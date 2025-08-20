@@ -1,0 +1,10 @@
+TestID,TradeTerm,SentimentModel,AnalysisModel,UserLevel,Success,Duration(ms),Confidence,Recommendation,RiskLevel,Error,Timestamp
+"intraday_gpt-5-mini_gpt-5_beginner","intraday","gpt-5-mini","gpt-5","beginner","false","181966","","","","Timeout waiting for review completion","2025-08-11T08:05:48.930Z"
+"intraday_gpt-5-mini_gpt-5_intermediate","intraday","gpt-5-mini","gpt-5","intermediate","true","108209","1.25","Your buy plan fights the tape (below VWAP, 15m bearish) and has a wide stop with weak RR. Flip to short below 1366 or wait for VWAP reclaim.","High","","2025-08-11T08:07:39.142Z"
+"intraday_gpt-5-mini_gpt-5_advanced","intraday","gpt-5-mini","gpt-5","advanced","false","181479","","","","Timeout waiting for review completion","2025-08-11T08:10:42.623Z"
+"short_gpt-5-mini_gpt-5_beginner","short","gpt-5-mini","gpt-5","beginner","false","181730","","","","Timeout waiting for review completion","2025-08-11T08:13:46.355Z"
+"short_gpt-5-mini_gpt-5_intermediate","short","gpt-5-mini","gpt-5","intermediate","false","181834","","","","Timeout waiting for review completion","2025-08-11T08:16:50.191Z"
+"short_gpt-5-mini_gpt-5_advanced","short","gpt-5-mini","gpt-5","advanced","false","181164","","","","Timeout waiting for review completion","2025-08-11T08:19:53.358Z"
+"medium_gpt-5-mini_gpt-5_beginner","medium","gpt-5-mini","gpt-5","beginner","false","182138","","","","Timeout waiting for review completion","2025-08-11T08:22:57.497Z"
+"medium_gpt-5-mini_gpt-5_intermediate","medium","gpt-5-mini","gpt-5","intermediate","false","181547","","","","Timeout waiting for review completion","2025-08-11T08:26:01.046Z"
+"medium_gpt-5-mini_gpt-5_advanced","medium","gpt-5-mini","gpt-5","advanced","false","181975","","","","Timeout waiting for review completion","2025-08-11T08:29:05.022Z"

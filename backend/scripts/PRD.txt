@@ -1,0 +1,62 @@
+# LogDhan.ai – Backend PRD
+
+## Overview:
+LogDhan is a mobile app that allows Indian stock traders to journal their trades, get AI insights, and maintain a personal stock log with optional TradingView integration.
+
+---
+
+## Features:
+
+### 1. OTP-Based Authentication
+- Send OTP to mobile number
+- Verify OTP
+- Issue JWT token on success
+
+### 2. User Profile
+- View/update profile
+- Logout session
+
+### 3. Stock Watchlist
+- Add a stock to user's watchlist
+- Remove a stock from watchlist
+- Get all stocks in watchlist
+
+### 4. Stock Log Entry (Per Stock)
+- Add Buy/Sell entry with:
+  - Symbol
+  - Quantity
+  - Entry Price
+  - Target
+  - Stop Loss
+  - Reason/Note
+  - Tag (Intraday, Swing, etc.)
+  - Whether trade was executed
+- View past entries for a stock
+- Export entries to CSV
+
+### 5. AI Chat (Stock-specific)
+- Maintain chat history for each stock
+- Support contextual replies for journaling, review, patterns, etc.
+- Option to trigger AI Review
+### 6. Credits & Recharge
+- Track how many free/paid credits user has
+- Deduct credit on AI review
+- Recharge endpoint (initially mock)
+
+### 7. Global Mentor Chat
+- Chat interface to discuss performance across all stocks
+- Questions like:
+  - “How was my week?”
+  - “What can I improve?”
+  - “Which trades went wrong?”
+
+---
+
+## API Auth
+- All user-specific endpoints require JWT
+
+---
+
+## Notes
+- Integration with brokers (like Zerodha, Upstox) is in phase 2
+- TradingView will be embedded via external links

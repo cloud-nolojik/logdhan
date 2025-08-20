@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Blue tech gradient -->
+    <linearGradient id="blueBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e3a8a;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Chart gradient -->
+    <linearGradient id="chartBlue" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#10b981;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#34d399;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- AI gradient -->
+    <radialGradient id="aiBlue" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#fbbf24;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f59e0b;stop-opacity:1" />
+    </radialGradient>
+    
+    <filter id="techGlow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background -->
+  <rect x="10" y="10" width="100" height="100" rx="22" ry="22" fill="url(#blueBg)"/>
+  
+  <!-- Tech grid -->
+  <rect x="25" y="25" width="70" height="70" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+  <line x1="45" y1="25" x2="45" y2="95" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>
+  <line x1="65" y1="25" x2="65" y2="95" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>
+  <line x1="85" y1="25" x2="85" y2="95" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>
+  
+  <!-- Trading chart -->
+  <path d="M30 80 L40 65 L50 70 L60 50 L70 55 L80 40 L90 45" 
+        fill="none" stroke="url(#chartBlue)" stroke-width="3" stroke-linecap="round" filter="url(#techGlow)"/>
+  
+  <!-- Data nodes -->
+  <circle cx="40" cy="65" r="3" fill="#10b981" filter="url(#techGlow)"/>
+  <circle cx="60" cy="50" r="3" fill="#34d399" filter="url(#techGlow)"/>
+  <circle cx="80" cy="40" r="3" fill="#10b981" filter="url(#techGlow)"/>
+  
+  <!-- AI hexagon -->
+  <polygon points="75,15 82,20 82,30 75,35 68,30 68,20" fill="url(#aiBlue)" filter="url(#techGlow)"/>
+  
+  <!-- AI core -->
+  <circle cx="75" cy="25" r="2" fill="#1e3a8a"/>
+  <circle cx="72" cy="22" r="1" fill="#1e3a8a"/>
+  <circle cx="78" cy="22" r="1" fill="#1e3a8a"/>
+  <circle cx="75" cy="28" r="1" fill="#1e3a8a"/>
+  
+  <!-- Data flow -->
+  <path d="M68 25 Q58 35 50 55" fill="none" stroke="#fbbf24" stroke-width="2" opacity="0.8" stroke-dasharray="2,2">
+    <animate attributeName="stroke-dashoffset" values="0;4" dur="1.5s" repeatCount="indefinite"/>
+  </path>
+  
+  <!-- Rupee tech style -->
+  <text x="25" y="90" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#06b6d4" filter="url(#techGlow)">₹</text>
+  
+  <!-- Tech indicators -->
+  <rect x="85" y="75" width="8" height="2" fill="#10b981" opacity="0.8"/>
+  <rect x="85" y="78" width="6" fill="#34d399" opacity="0.6"/>
+  <rect x="85" y="81" width="4" fill="#10b981" opacity="0.4"/>
+</svg>
+

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LogDhan Payment - Nolojik</title>
+    <script src="{{SDK_URL}}"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #333;
+        }
+        
+        .payment-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            width: 90%;
+            animation: slideUp 0.6s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .logo-section {
+            margin-bottom: 30px;
+        }
+        
+        .nolojik-logo {
+            font-size: 28px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .brand-connection {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+            font-size: 16px;
+            color: #666;
+        }
+        
+        .logdhan-text {
+            color: #764ba2;
+            font-weight: 600;
+        }
+        
+        .trust-badge {
+            background: #f8f9ff;
+            border: 1px solid #e1e5f7;
+            border-radius: 12px;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 14px;
+            color: #5a67d8;
+        }
+        
+        .loading-indicator {
+            margin: 30px 0;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .status-text {
+            font-size: 18px;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .secure-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 30px;
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .secure-icon {
+            color: #10b981;
+        }
+        
+        #error-message {
+            background: #fef2f2;
+            color: #dc2626;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="payment-container">
+        <div class="logo-section">
+            <div class="nolojik-logo">nolojik</div>
+            <div class="brand-connection">
+                <span class="logdhan-text">LogDhan</span>
+                <span>•</span>
+                <span>Trading AI Platform</span>
+            </div>
+        </div>
+        
+        <div class="trust-badge">
+            🛡️ Secure payment powered by Nolojik
+        </div>
+        
+        <div class="loading-indicator">
+            <div class="spinner"></div>
+            <div class="status-text">Securing your payment...</div>
+            <div style="font-size: 14px; color: #666;">You'll be redirected to complete your purchase</div>
+        </div>
+        
+        <div class="secure-badge">
+            <span class="secure-icon">🔒</span>
+            <span>SSL Encrypted • Safe & Secure</span>
+        </div>
+        
+        <div id="error-message">
+            Payment initialization failed. Please try again or contact support.
+        </div>
+    </div>
+
+    <script>
+        const paymentSessionId = "{{PAYMENT_SESSION_ID}}";
+        const environment = "{{ENVIRONMENT}}";
+        const returnUrl = "{{RETURN_URL}}";
+        
+        // Initialize Cashfree payment
+        function initializePayment() {
+            try {
+                const cashfree = Cashfree({
+                    mode: environment === "production" ? "production" : "sandbox"
+                });
+                
+                const checkoutOptions = {
+                    paymentSessionId: paymentSessionId,
+                    returnUrl: returnUrl || "https://www.google.com"
+                };
+                
+                // Start payment process
+                cashfree.checkout(checkoutOptions).then(function(result) {
+                    console.log("Payment result:", result);
+                    // Payment completed or failed, Cashfree will handle redirect
+                }).catch(function(error) {
+                    console.error("Payment error:", error);
+                    showError();
+                });
+                
+            } catch (error) {
+                console.error("Cashfree initialization error:", error);
+                showError();
+            }
+        }
+        
+        function showError() {
+            document.querySelector('.loading-indicator').style.display = 'none';
+            document.getElementById('error-message').style.display = 'block';
+        }
+        
+        // Start payment when page loads
+        window.addEventListener('load', function() {
+            // Small delay to show the loading screen briefly
+            setTimeout(initializePayment, 1000);
+        });
+        
+        // Fallback: redirect to return URL if payment doesn't start within 10 seconds
+        setTimeout(function() {
+            if (!window.paymentStarted) {
+                window.location.href = returnUrl || "https://www.google.com";
+            }
+        }, 10000);
+    </script>
+</body>
+</html>

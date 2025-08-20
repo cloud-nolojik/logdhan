@@ -1,0 +1,37 @@
+# Enable serving of image files
+<IfModule mod_mime.c>
+    AddType image/png .png
+    AddType image/svg+xml .svg
+    AddType image/jpeg .jpg .jpeg
+    AddType image/gif .gif
+    AddType image/webp .webp
+    AddType image/x-icon .ico
+</IfModule>
+
+# Set cache headers for static assets
+<IfModule mod_expires.c>
+    ExpiresActive on
+    ExpiresByType image/png "access plus 1 year"
+    ExpiresByType image/svg+xml "access plus 1 year"
+    ExpiresByType image/jpeg "access plus 1 year"
+    ExpiresByType image/gif "access plus 1 year"
+    ExpiresByType image/webp "access plus 1 year"
+    ExpiresByType image/x-icon "access plus 1 year"
+</IfModule>
+
+# Set proper headers for images
+<IfModule mod_headers.c>
+    <FilesMatch "\.(png|jpg|jpeg|gif|svg|webp|ico)$">
+        Header set Cache-Control "public, max-age=31536000"
+        Header set Access-Control-Allow-Origin "*"
+    </FilesMatch>
+</IfModule>
+
+# Ensure proper MIME types
+<Files "*.png">
+    ForceType image/png
+</Files>
+
+<Files "*.svg">
+    ForceType image/svg+xml
+</Files>

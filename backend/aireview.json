@@ -1,0 +1,605 @@
+{
+  "name": "My workflow 3",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "7b5c3c09-9744-4a9e-9013-ef3f78559cfa",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -140,
+        -80
+      ],
+      "id": "bbae3a30-ab8f-4113-a634-d2d5586f5e2d",
+      "name": "Webhook",
+      "webhookId": "7b5c3c09-9744-4a9e-9013-ef3f78559cfa"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── 0. Tiny helpers (pure-JS) ─────────────────────────────────────\nfunction addMonths(date, delta) {\n\tconst d = new Date(date);\n\td.setMonth(d.getMonth() + delta);\n\treturn d;\n}\nfunction addYears(date, delta) {\n\tconst d = new Date(date);\n\td.setFullYear(d.getFullYear() + delta);\n\treturn d;\n}\nconst iso = (d) => d.toISOString().slice(0, 10); // \"YYYY-MM-DD\"\nconst today = new Date(); // define once for consistency\n// ─── 1. Grab inputs ────────────────────────────────────────────────\nconst { instrument_key = '', term = '',stock ='' } = $input.first().json.body ?? {};\n\n// ─── 2. Term → preferred chart intervals ───────────────────────────\nconst termToIntervals = {\n\tintraday: ['3m', '15m'],\n\tshort:    ['15m', '1h'],\n\tmedium:   ['1h',  '4h'],\n\tlong:     ['1D',  '1W'],\n};\nconst intervals = termToIntervals[term.toLowerCase()] ?? [];\n\n// ─── 3. Parse \"4h\" → { unit:'hours', interval:4 } ─────────────────\nfunction parse(frame) {\n\tconst n = Number(frame.match(/^\\d+/)?.[0] ?? 1);\n\tconst s = frame.replace(/^\\d+/, '').toLowerCase();\n\tif (s === 'm') return { unit:'minutes', interval:n };\n\tif (s === 'h') return { unit:'hours',   interval:n };\n\tif (s === 'd') return { unit:'days',    interval:n };\n\tif (s === 'w') return { unit:'weeks',   interval:n };\n\tthrow new Error(`Unknown frame \"${frame}\"`);\n}\n\n// ─── 4. Upstox retention windows (your matrix) ─────────────────────\nfunction windowFor({ unit, interval }) {\n\tconst today = new Date();\n\tif (unit === 'minutes') {\n\t\treturn interval <= 15\n\t\t\t? { from:addMonths(today, -1), to:today }     // 1 month\n\t\t\t: { from:addMonths(today, -3), to:today };    // 1 quarter\n\t}\n\tif (unit === 'hours')   return { from:addMonths(today, -3), to:today }; // 1 quarter\n\tif (unit === 'days')    return { from:addYears(today,  -10), to:today }; // 1 decade\n\t// weeks / months → “no limit” → start 2000-01-01\n\treturn { from:new Date('2000-01-01'), to:today };\n}\n\n// ─── 5. Build every historical-candle URL ──────────────────────────\nconst endpoints = intervals.map((f) => {\n\tconst { unit, interval }  = parse(f);\n\tconst { from, to }        = windowFor({ unit, interval });\n\treturn `https://api.upstox.com/v3/historical-candle/${instrument_key}/${unit}/${interval}/${iso(to)}/${iso(from)}`;\n});\n\nconst yesterday = new Date(today);\nyesterday.setDate(today.getDate() - 1);\n\n// ─── 6. Output a single item with all URLs ─────────────────────────\nreturn [{\n\tjson: { instrument_key, term, endpoints, stock, today: iso(today),prevDayFromCurrent:iso(yesterday) },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "9e638748-627b-4acb-97e6-ccea3532b419",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.endpoints[0] }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "5d2c7442-7ce9-44b3-a0df-19c110d72262"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        40
+      ],
+      "id": "138aa79e-5e8a-4905-8676-8e736e860ab2",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.endpoints[1] }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "5d2c7442-7ce9-44b3-a0df-19c110d72262"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        200
+      ],
+      "id": "0a02663b-bf87-4f2b-99c1-b9e0703eaf3e",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        820,
+        -40
+      ],
+      "id": "733bc4e1-8c14-4d50-81e7-092855b39857",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        -40
+      ],
+      "id": "a1265b25-a7d6-46eb-b1ad-3a9276f1afc4",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "url": "=https://news.google.com/rss/search?q={{encodeURIComponent($json.stock)}}&hl=en-IN&gl=IN&ceid=IN:en ",
+        "options": {
+          "ignoreSSL": false
+        }
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        520,
+        380
+      ],
+      "id": "e61d7641-9781-4727-890e-011f2d3d2272",
+      "name": "RSS Read"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are an AI assistant analyzing {{ $json.term }} term sentiment for a given stock based on recent news articles and technical signals.\n\nYour job is to:\n  • ✅ Evaluate immediate market reactions, technical price movements, and recent news impact.\n  • ✅ Classify the sentiment into one of these categories:\n    - \"Positive\" – market outlook is optimistic.\n    - \"Neutral\" – market shows little change or conflicting signals.\n    - \"Negative\" – market reaction is adverse or concerning.\n  • ✅ Assign a numerical sentiment score between -1 (very negative) and 1 (very positive). For example:\n    - Strong sell-off = -0.9\n    - Mild positive headline = 0.2\n    - Major bullish technical breakout = 0.8\n  • ✅ Provide a concise, factual rationale for the sentiment. Mention technical triggers, breaking news, macro events, or earnings if relevant.\n\n📤 Output Format (strict JSON only):\n{\n  \"shortTermSentiment\": {\n    \"category\": \"Positive\",\n    \"score\": 0.7,\n    \"rationale\": \"Apple stock jumped after stronger-than-expected earnings and bullish guidance for next quarter. Technical breakout confirmed above key resistance at $200.\"\n  }\n}\n\n📥 Input:\nHere are the last 30 news article titles related to Reliance Industries:\n{{ $json.titles.slice(-30) }}",
+              "role": "system"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1300,
+        380
+      ],
+      "id": "089d8ab9-5006-4827-a0e8-3bfc6d84d0f8",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "MhbfvxZtEUmYztWt",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Initialize an array to collect all titles\nlet titles = [];\n\n// Loop through each input item\nfor (const item of $input.all()) {\n  // Add title to the array\n  titles.push(item.json.title);\n}\n\n// Return the array of titles as a single item\nreturn [{\n  json: {\n    titles: titles,\n    term:$('Webhook').first().json.query.term\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        360
+      ],
+      "id": "aac397be-3c1b-4ba6-828c-572268033566",
+      "name": "Code1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.first().json.data\n\n// Extract URLs and generate dynamic interval keys\nconst firstUrl = $('Code').first().json.endpoints[0];\nconst secondUrl = $('Code').first().json.endpoints[1];\n\nfunction extractOutputKey(url) {\n  const match = url.match(/\\/(minutes|hours|days|weeks|months)\\/(\\d+)/);\n  if (!match) return null;\n\n  const unitMap = {\n    minutes: \"m\",\n    hours: \"h\",\n    days: \"d\",\n    weeks: \"w\",\n    months: \"mo\"\n  };\n\n  const unit = match[1];\n  const value = match[2];\n  const suffix = unitMap[unit] ? `${value}${unitMap[unit]}` : null;\n  return suffix ? `candles${suffix}` : null;\n}\n\nconst output = [];\n\n// Loop through each item and attach candles under correct dynamic key\nfor (let i = 0; i < inputItems.length; i++) {\n  const item = inputItems[i];\n  const dataArray = item.data.candles;\n\n  const url = i === 0 ? firstUrl : secondUrl;\n  const outputKey = extractOutputKey(url);\n\n  if (!outputKey || !Array.isArray(dataArray)) continue;\n\n  let candleArray = [];\n\n  for (const entry of dataArray) {\n  if (!Array.isArray(entry) || entry.length < 6) continue;\n\n  candleArray.push({\n    time: entry[0],\n    open: entry[1],\n    high: entry[2],\n    low: entry[3],\n    close: entry[4],\n    volume: entry[5]\n  });\n}\n  \n  output.push({\n    json: {\n      [outputKey]: candleArray\n    }\n  });\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        -60
+      ],
+      "id": "1b425098-6b25-4e5e-a037-14552269dbed",
+      "name": "Code2"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1900,
+        240
+      ],
+      "id": "ebce458b-7ec2-4515-b4e6-26f94f9d0d0f",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2120,
+        240
+      ],
+      "id": "3c993bd7-f7d9-4a19-8221-3e5186522c48",
+      "name": "Aggregate1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=\n  const needsReview ={{ $('Webhook').item.json.body.needsReview }}\n\n  if (needsReview) {\n    return `\nYou are an expert trading mentor helping a retail trader review a planned trade.\n\n📌 Your role is to:\n1. Validate if the user’s trade setup (entry, stop loss, target) is logical based on current market price and the selected trading term.\n2. If invalid (e.g., unrealistic entry far below current price), politely explain what’s wrong and suggest correction.\n3. If valid, give an educational review — explain if the trade is high or low risk, reward-to-risk, and how it fits the strategy for that term.\n4. Keep your explanation clear, friendly, and beginner-friendly. Help them become a smarter trader — not just say yes or no.\n\n---\n\n🧾 Inputs:\n\n- Current Price (latest close from chart):\n{{ $json.data[0].data.candles[0][0] }}\n\n- User's Planned Trade:\nEntryPrice: {{ $('Webhook').item.json.body.entryprice }}\nStoploss: {{ $('Webhook').item.json.body.stoploss }}\ntarget:{{ $('Webhook').item.json.body.target }}\ndirection: {{ $('Webhook').item.json.body.direction }}\n- Trading Term:\n{{ $('Webhook').item.json.body.term }}\n\n\n- Candle Data (for reference):\n\n {{ JSON.stringify($json.data[1].data[0])}},\n{{ JSON.stringify($json.data[1].data[1])}}\n\n- Sentiment Analysis:\n{{ JSON.stringify($json.data[1].data[2])}}\n\n\n\n---\n\n🎯 Term-Based Logic:\n- Intraday: Trade lasts minutes to hours; use 1m, 15m, 1h candles. Target movement is 1–3%.\n- Shortterm: 1–3 days; use 15m, 1h, 4h candles. Target 3–7%.\n- Mediumterm: 1–3 weeks; use 1h, 4h, daily. Target 5–15%.\n- Longterm: Weeks to months; use daily & weekly candles. Target 10–25% or more.\n\n---\n\n🚫 Validation Checklist:\n- Entry price must be near current market price, unless user clearly planning a deep-limit order.\n- For BUY:\n  - entryPrice < targetExit\n  - stopLoss < entryPrice\n- For SELL:\n  - entryPrice > targetExit\n  - stopLoss > entryPrice\n- Target distance must be reasonable for the given term.\n\n---\n\n✅ Return Strict JSON Only:\n\\`\\`\\`json\n{\n  \"isValid\": true | false,\n  \"insight\": \"Educational explanation: Is this trade realistic? What works well? What is risky? Use current price, term, and chart logic to explain clearly in retail-friendly language.\"\n}\n\\`\\`\\`\n`;\n  } else {\n    return `\nYou are an expert trading assistant helping a retail trader understand stock trends.\n\nA user just selected a stock. Analyze the most recent technical candle data (from 1m to 1D) and recent sentiment to determine if the stock is currently **bullish**, **bearish**, or **neutral**.\n\n---\n\n🔍 Input Data\n\n- Technical Candles (multiple timeframes):\n{{ JSON.stringify($json.data[1].data[0]) }}, {{ JSON.stringify($json.data[1].data[1]) }}\n\n- Sentiment Analysis:\n{{ JSON.stringify($json.data[1].data[2]) }}\n\nEach object includes:\n- timeframe: \"1m\", \"15m\", \"1h\", \"4h\", or \"1d\"\n- candles: [datetime, open, high, low, close, volume]\n\n---\n\n🔧 Strategy\n\n- Use shorter timeframes (1m, 15m, 1h) for short-term momentum.\n- Use longer timeframes (4h, 1d) to confirm trend direction.\n- Use sentiment to support or warn against technical signals.\n- Evaluate trends, reversals, volume spikes, breakouts, or weakening patterns.\n\n---\n\n✅ Return Strict JSON Only:\n\\`\\`\\`json\n{\n  \"bias\": \"bullish\" | \"bearish\" | \"neutral\",\n  \"reason\": \"Explain this in clear, simple language that a beginner trader can understand — based on candles and sentiment.\"\n}\n\\`\\`\\`\n`;\n  }",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a helpful, knowledgeable trading assistant. Your job is to analyze recent price action and sentiment data to determine if a stock is currently bullish, bearish, or neutral. Always explain your reasoning in simple, clear language that beginner traders can understand. Avoid technical jargon unless necessary, and focus on practical insights based on the provided data."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        3220,
+        -160
+      ],
+      "id": "a8174eed-0edc-4c49-9029-850f9a1296f0",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2720,
+        460
+      ],
+      "id": "ddd1b77e-6b98-4147-a330-51fbeeb119ad",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "MhbfvxZtEUmYztWt",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.upstox.com/v3/historical-candle/{{ $json.instrument_key }}/minutes/1/\n{{ $json.today }}/{{ $json.prevDayFromCurrent }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "5d2c7442-7ce9-44b3-a0df-19c110d72262"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        -180
+      ],
+      "id": "115300cc-7fbf-4df5-b021-3135a8469a52",
+      "name": "latest Candle "
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2420,
+        -160
+      ],
+      "id": "f3c1005f-689e-4c32-b4e6-8bcef937293b",
+      "name": "latest price & trade data & sentimarntal analaysis"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        -160
+      ],
+      "id": "f03c9500-0625-4f83-8381-5e8f434915a1",
+      "name": "Aggregate2"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"isValid\": \"\",\n\t\"insight\": \"\"\n}",
+        "autoFix": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        3300,
+        60
+      ],
+      "id": "bdb838fd-d14c-4e04-ae6d-27c2aa3697f0",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3300,
+        200
+      ],
+      "id": "f238b012-54f5-497f-9f5c-b8e5b31d13c8",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "MhbfvxZtEUmYztWt",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://64.227.179.191/api/v1/stocklog/webhook/ai-review",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "logId",
+              "value": "={{ $('Webhook').item.json.body.logId }}"
+            },
+            {
+              "name": "isValid",
+              "value": "={{ $json.output.isValid }}"
+            },
+            {
+              "name": "insight",
+              "value": "={{ $json.output.insight }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3580,
+        -160
+      ],
+      "id": "d5d87844-df70-4352-90b4-a3c8c804ec1c",
+      "name": "HTTP Request2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Read",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "latest Candle ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read": {
+      "main": [
+        [
+          {
+            "node": "Code1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code1": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Code2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code2": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Aggregate1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate1": {
+      "main": [
+        [
+          {
+            "node": "latest price & trade data & sentimarntal analaysis",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "latest Candle ": {
+      "main": [
+        [
+          {
+            "node": "latest price & trade data & sentimarntal analaysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "latest price & trade data & sentimarntal analaysis": {
+      "main": [
+        [
+          {
+            "node": "Aggregate2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate2": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Structured Output Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "785c81e1-1b57-4b04-ac73-4920b374c6f0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "88bd35896e4a3ce0d17fef0e232de4c62d2fde1737c7036a9f590a9d6c0d7382"
+  },
+  "id": "CJsHjkY9stsfct9n",
+  "tags": []
+}

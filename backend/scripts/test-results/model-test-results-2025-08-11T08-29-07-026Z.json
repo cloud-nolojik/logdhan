@@ -1,0 +1,486 @@
+[
+  {
+    "testId": "intraday_gpt-5-mini_gpt-5_beginner",
+    "tradeTerm": "intraday",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "beginner",
+    "success": false,
+    "logId": "6899a3a7cd06b1e508dc2ed2",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a3a7cd06b1e508dc2ed2",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1395,
+        "stopLoss": 1350,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:02:47.950Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": null,
+    "error": "Timeout waiting for review completion",
+    "duration": 181966,
+    "timestamp": "2025-08-11T08:05:48.930Z"
+  },
+  {
+    "testId": "intraday_gpt-5-mini_gpt-5_intermediate",
+    "tradeTerm": "intraday",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "intermediate",
+    "success": true,
+    "logId": "6899a45fcd06b1e508dc2f87",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a45fcd06b1e508dc2f87",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1395,
+        "stopLoss": 1350,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:05:51.139Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": {
+      "id": "6899a45fcd06b1e508dc2f87",
+      "isReviewCompleted": {
+        "ui": {
+          "verdict": "reject",
+          "tldr": "Reject long: price below VWAP, 15m bearish. SL too wide; RR only 1.25. Prefer a short under 1366 or wait for VWAP reclaim.",
+          "chips": [
+            {
+              "label": "RR",
+              "value": "1.25",
+              "tone": "bad"
+            },
+            {
+              "label": "Deviation",
+              "value": "0.28%",
+              "tone": "good"
+            },
+            {
+              "label": "Context",
+              "value": "Below VWAP · Bearish",
+              "tone": "bad"
+            }
+          ],
+          "actionHint": "Short 1366.0 / SL 1369.0 / T1 1363.0 / T2 1360.0"
+        },
+        "analysis": {
+          "level": "intermediate",
+          "isValid": false,
+          "tldr": "Your buy plan fights the tape (below VWAP, 15m bearish) and has a wide stop with weak RR. Flip to short below 1366 or wait for VWAP reclaim.",
+          "userReview": {
+            "provided": true,
+            "isValidToday": false,
+            "reasons": [
+              "Long is against VWAP and 15m bearish bias",
+              "Stop 20.0 pts is very wide vs 3m ATR (~1.71), RR only 1.25",
+              "Data looks stale (latest bars 2025-08-08); today's range uncertain"
+            ],
+            "rr": 1.25,
+            "distanceFromLastPct": 0.28,
+            "withinTodayRange": true,
+            "todayRange": {
+              "high": 1376.3,
+              "low": 1365
+            },
+            "alignment": {
+              "withVWAP": "below",
+              "with15mBias": "against"
+            },
+            "reasoning": {
+              "provided": false,
+              "text": null,
+              "accepted": null,
+              "issues": [
+                "No reasoning provided."
+              ]
+            },
+            "correctedPlan": {
+              "side": "short",
+              "trigger": "Enter only after (a) two consecutive 3m closes below 1366.0, or (b) a VWAP retest rejection (wick above VWAP, close back below) then break of that rejection candle’s low.",
+              "entry": 1366,
+              "stop": 1369,
+              "targets": [
+                1363,
+                1360
+              ]
+            }
+          },
+          "plan": {
+            "side": "short",
+            "trigger": "Enter only after (a) two consecutive 3m closes below 1366.0, or (b) a VWAP retest rejection (wick above VWAP, close back below) then break of that rejection candle’s low.",
+            "entry": 1366,
+            "stop": 1369,
+            "targets": [
+              1363,
+              1360
+            ],
+            "manage": "Book 50% at 1363.0 (1R), move SL to 1366.0, then trail above 3m lower highs; exit remainder at 1360.0 or by 15:25.",
+            "exitByIST": "15:25",
+            "notes": [
+              "Tape: Below VWAP and 15m bearish — prioritize shorts.",
+              "Longs only after VWAP reclaim and acceptance (2 consecutive 3m closes above 1378.6).",
+              "Avoid new entries after 15:00 IST; size for ~3.0 pts risk."
+            ]
+          },
+          "guards": {
+            "needsData": true,
+            "marketOpenRequired": true,
+            "invalidateIf": [
+              "3m close ≥ 1369.0",
+              "sustained VWAP reclaim (2 consecutive 3m closes above VWAP)"
+            ]
+          },
+          "meta": {
+            "last": 1366.2,
+            "vwap": 1378.6,
+            "ema15": 1373.5,
+            "atr3": 1.71,
+            "bias15m": "bearish",
+            "tickSize": 0.05,
+            "generatedAtIST": "2025-08-08 15:29",
+            "marketStatus": "closed"
+          },
+          "disclaimer": "Educational review, not investment advice."
+        },
+        "microChartUrl": "https://loghanstorage.blob.core.windows.net/logdhancontainer/charts/chart-20250811080736-micro.png",
+        "fullChartUrl": "https://loghanstorage.blob.core.windows.net/logdhancontainer/charts/chart-20250811080736-full.png"
+      },
+      "reviewStatus": "failed",
+      "recommendation": "Your buy plan fights the tape (below VWAP, 15m bearish) and has a wide stop with weak RR. Flip to short below 1366 or wait for VWAP reclaim.",
+      "verdict": "reject",
+      "isAnalysisCorrect": "invalid",
+      "confidence": 1.25,
+      "riskLevel": "High",
+      "createdAt": "2025-08-11T08:07:37.232Z",
+      "detailedAnalysis": {
+        "ui": {
+          "verdict": "reject",
+          "tldr": "Reject long: price below VWAP, 15m bearish. SL too wide; RR only 1.25. Prefer a short under 1366 or wait for VWAP reclaim.",
+          "chips": [
+            {
+              "label": "RR",
+              "value": "1.25",
+              "tone": "bad"
+            },
+            {
+              "label": "Deviation",
+              "value": "0.28%",
+              "tone": "good"
+            },
+            {
+              "label": "Context",
+              "value": "Below VWAP · Bearish",
+              "tone": "bad"
+            }
+          ],
+          "actionHint": "Short 1366.0 / SL 1369.0 / T1 1363.0 / T2 1360.0"
+        },
+        "analysis": {
+          "level": "intermediate",
+          "isValid": false,
+          "tldr": "Your buy plan fights the tape (below VWAP, 15m bearish) and has a wide stop with weak RR. Flip to short below 1366 or wait for VWAP reclaim.",
+          "userReview": {
+            "provided": true,
+            "isValidToday": false,
+            "reasons": [
+              "Long is against VWAP and 15m bearish bias",
+              "Stop 20.0 pts is very wide vs 3m ATR (~1.71), RR only 1.25",
+              "Data looks stale (latest bars 2025-08-08); today's range uncertain"
+            ],
+            "rr": 1.25,
+            "distanceFromLastPct": 0.28,
+            "withinTodayRange": true,
+            "todayRange": {
+              "high": 1376.3,
+              "low": 1365
+            },
+            "alignment": {
+              "withVWAP": "below",
+              "with15mBias": "against"
+            },
+            "reasoning": {
+              "provided": false,
+              "text": null,
+              "accepted": null,
+              "issues": [
+                "No reasoning provided."
+              ]
+            },
+            "correctedPlan": {
+              "side": "short",
+              "trigger": "Enter only after (a) two consecutive 3m closes below 1366.0, or (b) a VWAP retest rejection (wick above VWAP, close back below) then break of that rejection candle’s low.",
+              "entry": 1366,
+              "stop": 1369,
+              "targets": [
+                1363,
+                1360
+              ]
+            }
+          },
+          "plan": {
+            "side": "short",
+            "trigger": "Enter only after (a) two consecutive 3m closes below 1366.0, or (b) a VWAP retest rejection (wick above VWAP, close back below) then break of that rejection candle’s low.",
+            "entry": 1366,
+            "stop": 1369,
+            "targets": [
+              1363,
+              1360
+            ],
+            "manage": "Book 50% at 1363.0 (1R), move SL to 1366.0, then trail above 3m lower highs; exit remainder at 1360.0 or by 15:25.",
+            "exitByIST": "15:25",
+            "notes": [
+              "Tape: Below VWAP and 15m bearish — prioritize shorts.",
+              "Longs only after VWAP reclaim and acceptance (2 consecutive 3m closes above 1378.6).",
+              "Avoid new entries after 15:00 IST; size for ~3.0 pts risk."
+            ]
+          },
+          "guards": {
+            "needsData": true,
+            "marketOpenRequired": true,
+            "invalidateIf": [
+              "3m close ≥ 1369.0",
+              "sustained VWAP reclaim (2 consecutive 3m closes above VWAP)"
+            ]
+          },
+          "meta": {
+            "last": 1366.2,
+            "vwap": 1378.6,
+            "ema15": 1373.5,
+            "atr3": 1.71,
+            "bias15m": "bearish",
+            "tickSize": 0.05,
+            "generatedAtIST": "2025-08-08 15:29",
+            "marketStatus": "closed"
+          },
+          "disclaimer": "Educational review, not investment advice."
+        },
+        "charts": {
+          "microChart": "https://loghanstorage.blob.core.windows.net/logdhancontainer/charts/chart-20250811080736-micro.png",
+          "fullChart": "https://loghanstorage.blob.core.windows.net/logdhancontainer/charts/chart-20250811080736-full.png"
+        }
+      },
+      "reviewMetadata": null,
+      "apiCosts": null
+    },
+    "error": null,
+    "duration": 108209,
+    "timestamp": "2025-08-11T08:07:39.142Z"
+  },
+  {
+    "testId": "intraday_gpt-5-mini_gpt-5_advanced",
+    "tradeTerm": "intraday",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "advanced",
+    "success": false,
+    "logId": "6899a4cdcd06b1e508dc3005",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a4cdcd06b1e508dc3005",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1395,
+        "stopLoss": 1350,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:07:41.312Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": null,
+    "error": "Timeout waiting for review completion",
+    "duration": 181479,
+    "timestamp": "2025-08-11T08:10:42.623Z"
+  },
+  {
+    "testId": "short_gpt-5-mini_gpt-5_beginner",
+    "tradeTerm": "short",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "beginner",
+    "success": false,
+    "logId": "6899a584cd06b1e508dc30c4",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a584cd06b1e508dc30c4",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1450,
+        "stopLoss": 1330,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:10:44.841Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": null,
+    "error": "Timeout waiting for review completion",
+    "duration": 181730,
+    "timestamp": "2025-08-11T08:13:46.355Z"
+  },
+  {
+    "testId": "short_gpt-5-mini_gpt-5_intermediate",
+    "tradeTerm": "short",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "intermediate",
+    "success": false,
+    "logId": "6899a63ccd06b1e508dc3183",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a63ccd06b1e508dc3183",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1450,
+        "stopLoss": 1330,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:13:48.618Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": null,
+    "error": "Timeout waiting for review completion",
+    "duration": 181834,
+    "timestamp": "2025-08-11T08:16:50.191Z"
+  },
+  {
+    "testId": "short_gpt-5-mini_gpt-5_advanced",
+    "tradeTerm": "short",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "advanced",
+    "success": false,
+    "logId": "6899a6f4cd06b1e508dc3238",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a6f4cd06b1e508dc3238",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1450,
+        "stopLoss": 1330,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:16:52.404Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": null,
+    "error": "Timeout waiting for review completion",
+    "duration": 181164,
+    "timestamp": "2025-08-11T08:19:53.358Z"
+  },
+  {
+    "testId": "medium_gpt-5-mini_gpt-5_beginner",
+    "tradeTerm": "medium",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "beginner",
+    "success": false,
+    "logId": "6899a7accd06b1e508dc32ed",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a7accd06b1e508dc32ed",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1480,
+        "stopLoss": 1310,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:19:56.294Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": null,
+    "error": "Timeout waiting for review completion",
+    "duration": 182138,
+    "timestamp": "2025-08-11T08:22:57.497Z"
+  },
+  {
+    "testId": "medium_gpt-5-mini_gpt-5_intermediate",
+    "tradeTerm": "medium",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "intermediate",
+    "success": false,
+    "logId": "6899a863cd06b1e508dc33a2",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a863cd06b1e508dc33a2",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1480,
+        "stopLoss": 1310,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:22:59.729Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": null,
+    "error": "Timeout waiting for review completion",
+    "duration": 181547,
+    "timestamp": "2025-08-11T08:26:01.046Z"
+  },
+  {
+    "testId": "medium_gpt-5-mini_gpt-5_advanced",
+    "tradeTerm": "medium",
+    "sentimentModel": "gpt-5-mini",
+    "analysisModel": "gpt-5",
+    "userLevel": "advanced",
+    "success": false,
+    "logId": "6899a91bcd06b1e508dc3461",
+    "apiResponse": {
+      "success": true,
+      "data": {
+        "_id": "6899a91bcd06b1e508dc3461",
+        "instrument_key": "NSE_EQ|INE002A01018",
+        "type": "BUY",
+        "quantity": 100,
+        "entryPrice": 1370,
+        "targetPrice": 1480,
+        "stopLoss": 1310,
+        "needsReview": true,
+        "reviewStatus": "pending",
+        "createdAt": "2025-08-11T08:26:03.278Z"
+      },
+      "message": "Trade logged successfully. AI review in progress..."
+    },
+    "reviewData": null,
+    "error": "Timeout waiting for review completion",
+    "duration": 181975,
+    "timestamp": "2025-08-11T08:29:05.022Z"
+  }
+]
