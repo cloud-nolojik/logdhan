@@ -5,8 +5,12 @@ export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false);
   return (
     <nav className="bg-transparent px-4 py-3 flex items-center justify-between">
-      <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition">
-        <img src="/logo.svg" alt="LogDhan L.O.G Logo" className="h-8 w-auto" />
+      <Link to="/" className="flex items-center gap-3 hover:opacity-90 transition">
+        <img src="/logo.svg" alt="LogDhan L.O.G Logo" className="h-10 w-auto" />
+        <div className="flex flex-col">
+          <span className="text-xl font-bold text-white">LogDhan</span>
+          <span className="text-xs text-gray-300">Your Smart Trading Companion</span>
+        </div>
       </Link>
       <div className="hidden md:flex gap-6 items-center">
         <NavLink to="/" className={({isActive}) => isActive ? 'text-logdhan-orange-light font-semibold' : 'text-white hover:text-logdhan-orange-light transition'}>Home</NavLink>

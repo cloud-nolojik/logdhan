@@ -751,9 +751,10 @@ router.get('/ad-status', auth, async (req, res) => {
     console.log(`🔍 Ad Status Debug - plan.restrictions:`, plan?.restrictions);
     console.log(`🔍 Ad Status Debug - plan.restrictions.rewardedAdLimit:`, plan?.restrictions?.rewardedAdLimit);
     
-    const dailyLimit = plan?.restrictions?.rewardedAdLimit || 0; // Default 0 for non-ad plans
+    const dailyLimit = plan?.restrictions?.rewardedAdLimit || 0; // Default 0 for non-ad plans (0 means unlimited)
     const adsWatchedToday = isToday ? subscription.credits.dailyRewardedCount : 0;
-    const adsRemainingToday = Math.max(0, dailyLimit - adsWatchedToday);
+    // If dailyLimit is 0 (unlimited), return 999 for UI, otherwise calculate remaining
+    const adsRemainingToday = dailyLimit === 0 ? 999 : Math.max(0, dailyLimit - adsWatchedToday);
     const creditsPerAd = 1;
     
     console.log(`🔍 Ad Status Debug - dailyLimit: ${dailyLimit}, adsWatchedToday: ${adsWatchedToday}, adsRemainingToday: ${adsRemainingToday}`);
@@ -762,15 +763,17 @@ router.get('/ad-status', auth, async (req, res) => {
     res.json({
       success: true,
       data: {
-        canWatchAd: adsRemainingToday > 0,
+        canWatchAd: dailyLimit === 0 ? true : adsRemainingToday > 0,
         adsWatchedToday,
         adsRemainingToday,
         dailyLimit,
         creditsPerAd,
         currentRewardedCredits: subscription.credits.rewardedCredits,
         rewardedCreditsExpiry: subscription.credits.lastRewardedDate ? 
-          new Date(subscription.credits.lastRewardedDate.getTime() + (24 * 60 * 60 * 1000)) : null,
-        showAds: subscription.planId === 'basic_ads'
+          new Date(subscription.credits.lastRewardedDate.getFullYear(), 
+                   subscription.credits.lastRewardedDate.getMonth(), 
+                   subscription.credits.lastRewardedDate.getDate() + 1, 0, 0, 0, 0) : null,
+        showAds: true // All users can watch ads now - free users get them always, paid users when credits exhausted
       }
     });
   } catch (error) {

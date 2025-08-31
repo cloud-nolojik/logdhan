@@ -13,7 +13,7 @@ export default function Pricing() {
           <p className="text-white/90 text-lg mb-4">
             <span className="text-gold-light font-semibold">Unlimited free logging</span> of your trade plans. 
             AI reviews consume credits based on your subscription plan. 
-            <span className="text-green-400 font-semibold">Start FREE with 3 AI reviews per day + 1 bonus after watching ad!</span>
+            <span className="text-green-400 font-semibold">Start FREE with unlimited AI reviews by watching short ads!</span>
           </p>
         </div>
 
@@ -34,11 +34,11 @@ export default function Pricing() {
               <tr className="border-b border-white/10 bg-green-500/10">
                 <td className="py-3 px-4 font-semibold">
                   Basic Free
-                  <div className="text-xs text-white/70 mt-1">Ad-supported • 3+1 reviews/day</div>
+                  <div className="text-xs text-white/70 mt-1">Ad-supported • Unlimited reviews</div>
                 </td>
                 <td className="text-center py-3 px-4">
                   ∞
-                  <div className="text-xs text-white/70">Daily limit</div>
+                  <div className="text-xs text-white/70">Watch ads</div>
                 </td>
                 <td className="text-center py-3 px-4">—</td>
                 <td className="text-center py-3 px-4 font-bold text-green-400">FREE</td>
@@ -95,20 +95,20 @@ export default function Pricing() {
             <div className="space-y-3">
               <div className="flex items-start">
                 <div className="w-6 h-6 bg-green-500/20 rounded-full flex items-center justify-center mr-3 mt-0.5">
-                  <span className="text-green-400 font-bold text-xs">3</span>
+                  <span className="text-green-400 font-bold text-xs">∞</span>
                 </div>
                 <div>
-                  <p className="font-semibold text-white">Daily AI Reviews</p>
-                  <p className="text-white/70">Get 3 comprehensive AI trade reviews every day, completely free.</p>
+                  <p className="font-semibold text-white">Unlimited AI Reviews</p>
+                  <p className="text-white/70">Get unlimited comprehensive AI trade reviews with short ads.</p>
                 </div>
               </div>
               <div className="flex items-start">
                 <div className="w-6 h-6 bg-blue-500/20 rounded-full flex items-center justify-center mr-3 mt-0.5">
-                  <span className="text-blue-400 font-bold text-xs">+1</span>
+                  <span className="text-blue-400 font-bold text-xs">📺</span>
                 </div>
                 <div>
-                  <p className="font-semibold text-white">Bonus Review via Ads</p>
-                  <p className="text-white/70">Watch a short video ad to unlock 1 additional review per day.</p>
+                  <p className="font-semibold text-white">Ad-Supported Model</p>
+                  <p className="text-white/70">Simple: Watch ad → Get AI review. Repeat unlimited times.</p>
                 </div>
               </div>
             </div>
@@ -134,7 +134,7 @@ export default function Pricing() {
             </div>
           </div>
           <div className="mt-4 p-3 bg-gradient-to-r from-green-600/20 to-blue-600/20 rounded-lg text-center">
-            <p className="text-green-400 font-semibold text-sm">💡 Pro Tip: Basic Free gives you up to 4 AI reviews per day (3 + 1 bonus) - that's 120+ reviews per month!</p>
+            <p className="text-green-400 font-semibold text-sm">💡 Pro Tip: Basic Free gives you unlimited AI reviews with ads - analyze as many trades as you want!</p>
           </div>
         </div>
 
@@ -146,10 +146,9 @@ export default function Pricing() {
       </div>
 
       <div className="mt-8 text-white/80 text-center text-sm max-w-md space-y-2">
-        <p><span className="text-gold-light font-semibold">Basic Free:</span> Lifetime access with 3 daily reviews + 1 bonus after ad.</p>
+        <p><span className="text-gold-light font-semibold">Basic Free:</span> Lifetime access with unlimited reviews by watching ads.</p>
         <p><span className="text-gold-light font-semibold">Pro Monthly:</span> 150 credits/month with ad-free experience.</p>
         <p><span className="text-gold-light font-semibold">Pro Annual:</span> 2000 credits/year with maximum value and savings.</p>
-        <p><span className="text-gold-light font-semibold">Credit rollover:</span> Up to 50% unused credits carry forward (Pro plans only).</p>
         <p>
           <Link to="/pricing-policy" className="text-gold-light hover:underline font-semibold">
             📋 View Pricing Policy

@@ -201,10 +201,15 @@ const userSchema = new mongoose.Schema({
     }],
     conceptsLearned: [{
       type: String,
-      enum: ['stopLoss', 'targetPrice', 'buyPrice', 'intraday', 'shortTerm', 'longTerm']
+      enum: ['stopLoss', 'targetPrice', 'buyPrice', 'intraday', 'shortTerm']
     }]
   },
   watchlist: [watchlistItemSchema],
+  // Auto trading feature
+  enableAutoTrade: {
+    type: Boolean,
+    default: false
+  },
   isVerified: {
     type: Boolean,
     default: true

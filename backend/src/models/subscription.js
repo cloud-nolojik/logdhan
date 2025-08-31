@@ -262,10 +262,13 @@ subscriptionSchema.methods.cleanupExpiredCredits = function() {
     this.credits.bonusCreditsExpiry = null;
   }
   
-  // Clean up expired rewarded credits (24 hours)
+  // Clean up expired rewarded credits (end of day)
   if (this.credits.lastRewardedDate) {
-    const twentyFourHoursAgo = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-    if (this.credits.lastRewardedDate < twentyFourHoursAgo) {
+    const lastRewardedDate = new Date(this.credits.lastRewardedDate);
+    const nowDate = new Date(now);
+    
+    // Check if lastRewardedDate is from a previous day
+    if (lastRewardedDate.toDateString() !== nowDate.toDateString()) {
       this.credits.rewardedCredits = 0;
       this.credits.dailyRewardedCount = 0;
     }
@@ -323,8 +326,8 @@ subscriptionSchema.statics.deductCreditsAtomic = async function(userId, creditsT
   // Clean up expired credits first
   subscription.cleanupExpiredCredits();
   
-  // For basic_ads plan, don't actually deduct (unlimited)
-  if (subscription.planId === 'basic_ads') {
+  // For basic_ads plan, only deduct bonus credits (advanced analysis), regular credits are unlimited
+  if (subscription.planId === 'basic_ads' && creditType !== 'bonus') {
     await subscription.save(); // Save cleanup changes
     return {
       subscription,

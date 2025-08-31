@@ -67,7 +67,7 @@ const stockLogSchema = new mongoose.Schema({
   },
   term:{
     type: String,
-    enum: ['intraday','short','medium','long'],
+    enum: ['intraday','short','medium'],
     required: true
   },
   reasoning: {
@@ -77,12 +77,41 @@ const stockLogSchema = new mongoose.Schema({
   },
   reviewStatus: {
     type: String,
-    enum: ['pending', 'processing', 'completed', 'failed'],
-    default: 'pending'
+    enum: ['pending', 'processing', 'completed', 'failed', 'error', 'rejected']
   },
   reviewResult: mongoose.Schema.Types.Mixed, // Flexible field for storing AI review results
   reviewRequestedAt: Date,
   reviewCompletedAt: Date,
+  reviewError: mongoose.Schema.Types.Mixed, // Store error details
+  // Track if this review was triggered by rewarded ad (bonus) or regular/paid
+  isFromRewardedAd: {
+    type: Boolean,
+    default: false
+  },
+  // Track the credit type used for model selection
+  creditType: {
+    type: String,
+    enum: ['regular', 'bonus', 'paid'],
+    default: 'regular'
+  },
+  // Comprehensive review metadata
+  reviewMetadata: {
+    totalCost: Number,
+    costBreakdown: mongoose.Schema.Types.Mixed,
+    modelsUsed: [String],
+    userExperience: mongoose.Schema.Types.Mixed,
+    tokenUsage: mongoose.Schema.Types.Mixed,
+    reviewProcessedAt: Date,
+    modelBreakdown: mongoose.Schema.Types.Mixed
+  },
+  // Debug fields for troubleshooting
+  debugInfo: {
+    payload: mongoose.Schema.Types.Mixed, // Store the full payload sent to AI
+    prompt: mongoose.Schema.Types.Mixed,  // Store the AI prompt used
+    candleData: mongoose.Schema.Types.Mixed, // Store raw candle data summary
+    savedAt: { type: Date, default: Date.now }
+  },
+  apiCosts: mongoose.Schema.Types.Mixed,
   // Token usage tracking for AI review
   tokenUsage: {
     inputTokens: { type: Number, default: 0 },

@@ -30,7 +30,7 @@ export default function Home() {
           <h3 className="text-xl font-bold text-white mb-4">Download the LogDhan App</h3>
           <p className="text-white/90 mb-6 max-w-md mx-auto">
             Experience AI-powered trading insights on your mobile device. 
-            Buy credits securely and get instant AI reviews for your trades.
+            Start with unlimited free AI reviews or upgrade to Pro for ad-free experience.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
             <Link to="/download" className="group">
@@ -41,9 +41,9 @@ export default function Home() {
           </div>
           <div className="mt-6 text-white/70 text-sm">
             <p><span className="text-gold-light font-semibold">
-              {loading ? '1 AI Review = 1 Credit' : creditInfo.description}
+              Free Plan: Unlimited AI reviews with ads
             </span></p>
-            <p>Credits valid for {loading ? 6 : creditInfo.creditValidityMonths} months • Available on mobile devices</p>
+            <p>Pro Plans: Monthly/Yearly credits • Ad-free experience • Available on all devices</p>
           </div>
         </div>
       </section>

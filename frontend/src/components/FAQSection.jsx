@@ -8,15 +8,15 @@ const faqs = [
   },
   {
     q: 'How does the free plan work?',
-    a: 'Our Basic Free plan gives you 3 AI trade reviews daily, plus 1 bonus review after watching a short ad. It\'s completely free forever with small banner ads and optional rewarded videos.'
+    a: 'Our Basic Free plan gives you unlimited AI trade reviews by watching short ads. It\'s completely free forever with small banner ads and rewarded videos for each review.'
   },
   {
     q: 'What are the differences between free and Pro plans?',
-    a: 'Basic Free: 3+1 daily reviews with ads. Pro Monthly: 150 credits/month, no ads. Pro Annual: 2000 credits/year, no ads, best value. Pro plans offer unlimited reviews and ad-free experience.'
+    a: 'Basic Free: Unlimited reviews with ads. Pro Monthly: 150 credits/month, no ads. Pro Annual: 2000 credits/year, no ads, best value. Pro plans offer unlimited reviews and ad-free experience.'
   },
   {
     q: 'Are ads intrusive or annoying?',
-    a: 'No! We use small banner ads and optional rewarded videos only. No pop-ups or interruptions during your trading analysis. You\'re in complete control of when you watch ads for bonus reviews.'
+    a: 'No! We use small banner ads and rewarded videos for each review. No pop-ups or interruptions during your trading analysis. Simply watch a short ad to get your AI review.'
   },
   {
     q: 'Is my data secure and private?',
@@ -24,7 +24,7 @@ const faqs = [
   },
   {
     q: 'Can I upgrade or cancel anytime?',
-    a: 'Yes! Upgrade from Basic Free to Pro anytime for ad-free experience. Pro subscriptions can be cancelled anytime with no penalties. Up to 50% unused credits roll over to next billing cycle.'
+    a: 'Yes! Upgrade from Basic Free to Pro anytime for ad-free experience. Pro subscriptions can be cancelled anytime with no penalties.'
   },
 ];
 

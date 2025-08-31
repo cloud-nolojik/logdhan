@@ -12,6 +12,7 @@ import { getExactStock } from '../utils/stock.js';
 import { firebaseService } from '../services/firebase/firebase.service.js';
 import { User } from '../models/user.js';
 import { emailService } from '../services/email/email.service.js';
+import { TRADING_TERMS, getTermsForSelection } from '../config/tradingTerms.js';
 
 const router = express.Router();
 
@@ -113,8 +114,13 @@ router.post('/', auth, async (req, res) => {
       const canUse = await subscriptionService.canUserUseCredits(req.user.id, 1, isFromRewardedAd);
       
       if (!canUse.canUse) {
+        // Determine if we should suggest watching an ad
+        const suggestAd = !isFromRewardedAd && (canUse.reason?.includes('exhausted') || canUse.reason?.includes('limit'));
+        
         return res.status(402).json({
-          error: `${canUse.reason || 'Please upgrade your subscription to continue using AI trade reviews.'}`
+          error: `${canUse.reason || 'Please upgrade your subscription to continue using AI trade reviews.'}`,
+          suggestAd: suggestAd,
+          errorCode: 'CREDITS_EXHAUSTED'
         });
       }
     }
@@ -136,9 +142,13 @@ router.post('/', auth, async (req, res) => {
       reasoning: reasoning || undefined,
       term,
       needsReview: needsReview || false,
-      creditType: creditType || "regular", // Store credit type for AI model selection
-      reviewRequestedAt: needsReview ? new Date() : undefined,
-      reviewStatus: needsReview ? 'pending' : undefined
+      // Only set review-related fields if review is actually requested
+      ...(needsReview && {
+        isFromRewardedAd: isFromRewardedAd || false,
+        creditType: isFromRewardedAd ? "bonus" : (creditType || "regular"),
+        reviewRequestedAt: new Date(),
+        reviewStatus: 'pending'
+      })
     });
 
     await logEntry.save();
@@ -267,48 +277,26 @@ router.get('/:instrument_key', auth, async (req, res) => {
   }
 });
 
-// Get review status for a log entry
-router.get('/:id/review', auth, async (req, res) => {
+// Get complete trade log entry (with or without review)
+router.get('/:id/trade-log', auth, async (req, res) => {
   try {
     const logEntry = await StockLog.findOne({
       _id: req.params.id,
       user: req.user.id,
-      needsReview: true
     });
 
     if (!logEntry) {
-      return res.status(404).json({ error: 'Log entry not found or no review requested' });
+      return res.status(404).json({ error: 'Trade log not found' });
     }
 
+    // Return the complete document as is
     res.status(200).json({
       success: true,
-      data: {
-        // Include original trade log data
-        _id: logEntry._id,
-        stock: logEntry.stock,
-        direction: logEntry.direction,
-        quantity: logEntry.quantity,
-        entryPrice: logEntry.entryPrice,
-        targetPrice: logEntry.targetPrice,
-        stopLoss: logEntry.stopLoss,
-        term: logEntry.term,
-        reasoning: logEntry.reasoning,
-        executed: logEntry.executed,
-        needsReview: logEntry.needsReview,
-        isRead: logEntry.isRead,
-        createdAt: logEntry.createdAt,
-        updatedAt: logEntry.updatedAt,
-        executedAt: logEntry.executedAt,
-        // Include review data
-        reviewStatus: logEntry.reviewStatus,
-        reviewResult: logEntry.reviewResult,
-        reviewRequestedAt: logEntry.reviewRequestedAt,
-        reviewCompletedAt: logEntry.reviewCompletedAt
-      }
+      data: logEntry.toObject() // Convert mongoose document to plain object with all fields
     });
 
   } catch (error) {
-    console.error('Error getting review status:', error);
+    console.error('Error getting trade log:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -333,13 +321,19 @@ router.get('/:id/review-status', auth, async (req, res) => {
     
     // Check if review is completed based on reviewStatus and reviewResult presence
     const isReviewCompleted = logEntry.reviewStatus === 'completed' || 
+                              logEntry.reviewStatus === 'rejected' ||
                               (logEntry.reviewStatus === 'failed' && reviewData) ||
                               (reviewData && analysisData);
+
+    // Extract rejection reason from flat structure (now consistent across success/rejected)
+    const rejectionReason = analysisData?.rejectionReason || null;
 
     let response = {
       id: logEntry._id,
       isReviewCompleted: isReviewCompleted,
       reviewStatus: logEntry.reviewStatus,
+      status: logEntry.reviewStatus, // Add status field for frontend compatibility
+      rejectionReason: rejectionReason, // Add rejection reason field
       
       // Extract recommendation from analysis or UI
       recommendation: analysisData?.tldr || uiData?.tldr || "No analysis available",
@@ -417,9 +411,14 @@ router.post('/:id/request-review', auth, async (req, res) => {
     const canUse = await subscriptionService.canUserUseCredits(req.user.id, 1, isFromRewardedAd);
     
     if (!canUse.canUse) {
+      // Determine if we should suggest watching an ad
+      const suggestAd = !isFromRewardedAd && (canUse.reason?.includes('exhausted') || canUse.reason?.includes('limit'));
+      
       return res.status(402).json({
         success: false,
-        message: `${canUse.reason || 'Please upgrade your subscription.'}`
+        message: `${canUse.reason || 'Please upgrade your subscription.'}`,
+        suggestAd: suggestAd,
+        errorCode: 'CREDITS_EXHAUSTED'
       });
     }
 
@@ -427,7 +426,9 @@ router.post('/:id/request-review', auth, async (req, res) => {
     await StockLog.findByIdAndUpdate(req.params.id, {
       needsReview: true,
       reviewStatus: 'pending',
-      reviewRequestedAt: new Date()
+      reviewRequestedAt: new Date(),
+      isFromRewardedAd: isFromRewardedAd || false,
+      creditType: isFromRewardedAd ? "bonus" : "regular"
     });
 
     try {
@@ -442,6 +443,7 @@ router.post('/:id/request-review', auth, async (req, res) => {
         logId: req.params.id,
         userId: req.user.id,
         stock: logEntry.stock,
+        instrument_key: logEntry.stock?.instrument_key, // Extract instrument_key for API calls
         direction: logEntry.direction,
         quantity: logEntry.quantity,
         entryPrice: logEntry.entryPrice,
@@ -459,9 +461,10 @@ router.post('/:id/request-review', auth, async (req, res) => {
         success: true,
         message: 'AI review request submitted successfully',
         data: {
-          id: req.params.id,
-          status: 'pending',
-          analysis: 'AI review is being processed. You will receive a notification when complete.'
+          tradeLogId: req.params.id,
+          reviewStatus: 'pending',
+          message: 'AI review is being processed. You will receive a notification when complete.',
+          analysis: 'AI review is being processed. You will receive a notification when complete.' // Keep for backward compatibility
         }
       });
 
@@ -483,6 +486,111 @@ router.post('/:id/request-review', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error requesting AI review:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Retry AI review for a specific trade log
+router.post('/:id/retry-review', auth, async (req, res) => {
+  try {
+    const logEntry = await StockLog.findOne({
+      _id: req.params.id,
+      user: req.user.id
+    });
+
+    if (!logEntry) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trade log not found'
+      });
+    }
+
+    // Check if user has sufficient credits in their subscription
+    const { subscriptionService } = await import('../services/subscription/subscriptionService.js');
+    // For retry, use the saved isFromRewardedAd flag from the original trade log
+    // This ensures we use the same model type (bonus/regular) as the original request
+    const isFromRewardedAd = logEntry.isFromRewardedAd || req.body.isFromRewardedAd || false;
+    const canUse = await subscriptionService.canUserUseCredits(req.user.id, 1, isFromRewardedAd);
+    
+    if (!canUse.canUse) {
+      // Determine if we should suggest watching an ad
+      const suggestAd = !isFromRewardedAd && (canUse.reason?.includes('exhausted') || canUse.reason?.includes('limit'));
+      
+      return res.status(402).json({
+        success: false,
+        message: `${canUse.reason || 'Please upgrade your subscription.'}`,
+        suggestAd: suggestAd,
+        errorCode: 'CREDITS_EXHAUSTED'
+      });
+    }
+
+    // Reset review status to pending and clear previous results
+    await StockLog.findByIdAndUpdate(req.params.id, {
+      needsReview: true,
+      reviewStatus: 'pending',
+      reviewRequestedAt: new Date(),
+      reviewResult: null,
+      reviewCompletedAt: null,
+      reviewError: null
+    });
+
+    try {
+      console.log(`\n=== AI Review Retry Route Called ===`);
+      console.log(`userId: ${req.user.id}, logId: ${req.params.id}, isFromRewardedAd: ${isFromRewardedAd}`);
+      
+      // Process AI review asynchronously
+      aiReviewService.processAIReview({
+        instrument_key: logEntry.stock.instrument_key,
+        stock: logEntry.stock.name,
+        needsReview: true,
+        entryprice: logEntry.entryPrice.toString(),
+        stoploss: logEntry.stopLoss ? logEntry.stopLoss.toString() : null,
+        target: logEntry.targetPrice ? logEntry.targetPrice.toString() : null,
+        direction: logEntry.direction.toLowerCase(),
+        term: logEntry.term,
+        reasoning: logEntry.reasoning || null,
+        logId: req.params.id,
+        quantity: logEntry.quantity.toString(),
+        createdAt: logEntry.createdAt,
+        creditType: isFromRewardedAd ? "bonus" : (logEntry.creditType || "regular"),
+        isFromRewardedAd: isFromRewardedAd
+      }, req.user.id);
+
+      // Return immediate response
+      res.status(200).json({
+        success: true,
+        message: 'AI review retry submitted successfully',
+        data: {
+          tradeLogId: req.params.id,
+          reviewStatus: 'pending',
+          message: 'AI review is being reprocessed. You will receive a notification when complete.'
+        }
+      });
+
+    } catch (processError) {
+      console.error('Error processing AI review retry:', processError);
+      
+      // Revert the status changes since processing failed
+      await StockLog.findByIdAndUpdate(req.params.id, {
+        reviewStatus: 'error',
+        reviewError: {
+          message: processError.message || 'Failed to process retry',
+          code: 'RETRY_PROCESSING_ERROR',
+          type: 'processing_error'
+        }
+      });
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to process AI review retry'
+      });
+    }
+
+  } catch (error) {
+    console.error('Error retrying AI review:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -517,10 +625,10 @@ router.get('/export/csv', auth, async (req, res) => {
     // Get trade logs with filtering (sort by executedAt since that's your main date field)
     const tradeLogs = await StockLog.find(filter).sort({ executedAt: -1 });
     
-    // Enhanced CSV headers
+    // Enhanced CSV headers - shorter names for better Excel display
     const csvHeader = [
       'Instrument Key',
-      'Stock Symbol',
+      'Symbol',
       'Stock Name',
       'Exchange',
       'Direction', 
@@ -533,38 +641,83 @@ router.get('/export/csv', auth, async (req, res) => {
       'Tags',
       'Notes',
       'Executed',
-      'Executed At',
-      'Needs Review',
+      'Executed Date',
+      'AI Review Requested',
       'Review Status',
-      'Review Result',
-      'Review Requested At',
-      'Review Completed At',
-      'Created At',
-      'Updated At'
+      'AI Verdict',
+      'AI Analysis Valid',
+      'AI Recommendation',
+      'Rejection Reason',
+      'Review Requested Date',
+      'Review Completed Date',
+      'Created Date',
+      'Updated Date'
     ];
     
     const csvRows = tradeLogs.map(log => {
-      // Format reviewResult properly for CSV
-      let reviewResultText = '';
-      if (log?.reviewResult) {
+      // Extract AI review data properly
+      let aiVerdict = '';
+      let aiAnalysisCorrect = '';
+      let aiInsight = '';
+      let rejectionReason = '';
+      
+      if (log?.reviewResult && Array.isArray(log.reviewResult) && log.reviewResult.length > 0) {
         try {
-          if (Array.isArray(log.reviewResult) && log.reviewResult.length > 0) {
-            const firstReview = log.reviewResult[0];
-            reviewResultText = `Status: ${firstReview.status || 'N/A'} | Correct: ${firstReview.isAnalaysisCorrect || 'N/A'} | Result: ${firstReview.result || 'N/A'}`;
-          } else if (typeof log.reviewResult === 'object') {
-            reviewResultText = JSON.stringify(log.reviewResult);
+          const firstReview = log.reviewResult[0];
+          
+          // Extract verdict from UI section
+          aiVerdict = firstReview.ui?.verdict || firstReview.status || '';
+          
+          // Extract analysis correctness
+          if (firstReview.isAnalaysisCorrect !== undefined) {
+            aiAnalysisCorrect = firstReview.isAnalaysisCorrect ? 'Yes' : 'No';
+          } else if (firstReview.analysis?.isValid !== undefined) {
+            aiAnalysisCorrect = firstReview.analysis.isValid === true ? 'Yes' : 
+                               firstReview.analysis.isValid === false ? 'No' : 'N/A';
           } else {
-            reviewResultText = log.reviewResult.toString();
+            aiAnalysisCorrect = 'N/A';
           }
+          
+          // Extract insight/recommendation (prioritize tldr, then insight)
+          aiInsight = firstReview.ui?.tldr || firstReview.analysis?.insight || '';
+          
+          // Extract rejection reason
+          rejectionReason = firstReview.analysis?.rejectionReason || '';
+          
         } catch (e) {
-          reviewResultText = 'Error parsing review result';
+          console.error('Error parsing review result:', e);
+          aiVerdict = 'Error parsing';
+          aiAnalysisCorrect = 'N/A';
+          aiInsight = 'Error parsing review data';
+          rejectionReason = '';
         }
       }
+      
+      // Helper function to format date for user-friendly display
+      const formatDate = (dateString) => {
+        if (!dateString) return '';
+        try {
+          const date = new Date(dateString);
+          // Format as DD/MM/YYYY HH:MM AM/PM IST
+          const options = {
+            day: '2-digit',
+            month: '2-digit', 
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+            timeZone: 'Asia/Kolkata'
+          };
+          return date.toLocaleString('en-IN', options) + ' IST';
+        } catch (e) {
+          return dateString; // Return original if parsing fails
+        }
+      };
       
       return [
         log.stock?.instrument_key || '',
         log.stock?.trading_symbol || '',
-        log.stock?.name || '',
+        `"${(log.stock?.name || '').replace(/"/g, '""')}"`, // Escape stock name
         log.stock?.exchange || '',
         log.direction || '',
         log.quantity || '',
@@ -573,17 +726,20 @@ router.get('/export/csv', auth, async (req, res) => {
         log.stopLoss || '',
         log.term || '',
         `"${(log.reasoning || '').replace(/"/g, '""')}"`, // Escape quotes properly for reasoning
-        log.tags?.join('; ') || '', // This field might not exist in schema
-        log.note || '', // This field might not exist in schema
+        `"${(log.tags?.join('; ') || '').replace(/"/g, '""')}"`, // Escape tags properly
+        `"${(log.note || '').replace(/"/g, '""')}"`, // Escape notes properly
         log.executed ? 'Yes' : 'No',
-        log.executedAt ? log.executedAt.toISOString() : '',
+        `"${formatDate(log.executedAt)}"`, // Escape date-time string
         log.needsReview ? 'Yes' : 'No',
-        log.reviewStatus || '',
-        `"${reviewResultText.replace(/"/g, '""')}"`, // Escape quotes properly
-        log.reviewRequestedAt ? log.reviewRequestedAt.toISOString() : '',
-        log.reviewCompletedAt ? log.reviewCompletedAt.toISOString() : '',
-        log.createdAt ? log.createdAt.toISOString() : '',
-        log.updatedAt ? log.updatedAt.toISOString() : ''
+        `"${(log.reviewStatus || '').replace(/"/g, '""')}"`, // Escape review status
+        `"${aiVerdict.replace(/"/g, '""')}"`, // Escape AI verdict
+        aiAnalysisCorrect,
+        `"${aiInsight.replace(/"/g, '""')}"`, // Escape quotes properly for AI insight
+        `"${rejectionReason.replace(/"/g, '""')}"`, // Escape quotes properly for rejection reason
+        `"${formatDate(log.reviewRequestedAt)}"`, // Escape date-time string
+        `"${formatDate(log.reviewCompletedAt)}"`, // Escape date-time string
+        `"${formatDate(log.createdAt)}"`, // Escape date-time string
+        `"${formatDate(log.updatedAt)}"` // Escape date-time string
       ];
     });
     
@@ -831,6 +987,22 @@ router.get('/token-usage/stats', auth, async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Failed to fetch token usage statistics' 
+    });
+  }
+});
+
+// Get trading terms configuration
+router.get('/terms', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: getTermsForSelection()
+    });
+  } catch (error) {
+    console.error('Error fetching trading terms:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch trading terms'
     });
   }
 });

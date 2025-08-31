@@ -50,13 +50,19 @@ class FirebaseService {
         if(!token){
           continue;
         }
+        // Ensure all data values are strings (Firebase requirement)
+        const stringifiedData = {};
+        for (const [key, value] of Object.entries(data)) {
+          stringifiedData[key] = String(value);
+        }
+
         const message = {
           notification: {
             title,
             body
           },
           data: {
-            ...data,
+            ...stringifiedData,
             click_action: 'FLUTTER_NOTIFICATION_CLICK',
             channel_id: 'trade_notifications'
           },

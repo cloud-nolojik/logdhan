@@ -56,26 +56,6 @@ export default function HeroSection() {
           transition={{ duration: 0.8 }}
           className="max-w-4xl mx-auto"
         >
-          {/* Logo and brand */}
-          <motion.div
-            initial={{ scale: 0, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ delay: 0.2, duration: 0.8, type: "spring", stiffness: 100 }}
-            className="mb-8"
-          >
-            <div className="flex items-center justify-center gap-4 mb-4">
-              <div className="relative">
-                <img src="/logo.svg" alt="LogDhan L.O.G Logo" className="h-20 w-auto drop-shadow-lg" />
-              </div>
-              <div className="text-left">
-                <h1 className="text-4xl font-bold bg-gradient-to-r from-violet-600 via-blue-600 to-emerald-600 bg-clip-text text-transparent">
-                  LogDhan
-                </h1>
-                <p className="text-lg text-gray-600 font-medium">Log your trades, Optimise decisions, Generate Dhan.</p>
-              </div>
-            </div>
-          </motion.div>
-
           {/* Main headline */}
           <motion.h2 
             initial={{ opacity: 0, y: 30 }}
@@ -83,11 +63,18 @@ export default function HeroSection() {
             transition={{ delay: 0.4, duration: 0.8 }}
             className="text-3xl md:text-5xl lg:text-6xl font-extrabold mb-6 leading-tight"
           >
-            <span className="block bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent">
-              Plan Your Trades
+            <div className="mb-4">
+              <span className="text-sm md:text-base uppercase tracking-wider text-gray-500 font-medium">The L.O.G Philosophy</span>
+            </div>
+            <span className="block text-4xl md:text-5xl lg:text-6xl font-black">
+              <span className="bg-gradient-to-r from-orange-600 to-orange-500 bg-clip-text text-transparent">Log</span>
+              <span className="text-gray-700"> • </span>
+              <span className="bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent">Optimise</span>
+              <span className="text-gray-700"> • </span>
+              <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 bg-clip-text text-transparent">Generate</span>
             </span>
-            <span className="block bg-gradient-to-r from-violet-600 via-blue-600 to-emerald-600 bg-clip-text text-transparent">
-              Get AI Review
+            <span className="block text-2xl md:text-3xl mt-4 text-gray-600">
+              Your Path to Disciplined Trading
             </span>
           </motion.h2>
 
@@ -98,7 +85,7 @@ export default function HeroSection() {
             transition={{ delay: 0.6, duration: 0.8 }}
             className="text-lg md:text-xl text-gray-600 mb-8 font-light max-w-3xl mx-auto leading-relaxed"
           >
-            Stop impulsive trading. Plan your trades, get AI feedback, and maintain detailed logs.
+            <span className="font-bold">Log</span> every trade with reason • <span className="font-bold">Optimise</span> with AI insights • <span className="font-bold">Generate</span> consistent profits. Transform impulsive trading into disciplined wealth creation.
           </motion.p>
 
           {/* Free plan highlight */}
@@ -115,7 +102,7 @@ export default function HeroSection() {
                 </div>
                 <div className="text-left">
                   <div className="bg-gradient-to-r from-violet-600 to-emerald-600 bg-clip-text text-transparent font-bold text-lg">Forever FREE Plan</div>
-                  <div className="text-gray-600 text-sm">3 AI reviews daily + 1 bonus after ad</div>
+                  <div className="text-gray-600 text-sm">Unlimited AI reviews by watching short ads</div>
                 </div>
               </div>
             </div>
@@ -142,41 +129,6 @@ export default function HeroSection() {
             </Link>
           </motion.div>
 
-          {/* Key features highlight */}
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 1.2, duration: 0.8 }}
-            className="flex flex-wrap justify-center gap-4 max-w-4xl mx-auto"
-          >
-            <motion.div 
-              whileHover={{ scale: 1.05 }}
-              className="flex items-center gap-3 bg-white/80 backdrop-blur-sm rounded-xl px-5 py-3 border border-orange-200 shadow-sm"
-            >
-              <div className="bg-gradient-to-r from-orange-500 to-orange-600 rounded-lg p-2">
-                <span className="text-lg">📝</span>
-              </div>
-              <span className="font-medium text-orange-700">Plan Your Trades</span>
-            </motion.div>
-            <motion.div 
-              whileHover={{ scale: 1.05 }}
-              className="flex items-center gap-3 bg-white/80 backdrop-blur-sm rounded-xl px-5 py-3 border border-blue-200 shadow-sm"
-            >
-              <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg p-2">
-                <span className="text-lg">🤖</span>
-              </div>
-              <span className="font-medium text-blue-700">AI Review</span>
-            </motion.div>
-            <motion.div 
-              whileHover={{ scale: 1.05 }}
-              className="flex items-center gap-3 bg-white/80 backdrop-blur-sm rounded-xl px-5 py-3 border border-emerald-200 shadow-sm"
-            >
-              <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-lg p-2">
-                <span className="text-lg">📊</span>
-              </div>
-              <span className="font-medium text-emerald-700">Track & Learn</span>
-            </motion.div>
-          </motion.div>
         </motion.div>
       </div>
 

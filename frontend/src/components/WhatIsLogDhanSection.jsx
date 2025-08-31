@@ -16,20 +16,20 @@ export default function WhatIsLogDhanSection() {
               <span className="text-blue-400 text-sm font-semibold">🚀 WHAT IS LOGDHAN?</span>
             </div>
             <h2 className="text-4xl md:text-5xl font-black text-white mb-6 leading-tight">
-              AI-Powered <span className="text-transparent bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text">Trade Planning</span>
+              Your <span className="text-transparent bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text">AI Trading Mentor</span>
             </h2>
             <p className="text-xl text-slate-300 mb-8 leading-relaxed">
-              Stop impulsive trading forever. LogDhan helps you plan trades before execution, get AI insights, and maintain detailed logs—completely <span className="text-emerald-400 font-semibold">free with our ad-supported model</span> or upgrade for unlimited access.
+              Transform impulsive trading into disciplined wealth creation. LogDhan uses the L.O.G philosophy—<span className="text-orange-400 font-bold">Log</span> every trade, <span className="text-blue-400 font-bold">Optimise</span> with AI insights, <span className="text-emerald-400 font-bold">Generate</span> consistent profits.
             </p>
           </div>
           
           <div className="space-y-4">
             {[
-              { icon: '🎯', title: 'Forever FREE', desc: '3 AI reviews daily + 1 bonus after ad', color: 'text-emerald-400' },
-              { icon: '🤖', title: 'AI Guidance', desc: 'Plan trades before execution with smart insights', color: 'text-blue-400' },
-              { icon: '📊', title: 'Performance Tracking', desc: 'Detailed analytics and progress monitoring', color: 'text-purple-400' },
-              { icon: '📈', title: 'Export & Compliance', desc: 'Export logs for review and tax compliance', color: 'text-pink-400' },
-              { icon: '⚡', title: 'Upgrade Anytime', desc: 'Pro plans for ad-free unlimited access', color: 'text-yellow-400' }
+              { icon: '♾️', title: 'Forever FREE', desc: 'Unlimited AI reviews by watching short ads', color: 'text-emerald-400' },
+              { icon: '🧠', title: 'AI-Powered Analysis', desc: 'Get instant feedback on every trade decision', color: 'text-blue-400' },
+              { icon: '📈', title: 'Build Your Playbook', desc: 'Learn from mistakes and repeat successes', color: 'text-purple-400' },
+              { icon: '🎯', title: 'Disciplined Trading', desc: 'No more FOMO or revenge trading', color: 'text-pink-400' },
+              { icon: '💎', title: 'Pro Plans Available', desc: 'Ad-free experience with monthly credits', color: 'text-yellow-400' }
             ].map((item, i) => (
               <motion.div
                 key={i}
@@ -68,8 +68,8 @@ export default function WhatIsLogDhanSection() {
                 </div>
                 <div className="space-y-3">
                   <div className="bg-white/10 rounded-lg p-3 flex items-center justify-between">
-                    <span className="text-white text-sm">AI Reviews Today</span>
-                    <span className="bg-emerald-500 text-white text-xs px-2 py-1 rounded-full font-bold">3 + 1 FREE</span>
+                    <span className="text-white text-sm">AI Reviews</span>
+                    <span className="bg-emerald-500 text-white text-xs px-2 py-1 rounded-full font-bold">∞ UNLIMITED</span>
                   </div>
                   <div className="bg-white/10 rounded-lg p-3 flex items-center justify-between">
                     <span className="text-white text-sm">Status</span>

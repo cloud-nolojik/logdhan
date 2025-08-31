@@ -47,8 +47,8 @@ class SubscriptionService {
         analysisLevel: 'advanced',
         creditRollover: { enabled: true, maxPercentage: 50 },
         restrictions: {
-          dailyReviewLimit: 4,   // 125 / ~30 days = ~4.2
-          weeklyReviewLimit: 28  // 4 per day × 7 days
+          dailyReviewLimit: 0,   // 0 means unlimited daily usage - use monthly pool
+          weeklyReviewLimit: 0   // 0 means unlimited weekly usage
         },
         sortOrder: 2
       },
@@ -78,8 +78,8 @@ class SubscriptionService {
         analysisLevel: 'advanced',
         creditRollover: { enabled: true, maxPercentage: 100 },
         restrictions: {
-          dailyReviewLimit: 6,    // 2000 / 365 ≈ 5.5
-          weeklyReviewLimit: 42   // ~6 per day × 7
+          dailyReviewLimit: 0,    // 0 means unlimited daily usage - use yearly pool
+          weeklyReviewLimit: 0    // 0 means unlimited weekly usage
         },
         sortOrder: 3
       },
@@ -91,8 +91,8 @@ class SubscriptionService {
         price: 0,
         credits: 999999, // Unlimited credits for basic plan (stored as large number for DB compatibility)
         features: [
-          'Up to 7 AI reviews per day',
-          '3 free + up to 4 from watching ads',
+          'Unlimited AI reviews with ads',
+          'Unlimited from watching ads',
           'Smart trade analysis',
           'Basic charts & insights', 
           'Earn bonus credits from assessments'
@@ -108,10 +108,11 @@ class SubscriptionService {
         analysisLevel: 'basic',
         creditRollover: { enabled: false },
         restrictions: {
-          dailyReviewLimit: 7,    // 3 base + up to 4 from ads
-          rewardedAdLimit: 4,     // Max +4 reviews from ads per day  
-          weeklyReviewLimit: 35,  // 7 × 5 days average (flexible with ads)
-          rateLimited: true
+          dailyReviewLimit: 0,    // 0 means unlimited
+          dailyFreeReviews: 0,    // 0 means unlimited - no free review limit, users can watch ads anytime
+          rewardedAdLimit: 0,     // 0 means unlimited ads per day
+          weeklyReviewLimit: 0,   // 0 means unlimited
+          rateLimited: false      // No rate limiting for basic plan with ads
         },
         sortOrder: 0 // Show first as free option
       }
@@ -965,69 +966,39 @@ class SubscriptionService {
         const dailyLimit = plan.restrictions.dailyReviewLimit || 7;
         
         if (isFromRewardedAd) {
-          // Check if user has reached max ad reviews
-          const rewardedLimit = plan.restrictions.rewardedAdLimit || 4;
-          if (subscription.dailyUsage.rewardedAdCount >= rewardedLimit) {
-            return { 
-              canUse: false, 
-              reason: `Daily ad review limit reached (${rewardedLimit} per day).`,
-              limit: rewardedLimit,
-              used: subscription.dailyUsage.rewardedAdCount
-            };
-          }
+          // Allow unlimited ad reviews for basic plan
+          console.log(`Ad-based review allowed - no limits on ad reviews for basic plan`);
+          // Remove daily ad limit restriction - users can watch unlimited ads
           
-          // Check total daily limit
-          if (totalReviewsToday >= dailyLimit) {
-            return { 
-              canUse: false, 
-              reason: `Daily total review limit reached (${dailyLimit} per day).`,
-              limit: dailyLimit,
-              used: totalReviewsToday
-            };
-          }
+          // No total daily limit for basic plan with ads - allow unlimited
+          console.log(`Total reviews today: ${totalReviewsToday} - no limit enforced for basic plan with ads`);
         } else {
-          // For non-ad reviews, check if user needs to watch ads
-          if (subscription.dailyUsage.reviewCount >= 3) {
-            // User has exhausted free reviews, check if they have rewarded credits
-            if (subscription.credits.rewardedCredits > 0) {
-              console.log(`User has ${subscription.credits.rewardedCredits} rewarded credits available - will use those`);
-              // Don't block - let them use rewarded credits
-              // The deductCredits method will handle using rewarded credits
-            } else if (totalReviewsToday >= dailyLimit) {
-              return { 
-                canUse: false, 
-                reason: `Daily review limit reached (${dailyLimit} per day). You've used all your free and ad-based reviews for today.`,
-                limit: dailyLimit,
-                used: totalReviewsToday
-              };
-            } else {
-              return { 
-                canUse: false, 
-                reason: 'Daily free review limit reached (3 per day). Watch an ad to unlock more reviews.',
-                limit: 3,
-                used: subscription.dailyUsage.reviewCount
-              };
-            }
-          }
+          // For non-ad reviews on basic plan, allow unlimited reviews
+          // Users can always watch ads to get more reviews - no daily limits
+          console.log(`Basic plan non-ad review allowed - no daily restrictions, user can watch ads anytime`);
         }
       } else {
-        // Check daily review limit for Pro plans
-        if (plan.restrictions.dailyReviewLimit) {
-          const dailyLimit = plan.restrictions.dailyReviewLimit;
-          if (subscription.dailyUsage.reviewCount >= dailyLimit) {
-            return { 
-              canUse: false, 
-              reason: `Daily review limit reached (${dailyLimit} per day). Upgrade for higher limits or wait until tomorrow.`,
-              limit: dailyLimit,
-              used: subscription.dailyUsage.reviewCount
-            };
-          }
-        }
+        // For paid plans (pro_monthly, pro_yearly) - no daily limits, only check credit pool
+        // Skip daily limit checks - let them use their monthly/yearly credits freely
+        console.log(`Paid plan ${subscription.planId} - checking credit pool only, no daily restrictions`);
       }
     }
 
     if (!subscription.canUseCredits(creditsNeeded)) {
-      return { canUse: false, reason: 'Insufficient credits' };
+      // Different messages based on plan type
+      if (subscription.planId === 'basic_ads') {
+        return { 
+          canUse: false, 
+          reason: 'Daily free review limit reached. Watch an ad to unlock more reviews.',
+          showAdOption: true 
+        };
+      } else {
+        return { 
+          canUse: false, 
+          reason: 'Monthly/Yearly credits exhausted. Watch an ad for more reviews or wait for next billing cycle.',
+          showAdOption: true 
+        };
+      }
     }
 
     // Always return daily usage stats for dashboard display
@@ -1052,11 +1023,15 @@ class SubscriptionService {
           used: totalReviewsToday
         };
       } else {
-        // Pro plans
-        const dailyLimit = plan.restrictions.dailyReviewLimit || 4;
+        // Pro plans - show total credit pool instead of daily limits
+        const totalCredits = subscription.getTotalAvailableCredits();
+        const planCredits = subscription.planId === 'pro_monthly' ? 125 : 2000;
         dailyUsageStats = {
-          limit: dailyLimit,
-          used: subscription.dailyUsage.reviewCount
+          limit: 0, // 0 indicates no daily limit
+          used: subscription.dailyUsage.reviewCount,
+          totalCredits: totalCredits,
+          planCredits: planCredits,
+          unlimited: true
         };
       }
     } else {
@@ -1089,10 +1064,10 @@ class SubscriptionService {
   /**
    * Deduct credits from subscription
    */
-  async deductCredits(userId, creditsNeeded, description, serviceType = 'ai_review', isFromRewardedAd = false) {
+  async deductCredits(userId, creditsNeeded, description, serviceType = 'ai_review', isFromRewardedAd = false, creditType = 'regular') {
     try {
       console.log(`\n=== deductCredits called ===`);
-      console.log(`userId: ${userId}, creditsNeeded: ${creditsNeeded}, serviceType: ${serviceType}, isFromRewardedAd: ${isFromRewardedAd}`);
+      console.log(`userId: ${userId}, creditsNeeded: ${creditsNeeded}, serviceType: ${serviceType}, isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
       
       const checkResult = await this.canUserUseCredits(userId, creditsNeeded, isFromRewardedAd);
       if (!checkResult.canUse) {
@@ -1107,56 +1082,27 @@ class SubscriptionService {
       
       console.log(`Subscription found: planId=${subscription.planId}, dailyUsage before:`, subscription.dailyUsage);
       
-      // Deduct credits based on source type
-      let creditsToDeduct = creditsNeeded;
-      let rolloverUsed = 0;
-      let regularUsed = 0;
-      let rewardedUsed = 0;
-
-      // For basic_ads plan, check if user should use rewarded credits
-      const shouldUseRewardedCredits = subscription.planId === 'basic_ads' && 
-                                       (isFromRewardedAd || 
-                                        (subscription.dailyUsage && subscription.dailyUsage.reviewCount >= 3));
-
-      if (shouldUseRewardedCredits) {
-        // For ad-based reviews OR when free reviews exhausted, deduct from rewarded credits
-        if (subscription.credits.rewardedCredits >= creditsToDeduct) {
-          rewardedUsed = creditsToDeduct;
-          subscription.credits.rewardedCredits -= rewardedUsed;
-          creditsToDeduct = 0;
-          console.log(`Deducted ${rewardedUsed} from rewarded credits. Remaining rewarded credits: ${subscription.credits.rewardedCredits}`);
-          
-          // Mark this as an ad-based review for tracking
-          isFromRewardedAd = true;
-        } else {
-          throw new Error('Insufficient rewarded credits. Please watch an ad to earn more credits.');
-        }
-      } else {
-        // For regular reviews, deduct from rollover first, then regular credits
-        if (subscription.credits.rollover > 0) {
-          rolloverUsed = Math.min(creditsToDeduct, subscription.credits.rollover);
-          subscription.credits.rollover -= rolloverUsed;
-          creditsToDeduct -= rolloverUsed;
-        }
-
-        if (creditsToDeduct > 0) {
-          regularUsed = creditsToDeduct;
-          subscription.credits.remaining -= regularUsed;
-          subscription.credits.used += regularUsed;
-        }
-        
-        console.log(`Deducted ${rolloverUsed} from rollover, ${regularUsed} from regular credits`);
-      }
+      // Use the proper subscription model method for credit deduction
+      const { Subscription } = await import('../../models/subscription.js');
+      const deductionResult = await Subscription.deductCreditsAtomic(userId, creditsNeeded, creditType);
+      
+      console.log(`Credit deduction result:`, deductionResult.deductedFrom);
+      
+      // Get the fresh subscription after deduction
+      const updatedSubscription = await this.getUserActiveSubscription(userId);
+      console.log(`Credits remaining after deduction: ${updatedSubscription.getTotalAvailableCredits()}`);
+      
+      // Get plan for daily usage tracking
+      const plan = await this.getPlanById(subscription.planId);
 
       // Update daily usage tracking for all plans with restrictions
-      const plan = await this.getPlanById(subscription.planId);
       if (plan && plan.restrictions) {
         const now = new Date();
         const today = now.toDateString();
         
         // Initialize daily usage if it doesn't exist
-        if (!subscription.dailyUsage) {
-          subscription.dailyUsage = {
+        if (!updatedSubscription.dailyUsage) {
+          updatedSubscription.dailyUsage = {
             date: today,
             reviewCount: 0,
             rewardedAdCount: 0
@@ -1164,8 +1110,8 @@ class SubscriptionService {
         }
         
         // Reset if it's a new day
-        if (subscription.dailyUsage.date !== today) {
-          subscription.dailyUsage = {
+        if (updatedSubscription.dailyUsage.date !== today) {
+          updatedSubscription.dailyUsage = {
             date: today,
             reviewCount: 0,
             rewardedAdCount: 0
@@ -1173,20 +1119,20 @@ class SubscriptionService {
         }
         
         // Increment the appropriate counter
-        if (isFromRewardedAd && subscription.planId === 'basic_ads') {
-          subscription.dailyUsage.rewardedAdCount += 1;
-          console.log(`Incremented rewardedAdCount to ${subscription.dailyUsage.rewardedAdCount} for user ${userId}`);
+        if (isFromRewardedAd && updatedSubscription.planId === 'basic_ads') {
+          updatedSubscription.dailyUsage.rewardedAdCount += 1;
+          console.log(`Incremented rewardedAdCount to ${updatedSubscription.dailyUsage.rewardedAdCount} for user ${userId}`);
         } else if (!isFromRewardedAd) {
-          subscription.dailyUsage.reviewCount += 1;
-          console.log(`Incremented reviewCount to ${subscription.dailyUsage.reviewCount} for user ${userId}`);
+          updatedSubscription.dailyUsage.reviewCount += 1;
+          console.log(`Incremented reviewCount to ${updatedSubscription.dailyUsage.reviewCount} for user ${userId}`);
         }
         
-        console.log(`dailyUsage after increment:`, subscription.dailyUsage);
+        console.log(`dailyUsage after increment:`, updatedSubscription.dailyUsage);
       } else {
-        console.log(`WARNING: Plan or restrictions not found for planId: ${subscription.planId}`);
+        console.log(`WARNING: Plan or restrictions not found for planId: ${updatedSubscription.planId}`);
       }
 
-      await subscription.save();
+      await updatedSubscription.save();
       console.log(`Subscription saved successfully`);
 
       // Update user credits
@@ -1201,8 +1147,8 @@ class SubscriptionService {
       return {
         success: true,
         creditsDeducted: creditsNeeded,
-        remainingCredits: subscription.getTotalAvailableCredits(),
-        subscription
+        remainingCredits: updatedSubscription.getTotalAvailableCredits(),
+        subscription: updatedSubscription
       };
 
     } catch (error) {
@@ -1463,18 +1409,19 @@ class SubscriptionService {
       const isToday = subscription.credits.lastRewardedDate && 
                      subscription.credits.lastRewardedDate.toDateString() === now.toDateString();
 
-      // Get daily ad limit from plan restrictions
+      // Get daily ad limit from plan restrictions (0 means unlimited)
       const plan = await this.getPlanById(subscription.planId);
       const dailyLimit = plan?.restrictions?.rewardedAdLimit || 0;
       const adsWatchedToday = isToday ? subscription.credits.dailyRewardedCount : 0;
 
       console.log(`🔍 ProcessRewardedAd Debug - planId: ${subscription.planId}, dailyLimit: ${dailyLimit}, adsWatchedToday: ${adsWatchedToday}`);
 
-      if (adsWatchedToday >= dailyLimit) {
+      // Only check limit if dailyLimit > 0 (0 means unlimited)
+      if (dailyLimit > 0 && adsWatchedToday >= dailyLimit) {
         throw new Error(`Daily ad limit reached. You can watch ${dailyLimit} ads per day.`);
       }
 
-      // Award 1 credit per ad (24-hour expiry)
+      // Award 1 credit per ad (expires at end of day)
       const creditsAwarded = 1;
       subscription.credits.rewardedCredits += creditsAwarded;
       
@@ -1489,7 +1436,8 @@ class SubscriptionService {
 
       await subscription.save();
 
-      const adsRemainingToday = Math.max(0, dailyLimit - subscription.credits.dailyRewardedCount);
+      // If dailyLimit is 0 (unlimited), return a high number for UI display
+      const adsRemainingToday = dailyLimit === 0 ? 999 : Math.max(0, dailyLimit - subscription.credits.dailyRewardedCount);
 
       console.log(`✅ Rewarded ad processed for user ${userId}: +${creditsAwarded} credits (${adsRemainingToday} remaining today)`);
 
@@ -1499,7 +1447,7 @@ class SubscriptionService {
         adsWatchedToday: subscription.credits.dailyRewardedCount,
         adsRemainingToday,
         dailyLimit,
-        expiryTime: new Date(now.getTime() + (24 * 60 * 60 * 1000)) // 24 hours from now
+        expiryTime: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0) // End of today (start of tomorrow)
       };
 
     } catch (error) {

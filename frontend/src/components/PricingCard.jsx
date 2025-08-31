@@ -13,7 +13,7 @@ export default function PricingCard() {
         <div className="text-xs text-white/90 space-y-1">
           <div className="flex justify-between">
             <span>Basic Free:</span>
-            <span className="font-bold text-green-400">3+1 reviews/day – FREE</span>
+            <span className="font-bold text-green-400">∞ with ads – FREE</span>
           </div>
           <div className="flex justify-between">
             <span>Pro Monthly:</span>
@@ -31,9 +31,8 @@ export default function PricingCard() {
       
       <ul className="text-white/90 mb-6 text-sm list-disc list-inside">
         <li>Unlimited free trade logging</li>
-        <li>Start with Basic Free: 3+1 daily AI reviews</li>
+        <li>Start with Basic Free: Unlimited AI reviews with ads</li>
         <li>Pro plans offer unlimited access without ads</li>
-        <li>Credit rollover up to 50% (Pro plans)</li>
         <li>Cancel anytime</li>
       </ul>
       <Link to="/pricing">

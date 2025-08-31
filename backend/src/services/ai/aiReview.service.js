@@ -13,14 +13,18 @@ import { createAndUploadIntradayCharts } from '../chart/intradayChart.service.js
 import { createAndUploadMediumTermCharts } from '../chart/mediumChart.service.js';
 import { aiCostTracker } from './aiCostTracker.js';
 import { subscriptionService } from '../subscription/subscriptionService.js';
+  import { Plan }  from '../../models/plan.js';
+import { Subscription } from '../../models/subscription.js';
+
+
 
 class AIReviewService {
   constructor() {
     this.upstoxApiKey = process.env.UPSTOX_API_KEY;
     this.openaiApiKey = process.env.OPENAI_API_KEY;
     
-    this.advancedanalysisModel = "o1-mini";
-    this.basicanalysisModel = "gpt-4o-mini";
+    this.advancedanalysisModel = "gpt-5";
+    this.basicanalysisModel = "o4-mini";
 
     
     // Initialize analysis model to basic by default
@@ -28,10 +32,11 @@ class AIReviewService {
     this.sentimentalModel = "gpt-4o-mini"; // Default to mini for cost efficiency
     
     // Model selection logic:
-    // - Basic plan with bonus credits: use advancedanalysisModel (o1-mini)
-    // - Basic plan with regular credits: use basicanalysisModel (gpt-4o-mini)
-    // - Paid plans: use advancedanalysisModel (o1-mini)
-    // - Sentiment analysis: always use sentimentalModel (gpt-4o-mini) for cost efficiency 
+    // - Bonus credits (advanced analysis): use o4-mini
+    // - Basic plan with regular credits: use gpt-4o-mini  
+    // - Rewarded ad reviews: use gpt-4o-mini (sustainable)
+    // - Paid plans: use o4-mini
+    // - Sentiment analysis: always use gpt-4o-mini for cost efficiency 
     
     this.rssParser = new Parser();
     
@@ -129,6 +134,132 @@ class AIReviewService {
   }
 
   /**
+   * Clean JSON response from AI models (especially o4-mini)
+   * @param {String} raw - Raw response that might contain markdown or other formatting
+   * @returns {Object} - Parsed JSON object
+   */
+  cleanJsonResponse(raw) {
+    if (!raw) throw new Error("Empty response from model");
+    
+    let cleaned = raw;
+    
+    // Remove markdown code blocks if present
+    if (cleaned.includes('```json')) {
+      cleaned = cleaned.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+    }
+    
+    // Remove any leading/trailing whitespace
+    cleaned = cleaned.trim();
+    
+    // Remove any potential BOM or zero-width characters
+    cleaned = cleaned.replace(/^\uFEFF/, '').replace(/\u200B/g, '');
+    
+    // If it starts with ``` without json, remove it
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/g, '');
+    }
+    
+    try {
+      return JSON.parse(cleaned);
+    } catch (error) {
+      console.error('Failed to parse JSON after cleaning:', cleaned.substring(0, 200));
+      throw new Error(`JSON parsing failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get language style based on user experience
+   * @param {String} userExperience - User's trading experience level
+   * @returns {Object} - Language style configuration
+   */
+  getExperienceLanguage(userExperience) {
+    switch (userExperience) {
+      case 'beginner':
+        return {
+          tone: 'Use plain, short sentences',
+          complexity: 'Avoid technical jargon',
+          glossaryTerms: ['VWAP', 'Risk/Reward', 'RR', 'ATR', 'RSI', 'SMA', 'EMA', 'Support', 'Resistance']
+        };
+      case 'intermediate':
+        return {
+          tone: 'Use clear language with light technical terms',
+          complexity: 'Define uncommon terms once in parentheses',
+          glossaryTerms: ['RR', 'SL', 'TP', 'VWAP', 'ATR', 'MACD', 'Divergence']
+        };
+      case 'advanced':
+        return {
+          tone: 'Use technical language freely',
+          complexity: 'Include advanced structure and confluence analysis',
+          glossaryTerms: []
+        };
+      default:
+        return {
+          tone: 'Use clear, practical language',
+          complexity: 'Keep it concise',
+          glossaryTerms: ['VWAP', 'RR', 'ATR']
+        };
+    }
+  }
+
+  /**
+   * Get latest candle from array, handling both chronological orders
+   * @param {Array} candles - Array of candles [time, open, high, low, close, volume]
+   * @returns {Object|null} - Latest candle object or null
+   */
+  getLatestCandle(candles) {
+    if (!candles || !Array.isArray(candles) || candles.length === 0) return null;
+    
+    // Check if first candle is array or object format
+    const isArrayFormat = Array.isArray(candles[0]);
+    
+    if (candles.length === 1) {
+      if (isArrayFormat) {
+        return { time: candles[0][0], close: candles[0][4] };
+      } else {
+        return { 
+          time: candles[0].time || candles[0].timestamp, 
+          close: candles[0].close || candles[0].c 
+        };
+      }
+    }
+    
+    // Check order by comparing first and last timestamps
+    let firstTime, lastTime;
+    if (isArrayFormat) {
+      firstTime = new Date(candles[0][0]).getTime();
+      lastTime = new Date(candles[candles.length - 1][0]).getTime();
+    } else {
+      firstTime = new Date(candles[0].time || candles[0].timestamp).getTime();
+      lastTime = new Date(candles[candles.length - 1].time || candles[candles.length - 1].timestamp).getTime();
+    }
+    
+    // If newest first (reverse chronological), use [0]
+    // If oldest first (chronological), use [-1]
+    const latestIndex = firstTime > lastTime ? 0 : candles.length - 1;
+    const latestCandle = candles[latestIndex];
+    
+    if (isArrayFormat) {
+      return {
+        time: latestCandle[0],
+        close: latestCandle[4],
+        open: latestCandle[1],
+        high: latestCandle[2], 
+        low: latestCandle[3],
+        volume: latestCandle[5]
+      };
+    } else {
+      return {
+        time: latestCandle.time || latestCandle.timestamp,
+        close: latestCandle.close || latestCandle.c,
+        open: latestCandle.open || latestCandle.o,
+        high: latestCandle.high || latestCandle.h,
+        low: latestCandle.low || latestCandle.l,
+        volume: latestCandle.volume || latestCandle.v
+      };
+    }
+  }
+
+  /**
    * Get current Indian Standard Time (IST)
    * @param {string} format - Return format: 'string' | 'minutes' | 'object'
    * @returns {string|number|object} - IST time in requested format
@@ -136,16 +267,16 @@ class AIReviewService {
   getCurrentIST(format = 'string') {
     const now = new Date();
     
-    // Convert UTC to IST offset
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(now.getTime() + istOffset - (now.getTimezoneOffset() * 60000));
-    
+    // Use Intl.DateTimeFormat for proper IST conversion
     const istTimeString = new Intl.DateTimeFormat('en-IN', {
       timeZone: 'Asia/Kolkata',
       hour: '2-digit',
       minute: '2-digit',
       hour12: false
     }).format(now);
+    
+    // Create proper IST Date object using toLocaleString
+    const istDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     
     if (format === 'string') {
       return istTimeString; 
@@ -168,7 +299,7 @@ class AIReviewService {
     }
   
     if (format === 'date') {
-      return istDate; // <--- direct IST Date object
+      return istDate; // <--- proper IST Date object
     }
     
     throw new Error(`Invalid format: ${format}`);
@@ -198,7 +329,7 @@ class AIReviewService {
    */
   validateTradeReview(tradeData) {
     const term = tradeData.term?.toLowerCase();
-  
+    
     // 1) Skip market-hour checks for non-intraday trades
     if (term !== 'intraday') {
       return {
@@ -250,6 +381,146 @@ class AIReviewService {
 
 
   /**
+   * Determine which AI model to use based on user's plan, credits, and ad status
+   * @param {String} userId - User ID
+   * @param {Boolean} isFromRewardedAd - Whether this is from a rewarded ad
+   * @param {String} creditType - Type of credit (regular, bonus, paid)
+   * @returns {Object} - Model configuration and status
+   */
+  async determineAIModel(userId, isFromRewardedAd = false, creditType = 'regular') {
+    try {
+      console.log(`\n🔍 Determining AI model for user: ${userId}`);
+      console.log(`   isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
+      
+      // Import required services
+      const { Subscription } = await import('../../models/subscription.js');
+      const { Plan } = await import('../../models/plan.js');
+      const { subscriptionService } = await import('../subscription/subscriptionService.js');
+      
+      // Check if user can use credits
+      const canUse = await subscriptionService.canUserUseCredits(userId, 1, isFromRewardedAd);
+      
+      if (!canUse.canUse) {
+        // Credits exhausted - determine appropriate message
+        const subscription = await Subscription.findActiveForUser(userId);
+        const plan = subscription ? await Plan.getPlanById(subscription.planId) : null;
+        
+        let errorMessage = '';
+        let errorCode = 'CREDITS_EXHAUSTED';
+        
+        if (plan && plan.analysisLevel === 'advanced') {
+          // Paid plan with exhausted credits
+          if (isFromRewardedAd) {
+            // User watched ad but still can't use (maybe ad limit reached)
+            errorMessage = canUse.reason || 'Daily ad limit reached. Please try again tomorrow.';
+            errorCode = 'AD_LIMIT_REACHED';
+          } else {
+            // Suggest watching ad for paid users
+            errorMessage = 'Your monthly credits are exhausted. Watch an ad to get this trade reviewed with AI, or wait for next month\'s credits.';
+            errorCode = 'PAID_CREDITS_EXHAUSTED';
+          }
+        } else {
+          // Basic/free plan with exhausted credits
+          if (isFromRewardedAd) {
+            errorMessage = canUse.reason || 'Daily limit reached. Please try again tomorrow.';
+            errorCode = 'DAILY_LIMIT_REACHED';
+          } else {
+            errorMessage = 'Daily free credits exhausted. Watch an ad to get this trade reviewed with AI.';
+            errorCode = 'FREE_CREDITS_EXHAUSTED';
+          }
+        }
+        
+        return {
+          canProceed: false,
+          error: errorMessage,
+          errorCode: errorCode,
+          suggestAd: !isFromRewardedAd, // Suggest ad only if not already from ad
+          models: null
+        };
+      }
+      
+      // User can proceed - determine models
+      const subscription = await Subscription.findActiveForUser(userId);
+      const plan = subscription ? await Plan.getPlanById(subscription.planId) : null;
+      
+      let analysisModel = 'o4-mini'; // Default basic model
+      let sentimentModel = 'gpt-4o-mini'; // Default basic model
+      let modelTier = 'basic';
+      
+      // Priority 1: Check if using bonus credits (advanced analysis)
+      if (creditType === 'bonus') {
+        // Bonus credits get advanced model for premium analysis
+        analysisModel = 'gpt-5';
+        sentimentModel = 'gpt-4o-mini';
+        modelTier = 'advanced';
+        console.log(`🎁 Bonus credits - using advanced analysis model (o4-mini)`);
+      }
+      // Priority 1.5: Check if this is from rewarded ad (basic model for sustainability) 
+      else if (isFromRewardedAd) {
+        // Rewarded ad users get basic model (sustainable for ad revenue)
+        analysisModel = 'o4-mini';
+        sentimentModel = 'gpt-4o-mini';
+        modelTier = 'ad-supported';
+        console.log(`🎁 Ad-supported review - using basic models (o4-mini) for sustainability`);
+      }
+      // Priority 2: Check plan type for paying users
+      else if (plan && plan.analysisLevel === 'advanced') {
+        // Check if paid user has credits remaining
+        const totalCredits = (subscription.credits.remaining || 0) + 
+                           (subscription.credits.rollover || 0) + 
+                           (subscription.credits.earnedCredits || 0);
+        
+        if (totalCredits > 0) {
+          // Paid user has credits - use advanced model
+          analysisModel = 'gpt-5';
+          sentimentModel = 'gpt-4o-mini';
+          modelTier = 'advanced';
+          console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models (gpt-5)`);
+        } else {
+          // Paid user exhausted credits - fallback to basic model
+          analysisModel = 'o4-mini';
+          sentimentModel = 'gpt-4o-mini';
+          modelTier = 'basic-fallback';
+          console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models (o4-mini)`);
+        }
+      }
+      // Priority 3: Basic/free plan users
+      else {
+        // Basic plan users get basic model
+        analysisModel = 'o4-mini';
+        sentimentModel = 'gpt-4o-mini';
+        modelTier = 'basic';
+        console.log(`📱 Basic/free plan - using basic models (o4-mini)`);
+      }
+      
+      return {
+        canProceed: true,
+        models: {
+          analysis: analysisModel,
+          sentiment: sentimentModel,
+          tier: modelTier
+        },
+        creditType: isFromRewardedAd ? 'bonus' : creditType,
+        subscription: {
+          planId: plan?.planId || 'free',
+          analysisLevel: plan?.analysisLevel || 'basic',
+          creditsRemaining: subscription?.credits?.regular || 0,
+          bonusCreditsRemaining: subscription?.credits?.bonusCredits || 0
+        }
+      };
+      
+    } catch (error) {
+      console.error('Error determining AI model:', error);
+      return {
+        canProceed: false,
+        error: 'Failed to determine AI model configuration. Please try again.',
+        errorCode: 'MODEL_DETERMINATION_ERROR',
+        models: null
+      };
+    }
+  }
+
+  /**
    * Main entry point - replaces n8n workflow
    * @param {Object} tradeData - Trade data from webhook
    * @param {String} userId - User ID for experience-based responses
@@ -259,49 +530,70 @@ class AIReviewService {
     const originalSentimentModel = this.sentimentalModel;
     const originalAnalysisModel = this.analysisModel;
     
-    // Set AI models based on user's subscription plan analysis level
+    // Use the new centralized model determination function
     if (userId) {
-      try {
-        const { Plan } = await import('../../models/plan.js');
-        const { Subscription } = await import('../../models/subscription.js');
+      const modelConfig = await this.determineAIModel(
+        userId, 
+        tradeData.isFromRewardedAd || false,
+        tradeData.creditType || 'regular'
+      );
+      
+      if (!modelConfig.canProceed) {
+        // Cannot proceed with review - save error status
+        console.error(`❌ Cannot proceed with AI review: ${modelConfig.error}`);
         
-        const subscription = await Subscription.findActiveForUser(userId);
-        if (subscription) {
-          const plan = await Plan.getPlanById(subscription.planId);
-          if (plan) {
-            // Map analysis level to AI models
-            if (plan.analysisLevel === 'basic') {
-              this.analysisModel = "gpt-4o-mini";
-              this.sentimentalModel = "gpt-4o-mini";
-              console.log(`🔄 Using basic AI models (${plan.planId}): gpt-4o-mini`);
-            } else if (plan.analysisLevel === 'advanced') {
-              this.analysisModel = "o1-mini"; // Keep advanced model
-              this.sentimentalModel = "gpt-4o-mini"; // Keep cost-effective for sentiment
-              console.log(`🔄 Using advanced AI models (${plan.planId}): o1-mini + gpt-4o-mini`);
-            }
-            
-            // For bonus credits, force advanced analysis only if user chose to use bonus credits
-            if (tradeData.creditType === "bonus" && 
-                subscription.credits.bonusCredits > 0 && 
-                subscription.credits.bonusCreditsExpiry && 
-                new Date() < subscription.credits.bonusCreditsExpiry) {
-              this.analysisModel = "o1-mini";
-              console.log(`🎁 Using bonus credits (creditType: ${tradeData.creditType}) - forcing advanced analysis: o1-mini`);
-            }
-          }
+        // Update trade log with error status
+        try {
+          const errorData = {
+            reviewStatus: 'error',
+            reviewCompletedAt: new Date(),
+            reviewError: {
+              message: modelConfig.error,
+              code: modelConfig.errorCode,
+              suggestAd: modelConfig.suggestAd
+            },
+            reviewResult: [{
+              status: 'error',
+              ui: {
+                verdict: 'error',
+                tldr: modelConfig.error
+              }
+            }]
+          };
+          
+          await StockLog.findByIdAndUpdate(tradeData.logId, errorData, { new: true });
+        } catch (updateError) {
+          console.error('Error updating trade log with error status:', updateError);
         }
-      } catch (error) {
-        console.error('Error determining AI model from subscription:', error);
-        // Continue with default models
+        
+        return {
+          success: false,
+          error: modelConfig.error,
+          errorCode: modelConfig.errorCode,
+          suggestAd: modelConfig.suggestAd
+        };
       }
+      
+      // Set the determined models and credit type
+      this.analysisModel = modelConfig.models.analysis;
+      this.sentimentalModel = modelConfig.models.sentiment;
+      this.creditType = modelConfig.creditType;
+      
+      console.log(`✅ Model selection complete:`);
+      console.log(`   Analysis: ${this.analysisModel}`);
+      console.log(`   Sentiment: ${this.sentimentalModel}`);
+      console.log(`   Tier: ${modelConfig.models.tier}`);
+      console.log(`   Credit Type: ${this.creditType}`);
+      console.log(`   Credits remaining: ${modelConfig.subscription.creditsRemaining}`);
     }
     
-    if (tradeData.sentimentModel) {
+    // Allow manual overrides for testing (only if not already set by determineAIModel)
+    if (tradeData.sentimentModel && !userId) {
       this.sentimentalModel = tradeData.sentimentModel;
       console.log(`🔄 Override: Using custom sentiment model: ${tradeData.sentimentModel}`);
     }
     
-    if (tradeData.analysisModel) {
+    if (tradeData.analysisModel && !userId) {
       this.analysisModel = tradeData.analysisModel;
       console.log(`🔄 Override: Using custom analysis model: ${tradeData.analysisModel}`);
     }
@@ -380,14 +672,57 @@ const candleSets = candleResults.reduce((acc, r) => {
     else if(tradeData.term == 'intraday'){
         payload =  this.buildIntradayReviewPayload(agentOut, tradeData, sentiment);
         rawAiReview = await this.getIntraDayAITradingReview(tradeData, payload, userExperience);
-       const { microUrl, fullUrl } = await createAndUploadIntradayCharts(payload, rawAiReview);
-       console.log('Charts uploaded:', { microUrl, fullUrl });
-      rawAiReview.microChartUrl = microUrl;
-      rawAiReview.fullChartUrl = fullUrl;
+        
+        // Save debug info for troubleshooting
+        const candleSummary = {
+          endpoints: endpoints.length,
+          candleSets: Object.keys(candleSets.byFrame || {}),
+          errors: candleSets.errors || [],
+          lastPrices: {
+            last1m: this.getLatestCandle(agentOut?.frames?.['1m']?.candles)?.close,
+            finalUsed: payload?.priceContext?.last
+          }
+        };
+        await this.saveDebugInfo(tradeData.logId, payload, { 
+          type: 'intraday', 
+          userExperience, 
+          models: { analysis: this.analysisModel, sentiment: this.sentimentalModel },
+          ...rawAiReview.debugInfo
+        }, candleSummary);
+        
+        // Only create charts if we have required snapshot data
+        if (payload?.snapshots?.lastBars1m?.length && payload?.snapshots?.lastBars3m?.length) {
+          const { microUrl, fullUrl } = await createAndUploadIntradayCharts(payload, rawAiReview);
+          console.log('Charts uploaded:', { microUrl, fullUrl });
+          rawAiReview.microChartUrl = microUrl;
+          rawAiReview.fullChartUrl = fullUrl;
+        } else {
+          console.log('⚠️ Skipping chart creation: missing snapshot bars data');
+        }
     }
     else if(tradeData.term == 'short'){
        payload =  this.buildShortTermReviewPayload(agentOut, tradeData, sentiment);
        rawAiReview = await this.getShortTermAITradingReview(tradeData, payload, userExperience);
+       
+       // Save debug info for troubleshooting
+       const candleSummary = {
+         endpoints: endpoints.length,
+         candleSets: Object.keys(candleSets.byFrame || {}),
+         errors: candleSets.errors || [],
+         lastPrices: {
+           last15m: this.getLatestCandle(agentOut?.frames?.['15m']?.candles)?.close,
+           last1h: this.getLatestCandle(agentOut?.frames?.['1h']?.candles)?.close,
+           last1D: this.getLatestCandle(agentOut?.frames?.['1D']?.candles)?.close,
+           finalUsed: payload?.priceContext?.last
+         }
+       };
+       await this.saveDebugInfo(tradeData.logId, payload, { 
+        type: 'short-term', 
+        userExperience, 
+        models: { analysis: this.analysisModel, sentiment: this.sentimentalModel },
+        ...rawAiReview.debugInfo
+      }, candleSummary);
+       
         const { microUrl, fullUrl } = await createAndUploadShortTermCharts( payload, rawAiReview );
        console.log('Charts uploaded:', { microUrl, fullUrl });
       rawAiReview.microChartUrl = microUrl;
@@ -396,6 +731,25 @@ const candleSets = candleResults.reduce((acc, r) => {
     else if(tradeData.term == 'medium'){
       payload =  this.buildMediumTermReviewPayload(agentOut, tradeData, sentiment);
       rawAiReview = await this.getMediumTermAITradingReview(tradeData, payload, userExperience); 
+      
+      // Save debug info for troubleshooting
+      const candleSummary = {
+        term: 'medium',
+        errors: candleSets.errors || [],
+        lastPrices: {
+          last1h: this.getLatestCandle(agentOut?.frames?.['1h']?.candles)?.close,
+          last1D: this.getLatestCandle(agentOut?.frames?.['1D']?.candles)?.close,
+          last1W: this.getLatestCandle(agentOut?.frames?.['1W']?.candles)?.close,
+          finalUsed: payload?.priceContext?.last
+        }
+      };
+      await this.saveDebugInfo(tradeData.logId, payload, { 
+        type: 'medium-term', 
+        userExperience, 
+        models: { analysis: this.analysisModel, sentiment: this.sentimentalModel },
+        ...rawAiReview.debugInfo
+      }, candleSummary);
+      
       const { microUrl, fullUrl } = await createAndUploadMediumTermCharts( payload, rawAiReview );
       console.log('Charts uploaded:', { microUrl, fullUrl });
       rawAiReview.microChartUrl = microUrl;
@@ -479,7 +833,8 @@ const candleSets = candleResults.reduce((acc, r) => {
         const sessionSummary = aiCostTracker.getSessionSummary();
         await this.updateTradeLogWithReviewMetadata(tradeData.logId, {
           sessionCosts: sessionSummary,
-          modelsUsed: {
+          modelsUsed: [this.sentimentalModel, this.analysisModel].filter((model, index, arr) => arr.indexOf(model) === index), // Array of unique model names
+          modelDetails: {
             sentimentModel: this.sentimentalModel,
             analysisModel: this.analysisModel
           },
@@ -499,13 +854,12 @@ const candleSets = candleResults.reduce((acc, r) => {
     } catch (error) {
       console.error('❌ AI Review failed:', error);
       
-      // Update database with failure and notify user
-      // await this.updateTradeLogAndNotify(tradeData.logId, {
-      //   isValid: null,
-      //   insight: `AI Review failed: ${error.message}`
-      // });
+      // Save error status to database
+      if (tradeData.logId) {
+        await this.saveErrorStatus(tradeData.logId, error);
+      }
       
-      // return { success: false, error: error.message };
+      return { success: false, error: error.message };
     } finally {
       // Restore original models
       this.sentimentalModel = originalSentimentModel;
@@ -515,9 +869,19 @@ const candleSets = candleResults.reduce((acc, r) => {
 
 
 buildIntradayReviewPayload(agentOut, tradeData, newsSentiment) {
-  // pull latest prices safely
+  // pull latest prices safely using consistent helper
   const last1m = agentOut?.frames?.['1m']?.candles;
-  const last = last1m?.length ? last1m[last1m.length - 1].close : null;
+  const latestCandle = this.getLatestCandle(last1m);
+  const last = latestCandle?.close || null;
+  
+  // DEBUG: Consolidated intraday data summary
+  const candleCount = last1m?.length || 0;
+  const lastCandleTime = last1m?.length ? last1m[last1m.length - 1].time : null;
+  if (candleCount > 0) {
+    console.log(`📊 INTRADAY DATA: ${candleCount} candles | Last: ${lastCandleTime} | Price: ${last}`);
+  } else {
+    console.log(`❌ INTRADAY DATA: No 1m candles available`);
+  }
 
   // small helpers from your indicators
   const vwapArr = agentOut?.frames?.['1m']?.indicators?.vwap || [];
@@ -552,6 +916,9 @@ buildIntradayReviewPayload(agentOut, tradeData, newsSentiment) {
   const quantity = parseInt(tradeData?.quantity) || null;
   
   const distanceFromLastPct = (last && entry) ? Math.abs(entry - last) / last * 100 : null;
+  
+  // DEBUG: Consolidated deviation calculation
+  console.log(`💰 DEVIATION: Entry=${entry} | Last=${last} | Deviation=${distanceFromLastPct?.toFixed(2)}% | LogID=${tradeData?.logId || 'N/A'}`);
   const rr = (entry != null && stop != null && target != null)
     ? Math.abs(target - entry) / Math.max(1e-9, Math.abs(entry - stop))
     : null;
@@ -661,10 +1028,17 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
   const c15 = agentOut?.frames?.['15m']?.candles || [];
   const c1D = agentOut?.frames?.['1D']?.candles  || [];
 
-  const last1h = c1h.length ? c1h[c1h.length - 1].close : null;
-  const last15 = c15.length ? c15[c15.length - 1].close : null;
-  const last1D = c1D.length ? c1D[c1D.length - 1].close : null;
-  const last = last1h ?? last15 ?? last1D ?? null;
+  // Use consistent helper to get latest candle regardless of API order
+  const latest1h = this.getLatestCandle(c1h);
+  const latest15m = this.getLatestCandle(c15);
+  const latest1D = this.getLatestCandle(c1D);
+  
+  const last = latest1h?.close ?? latest15m?.close ?? latest1D?.close ?? null;
+  
+  // For compatibility with existing code
+  const last1h = latest1h?.close;
+  const last15 = latest15m?.close;
+  const last1D = latest1D?.close;
 
   // ----- indicators snapshot -----
   const ind15  = agentOut?.frames?.['15m']?.indicators || {};
@@ -711,6 +1085,10 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
   const distanceFromLastPct = (last != null && entry != null)
     ? Math.abs(entry - last) / Math.max(1e-9, last) * 100
     : null;
+  
+  // DEBUG: Clean short-term summary
+  const priceSource = c1h?.length ? '1h' : (c1D?.length ? '1D' : 'NO_DATA');
+  console.log(`💰 SHORT DEVIATION: Entry=${entry} | Last=${last}(${priceSource}) | Dev=${distanceFromLastPct?.toFixed(2)}% | Log=${tradeData?.logId}`);
 
   const rr = (entry != null && stop != null && target != null)
     ? Math.abs(target - entry) / Math.max(1e-9, Math.abs(entry - stop))
@@ -885,8 +1263,11 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
     return 'neutral';
   };
 
-  const lastWclose = c1W.length ? c1W.at(-1).close : null;
-  const lastDclose = c1D.length ? c1D.at(-1).close : null;
+  // Use consistent helper to get latest candle regardless of API order
+  const latestWeekly = this.getLatestCandle(c1W);
+  const latestDaily = this.getLatestCandle(c1D);
+  const lastWclose = latestWeekly?.close || null;
+  const lastDclose = latestDaily?.close || null;
 
   const biasW = calcBias(lastWclose, ema20_1W, ema50_1W);
   const biasD = calcBias(lastDclose, ema20_1D, ema50_1D);
@@ -911,6 +1292,10 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
   const distanceFromLastPct = (last != null && entry != null)
     ? Math.abs(entry - last) / Math.max(1e-9, last) * 100
     : null;
+
+  // DEBUG: Clean medium-term summary  
+  const priceSource = c1h?.length ? '1h' : (c1D?.length ? '1D' : 'NO_DATA');
+  console.log(`💰 MEDIUM DEVIATION: Entry=${entry} | Last=${last}(${priceSource}) | Dev=${distanceFromLastPct?.toFixed(2)}% | Log=${tradeData?.logId}`);
 
   const rr = (entry != null && stop != null && target != null)
     ? Math.abs(target - entry) / Math.max(1e-9, Math.abs(entry - stop))
@@ -1080,8 +1465,7 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
 termToFrames = {
   intraday: ['1m', '3m', '15m'],  // For active day traders
   short:    ['15m', '1h', '1D'],  // Swing trades lasting days - now includes 1D
-  medium:   ['1h', '1D','1W'],         // Multi-week to monthly trades
-  long:     ['1D', '1W']          // Position trades & investing
+  medium:   ['1h', '1D','1W']     // Multi-week to monthly trades
 };
 
 // Indian market holidays for 2024-2025 (update annually)
@@ -1102,14 +1486,21 @@ indianMarketHolidays = [
   '2024-11-01', // Diwali-Laxmi Pujan
   '2024-11-15', // Guru Nanak Jayanti
   '2024-11-20', // Maharashtra Election
-  // 2025 - Add more as available
-  '2025-01-26', // Republic Day
+  // 2025 - Official NSE Holiday List
+  '2025-02-26', // Mahashivratri
   '2025-03-14', // Holi
-  '2025-03-31', // Id-Ul-Fitr
+  '2025-03-31', // Id-Ul-Fitr (Ramadan Eid)
+  '2025-04-10', // Shri Mahavir Jayanti
+  '2025-04-14', // Dr. Baba Saheb Ambedkar Jayanti
   '2025-04-18', // Good Friday
   '2025-05-01', // Maharashtra Day
   '2025-08-15', // Independence Day
-  '2025-10-02', // Gandhi Jayanti
+  '2025-08-27', // Ganesh Chaturthi
+  '2025-10-02', // Mahatma Gandhi Jayanti/Dussehra
+  '2025-10-21', // Diwali Laxmi Pujan
+  '2025-10-22', // Diwali-Balipratipada
+  '2025-11-05', // Prakash Gurpurb Sri Guru Nanak Dev
+  '2025-12-25', // Christmas
 ];
 
 /**
@@ -1226,8 +1617,12 @@ buildCandleUrls(tradeData) {
   const todayISO = this.isoIST(now);
   const yesterdayISO = this.isoIST(this.addDays(now, -1));
   const live = this.sessionHasStartedIST();       // boolean (09:15–15:30 IST)
-
+  
   const frames = this.termToFrames[t] || [];
+  
+  // DEBUG: Clean endpoint creation summary
+  console.log(`🔍 ENDPOINT DEBUG: ${t.toUpperCase()} | Today: ${todayISO} | Live: ${live} | Frames: [${frames.join(',')}]`);
+  
   const endpoints = [];
 
   // ---------- INTRADAY (time-aware, target-based) ----------
@@ -1311,26 +1706,32 @@ buildCandleUrls(tradeData) {
     // For live session, we can add intraday streams for 15m and 60m (not for 1D)
     const minutesSoFar = this.getTradingMinutesElapsedIST(); // 0..375
     const todayIsBusinessDay = this.isBusinessDayIST(this.indianMarketHolidays, now);
+    
+    console.log(`🔍 SHORT TERM: BusinessDay=${todayIsBusinessDay} | Minutes=${minutesSoFar} | Live=${live}`);
 
 
     frames.forEach((f) => {
       const { n, u } = this.parseFrame(f);
 
-      // 1) Live intraday stream for intraday-capable frames (15m/1h) if session is live AND today is business day
-      if ((f === '15m' || f === '1h') && todayIsBusinessDay && live) {
+      // 1) Intraday stream for intraday-capable frames (15m/1h) if today is business day (live or just closed)
+      if ((f === '15m' || f === '1h') && todayIsBusinessDay) {
         const upIntra = this.unitPath(u, 'intraday');
         endpoints.push({
           frame: f,
           kind: 'intraday',
           url: `https://api.upstox.com/v3/historical-candle/intraday/${instrument_key}/${upIntra}/${n}`,
         });
+        console.log(`   ✅ Added INTRADAY ${f} endpoint`);
       }
 
-      // 2) How many bars we already have today (only matters for 15m/1h while live on business day)
+      // 2) How many bars we have today (for business days, either live or completed session)
       let todayBars = 0;
-      if (todayIsBusinessDay && live) {
-        if (u === 'm') todayBars = Math.floor(minutesSoFar / n);          // 15m → 25 max
-        if (u === 'h') todayBars = Math.floor(minutesSoFar / (n * 60));   // 1h → ~6 max
+      if (todayIsBusinessDay) {
+        // If market is live, use actual elapsed time; if closed, assume full session (375 minutes)
+        const effectiveMinutes = live ? minutesSoFar : 375; // Full trading day = 375 minutes
+        if (u === 'm') todayBars = Math.floor(effectiveMinutes / n);          // 15m → 25 max
+        if (u === 'h') todayBars = Math.floor(effectiveMinutes / (n * 60));   // 1h → 6 max
+        console.log(`   📊 ${f}: ${todayBars} today's bars (${effectiveMinutes}min)`);
       }
 
       // For 1D, we consider only full daily bars → count 0 for the current day
@@ -1601,7 +2002,9 @@ isBusinessDayIST(holidays, date = new Date()) {
     return () => false;
   })();
 
-  return !isHoliday(dateISO);
+  const result = !isHoliday(dateISO);
+  if (!result) console.log(`🏖️ HOLIDAY: ${dateISO} is not a business day`);
+  return result;
 }
 
 getTradingMinutesElapsedIST() {
@@ -1624,6 +2027,18 @@ getTradingMinutesElapsedIST() {
   async fetchCandleData(url) {
     console.log(`📡 Fetching candle data from: ${url}`);
     
+    // DEBUG: Log URL details - Upstox uses path params, not query params
+    const urlParts = url.split('/');
+    const isIntraday = url.includes('/intraday/');
+    const instrument = isIntraday ? urlParts[5] : urlParts[4];
+    const interval = isIntraday ? 
+      `${urlParts[6]}/${urlParts[7]}` : // intraday: minutes/15
+      `${urlParts[5]}/${urlParts[6]}`; // historical: minutes/15
+    const toDate = isIntraday ? 'TODAY' : urlParts[7];
+    const fromDate = isIntraday ? 'TODAY' : urlParts[8];
+    
+    console.log(`📡 FETCH: ${instrument} | ${interval} | ${fromDate} → ${toDate}`);
+    
     try {
       const response = await axios.get(url, {
         headers: {
@@ -1634,6 +2049,30 @@ getTradingMinutesElapsedIST() {
       // Check if data exists in nested structure
       const actualCandles = response.data?.data?.candles || response.data?.candles;
       console.log(`✅ Candle data received: ${actualCandles?.length || 0} candles`);
+      
+      // DEBUG: Check response structure
+      if (!actualCandles && response.data) {
+        console.log(`❌ RESPONSE STRUCTURE ISSUE:`, Object.keys(response.data));
+        console.log(`   Raw response.data:`, JSON.stringify(response.data).substring(0, 200));
+      }
+      
+      // DEBUG: Check candle order for both API types
+      if (actualCandles?.length > 0) {
+        const firstCandle = actualCandles[0];
+        const lastCandle = actualCandles[actualCandles.length - 1];
+        const isIntraday = url.includes('/intraday/');
+        
+        console.log(`   📈 ${isIntraday ? 'INTRADAY' : 'HISTORICAL'} - ${actualCandles.length} candles`);
+        console.log(`   🕐 Array[0]: ${firstCandle[0]} | Close: ${firstCandle[4]}`);
+        console.log(`   🕐 Array[-1]: ${lastCandle[0]} | Close: ${lastCandle[4]}`);
+        
+        // Determine chronological order
+        const firstTime = new Date(firstCandle[0]).getTime();
+        const lastTime = new Date(lastCandle[0]).getTime();
+        const isNewestFirst = firstTime > lastTime;
+        
+        console.log(`   📊 ORDER: ${isNewestFirst ? 'NEWEST→OLDEST' : 'OLDEST→NEWEST'} | API: ${isIntraday ? 'intraday' : 'historical'}`);
+      }
       
       // If no candles (market closed), return empty structure
       if (!actualCandles || actualCandles.length === 0) {
@@ -1727,9 +2166,6 @@ getTradingMinutesElapsedIST() {
       return this.runMediumTermAgent(labeledData, tradeData,newsData);
     }
   
-    if (t === 'long' || t === 'longterm') {
-      return this.runLongTermAgent(labeledData,tradeData, newsData);
-    }
   
     console.warn(`⚠️ No matching agent found for term: ${t}`);
     return null;
@@ -2539,7 +2975,8 @@ addDays(date, days) {
    * Analyze sentiment using OpenAI (replaces "Message a model" node)
    */
   async analyzeSentiment(titles, term, logId = 'N/A') {
-    const prompt = `You are an AI assistant analyzing ${term} term sentiment for a given stock based on recent news articles and technical signals.
+    try {
+      const prompt = `You are an AI assistant analyzing ${term} term sentiment for a given stock based on recent news articles and technical signals.
 
 Your job is to:
   • ✅ Evaluate immediate market reactions, technical price movements, and recent news impact.
@@ -2566,15 +3003,19 @@ Your job is to:
 Here are the last 30 news article titles:
 ${titles.slice(-30).join('\n')}`;
 
-    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: this.sentimentalModel,
-      messages: this.formatMessagesForModel(this.sentimentalModel, prompt),
-    }, {
-      headers: {
-        'Authorization': `Bearer ${this.openaiApiKey}`,
-        'Content-Type': 'application/json'
+    const response = await axios.post('https://api.openai.com/v1/chat/completions', 
+      this.buildRequestPayload(
+        this.sentimentalModel,
+        this.formatMessagesForModel(this.sentimentalModel, prompt),
+        false // Sentiment analysis doesn't require JSON format
+      ), 
+      {
+        headers: {
+          'Authorization': `Bearer ${this.openaiApiKey}`,
+          'Content-Type': 'application/json'
+        }
       }
-    });
+    );
 
     const content = response.data.choices[0].message.content;
     const usage = response.data.usage;
@@ -2611,6 +3052,17 @@ try {
     };
   }
 }
+    } catch (error) {
+      console.error('❌ Sentiment analysis failed:', error);
+      // Return default neutral sentiment on error
+      return {
+        shortTermSentiment: {
+          category: "Neutral",
+          score: 0,
+          rationale: `Sentiment analysis failed: ${error.message}`
+        }
+      };
+    }
   }
 
 
@@ -2665,12 +3117,21 @@ safeJSONParse(content) {
 
 
 // Minimal intraday review: model decides buy/sell/none and outputs levels only
-async getIntraDayAITradingReviewToday( payload) {
-  // ---------- PROMPTS ----------
+
+
+
+
+// Minimal intraday review: model decides buy/sell/none and outputs levels only
+// Assumes `axios` and `aiCostTracker` exist in your scope, and `this.analysisModel` / `this.openaiApiKey` are configured.
+
+async  getIntraDayAITradingReviewToday(payload) {
+  try {
+    // ---------- PROMPTS ----------
   const SYSTEM = `
 You are a veteran Indian intraday stock trader and mentor.
 
 Operate ONLY on the provided JSON payload. Do not browse. Do not infer missing fields.
+When numeric MA comparisons are provided, ignore entryVsDailyMA.* text flags.
 Market: NSE cash, IST 09:15–15:30. Intraday only (no carryover).
 
 Your task:
@@ -2713,15 +3174,25 @@ Tape Context (exact strings):
 - If vwap != null and last <  vwap and bias15m == "bearish" -> "Below VWAP · Bearish"
 - Else -> "VWAP Unknown"
 
-Self-check:
+REASONING REQUIREMENTS (must be concrete & numeric):
+- In 2–4 sentences, explicitly cite:
+  • current tape: last, vwap (or 'unknown'), bias15m;
+  • today’s range: todayHigh and todayLow;
+  • chosen ATR multiple used for stop (e.g., "1.8×ATR3m = 3.0");
+  • the structural level or condition used for entry (e.g., “break/reclaim of 1373.0”);
+  • how T1/T2 relate to R multiples or nearby structure.
+- If side:"none", explain specifically which guard failed (e.g., “VWAP unknown + neutral bias”, “outside today’s range”, “after 15:00 IST”, or “RR < 1.0 before 15:00”).
+
+Self-check (hard requirements before returning):
 - Return ONE valid JSON object. No markdown, no comments.
 - When side:"none", entry/stop/targets/rr MUST be null (targets = [null, null]).
 - rr = |T1 - entry| / |entry - stop| (rounded to 2 decimals).
+- Reasoning must include at least three explicit numbers among: last, vwap, todayHigh, todayLow, atr3, entry, stop, T1, T2.
 - Always include note: "Exit by 15:25 IST. Educational review, not investment advice."
 `.trim();
 
   const USER = `
-Analyze this payload and generate a fresh intraday trading suggestion for TODAY. There is NO user trade plan; you must independently decide the side (buy/sell/none) using VWAP alignment, 15m bias, ATR(3m), and intraday structure.
+Analyze this payload and generate a fresh intraday trading suggestion for TODAY. There is NO user trade plan; you must independently decide the side (buy/sell/none) using VWAP alignment, 15m bias, ATR(3m), and intraday structure. Your reasoning MUST justify the direction and each level numerically as per SYSTEM.
 
 [PAYLOAD]
 ${JSON.stringify(payload)}
@@ -2735,7 +3206,7 @@ ${JSON.stringify(payload)}
   "targets": [number | null, number | null],
   "rr": number | null,
   "tapeContext": "Above VWAP · Bullish" | "Below VWAP · Bearish" | "VWAP Unknown",
-  "reasoning": "Short, plain-English justification (2–3 sentences) citing VWAP/bias/ATR/structure and today’s range.",
+  "reasoning": "2–4 sentences with explicit numeric references to last/vwap/bias/todayHigh/Low/ATR/entry/stop/T1/T2 per SYSTEM.",
   "notes": [
     "Enter after confirmation (e.g., two consecutive 3m closes through the trigger or VWAP retest rejection).",
     "Avoid new entries after 15:00 IST.",
@@ -2745,13 +3216,14 @@ ${JSON.stringify(payload)}
 `.trim();
 
   // ---------- CALL MODEL ----------
+  const formattedMessages = this.formatMessagesForModel(this.analysisModel, SYSTEM, USER);
   const resp = await axios.post(
     "https://api.openai.com/v1/chat/completions",
-    {
-      model: this.analysisModel,
-      messages: this.formatMessagesForModel(this.analysisModel, SYSTEM, USER),
-      response_format: { type: "json_object" }
-    },
+    this.buildRequestPayload(
+      this.analysisModel,
+      formattedMessages,
+      true // Intraday analysis requires JSON format
+    ),
     {
       headers: {
         Authorization: `Bearer ${this.openaiApiKey}`,
@@ -2763,7 +3235,7 @@ ${JSON.stringify(payload)}
   const raw = resp?.data?.choices?.[0]?.message?.content;
   const usage = resp?.data?.usage;
 
-  // Optional: cost tracking (kept intact)
+  // Optional: cost tracking
   const costRecord = aiCostTracker.calculateCost(
     this.analysisModel,
     usage?.prompt_tokens ?? 0,
@@ -2773,43 +3245,79 @@ ${JSON.stringify(payload)}
   );
   console.log(`💰 Intraday Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
 
-  // Optional: update your log (safe no-op if no logId)
-  if (_tradeData?.logId) {
-    await this.updateStockLogWithCost(_tradeData.logId, costRecord.totalCost, 'analysis');
-  }
+  // Parse & return JSON result with token usage (use cleanJsonResponse for o4-mini compatibility)
+  const parsedResult = this.cleanJsonResponse(raw);
 
-  if (!raw) throw new Error("Empty response from model");
+  // ---------- OPTIONAL: schema sanity check ----------
+  validateIntradayPlan(parsedResult);
 
-  // Parse & return JSON result with token usage
-  try {
-    const parsedResult = JSON.parse(raw);
-    // Add token usage information to the result
-    parsedResult.tokenUsage = {
-      inputTokens: usage?.prompt_tokens ?? 0,
-      outputTokens: usage?.completion_tokens ?? 0,
-      totalTokens: costRecord.totalTokens,
-      estimatedCost: costRecord.totalCost,
-      model: this.analysisModel,
-      timestamp: new Date().toISOString()
-    };
+  // Attach token usage for telemetry
+  parsedResult.tokenUsage = {
+    inputTokens: usage?.prompt_tokens ?? 0,
+    outputTokens: usage?.completion_tokens ?? 0,
+    totalTokens: costRecord.totalTokens,
+    estimatedCost: costRecord.totalCost,
+    model: this.analysisModel,
+    timestamp: new Date().toISOString()
+  };
+
+  // Save debug info with actual formatted messages
+  parsedResult.debugInfo = {
+    formattedMessages: formattedMessages,
+    systemPrompt: SYSTEM,
+    userPrompt: USER,
+    model: this.analysisModel
+  };
+
     return parsedResult;
-  } catch (e) {
-    throw new Error(`Model returned non-JSON content: ${raw?.slice(0, 200)}...`);
+  } catch (error) {
+    console.error('❌ Intraday analysis failed:', error);
+    throw new Error(`Intraday analysis failed: ${error.message}`);
   }
 }
 
+// --- Optional helper: light schema + guard validation ---
+async validateIntradayPlan(o) {
+  const must = (cond, msg) => { if (!cond) throw new Error(`Invalid AI plan: ${msg}`); };
 
+  must(o && typeof o === 'object', 'result must be an object');
+  must(typeof o.symbol === 'string', 'symbol must be string');
+  must(['buy','sell','none'].includes(o.side), 'side must be buy/sell/none');
+  must(Array.isArray(o.targets) && o.targets.length === 2, 'targets must be [t1,t2]');
 
+  if (o.side === 'none') {
+    must(o.entry === null && o.stop === null && o.targets[0] === null && o.targets[1] === null && o.rr === null,
+         'when side is none, entry/stop/targets/rr must be null');
+    return;
+  }
+
+  // For actionable plans, ensure numbers
+  ['entry','stop','rr'].forEach(k => must(typeof o[k] === 'number' && Number.isFinite(o[k]), `${k} must be number`));
+  o.targets.forEach((t, i) => must(typeof t === 'number' && Number.isFinite(t), `targets[${i}] must be number`));
+
+  if (o.side === 'buy') {
+    must(o.stop < o.entry, 'buy: stop < entry');
+    must(o.entry < o.targets[0] && o.targets[0] <= o.targets[1], 'buy: entry < T1 ≤ T2');
+  } else if (o.side === 'sell') {
+    must(o.targets[0] <= o.targets[1] && o.targets[1] < o.entry, 'sell: T1 ≤ T2 < entry');
+    must(o.entry < o.stop, 'sell: entry < stop');
+  }
+
+  must(typeof o.tapeContext === 'string' &&
+       ['Above VWAP · Bullish','Below VWAP · Bearish','VWAP Unknown'].includes(o.tapeContext),
+       'tapeContext must be one of the exact strings');
+  must(typeof o.reasoning === 'string' && o.reasoning.length >= 30, 'reasoning must be a non-empty explanation');
+}
 
 async  getIntraDayAITradingReview(tradeData,payload,userExperience) {
   // --- guardrails ---
   const allowed = new Set(["beginner", "intermediate", "advanced"]);
   if (!allowed.has(userExperience)) throw new Error(`Invalid userExperience: ${userExperience}`);
 
-  const language =
+  const lang =
     typeof this.getExperienceLanguage === "function"
       ? this.getExperienceLanguage(userExperience)
-      : { tone: "clear, practical language", complexity: "keep it concise" };
+      : { tone: "clear, practical language", complexity: "keep it concise", glossaryTerms: [] };
 
   // ---- merge user's proposed trade into payload (so the model can review it) ----
   const mergedPayload = {
@@ -2817,13 +3325,13 @@ async  getIntraDayAITradingReview(tradeData,payload,userExperience) {
     userTrade: {
       // normalize common keys (db variations supported)
       direction: tradeData.direction,
-      entry: tradeData.entryprice,
-      stop: tradeData.stoploss,
-      target: tradeData.target,
-      qty: tradeData.quantity,
-      term: tradeData.term,
-      reasoning: tradeData.reasoning,
-      createdAtISO: tradeData.createdAt
+      entry: tradeData.entryPrice ?? tradeData.entryprice ?? tradeData.entry ?? null,
+      stop: tradeData.stopLoss ?? tradeData.stoploss ?? tradeData.stop ?? null,
+      target: tradeData.targetPrice ?? tradeData.targetprice ?? tradeData.target ?? null,
+      qty: tradeData.quantity ?? tradeData.qty ?? null,
+      term: tradeData.term ?? "intraday",
+      reasoning: tradeData.reasoning ?? tradeData.note ?? null,
+      createdAtISO: tradeData.createdAt ?? null
     }
   };
 
@@ -2832,6 +3340,7 @@ async  getIntraDayAITradingReview(tradeData,payload,userExperience) {
 You are a veteran Indian intraday stock trader and mentor.
 
 Operate ONLY on the provided JSON payload. Do not browse. Do not infer missing fields.
+When numeric MA comparisons are provided, ignore entryVsDailyMA.* text flags.
 Market: NSE cash, IST 09:15–15:30. Intraday only (no carryover).
 
 Behavior:
@@ -2841,7 +3350,19 @@ Behavior:
 - Prefer shorts when price is below VWAP and 15m bias is bearish; prefer longs only after a clear VWAP reclaim + acceptance. If VWAP is missing, alignment is "unknown".
 - Stops: ATR(3m) × (1.5–2.0) or nearest clean structure. Targets: ~1R / 2R baseline.
 - Use absolute IST times. Avoid new entries after 15:00; hard exit by 15:25.
-- Output JSON only. No markdown. No BSON/NumberInt/ObjectId/ISODate. All numeric fields are numbers (not strings).
+
+Language style: ${lang.tone}. ${lang.complexity}.
+If userExperience=="beginner":
+  - Use plain, short sentences.
+  - Add 1–3 bullets in analysis.notes defining any of: ${lang.glossaryTerms.join(', ')} that appear (e.g., "VWAP = day's average price weighted by volume").
+  - Avoid unexplained jargon in ui.tldr and ui.actionHint (keep them plain).
+If userExperience=="intermediate":
+  - Use clear language with light technical terms (define uncommon terms once, in parentheses).
+  - May use standard acronyms (RR, SL, TP, VWAP) but expand them the first time in analysis (e.g., "RR (risk/reward)").
+  - Include one numeric example where helpful (e.g., how RR was computed).
+  - Keep the UI beginner-simple; put any extra detail in analysis.notes.
+If userExperience=="advanced":
+  - You may use technical terms in analysis; keep UI beginner-simple but expand analysis depth and structure commentary.
 
 Rounding:
 - Compute with full precision; compare thresholds on full precision.
@@ -2856,12 +3377,11 @@ Before returning, self-check:
 - No BSON wrappers or comments; valid single JSON object.
 - ui.chips length ≤ 3. ui.tldr ≤ 140 chars. ui.actionHint ≤ 80 chars.
 - Numeric fields are numbers; when side:"none", entry/stop/targets MUST be null.
-- If withinTodayRange is set, todayRange MUST be included.
 - Replace any vague text like "break of opposite structure level" with explicit numeric levels.
 - Context chip MUST reflect current tape: "Above VWAP · Bullish" / "Below VWAP · Bearish" / "VWAP Unknown".
 Always append: "Educational review, not investment advice."`.trim();
 
-  const USER = `Analyze the payload and FIRST review the user's proposed intraday trade (payload.userTrade).
+  const USER = `Analyze the payload and FIRST review the user's proposed plan (payload.userPlan; fallback to payload.userTrade if userPlan missing).
 Validate both the numeric plan and the user's textual "reasoning".
 
 Then produce TWO layers:
@@ -2878,8 +3398,8 @@ ${JSON.stringify(mergedPayload)}
     "tldr": "string",                       // <= 140 chars, no jargon
     "chips": [                              // <= 3 items
       {"label":"RR","value":"string","tone":"good|warn|bad"},               // e.g., "1.14"
-      {"label":"Deviation","value":"string","tone":"good|warn|bad"},        // e.g., "13.45%"
-      {"label":"Context","value":"string","tone":"good|warn|bad"}           // EXACT tape: "Below VWAP · Bearish" / "Above VWAP · Bullish" / "VWAP Unknown"
+      {"label":"Deviation","value":"string","tone":"good|warn|bad"},        // MUST use payload.planDiagnostics.distanceFromLastPct with % sign, e.g., "0.35%"        // MUST use payload.planDiagnostics.distanceFromLastPct with % sign, e.g., "0.35%"
+      {"label":"Context","value":"string","tone":"good|warn|bad"}           // EXACT: "Below VWAP · Bearish" / "Above VWAP · Bullish" / "Below VWAP · Neutral" / "Above VWAP · Neutral" / "VWAP Unknown"
     ],
     "actionHint": "string"                  // <= 80 chars. If verdict=="reject" and correctedPlan exists, summarize it (e.g., "Short 1373 / SL 1375.5 / T1 1370.5 / T2 1368.0").
   },
@@ -2939,7 +3459,7 @@ ${JSON.stringify(mergedPayload)}
       "atr3": number,                       // ATR(14) on 3m alias if that's your source
       "bias15m": "bullish" | "bearish" | "neutral",
       "tickSize": number | null,
-      "generatedAtIST": "YYYY-MM-DD HH:MM",
+      "generatedAtIST": "YYYY-MM-DD HH:MM",  // Use userPlan.createdAtISO→IST if available; else null/omit
       "marketStatus": "open" | "closed" | "preopen"
     },
     "disclaimer": "Educational review, not investment advice."
@@ -2960,6 +3480,10 @@ ${JSON.stringify(mergedPayload)}
   • BUY: stop < entry < target ; SELL: target < entry < stop
   • abs(entry - last) ≤ max(0.02 * last, 5 * atr3)
   • entry ∈ [todayLow, todayHigh]
+  • Deviation = payload.planDiagnostics.distanceFromLastPct (already calculated as percentage)
+    - If payload.planDiagnostics.distanceFromLastPct is missing or null:
+      • Set analysis.userReview.distanceFromLastPct = null
+      • In ui.chips, set Deviation.value = "n/a" and Deviation.tone = "good"
   • Alignment preference: longs above VWAP (or unknown), shorts below VWAP (or unknown), and with 15m bias.
   → Set userReview.isValidToday accordingly; rr = abs(target - entry) / abs(entry - stop).
 
@@ -2985,13 +3509,14 @@ Return ONLY the JSON object described above.
 `.trim();
 
   // ---------- CALL MODEL ----------
+  const formattedMessages = this.formatMessagesForModel(this.analysisModel, SYSTEM, USER);
   const resp = await axios.post(
     "https://api.openai.com/v1/chat/completions",
-    {
-      model: this.analysisModel,
-      messages: this.formatMessagesForModel(this.analysisModel, SYSTEM, USER),
-      response_format: { type: "json_object" }
-    },
+    this.buildRequestPayload(
+      this.analysisModel,
+      formattedMessages,
+      true // Short-term analysis requires JSON format
+    ),
     {
       headers: {
         Authorization: `Bearer ${this.openaiApiKey}`,
@@ -3019,10 +3544,8 @@ Return ONLY the JSON object described above.
     await this.updateStockLogWithCost(tradeData.logId, costRecord.totalCost, 'analysis');
   }
   
-  if (!raw) throw new Error("Empty response from model");
-  
-  // Parse & return JSON result with token usage
-  const parsedResult = JSON.parse(raw);
+  // Parse & return JSON result with token usage (use cleanJsonResponse for o4-mini compatibility)
+  const parsedResult = this.cleanJsonResponse(raw);
   parsedResult.tokenUsage = {
     inputTokens: usage.prompt_tokens,
     outputTokens: usage.completion_tokens,
@@ -3031,31 +3554,39 @@ Return ONLY the JSON object described above.
     model: this.analysisModel,
     timestamp: new Date().toISOString()
   };
+  
+  // Save debug info with actual prompt sent to AI
+  parsedResult.debugInfo = {
+    aiPrompt: formattedMessages,
+    model: this.analysisModel
+  };
+  
   return parsedResult;
 }
 
 async  getShortTermAITradingReview(tradeData, payload, userExperience) {
-  // --- guardrails ---
+  try {
+    // --- guardrails ---
   const allowed = new Set(["beginner", "intermediate", "advanced"]);
   if (!allowed.has(userExperience)) throw new Error(`Invalid userExperience: ${userExperience}`);
 
-  const language =
+  const lang =
     typeof this.getExperienceLanguage === "function"
       ? this.getExperienceLanguage(userExperience)
-      : { tone: "clear, practical language", complexity: "keep it concise" };
+      : { tone: "clear, practical language", complexity: "keep it concise", glossaryTerms: [] };
 
   // ---- merge user's proposed trade into payload ----
   const mergedPayload = {
     ...payload, // expected from buildShortTermReviewPayload
     userTrade: {
       direction: tradeData.direction,
-      entry:     tradeData.entryprice ?? tradeData.entry,
-      stop:      tradeData.stoploss   ?? tradeData.stop,
-      target:    tradeData.target,
-      qty:       tradeData.quantity,
+      entry:     tradeData.entryPrice ?? tradeData.entryprice ?? tradeData.entry ?? null,
+      stop:      tradeData.stopLoss   ?? tradeData.stoploss   ?? tradeData.stop  ?? null,
+      target:    tradeData.targetPrice?? tradeData.targetprice?? tradeData.target?? null,
+      qty:       tradeData.quantity ?? tradeData.qty ?? null,
       term:      tradeData.term ?? "short",
       reasoning: tradeData.reasoning ?? tradeData.note ?? null,
-      createdAtISO: tradeData.createdAt
+      createdAtISO: tradeData.createdAt ?? null
     }
   };
 
@@ -3064,6 +3595,7 @@ async  getShortTermAITradingReview(tradeData, payload, userExperience) {
 You are a veteran Indian **short-term swing** stock trader and mentor.
 
 Operate ONLY on the provided JSON payload. Do not browse. Do not infer missing fields.
+When numeric MA comparisons are provided, ignore entryVsDailyMA.* text flags.
 Market: NSE cash. Holding window: ~2–10 trading days. Timeframes: **15m (trigger)**, **1h (momentum)**, **1D (bias)**.
 
 Behavior:
@@ -3074,11 +3606,28 @@ Behavior:
 - **VWAP usage:** Use 15m VWAP for timing. It's NOT mandatory to be above VWAP for a swing long if 1D/1h align, but it improves timing quality. If VWAP is missing, mark "unknown".
 - **Risk model:** Stops at swing low/high or ATR(1D) × (1.0–1.5). Targets at ~1.5R and 2R baseline; stretch only if structure allows.
 - **Session rules:** Planning can occur after hours. No intraday forced exit times for swing.
-- Output JSON only. No markdown. All numeric fields are numbers (not strings).
+
+Language style: ${lang.tone}. ${lang.complexity}.
+If userExperience=="beginner":
+  - Use plain, short sentences.
+  - Add 1–3 bullets in analysis.notes defining any of: ${lang.glossaryTerms.join(', ')} that appear (e.g., "Risk/Reward = profit ÷ loss").
+  - Avoid unexplained jargon in ui.tldr and ui.actionHint (keep them plain).
+If userExperience=="intermediate":
+  - Use clear language with light technical terms (define uncommon terms once, in parentheses).
+  - May use standard acronyms (RR, SL, TP, VWAP) but expand them the first time in analysis (e.g., "RR (risk/reward)").
+  - Include one numeric example where helpful (e.g., how RR was computed).
+  - Keep the UI beginner-simple; put any extra detail in analysis.notes.
+If userExperience=="advanced":
+  - You may use technical terms in analysis; keep UI beginner-simple but expand analysis depth and structure commentary.
 
 Rounding:
 - Compute with full precision; compare thresholds on full precision.
-- Round to tickSize (if provided) else 0.05. Prices 1dp where sensible; percentages 2dp; rr 2dp.
+- Round all emitted levels (entry/stop/T1/T2 in plan/correctedPlan and ui.actionHint) to tickSize (default 0.05); display with 2dp.
+
+Chip Tones (consistency):
+- RR chip: ≥2.00: good, 1.20–1.99: warn, <1.20: bad
+- Deviation chip: ≤5%: good, >5–10%: warn, >10–15%: bad, >15%: reject flag
+- Context chip: "Above VWAP · Bullish": good, "Below VWAP · Bearish": bad, all others: warn (including "VWAP Unknown")
 
 Safety:
 - If critical fields are missing/stale, set guards.needsData=true and analysis.isValid=false.
@@ -3089,17 +3638,21 @@ Before returning, self-check:
 - ui.chips length ≤ 3. ui.tldr ≤ 140 chars. ui.actionHint ≤ 80 chars.
 - Numeric fields are numbers; when side:"none", entry/stop/targets MUST be null.
 - Replace vague text with explicit numeric levels (use payload levels).
-- Context chip MUST be EXACTLY one of: "Below VWAP · Bearish" / "Above VWAP · Bullish" / "VWAP Unknown".
-- If you set withinTodayRange, you MUST also include todayRange with numeric high/low (otherwise omit both).
+- Context chip MUST be EXACTLY one of: "Below VWAP · Bearish" / "Above VWAP · Bullish" / "Below VWAP · Neutral" / "Above VWAP · Neutral" / "VWAP Unknown".
 
 HARD CONSTRAINTS:
 - ui.actionHint MUST be built from the chosen trade:
   • If analysis.plan.side != "none" -> build from analysis.plan
   • Else if userReview.correctedPlan exists -> build from correctedPlan
+  • If plan.side=="none" and userReview.correctedPlan==null -> return validation error (don't fabricate a hint)
   • NEVER build ui.actionHint from payload.userTrade.
+- analysis.tldr MUST accurately describe what's being recommended:
+  • If suggesting opposite direction from user -> "Rejected user's [long/short]; conditions favor [opposite direction] instead"
+  • Never say "User long plan" when the actual recommendation is short (or vice versa)
 - userReview.isValidToday MUST reflect your computed checks:
   • Set to false if ANY hold: deviation > 15; numeric order invalid (BUY: stop<entry<target; SELL: target<entry<stop);
-    long & withVWAP15m=="below"; long & with1hMomentum=="against" (mirror for shorts).
+    long & withVWAP15m=="below" & (with1hMomentum!="aligned" OR with1DBias!="bullish"); 
+    short & withVWAP15m=="above" & (with1hMomentum!="aligned" OR with1DBias!="bearish").
 - guards.invalidateIf MUST mirror side and STOP:
   • LONG: "1h close ≤ <stop>" and "Sustained 15m VWAP loss (2 consecutive 15m closes below VWAP)"
   • SHORT: "1h close ≥ <stop>" and "Sustained 15m VWAP reclaim (2 consecutive 15m closes above VWAP)"
@@ -3108,7 +3661,7 @@ HARD CONSTRAINTS:
 `.trim();
 
   const USER = `
-Review the payload for a SHORT-TERM swing trade. First, evaluate the user's proposed plan (payload.userTrade).
+Review the payload for a SHORT-TERM swing trade. First, evaluate the user's proposed plan (payload.userPlan; fallback to payload.userTrade if userPlan missing).
 Then, produce: (1) a beginner-friendly "ui" card; (2) a detailed "analysis" section tailored to ${userExperience}.
 
 [PAYLOAD]
@@ -3121,8 +3674,8 @@ ${JSON.stringify(mergedPayload)}
     "tldr": "string",
     "chips": [
       {"label":"RR","value":"string","tone":"good|warn|bad"},
-      {"label":"Deviation","value":"string","tone":"good|warn|bad"},
-      {"label":"Context","value":"string","tone":"good|warn|bad"}  // EXACT: "Below VWAP · Bearish" / "Above VWAP · Bullish" / "VWAP Unknown"
+      {"label":"Deviation","value":"string","tone":"good|warn|bad"},        // MUST use payload.planDiagnostics.distanceFromLastPct with % sign, e.g., "0.35%"
+      {"label":"Context","value":"string","tone":"good|warn|bad"}  // EXACT: "Below VWAP · Bearish" / "Above VWAP · Bullish" / "Below VWAP · Neutral" / "Above VWAP · Neutral" / "VWAP Unknown"
     ],
     "actionHint": "string"  // "Side <entry> / SL <stop> / T1 <t1> / T2 <t2>"
   },
@@ -3137,7 +3690,7 @@ ${JSON.stringify(mergedPayload)}
       "isValidToday": boolean | null,
       "reasons": ["string"],
       "rr": number | null,              // abs(target-entry)/abs(entry-stop)
-      "distanceFromLastPct": number | null, // 100*abs(entry-last)/last (2dp)
+      "distanceFromLastPct": number | null, // Use payload.planDiagnostics.distanceFromLastPct (pre-calculated)
       "alignment": {
         "withVWAP15m": "above" | "below" | "unknown",
         "with1hMomentum": "aligned" | "against" | "neutral",
@@ -3171,9 +3724,9 @@ ${JSON.stringify(mergedPayload)}
     "guards": {
       "needsData": boolean,
       "marketOpenRequired": false,
-      "invalidateIf": [
-        "1h close ≥ <numeric stop level>",
-        "Sustained 15m VWAP reclaim against position (2 consecutive 15m closes)"
+      "invalidateIf": [  // LONG: ["1h close ≤ <stop>", "Sustained 15m VWAP loss (2 consecutive 15m closes below VWAP)"]
+        "1h close ≤ <stop>",  // SHORT: ["1h close ≥ <stop>", "Sustained 15m VWAP reclaim (2 consecutive 15m closes above VWAP)"]
+        "Sustained 15m VWAP loss (2 consecutive 15m closes below VWAP)"
       ]
     },
 
@@ -3185,7 +3738,7 @@ ${JSON.stringify(mergedPayload)}
       "atr1D": number | null,           // trendMomentum.atr14_1D
       "biasDaily": "bullish" | "bearish" | "neutral",
       "tickSize": number | null,
-      "generatedAtIST": "YYYY-MM-DD HH:MM",
+      "generatedAtIST": "YYYY-MM-DD HH:MM",  // Use userPlan.createdAtISO→IST if available; else null/omit
       "dataHealth": { "bars15m": number, "bars1h": number, "bars1D": number }
     },
 
@@ -3216,17 +3769,21 @@ ${JSON.stringify(mergedPayload)}
 - User numeric validity:
   • BUY: stop < entry < target ; SELL: target < entry < stop
   • rr = abs(target - entry) / abs(entry - stop)
-  • Deviation = 100 * abs(entry - last) / last
+  • Deviation = payload.planDiagnostics.distanceFromLastPct (already calculated correctly as a percentage)
+    - For the Deviation chip: use the exact value from payload.planDiagnostics.distanceFromLastPct, format as "X.XX%" (e.g., "0.35%", "2.45%")
     - > 10% => warn; > 15% => reject unless explicitly marked as a future stop/limit order
+    - If payload.planDiagnostics.distanceFromLastPct is missing or null:
+      • Set analysis.userReview.distanceFromLastPct = null
+      • In ui.chips, set Deviation.value = "n/a" and Deviation.tone = "good"
   • Alignment scoring:
     - with1DBias: aligned if (biasDaily=="bullish" && side=="long") or (biasDaily=="bearish" && side=="short"), else "against"; if "neutral" => "neutral"
-    - with1hMomentum: use rsi1h (aligned if 52–65 for longs, 35–48 for shorts; else "neutral"; if missing => "neutral")
+    - with1hMomentum: use rsi1h (Longs: aligned if RSI ≥ 52; against if RSI ≤ 45; else neutral. Shorts: aligned if RSI ≤ 48; against if RSI ≥ 55; else neutral. If missing => "neutral")
     - withVWAP15m: "above"/"below"/"unknown" from last vs vwap15m
 
 - Triggers (explicit numbers; no vague phrasing):
   • Long: "Enter after one 1h close above <level> AND two 15m closes above <level>"
   • Short: "Enter after one 1h close below <level> AND two 15m closes below <level>"
-  (Choose <level> from swingLevels.recent20/50 or weeklyRange/prevSession.)
+  • Pick <level> from: prevSession.high/low, weeklyRange.high/low, swingLevels.recent20/50
 
 - actionHint source:
   • Build from analysis.plan if side!="none"; else from userReview.correctedPlan. Never from payload.userTrade.
@@ -3239,13 +3796,14 @@ Return ONLY the JSON object described above.
 `.trim();
 
   // ---------- CALL MODEL ----------
+  const formattedMessages = this.formatMessagesForModel(this.analysisModel, SYSTEM, USER);
   const resp = await axios.post(
     "https://api.openai.com/v1/chat/completions",
-    {
-      model: this.analysisModel,
-      messages: this.formatMessagesForModel(this.analysisModel, SYSTEM, USER),
-      response_format: { type: "json_object" }
-    },
+    this.buildRequestPayload(
+      this.analysisModel,
+      formattedMessages,
+      true // Short-term analysis requires JSON format
+    ),
     {
       headers: {
         Authorization: `Bearer ${this.openaiApiKey}`,
@@ -3273,10 +3831,8 @@ Return ONLY the JSON object described above.
     await this.updateStockLogWithCost(tradeData.logId, costRecord.totalCost, 'analysis');
   }
   
-  if (!raw) throw new Error("Empty response from model");
-
-  // Parse + sanitize drift
-  const modelJson = JSON.parse(raw);
+  // Parse + sanitize drift (use cleanJsonResponse for o4-mini compatibility)
+  const modelJson = this.cleanJsonResponse(raw);
   const sanitized = await this.sanitizeReview(modelJson);
   
   // Add token usage information to the result
@@ -3288,30 +3844,41 @@ Return ONLY the JSON object described above.
     model: this.analysisModel,
     timestamp: new Date().toISOString()
   };
+
+  // Save debug info with actual prompt sent to AI
+  sanitized.debugInfo = {
+    aiPrompt: formattedMessages,
+    model: this.analysisModel
+  };
   
-  return sanitized;
+    return sanitized;
+  } catch (error) {
+    console.error('❌ Short-term analysis failed:', error);
+    throw new Error(`Short-term analysis failed: ${error.message}`);
+  }
 }
 
 
 async getMediumTermAITradingReview(tradeData, payload, userExperience) {
-  // --- guardrails ---
+  try {
+    // --- guardrails ---
   const allowed = new Set(["beginner", "intermediate", "advanced"]);
   if (!allowed.has(userExperience)) throw new Error(`Invalid userExperience: ${userExperience}`);
 
-  const language =
+  const lang =
     typeof this.getExperienceLanguage === "function"
       ? this.getExperienceLanguage(userExperience)
-      : { tone: "clear, practical language", complexity: "keep it concise" };
+      : { tone: "clear, practical language", complexity: "keep it concise", glossaryTerms: [] };
 
   // ---- merge user's proposed trade into payload (so model can review it) ----
   const mergedPayload = {
     ...payload, // expected from buildMediumTermReviewPayload
     userTrade: {
       direction: tradeData.direction,
-      entry:     tradeData.entryPrice ?? tradeData.entryprice ?? tradeData.entry,
-      stop:      tradeData.stopLoss   ?? tradeData.stoploss   ?? tradeData.stop,
-      target:    tradeData.targetPrice?? tradeData.target,
-      qty:       tradeData.qty ?? tradeData.quantity,
+      entry:     tradeData.entryPrice ?? tradeData.entryprice ?? tradeData.entry ?? null,
+      stop:      tradeData.stopLoss   ?? tradeData.stoploss   ?? tradeData.stop  ?? null,
+      target:    tradeData.targetPrice?? tradeData.targetprice?? tradeData.target?? null,
+      qty:       tradeData.qty ?? tradeData.quantity ?? null,
       term:      tradeData.term ?? "medium",
       reasoning: tradeData.reasoning ?? tradeData.note ?? null,
       createdAtISO: tradeData.createdAt ?? null
@@ -3325,6 +3892,7 @@ const SYSTEM = `
 You are a veteran Indian medium-term swing/position stock trader and mentor.
 
 Operate ONLY on the provided JSON payload. Do not browse. Do not infer missing fields.
+When numeric MA comparisons are provided, ignore entryVsDailyMA.* text flags.
 Market: NSE cash. Holding window: ~3–12 weeks. Timeframes: 1W (structure), 1D (primary bias), 1h (timing aid only).
 
 Behavior:
@@ -3332,6 +3900,19 @@ Behavior:
 - The concise UI "card" MUST be beginner-friendly regardless of userExperience.
 - The detailed "analysis" may adapt tone/complexity to userExperience.
 - Alignment rule: Prefer LONGS when 1W AND 1D are bullish; prefer SHORTS when 1W AND 1D are bearish. 1h is for timing only (optional).
+
+Language style: ${lang.tone}. ${lang.complexity}.
+If userExperience=="beginner":
+  - Use plain, short sentences.
+  - Add 1–3 bullets in analysis.notes defining any of: ${lang.glossaryTerms.join(', ')} that appear (e.g., "Risk/Reward = profit ÷ loss").
+  - Avoid unexplained jargon in ui.tldr and ui.actionHint (keep them plain).
+If userExperience=="intermediate":
+  - Use clear language with light technical terms (define uncommon terms once, in parentheses).
+  - May use standard acronyms (RR, SL, TP) but expand them the first time in analysis (e.g., "RR (risk/reward)").
+  - Include one numeric example where helpful (e.g., how RR was computed).
+  - Keep the UI beginner-simple; put any extra detail in analysis.notes.
+If userExperience=="advanced":
+  - You may use technical terms in analysis; keep UI beginner-simple but expand analysis depth and structure commentary.
 
 Risk model:
 - Stops at weekly/daily swing low/high or ATR(1D) × (1.5–2.0).
@@ -3345,7 +3926,12 @@ Output:
 
 Rounding:
 - Compute with full precision; compare thresholds on full precision.
-- Round to tickSize (if provided) else 0.05. Prices 1dp where sensible; percentages 2dp; rr 2dp.
+- Round all emitted levels (entry/stop/T1/T2 in plan/correctedPlan and ui.actionHint) to tickSize (default 0.05); display with 2dp.
+
+Chip Tones (consistency):
+- RR chip: ≥2.00: good, 1.20–1.99: warn, <1.20: bad
+- Deviation chip: ≤5%: good, >5–10%: warn, >10–15%: bad, >15%: reject flag
+- Context chip: "Above VWAP · Bullish": good, "Below VWAP · Bearish": bad, all others: warn (including "VWAP Unknown")
 
 Safety:
 - If critical fields are missing/stale, set guards.needsData=true and analysis.isValid=false.
@@ -3358,7 +3944,6 @@ Before returning, self-check:
 - Replace vague text with explicit numeric levels (use payload levels).
 - Context chip MUST be EXACTLY one of: "W1&D1 Bullish" / "W1&D1 Bearish" / "Mixed/Neutral".
 - Do NOT reference VWAP or 15m in medium-term output.
-- If you set withinTodayRange, you MUST also include todayRange with numeric high/low (otherwise omit both).
 
 HARD CONSTRAINTS:
 - Strict medium-term invalidation ONLY (no intraday rules):
@@ -3369,12 +3954,23 @@ HARD CONSTRAINTS:
 - Trigger–Entry coherence:
   • If a trigger level exists and |trigger - entry| / entry > 0.01 → snap trigger to entry (note this in userReview.reasons) OR revise entry to the trigger. Keep them equal and explicit.
 
+- Deviation calculation:
+  • Deviation = payload.planDiagnostics.distanceFromLastPct (already calculated correctly as a percentage)
+  • For the Deviation chip: use the exact value from payload.planDiagnostics.distanceFromLastPct, format as "X.XX%" (e.g., "0.35%", "2.45%")
+  • DO NOT output "15.00" when distanceFromLastPct is 0.35 - use the actual calculated value
+
 - Future order detection:
-  • If deviation > 3 AND a trigger is present → set userReview.isValidToday=false (plan may still be valid). State this explicitly.
+  • If deviation > 3% AND a trigger is present → set userReview.isValidToday=false (plan may still be valid). State this explicitly.
   • If _preFlags.futureOrder is true, do the same and cite deviation.
 
-- Target baseline:
-  • If RR(T1) < 1.8, propose a correctedPlan that lifts T1 to ≥ 1.8R; or to ≥ _preHints.minT1 when provided; unless blocked by nearby weekly/daily resistance (explain if blocked).
+- Target baseline (CRITICAL):
+  • If RR(T1) < 1.8, YOU MUST propose a correctedPlan that lifts T1 to achieve ≥ 1.8R minimum
+  • Calculate new T1: T1_new = entry + (1.8 × |entry - stop|)
+  • For LONG: T1_new = entry + (1.8 × (entry - stop))
+  • For SHORT: T1_new = entry - (1.8 × (stop - entry))  
+  • DO NOT copy the user's targets if RR < 1.8 - you MUST improve them
+  • Set T2 to extend beyond T1 for better reward potential
+  • Only keep user's targets if they already meet ≥ 1.8R requirement
 
 - ui.actionHint:
   • Build ONLY from analysis.plan when side!="none"; else from userReview.correctedPlan. NEVER from payload.userTrade.
@@ -3385,7 +3981,7 @@ HARD CONSTRAINTS:
 `.trim();
 
 const USER = `
-Review the payload for a MEDIUM-TERM swing/position trade. First, evaluate the user's proposed plan (payload.userTrade).
+Review the payload for a MEDIUM-TERM swing/position trade. First, evaluate the user's proposed plan (payload.userPlan; fallback to payload.userTrade if userPlan missing).
 Then, produce: (1) a beginner-friendly "ui" card; (2) a detailed "analysis" section tailored to ${userExperience}.
 
 [PAYLOAD]
@@ -3398,7 +3994,7 @@ ${JSON.stringify(mergedPayload)}
     "tldr": "string",
     "chips": [
       {"label":"RR","value":"string","tone":"good|warn|bad"},
-      {"label":"Deviation","value":"string","tone":"good|warn|bad"},
+      {"label":"Deviation","value":"string","tone":"good|warn|bad"},        // MUST use payload.planDiagnostics.distanceFromLastPct with % sign, e.g., "0.35%"
       {"label":"Context","value":"W1&D1 Bullish" | "W1&D1 Bearish" | "Mixed/Neutral","tone":"good|warn|bad"}
     ],
     "actionHint": "string"  // "Side <entry> / SL <stop> / T1 <t1> / T2 <t2>"
@@ -3414,7 +4010,7 @@ ${JSON.stringify(mergedPayload)}
       "isValidToday": boolean | null,
       "reasons": ["string"],
       "rr": number | null,
-      "distanceFromLastPct": number | null,
+      "distanceFromLastPct": number | null, // Use payload.planDiagnostics.distanceFromLastPct (pre-calculated)
       "alignment": {
         "with1hMomentum": "aligned" | "against" | "neutral",
         "with1DBias": "aligned" | "against" | "neutral",
@@ -3464,7 +4060,7 @@ ${JSON.stringify(mergedPayload)}
       "biasDaily": "bullish" | "bearish" | "neutral",
       "biasWeekly": "bullish" | "bearish" | "neutral",
       "tickSize": number | null,
-      "generatedAtIST": "YYYY-MM-DD HH:MM",
+      "generatedAtIST": "YYYY-MM-DD HH:MM",  // Use userPlan.createdAtISO→IST if available; else null/omit
       "dataHealth": { "bars1h": number, "bars1D": number, "bars1W": number }
     },
 
@@ -3476,6 +4072,11 @@ ${JSON.stringify(mergedPayload)}
 - Map fields from payload as specified.
 - Data minima: bars1D ≥ 200, bars1W ≥ 80 (required); bars1h ≥ 60 (optional).
 - Numeric validity: BUY stop<entry<target; SELL target<entry<stop; rr and deviation as defined.
+- Deviation handling:
+  • Use payload.planDiagnostics.distanceFromLastPct (already calculated as percentage)
+  • If payload.planDiagnostics.distanceFromLastPct is missing or null:
+    - Set analysis.userReview.distanceFromLastPct = null
+    - In ui.chips, set Deviation.value = "n/a" and Deviation.tone = "good"
 - Alignment scoring: with1W/with1D per side; 1h momentum via rsi1h (52–65 long, 35–48 short).
 - Triggers: explicit numeric; ensure trigger ≈ entry (≤1% diff) — else snap/revise and explain.
 - Target upgrades: if T1 < 1.8R, lift to ≥ 1.8R (or ≥ _preHints.minT1) unless blocked by resistance; keep "caution" if blocked.
@@ -3486,13 +4087,14 @@ Return ONLY the JSON object described above.
 `.trim();
 
   // ---------- CALL MODEL ----------
+  const formattedMessages = this.formatMessagesForModel(this.analysisModel, SYSTEM, USER);
   const resp = await axios.post(
     "https://api.openai.com/v1/chat/completions",
-    {
-      model: this.analysisModel,
-      messages: this.formatMessagesForModel(this.analysisModel, SYSTEM, USER),
-      response_format: { type: "json_object" }
-    },
+    this.buildRequestPayload(
+      this.analysisModel,
+      formattedMessages,
+      true // Medium-term analysis requires JSON format
+    ),
     {
       headers: {
         Authorization: `Bearer ${this.openaiApiKey}`,
@@ -3520,11 +4122,16 @@ Return ONLY the JSON object described above.
     await this.updateStockLogWithCost(tradeData.logId, costRecord.totalCost, 'analysis');
   }
   
-  if (!raw) throw new Error("Empty response from model");
-
-  const modelJson = JSON.parse(raw);
+  // Parse (use cleanJsonResponse for o4-mini compatibility)
+  const modelJson = this.cleanJsonResponse(raw);
+  
+  // Add debug info early so it survives processing
+  modelJson.debugInfo = {
+    aiPrompt: formattedMessages,
+    model: this.analysisModel
+  };
+  
   const patched = await this.fixMediumReview(modelJson);
- 
   const cleaned = this.validateMediumResponse(patched);
   
   // Add token usage information to the result
@@ -3537,7 +4144,19 @@ Return ONLY the JSON object described above.
     timestamp: new Date().toISOString()
   };
   
-  return cleaned;
+  // Ensure debug info is preserved
+  if (!cleaned.debugInfo) {
+    cleaned.debugInfo = {
+      aiPrompt: formattedMessages,
+      model: this.analysisModel
+    };
+  }
+  
+    return cleaned;
+  } catch (error) {
+    console.error('❌ Medium-term analysis failed:', error);
+    throw new Error(`Medium-term analysis failed: ${error.message}`);
+  }
 }
 
 
@@ -3788,6 +4407,67 @@ async sanitizeReview(review) {
       : [`1h close ≥ ${S}`, `Sustained 15m VWAP reclaim (2 consecutive 15m closes above VWAP)`];
   }
 
+  // Fix deviation chip value if AI got it wrong
+  if (ui.chips && Array.isArray(ui.chips)) {
+    const deviationChip = ui.chips.find(chip => chip.label === 'Deviation');
+    const actualDeviation = a.userReview?.distanceFromLastPct;
+    
+    if (deviationChip && actualDeviation != null && isFinite(actualDeviation)) {
+      // Format the deviation value correctly with percentage sign
+      deviationChip.value = actualDeviation.toFixed(2) + '%';
+      
+      // Set tone based on deviation value
+      if (actualDeviation > 15) {
+        deviationChip.tone = 'bad';
+      } else if (actualDeviation > 10) {
+        deviationChip.tone = 'warn';
+      } else {
+        deviationChip.tone = 'good';
+      }
+    }
+  }
+  
+  // Fix medium-term RR issues if AI didn't follow instructions
+  const isMediumTerm = 
+    r?.userPlan?.term === 'medium' ||
+    r?.yourPlan?.term === 'medium' ||
+    r?.term === 'medium' ||
+    a?.meta?.term === 'medium';
+  if (isMediumTerm && a.userReview && a.plan) {
+    const userRR = Number(a.userReview.rr);
+    if (userRR > 0 && userRR < 1.8 && a.plan.side && a.plan.side !== 'none') {
+      // AI should have corrected the targets but didn't - fix it
+      const entry = Number(a.plan.entry);
+      const stop = Number(a.plan.stop);
+      
+      if (isFinite(entry) && isFinite(stop) && Math.abs(entry - stop) > 0) {
+        const riskAmount = Math.abs(entry - stop);
+        const minReward = 1.8 * riskAmount;
+        
+        if (a.plan.side === 'long') {
+          const newT1 = entry + minReward;
+          const newT2 = entry + (minReward * 1.4); // 20% extension for T2
+          a.plan.targets = [roundTick(newT1), roundTick(newT2)];
+          a.plan.notes = a.plan.notes || [];
+          a.plan.notes.push('Targets adjusted to meet 1.8R minimum requirement');
+          console.log(`Fixed medium-term RR: T1=${newT1}, T2=${newT2} for entry=${entry}, stop=${stop}`);
+        } else if (a.plan.side === 'short') {
+          const newT1 = entry - minReward;
+          const newT2 = entry - (minReward * 1.4);
+          a.plan.targets = [roundTick(newT1), roundTick(newT2)];
+          a.plan.notes = a.plan.notes || [];
+          a.plan.notes.push('Targets adjusted to meet 1.8R minimum requirement');
+          console.log(`Fixed medium-term RR: T1=${newT1}, T2=${newT2} for entry=${entry}, stop=${stop}`);
+        }
+        
+        // Also update correctedPlan if it exists
+        if (a.userReview.correctedPlan && a.userReview.correctedPlan.side === a.plan.side) {
+          a.userReview.correctedPlan.targets = [...a.plan.targets];
+        }
+      }
+    }
+  }
+  
   // Enforce userReview.isValidToday if model drifted
   if (a.userReview) {
     const u = a.userReview;
@@ -3827,6 +4507,31 @@ async sanitizeReview(review) {
     }
   }
 
+  // Add glossary terms for beginner and intermediate users
+  if (a.level === 'beginner') {
+    a.notes ??= [];
+    const txt = JSON.stringify(a); // crude scan is fine
+    const need = [];
+    if (/VWAP/i.test(txt)) need.push('VWAP = day\'s average price weighted by volume');
+    if (/\bRR\b|Risk\/Reward/i.test(txt)) need.push('Risk/Reward = profit ÷ loss (higher is better)');
+    if (/ATR/i.test(txt)) need.push('ATR = typical daily move size (volatility)');
+    if (/RSI/i.test(txt)) need.push('RSI = momentum indicator (>70 overbought, <30 oversold)');
+    if (/\bSMA\b/i.test(txt)) need.push('SMA = Simple Moving Average (average price over time)');
+    if (/\bEMA\b/i.test(txt)) need.push('EMA = Exponential Moving Average (recent prices weighted more)');
+    for (const n of need.slice(0,3)) if (!a.notes.includes(n)) a.notes.push(n);
+  }
+
+  if (a.level === 'intermediate') {
+    a.notes ??= [];
+    const txt = JSON.stringify(a);
+    const addOnce = (s) => { if (!a.notes.includes(s)) a.notes.push(s); };
+    if (/\bRR\b(?!\s*\()/i.test(txt)) addOnce('RR (risk/reward) = profit ÷ loss');
+    if (/\bSL\b(?!\s*\()/i.test(txt)) addOnce('SL (stop-loss) = exit price if wrong');
+    if (/\bTP\b(?!\s*\()/i.test(txt)) addOnce('TP (take-profit) = target price to book gains');
+    if (/\bVWAP\b(?!\s*\()/i.test(txt)) addOnce('VWAP = day\'s average price weighted by volume');
+    if (/\bMACD\b(?!\s*\()/i.test(txt)) addOnce('MACD = trend-following momentum indicator');
+  }
+
   // Strip accidental BSON wrappers in strings
   const stripBson = (x) => {
     if (Array.isArray(x)) return x.map(stripBson);
@@ -3848,29 +4553,37 @@ async sanitizeReview(review) {
    */
   async updateTradeLogWithRejection(logId, rejectionReason) {
     try {
+      // Create a flat structure matching successful reviews
+      const rejectionResult = {
+        reviewId: `rejection_${Date.now()}`,
+        status: "rejected",
+        isAnalaysisCorrect: false,
+        // Direct analysis object (not nested under 'result')
+        analysis: {
+          isValid: null,
+          insight: rejectionReason,
+          bias: 'neutral',
+          marketHoursRejection: true,
+          rejectionReason: rejectionReason,
+          reviewedAt: new Date().toISOString()
+        },
+        // UI structure for consistent frontend handling  
+        ui: {
+          verdict: "reject",
+          tldr: rejectionReason.split('\n')[0], // Use first line of rejection reason
+          chips: []
+        },
+        error: null,
+        metadata: {
+          reviewedAt: new Date().toISOString(),
+          reviewSource: "market_hours_validation",
+          serviceVersion: "v2.1",
+          rejectionType: "market_hours"
+        }
+      };
+
       const updatedLogEntry = await StockLog.findByIdAndUpdate(logId, {
-        reviewResult: [{
-          reviewId: `rejection_${Date.now()}`,
-          status: "rejected",
-          isAnalaysisCorrect: false,
-          result: {
-            analysis: {
-              isValid: null,
-              insight: rejectionReason,
-              bias: 'neutral',
-              marketHoursRejection: true,
-              rejectionReason: rejectionReason,
-              reviewedAt: new Date().toISOString()
-            }
-          },
-          error: null,
-          metadata: {
-            reviewedAt: new Date().toISOString(),
-            reviewSource: "market_hours_validation",
-            serviceVersion: "v2.1",
-            rejectionType: "market_hours"
-          }
-        }],
+        reviewResult: [rejectionResult],
         reviewStatus: 'rejected',
         reviewCompletedAt: new Date()
       }, { new: true });
@@ -3943,21 +4656,28 @@ async sanitizeReview(review) {
       const updatedLogEntry = await StockLog.findByIdAndUpdate(logId, updateData, { new: true });
 
 
+        console.log(`🔍 Credit deduction check: isValid = ${result?.analysis?.isValid}, condition passes: ${result?.analysis?.isValid != null}`);
+        console.log(`🔍 User ID: ${logEntry.user}, isFromRewardedAd: ${logEntry.isFromRewardedAd}`);
+        
         if(result?.analysis?.isValid  != null){
           try {
+              console.log(`💳 Starting credit deduction for user ${logEntry.user}...`);
               // Deduct credits after successful AI review
               await subscriptionService.deductCredits(
                 logEntry.user, 
                 1, 
                 'AI trade review', 
                 'ai_review', 
-                logEntry.isFromRewardedAd || false
+                logEntry.isFromRewardedAd || false,
+                this.creditType || 'regular'
               );
               console.log(`✅ AI review successful for ${logEntry.stock.trading_symbol} - credits deducted`);
             } catch (error) {
-              console.error('Error deducting credits after AI review:', error);
+              console.error('❌ Error deducting credits after AI review:', error);
               // Continue even if credit deduction fails - review is already complete
             }
+        } else {
+          console.log(`⚠️ Credits NOT deducted - isValid is null for user ${logEntry.user}`);
         }
       
 
@@ -3998,7 +4718,8 @@ async sanitizeReview(review) {
           analysis: metadata.sessionCosts.byCallType.analysis?.totalCost || 0,
           totalCalls: metadata.sessionCosts.callCount
         },
-        modelsUsed: metadata.modelsUsed,
+        modelsUsed: metadata.modelsUsed, // Now correctly an array of strings
+        modelDetails: metadata.modelDetails, // Object with detailed model info
         userExperience: metadata.userExperience,
         tokenUsage: metadata.tokenUsage,
         reviewProcessedAt: metadata.reviewProcessedAt,
@@ -4022,11 +4743,45 @@ async sanitizeReview(review) {
       await stockLog.save();
       console.log(`💾 Updated trade log ${logId} with comprehensive review metadata`);
       console.log(`   Total Cost: $${metadata.sessionCosts.totalCost.toFixed(4)}`);
-      console.log(`   Models: ${metadata.modelsUsed.sentimentModel} + ${metadata.modelsUsed.analysisModel}`);
+      console.log(`   Models: ${metadata.modelDetails.sentimentModel} + ${metadata.modelDetails.analysisModel}`);
       console.log(`   Tokens: ${metadata.tokenUsage.totalTokens} (${metadata.tokenUsage.inputTokens}+${metadata.tokenUsage.outputTokens})`);
       console.log(`   User Level: ${metadata.userExperience}`);
     } catch (error) {
       console.error(`❌ Failed to update trade log with metadata:`, error);
+    }
+  }
+
+  /**
+   * Save debug information to stock log for troubleshooting
+   * @param {string} logId - The stock log ID
+   * @param {Object} payload - The payload sent to AI
+   * @param {string|Object} prompt - The prompt used for AI
+   * @param {Object} candleSummary - Summary of candle data
+   */
+  async saveDebugInfo(logId, payload, prompt, candleSummary) {
+    try {
+      // Get existing debugInfo to preserve AI prompt
+      const existingLog = await StockLog.findById(logId).select('debugInfo');
+      const existingDebugInfo = existingLog?.debugInfo || {};
+      
+      const debugInfo = {
+        payload: payload,
+        prompt: typeof prompt === 'string' ? { content: prompt } : prompt,
+        candleData: candleSummary,
+        savedAt: new Date(),
+        // Preserve the aiPrompt if it exists
+        ...(existingDebugInfo.aiPrompt ? { aiPrompt: existingDebugInfo.aiPrompt } : {}),
+        ...(existingDebugInfo.model ? { model: existingDebugInfo.model } : {})
+      };
+
+      await StockLog.findByIdAndUpdate(logId, 
+        { debugInfo: debugInfo },
+        { new: true }
+      );
+
+      console.log(`🐛 Debug info saved for trade ${logId}`);
+    } catch (error) {
+      console.error(`❌ Failed to save debug info:`, error);
     }
   }
 
@@ -4076,6 +4831,131 @@ async sanitizeReview(review) {
     } catch (error) {
       console.error(`❌ Failed to update stock log with cost:`, error);
     }
+  }
+
+  /**
+   * Check if a model is from OpenAI and supports response_format
+   * @param {string} model - The model name
+   * @returns {boolean} - True if it's an OpenAI model that supports response_format (excludes o1 models)
+   */
+  isOpenAIModel(model) {
+    // o1 models don't support response_format, temperature, top_p, etc.
+    if (model.startsWith('o1')) {
+      return false;
+    }
+    
+    const openAIModels = [
+   
+      'gpt-4o-mini',
+      'gpt-5',
+      'o4-mini'
+
+    ];
+    
+    // Check if the model starts with any OpenAI model prefix
+    return openAIModels.some(openAiModel => model.includes(openAiModel));
+  }
+
+  /**
+   * Save error status to database when AI review fails
+   * @param {string} tradeLogId - The trade log ID
+   * @param {Error} error - The error that occurred
+   */
+  async saveErrorStatus(tradeLogId, error) {
+    try {
+      console.error(`❌ AI Review failed for trade ${tradeLogId}:`, error.message);
+      
+      const errorData = {
+        reviewStatus: 'error',
+        reviewCompletedAt: new Date(),
+        reviewError: {
+          message: error.message || 'Unknown error occurred',
+          code: error.code || 'UNKNOWN_ERROR',
+          type: this.getErrorType(error)
+        },
+        reviewResult: [{
+          status: 'error',
+          ui: {
+            verdict: 'error',
+            tldr: 'Review failed - ' + this.getErrorMessage(error)
+          }
+        }]
+      };
+
+     
+      await StockLog.findByIdAndUpdate(tradeLogId, errorData, { new: true });
+      
+      console.log(`💾 Updated trade log ${tradeLogId} with error status`);
+    } catch (dbError) {
+      console.error(`❌ Failed to save error status for trade ${tradeLogId}:`, dbError);
+    }
+  }
+
+  /**
+   * Get error type for categorization
+   * @param {Error} error - The error object
+   * @returns {string} - Error type
+   */
+  getErrorType(error) {
+    if (error.response) {
+      if (error.response.status === 400) return 'BAD_REQUEST';
+      if (error.response.status === 401) return 'UNAUTHORIZED';
+      if (error.response.status === 429) return 'RATE_LIMIT';
+      if (error.response.status >= 500) return 'SERVER_ERROR';
+      return 'API_ERROR';
+    }
+    
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') return 'CONNECTION_ERROR';
+    if (error.name === 'SyntaxError') return 'PARSE_ERROR';
+    
+    return 'UNKNOWN_ERROR';
+  }
+
+  /**
+   * Get user-friendly error message
+   * @param {Error} error - The error object
+   * @returns {string} - User-friendly error message
+   */
+  getErrorMessage(error) {
+    const errorType = this.getErrorType(error);
+    
+    switch (errorType) {
+      case 'BAD_REQUEST':
+        return 'Invalid request parameters';
+      case 'UNAUTHORIZED':
+        return 'Authentication failed';
+      case 'RATE_LIMIT':
+        return 'Too many requests, please try again later';
+      case 'SERVER_ERROR':
+        return 'AI service temporarily unavailable';
+      case 'CONNECTION_ERROR':
+        return 'Connection failed, please check your internet';
+      case 'PARSE_ERROR':
+        return 'Failed to process AI response';
+      default:
+        return 'An unexpected error occurred';
+    }
+  }
+
+  /**
+   * Build request payload for AI API calls with conditional response_format
+   * @param {string} model - The model name
+   * @param {Array} messages - The messages array
+   * @param {boolean} requireJson - Whether JSON response format is required
+   * @returns {Object} - Request payload
+   */
+  buildRequestPayload(model, messages, requireJson = true) {
+    const payload = {
+      model: model,
+      messages: messages
+    };
+
+    // Only add response_format for OpenAI models that support it
+    if (requireJson && this.isOpenAIModel(model)) {
+      payload.response_format = { type: "json_object" };
+    }
+
+    return payload;
   }
 
 }

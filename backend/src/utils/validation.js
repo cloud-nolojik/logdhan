@@ -120,8 +120,8 @@ export const validateStockLog = (logData) => {
   // Validate term
   if (!logData.term) {
     errors.term = 'Trading term is required';
-  } else if (!['intraday', 'short', 'medium', 'long'].includes(logData.term.toLowerCase())) {
-    errors.term = 'Term must be one of: intraday, short, medium, long';
+  } else if (!['intraday', 'short', 'medium'].includes(logData.term.toLowerCase())) {
+    errors.term = 'Term must be one of: intraday (same day), short (2-10 days), medium (3-12 weeks)';
   }
 
   // Validate reasoning (optional, but must be string if present and within length limit)
