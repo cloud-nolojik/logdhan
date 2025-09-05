@@ -3090,10 +3090,10 @@ safeJSONParse(content) {
   getExperienceLanguage(experience) {
     const languages = {
       beginner: {
-        tone: "very simple, beginner-friendly language with basic explanations",
-        examples: "Use simple analogies and explain technical terms",
-        complexity: "Avoid jargon, explain everything step by step",
-        glossaryTerms: ['reward-to-risk', 'stop-loss', 'resistance', 'support', 'breakout', 'volume', 'sentiment']
+        tone: "use everyday language like talking to a friend who never traded before",
+        examples: "Replace all technical terms: VWAP → 'average price today', RSI → 'price momentum', ATR → 'daily movement', RR → 'profit vs loss'",
+        complexity: "Translate everything to plain English - say 'price going up/down' instead of 'bullish/bearish', 'average price' instead of 'VWAP'",
+        glossaryTerms: ['profit-vs-loss', 'safety-exit', 'price-barrier', 'price-floor', 'price-jump', 'trading-activity', 'market-mood']
       },
       intermediate: {
         tone: "clear language with some technical terms explained",
