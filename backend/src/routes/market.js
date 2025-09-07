@@ -34,7 +34,7 @@ const MARKET_INDICES = {
   }
 };
 
-// Function to fetch real market data using existing getCurrentPrice function
+// Function to fetch real market data using existing getCurrentPrice function with candles
 async function fetchMarketDataFromUpstox() {
   try {
     const indices = [];
@@ -42,21 +42,32 @@ async function fetchMarketDataFromUpstox() {
     // Fetch real data for each index using the existing getCurrentPrice function
     for (const [key, indexInfo] of Object.entries(MARKET_INDICES)) {
       try {
-        console.log(`Fetching data for ${indexInfo.name} using key: ${indexInfo.upstoxKey}`);
-        const priceData = await getCurrentPrice(indexInfo.upstoxKey);
+        console.log(`Fetching candle data for ${indexInfo.name} using key: ${indexInfo.upstoxKey}`);
         
-        if (priceData && priceData.candles && priceData.candles.length > 0) {
-          // Get the latest candle data
-          const latestCandle = priceData.candles[priceData.candles.length - 1];
+        // Get candles data using sendCandles=true parameter
+        const candles = await getCurrentPrice(indexInfo.upstoxKey, true);
+        
+        if (candles && candles.length > 0) {
+          // Get the latest candle data (first element is most recent)
+          const latestCandle = candles[0];
           const [timestamp, open, high, low, close, volume] = latestCandle;
           
-          // Calculate change from previous candle or use open as reference
-          const previousCandle = priceData.candles.length > 1 ? 
-            priceData.candles[priceData.candles.length - 2] : null;
-          const previousClose = previousCandle ? previousCandle[4] : open;
+          // Calculate change from previous candle if available
+          let change = 0;
+          let changePercent = 0;
+          let previousClose = open; // Default to open price
           
-          const change = close - previousClose;
-          const changePercent = previousClose !== 0 ? (change / previousClose) * 100 : 0;
+          if (candles.length > 1) {
+            // Use previous candle's close price for change calculation
+            const previousCandle = candles[1];
+            previousClose = previousCandle[4]; // close price of previous candle
+            change = close - previousClose;
+            changePercent = previousClose !== 0 ? (change / previousClose) * 100 : 0;
+          } else {
+            // If only one candle, compare close to open
+            change = close - open;
+            changePercent = open !== 0 ? (change / open) * 100 : 0;
+          }
           
           indices.push({
             name: indexInfo.name,
@@ -69,12 +80,14 @@ async function fetchMarketDataFromUpstox() {
             low: Math.round(low * 100) / 100,
             open: Math.round(open * 100) / 100,
             volume: volume ? `${Math.round(volume / 1000000)}M` : 'N/A',
-            lastUpdated: new Date().toISOString()
+            timestamp: new Date(timestamp).toISOString(),
+            lastUpdated: new Date().toISOString(),
+            totalCandles: candles.length
           });
           
-          console.log(`✅ Successfully fetched data for ${indexInfo.name}: ₹${close}`);
+          console.log(`✅ Successfully fetched data for ${indexInfo.name}: ₹${close} (${candles.length} candles)`);
         } else {
-          console.warn(`⚠️ No price data available for ${indexInfo.name}, using fallback`);
+          console.warn(`⚠️ No candle data available for ${indexInfo.name}, using fallback`);
           // Fallback to reasonable default values
           const basePrice = key === 'SENSEX' ? 75000 : 
                            key === 'NIFTY_50' ? 22500 :
@@ -91,8 +104,10 @@ async function fetchMarketDataFromUpstox() {
             low: basePrice,
             open: basePrice,
             volume: 'N/A',
+            timestamp: new Date().toISOString(),
             lastUpdated: new Date().toISOString(),
-            dataSource: 'fallback'
+            dataSource: 'fallback',
+            totalCandles: 0
           });
         }
       } catch (indexError) {
@@ -113,13 +128,16 @@ async function fetchMarketDataFromUpstox() {
           low: basePrice,
           open: basePrice,
           volume: 'N/A',
+          timestamp: new Date().toISOString(),
           lastUpdated: new Date().toISOString(),
           dataSource: 'fallback',
+          totalCandles: 0,
           error: indexError.message
         });
       }
     }
     
+    console.log(`📊 Market data fetch completed: ${indices.length} indices processed`);
     return indices;
   } catch (error) {
     console.error('Error fetching market data:', error);
@@ -132,16 +150,16 @@ router.get('/indices', auth, async (req, res) => {
   try {
     // Check cache first
     const now = Date.now();
-    if (marketDataCache && (now - cacheTimestamp) < CACHE_DURATION) {
-      console.log('Returning cached market data');
-      return res.status(200).json({
-        success: true,
-        data: {
-          indices: marketDataCache
-        },
-        message: 'Market data retrieved successfully (cached)'
-      });
-    }
+    // if (marketDataCache && (now - cacheTimestamp) < CACHE_DURATION) {
+    //   console.log('Returning cached market data');
+    //   return res.status(200).json({
+    //     success: true,
+    //     data: {
+    //       indices: marketDataCache
+    //     },
+    //     message: 'Market data retrieved successfully (cached)'
+    //   });
+    // }
     
     // Fetch fresh data
     console.log('Fetching fresh market data');
@@ -176,10 +194,10 @@ router.get('/index/:symbol', auth, async (req, res) => {
     
     // Check cache first
     const now = Date.now();
-    if (!marketDataCache || (now - cacheTimestamp) >= CACHE_DURATION) {
+   // if (!marketDataCache || (now - cacheTimestamp) >= CACHE_DURATION) {
       marketDataCache = await fetchMarketDataFromUpstox();
       cacheTimestamp = now;
-    }
+   // }
     
     const indexData = marketDataCache.find(index => 
       index.symbol.toLowerCase().includes(symbol.toLowerCase())

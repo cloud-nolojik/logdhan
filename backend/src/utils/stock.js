@@ -102,7 +102,7 @@ export async function validateStock(instrumentKey) {
   return stock !== null;
 }
 
-export async function getCurrentPrice(instrumentKey) {
+export async function getCurrentPrice(instrumentKey,sendCandles = false) {
   const currentDate = new Date();
   const previousDay = new Date(currentDate); 
   previousDay.setDate(currentDate.getDate() - 3);
@@ -148,10 +148,15 @@ export async function getCurrentPrice(instrumentKey) {
         const candles = response.data?.data?.candles || [];
         
         if (candles.length > 0) {
-          const latest = candles[0]; // last candle
-          const currentPrice = latest ? latest[4] : null; // close price
-          console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
-          return currentPrice;
+          if (sendCandles) {
+            console.log(`✅ Success with ${format.name} - Returning ${candles.length} candles for ${instrumentKey}`);
+            return candles;
+          } else {
+            const latest = candles[0]; // last candle
+            const currentPrice = latest ? latest[4] : null; // close price
+            console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
+            return currentPrice;
+          }
         } else {
           console.log(`${format.name} returned no candles for ${instrumentKey}`);
         }
