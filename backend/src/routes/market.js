@@ -1,6 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import { auth } from '../middleware/auth.js';
+import { getCurrentPrice } from '../utils/stock.js';
 
 const router = express.Router();
 
@@ -33,34 +34,90 @@ const MARKET_INDICES = {
   }
 };
 
-// Function to fetch market data from Upstox (you'll need to implement this)
+// Function to fetch real market data using existing getCurrentPrice function
 async function fetchMarketDataFromUpstox() {
   try {
-    // This is a placeholder - you'll need to implement Upstox API integration
-    // For now, return mock data that looks realistic
     const indices = [];
     
+    // Fetch real data for each index using the existing getCurrentPrice function
     for (const [key, indexInfo] of Object.entries(MARKET_INDICES)) {
-      // Generate realistic mock data
-      const basePrice = key === 'SENSEX' ? 75000 : 
-                       key === 'NIFTY_50' ? 22500 :
-                       key === 'NIFTY_BANK' ? 48000 : 35000;
-      
-      const changePercent = (Math.random() - 0.5) * 4; // -2% to +2%
-      const change = (basePrice * changePercent) / 100;
-      const currentPrice = basePrice + change;
-      
-      indices.push({
-        name: indexInfo.name,
-        symbol: indexInfo.symbol,
-        currentPrice: Math.round(currentPrice * 100) / 100,
-        change: Math.round(change * 100) / 100,
-        changePercent: Math.round(changePercent * 100) / 100,
-        high: Math.round((currentPrice * 1.02) * 100) / 100,
-        low: Math.round((currentPrice * 0.98) * 100) / 100,
-        volume: `${Math.floor(Math.random() * 500 + 100)}M`,
-        lastUpdated: new Date().toISOString()
-      });
+      try {
+        console.log(`Fetching data for ${indexInfo.name} using key: ${indexInfo.upstoxKey}`);
+        const priceData = await getCurrentPrice(indexInfo.upstoxKey);
+        
+        if (priceData && priceData.candles && priceData.candles.length > 0) {
+          // Get the latest candle data
+          const latestCandle = priceData.candles[priceData.candles.length - 1];
+          const [timestamp, open, high, low, close, volume] = latestCandle;
+          
+          // Calculate change from previous candle or use open as reference
+          const previousCandle = priceData.candles.length > 1 ? 
+            priceData.candles[priceData.candles.length - 2] : null;
+          const previousClose = previousCandle ? previousCandle[4] : open;
+          
+          const change = close - previousClose;
+          const changePercent = previousClose !== 0 ? (change / previousClose) * 100 : 0;
+          
+          indices.push({
+            name: indexInfo.name,
+            symbol: indexInfo.symbol,
+            instrumentKey: indexInfo.upstoxKey,
+            currentPrice: Math.round(close * 100) / 100,
+            change: Math.round(change * 100) / 100,
+            changePercent: Math.round(changePercent * 100) / 100,
+            high: Math.round(high * 100) / 100,
+            low: Math.round(low * 100) / 100,
+            open: Math.round(open * 100) / 100,
+            volume: volume ? `${Math.round(volume / 1000000)}M` : 'N/A',
+            lastUpdated: new Date().toISOString()
+          });
+          
+          console.log(`✅ Successfully fetched data for ${indexInfo.name}: ₹${close}`);
+        } else {
+          console.warn(`⚠️ No price data available for ${indexInfo.name}, using fallback`);
+          // Fallback to reasonable default values
+          const basePrice = key === 'SENSEX' ? 75000 : 
+                           key === 'NIFTY_50' ? 22500 :
+                           key === 'NIFTY_BANK' ? 48000 : 35000;
+          
+          indices.push({
+            name: indexInfo.name,
+            symbol: indexInfo.symbol,
+            instrumentKey: indexInfo.upstoxKey,
+            currentPrice: basePrice,
+            change: 0,
+            changePercent: 0,
+            high: basePrice,
+            low: basePrice,
+            open: basePrice,
+            volume: 'N/A',
+            lastUpdated: new Date().toISOString(),
+            dataSource: 'fallback'
+          });
+        }
+      } catch (indexError) {
+        console.error(`❌ Error fetching data for ${indexInfo.name}:`, indexError.message);
+        // Add fallback data for this index
+        const basePrice = key === 'SENSEX' ? 75000 : 
+                         key === 'NIFTY_50' ? 22500 :
+                         key === 'NIFTY_BANK' ? 48000 : 35000;
+        
+        indices.push({
+          name: indexInfo.name,
+          symbol: indexInfo.symbol,
+          instrumentKey: indexInfo.upstoxKey,
+          currentPrice: basePrice,
+          change: 0,
+          changePercent: 0,
+          high: basePrice,
+          low: basePrice,
+          open: basePrice,
+          volume: 'N/A',
+          lastUpdated: new Date().toISOString(),
+          dataSource: 'fallback',
+          error: indexError.message
+        });
+      }
     }
     
     return indices;
