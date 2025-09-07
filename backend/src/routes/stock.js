@@ -122,13 +122,13 @@ router.get('/:instrument_key/news', auth, async (req, res) => {
     
     // Fetch news using the existing service
     const stockName = stockDetails.name || stockDetails.trading_symbol;
-    console.log(`📰 Fetching news for: ${stockName}`);
+    console.log(`📰 Fetching  news for: ${stockName}`);
     
     try {
       const newsItems = await aiReviewService.fetchNewsData(stockName);
       console.log(`📰 Retrieved ${newsItems?.length || 0} news items`);
       
-      if (!newsItems || newsItems.length === 0) {
+      if (!newsItems  || newsItems.length === 0) {
         return res.status(200).json({
           success: true,
           data: {
