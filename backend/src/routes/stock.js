@@ -94,47 +94,92 @@ router.get('/:instrument_key/news', auth, async (req, res) => {
     const { instrument_key } = req.params;
     const { limit = 10 } = req.query; // Default to 10 news items
     
+    console.log(`📰 Fetching news for instrument: ${instrument_key}`);
+    
     // Validate instrument_key parameter
     if (!instrument_key || instrument_key.trim().length === 0) {
-      return res.status(400).json({ error: 'Invalid instrument_key parameter' });
+      console.log('❌ Invalid instrument_key parameter');
+      return res.status(400).json({ 
+        success: false,
+        error: 'Invalid instrument_key parameter' 
+      });
     }
 
     // Get stock details to extract stock name
     const stockDetails = await getExactStock(instrument_key);
     if (!stockDetails) {
-      return res.status(404).json({ error: 'Stock not found' });
+      console.log(`❌ Stock not found for instrument: ${instrument_key}`);
+      return res.status(404).json({ 
+        success: false,
+        error: 'Stock not found' 
+      });
     }
 
-    // Import AIReviewService to use its news fetching functionality
-    const { AIReviewService } = await import('../services/ai/aiReview.service.js');
-    const aiService = new AIReviewService();
+    console.log(`📰 Found stock: ${stockDetails.name || stockDetails.trading_symbol}`);
+
+    // Import aiReviewService instance to use its news fetching functionality
+    const { aiReviewService } = await import('../services/ai/aiReview.service.js');
     
     // Fetch news using the existing service
     const stockName = stockDetails.name || stockDetails.trading_symbol;
-    const newsItems = await aiService.fetchNewsData(stockName);
+    console.log(`📰 Fetching news for: ${stockName}`);
     
-    // Process and format news items for frontend
-    const formattedNews = newsItems.slice(0, parseInt(limit)).map(item => ({
-      title: item.title,
-      link: item.link,
-      publishedDate: item.pubDate,
-      source: item.source || 'Google News',
-      snippet: item.contentSnippet || item.content || '',
-      thumbnail: item.thumbnail || null
-    }));
-
-    res.status(200).json({
-      success: true,
-      data: {
-        stockName: stockName,
-        stockSymbol: stockDetails.trading_symbol,
-        totalNews: formattedNews.length,
-        news: formattedNews
+    try {
+      const newsItems = await aiReviewService.fetchNewsData(stockName);
+      console.log(`📰 Retrieved ${newsItems?.length || 0} news items`);
+      
+      if (!newsItems || newsItems.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            stockName: stockName,
+            stockSymbol: stockDetails.trading_symbol,
+            totalNews: 0,
+            news: [],
+            message: 'No news available for this stock'
+          }
+        });
       }
-    });
+      
+      // Process and format news items for frontend
+      const formattedNews = newsItems.slice(0, parseInt(limit)).map(item => ({
+        title: item.title,
+        link: item.link,
+        publishedDate: item.pubDate,
+        source: item.source || 'Google News',
+        snippet: item.contentSnippet || item.content || item.summary || '',
+        thumbnail: item.thumbnail || null,
+        guid: item.guid || item.link
+      }));
+
+      console.log(`📰 Returning ${formattedNews.length} formatted news items`);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          stockName: stockName,
+          stockSymbol: stockDetails.trading_symbol,
+          totalNews: formattedNews.length,
+          news: formattedNews
+        }
+      });
+    } catch (newsError) {
+      console.error('❌ Error fetching news data:', newsError);
+      return res.status(200).json({
+        success: true,
+        data: {
+          stockName: stockName,
+          stockSymbol: stockDetails.trading_symbol,
+          totalNews: 0,
+          news: [],
+          message: 'Unable to fetch news at the moment',
+          error: newsError.message
+        }
+      });
+    }
 
   } catch (error) {
-    console.error('Error fetching stock news:', error);
+    console.error('❌ Error in news endpoint:', error);
     res.status(500).json({ 
       success: false,
       error: 'Failed to fetch stock news',
