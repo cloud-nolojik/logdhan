@@ -41,6 +41,9 @@ import experienceAnalyticsRoutes from './routes/experienceAnalytics.js';
 import subscriptionRoutes from './routes/subscriptions.js';
 import referralRoutes from './routes/referrals.js';
 import creditsRoutes from './routes/credits.js';
+import marketRoutes from './routes/market.js';
+import aiRoutes from './routes/ai.js';
+import upstoxRoutes from './routes/upstox.js';
 
 
 const app = express();
@@ -94,6 +97,9 @@ app.use('/api/v1/analytics/experience', experienceAnalyticsRoutes);
 app.use('/api/v1/subscriptions', subscriptionRoutes);
 app.use('/api/v1/referrals', referralRoutes);
 app.use('/api/credits', creditsRoutes);
+app.use('/api/v1/market', marketRoutes);
+app.use('/api/v1/ai', aiRoutes);
+app.use('/api/v1/upstox', upstoxRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

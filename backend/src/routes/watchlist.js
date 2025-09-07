@@ -1,7 +1,8 @@
 import express from 'express';
 import { auth } from '../middleware/auth.js';
 import { User } from '../models/user.js';
-import { getExactStock, getCurrentPrice } from '../utils/stock.js';
+// Use database version instead of JSON file version
+import { getExactStock, getCurrentPrice } from '../utils/stockDb.js';
 import pLimit from 'p-limit'; 
 // Upstox allows 50 requests/second, so 20 concurrent is safe with 10s timeouts
 const limit = pLimit(20); // Optimized for better performance while staying within rate limits

@@ -11,7 +11,9 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "migrate:stocks": "node src/scripts/migrateStocksToDb.js",
+    "migrate:stocks:clear": "node src/scripts/migrateStocksToDb.js --clear"
   },
   "keywords": [
     "nodejs",

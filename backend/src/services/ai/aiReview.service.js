@@ -2292,7 +2292,7 @@ async runIntradayAgent(labeledData, tradeData = {}, newsData = null) {
 }
 
 
-async runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
+async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
   // ---------- helpers ----------
   const mapRaw = (arr = []) =>
     arr.map(a => ({

@@ -1,5 +1,6 @@
 import express from 'express';
-import { searchStocks, getExactStock, getCurrentPrice } from '../utils/stock.js';
+// Use database version instead of JSON file version
+import { searchStocks, getExactStock, getCurrentPrice } from '../utils/stockDb.js';
 import { User } from '../models/user.js';
 import { auth } from '../middleware/auth.js';
 
@@ -84,6 +85,61 @@ router.get('/:instrument_key', auth, async (req, res) => {
     console.error('Error in GET /:instrument_key:', error);
     console.error('Error details:', error.message, error.stack);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Route: Get stock news
+router.get('/:instrument_key/news', auth, async (req, res) => {
+  try {
+    const { instrument_key } = req.params;
+    const { limit = 10 } = req.query; // Default to 10 news items
+    
+    // Validate instrument_key parameter
+    if (!instrument_key || instrument_key.trim().length === 0) {
+      return res.status(400).json({ error: 'Invalid instrument_key parameter' });
+    }
+
+    // Get stock details to extract stock name
+    const stockDetails = await getExactStock(instrument_key);
+    if (!stockDetails) {
+      return res.status(404).json({ error: 'Stock not found' });
+    }
+
+    // Import AIReviewService to use its news fetching functionality
+    const { AIReviewService } = await import('../services/ai/aiReview.service.js');
+    const aiService = new AIReviewService();
+    
+    // Fetch news using the existing service
+    const stockName = stockDetails.name || stockDetails.trading_symbol;
+    const newsItems = await aiService.fetchNewsData(stockName);
+    
+    // Process and format news items for frontend
+    const formattedNews = newsItems.slice(0, parseInt(limit)).map(item => ({
+      title: item.title,
+      link: item.link,
+      publishedDate: item.pubDate,
+      source: item.source || 'Google News',
+      snippet: item.contentSnippet || item.content || '',
+      thumbnail: item.thumbnail || null
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        stockName: stockName,
+        stockSymbol: stockDetails.trading_symbol,
+        totalNews: formattedNews.length,
+        news: formattedNews
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching stock news:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch stock news',
+      message: error.message 
+    });
   }
 });
 
