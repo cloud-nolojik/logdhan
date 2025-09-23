@@ -70,32 +70,18 @@ const strategySchema = new mongoose.Schema({
         required: true
     },
     indicators: [indicatorSignalSchema],
-    reasoning: [{
-        because: String
-    }],
-    warnings: [String],
-    triggers: [String],
-    invalidations: [String],
-    beginner_summary: String,
-    why_in_plain_words: [String],
-    what_could_go_wrong: String,
-    money_example: {
-        qty: Number,
-        max_loss: Number,
-        potential_profit: Number
-    },
-    suggested_qty: Number,
-    risk_meter: {
-        type: String,
-        enum: ['Low', 'Medium', 'High'],
-        default: 'Medium'
-    },
-    actionability: String,
-    glossary: {
-        entry: String,
-        target: String,
-        stopLoss: String
-    },
+    reasoning: [mongoose.Schema.Types.Mixed], // Accept objects or strings
+    warnings: [mongoose.Schema.Types.Mixed], // Accept objects or strings
+    triggers: [mongoose.Schema.Types.Mixed], // Accept objects or strings
+    invalidations: [mongoose.Schema.Types.Mixed], // Accept objects or strings
+    beginner_summary: mongoose.Schema.Types.Mixed, // Accept object or string
+    why_in_plain_words: [mongoose.Schema.Types.Mixed], // Accept objects or strings
+    what_could_go_wrong: mongoose.Schema.Types.Mixed, // Accept array or string
+    money_example: mongoose.Schema.Types.Mixed, // Accept any object structure
+    suggested_qty: mongoose.Schema.Types.Mixed, // Accept object or number
+    risk_meter: mongoose.Schema.Types.Mixed, // Accept object or string
+    actionability: mongoose.Schema.Types.Mixed, // Accept object or string
+    glossary: mongoose.Schema.Types.Mixed, // Accept any object structure
     score: Number,
     score_band: {
         type: String,
@@ -105,7 +91,18 @@ const strategySchema = new mongoose.Schema({
     isTopPick: {
         type: Boolean,
         default: false
-    }
+    },
+    archetype: {
+        type: String,
+        enum: ['breakout', 'pullback', 'trend-follow', 'mean-reversion', 'range-fade'],
+        required: false
+    },
+    why_best: {
+        type: String,
+        required: false
+    },
+    confirmation: mongoose.Schema.Types.Mixed, // Accept object or string
+    validity: mongoose.Schema.Types.Mixed // Accept any object structure
 });
 
 const stockAnalysisSchema = new mongoose.Schema({
@@ -135,7 +132,7 @@ const stockAnalysisSchema = new mongoose.Schema({
     analysis_data: {
         schema_version: {
             type: String,
-            default: '1.3'
+            default: '1.4'
         },
         symbol: String,
         analysis_type: String,
@@ -164,6 +161,30 @@ const stockAnalysisSchema = new mongoose.Schema({
             enum: ['BULLISH', 'BEARISH', 'NEUTRAL'],
             required: true
         },
+        runtime: {
+            triggers_evaluated: [{
+                id: String,
+                timeframe: String,
+                left_ref: String,
+                left_value: mongoose.Schema.Types.Mixed,
+                op: String,
+                right_ref: String,
+                right_value: mongoose.Schema.Types.Mixed,
+                passed: Boolean,
+                evaluable: Boolean
+            }],
+            pre_entry_invalidations_hit: Boolean
+        },
+        order_gate: {
+            all_triggers_true: Boolean,
+            no_pre_entry_invalidations: Boolean,
+            actionability_status: {
+                type: String,
+                enum: ['actionable_now', 'actionable_on_trigger', 'monitor_only']
+            },
+            entry_type_sane: Boolean,
+            can_place_order: Boolean
+        },
         strategies: [strategySchema],
         disclaimer: {
             type: String,
@@ -172,7 +193,20 @@ const stockAnalysisSchema = new mongoose.Schema({
         meta: {
             data_as_of_ist: String,
             stalePrice: Boolean,
-            generated_at_ist: String
+            generated_at_ist: String,
+            debug: {
+                ai_request: {
+                    model: String,
+                    formatted_messages: mongoose.Schema.Types.Mixed, // The formatted messages sent to AI
+                    request_payload: mongoose.Schema.Types.Mixed,   // The full request payload built
+                    prompt_hash: String // Hash of the prompt for quick identification
+                },
+                market_payload: mongoose.Schema.Types.Mixed, // The market data used for analysis
+                processing_time: {
+                    total_ms: Number,
+                    steps: mongoose.Schema.Types.Mixed // Timing for each analysis step
+                }
+            }
         }
     },
     status: {
@@ -441,6 +475,85 @@ stockAnalysisSchema.methods.updateOrderStatus = function(tag, newStatus) {
         }
     }
     return Promise.resolve(this);
+};
+
+// New methods for condition validation
+stockAnalysisSchema.methods.canPlaceOrder = function() {
+    // Check if order_gate allows order placement
+    if (!this.analysis_data?.order_gate) {
+        console.log('❌ No order_gate data found');
+        return false;
+    }
+    
+    const orderGate = this.analysis_data.order_gate;
+    
+    // All conditions must be true
+    const canPlace = orderGate.can_place_order === true &&
+                    orderGate.all_triggers_true === true &&
+                    orderGate.no_pre_entry_invalidations === true &&
+                    orderGate.entry_type_sane === true &&
+                    orderGate.actionability_status === 'actionable_now';
+    
+    console.log(`📋 Order gate check: can_place=${canPlace}`, orderGate);
+    return canPlace;
+};
+
+stockAnalysisSchema.methods.getConditionValidationDetails = function() {
+    const analysis = this.analysis_data;
+    
+    if (!analysis?.runtime || !analysis?.order_gate) {
+        return {
+            valid: false,
+            reason: 'No condition validation data available',
+            details: {}
+        };
+    }
+    
+    const runtime = analysis.runtime;
+    const orderGate = analysis.order_gate;
+    
+    // Check each trigger
+    const triggerDetails = runtime.triggers_evaluated?.map(trigger => ({
+        id: trigger.id,
+        description: `${trigger.left_ref} ${trigger.op} ${trigger.right_ref}`,
+        passed: trigger.passed,
+        evaluable: trigger.evaluable,
+        left_value: trigger.left_value,
+        right_value: trigger.right_value
+    })) || [];
+    
+    const failedTriggers = triggerDetails.filter(t => !t.passed || !t.evaluable);
+    
+    return {
+        valid: orderGate.can_place_order === true,
+        reason: this._getValidationFailureReason(orderGate, failedTriggers),
+        details: {
+            triggers: triggerDetails,
+            failed_triggers: failedTriggers,
+            actionability_status: orderGate.actionability_status,
+            entry_type_sane: orderGate.entry_type_sane,
+            pre_entry_invalidations_hit: runtime.pre_entry_invalidations_hit
+        }
+    };
+};
+
+stockAnalysisSchema.methods._getValidationFailureReason = function(orderGate, failedTriggers) {
+    if (!orderGate.can_place_order) {
+        if (failedTriggers.length > 0) {
+            return `Entry conditions not met: ${failedTriggers.map(t => t.description).join(', ')}`;
+        }
+        if (orderGate.actionability_status !== 'actionable_now') {
+            return `Strategy status: ${orderGate.actionability_status}`;
+        }
+        if (!orderGate.entry_type_sane) {
+            return 'Entry type configuration issue';
+        }
+        if (!orderGate.no_pre_entry_invalidations) {
+            return 'Pre-entry invalidation conditions hit';
+        }
+        return 'Conditions not suitable for order placement';
+    }
+    return 'All conditions validated';
 };
 
 // Market timing helpers

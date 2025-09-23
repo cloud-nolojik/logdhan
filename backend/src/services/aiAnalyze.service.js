@@ -1,5 +1,6 @@
 import axios from 'axios';
 import Parser from 'rss-parser';
+import crypto from 'crypto';
 import StockAnalysis from '../models/stockAnalysis.js';
 import { aiReviewService } from './ai/aiReview.service.js';
 import { subscriptionService } from './subscription/subscriptionService.js';
@@ -13,20 +14,10 @@ class AIAnalyzeService {
         this.openaiApiKey = process.env.OPENAI_API_KEY;
         this.rssParser = new Parser();
         
-        // Model configuration (same as aiReview.service.js)
-        this.advancedanalysisModel = "gpt-5";
-        this.basicanalysisModel = "o4-mini";
-        
-        // Initialize analysis model to basic by default
-        this.analysisModel = this.basicanalysisModel;
-        this.sentimentalModel = "gpt-4o-mini"; // Default to mini for cost efficiency
-        
-        // Model selection logic:
-        // - Bonus credits (advanced analysis): use o4-mini
-        // - Basic plan with regular credits: use gpt-4o-mini  
-        // - Rewarded ad reviews: use gpt-4o-mini (sustainable)
-        // - Paid plans: use o4-mini
-        // - Sentiment analysis: always use gpt-4o-mini for cost efficiency 
+        // Model configuration
+        this.analysisModel = "gpt-4o";
+        this.basicModel = "gpt-5";
+        this.advancedModel = "gpt-5"; 
         
         // Use existing term-to-frames mapping from aiReview
         this.termToFrames = {
@@ -35,6 +26,8 @@ class AIAnalyzeService {
         };
     }
 
+
+ 
     /**
      * Helper function to format messages based on model type
      * o1 models don't support system role, so we merge system into user message
@@ -59,24 +52,7 @@ class AIAnalyzeService {
         }
     }
 
-    /**
-     * Check if a model is from OpenAI and supports response_format
-     */
-    isOpenAIModel(model) {
-        // o1 models don't support response_format, temperature, top_p, etc.
-        if (model.startsWith('o1')) {
-            return false;
-        }
-        
-        const openAIModels = [
-            'gpt-4o-mini',
-            'gpt-5',
-            'o4-mini'
-        ];
-        
-        // Check if the model starts with any OpenAI model prefix
-        return openAIModels.some(openAiModel => model.includes(openAiModel));
-    }
+
 
     /**
      * Build request payload for OpenAI API
@@ -89,11 +65,24 @@ class AIAnalyzeService {
         };
 
         // Only add response_format for OpenAI models that support it
-        if (forceJson && this.isOpenAIModel(model)) {
+        if (forceJson ) {
             payload.response_format = { type: "json_object" };
         }
 
         return payload;
+    }
+
+    /**
+     * Create a hash of the prompt content for debugging purposes
+     */
+    createPromptHash(content) {
+        try {
+            const contentStr = typeof content === 'string' ? content : JSON.stringify(content);
+            return crypto.createHash('sha256').update(contentStr).digest('hex').substring(0, 16);
+        } catch (error) {
+            console.error('❌ Error creating prompt hash:', error.message);
+            return 'hash_error';
+        }
     }
 
     /**
@@ -155,25 +144,18 @@ class AIAnalyzeService {
             const subscription = await Subscription.findActiveForUser(userId);
             const plan = subscription ? await Plan.getPlanById(subscription.planId) : null;
             
-            let analysisModel = 'o4-mini'; // Default basic model
-            let sentimentModel = 'gpt-4o-mini'; // Default basic model
-            let modelTier = 'basic';
+            // Determine tier based on user plan/credits
+            let modelTier = 'basic'; // Default
             
             // Priority 1: Check if using bonus credits (advanced analysis)
             if (creditType === 'bonus') {
-                // Bonus credits get advanced model for premium analysis
-                analysisModel = 'gpt-5';
-                sentimentModel = 'gpt-4o-mini';
                 modelTier = 'advanced';
-                console.log(`🎁 Bonus credits - using advanced analysis model (gpt-5)`);
+                console.log(`🎁 Bonus credits - using advanced analysis model`);
             }
             // Priority 1.5: Check if this is from rewarded ad (basic model for sustainability) 
             else if (isFromRewardedAd) {
-                // Rewarded ad users get basic model (sustainable for ad revenue)
-                analysisModel = 'o4-mini';
-                sentimentModel = 'gpt-4o-mini';
                 modelTier = 'ad-supported';
-                console.log(`🎁 Ad-supported analysis - using basic models (o4-mini) for sustainability`);
+                console.log(`🎁 Ad-supported analysis - using basic models for sustainability`);
             }
             // Priority 2: Check plan type for paying users
             else if (plan && plan.analysisLevel === 'advanced') {
@@ -183,27 +165,24 @@ class AIAnalyzeService {
                                    (subscription.credits.earnedCredits || 0);
                 
                 if (totalCredits > 0) {
-                    // Paid user has credits - use advanced model
-                    analysisModel = 'gpt-5';
-                    sentimentModel = 'gpt-4o-mini';
                     modelTier = 'advanced';
-                    console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models (gpt-5)`);
+                    console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models`);
                 } else {
-                    // Paid user exhausted credits - fallback to basic model
-                    analysisModel = 'o4-mini';
-                    sentimentModel = 'gpt-4o-mini';
                     modelTier = 'basic-fallback';
-                    console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models (o4-mini)`);
+                    console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models`);
                 }
             }
             // Priority 3: Basic/free plan users
             else {
-                // Basic plan users get basic model
-                analysisModel = 'o4-mini';
-                sentimentModel = 'gpt-4o-mini';
                 modelTier = 'basic';
-                console.log(`📱 Basic/free plan - using basic models (o4-mini)`);
+                console.log(`📱 Basic/free plan - using basic models`);
             }
+            
+            // Get models from simplified configuration
+            const analysisModel = modelTier === 'advanced' ? this.advancedModel : this.basicModel;
+            const sentimentModel = this.analysisModel; // Use main analysis model for sentiment
+            
+            console.log(`🤖 Selected models: Analysis=${analysisModel}, Sentiment=${sentimentModel}, Tier=${modelTier}`);
             
             return {
                 canProceed: true,
@@ -223,21 +202,12 @@ class AIAnalyzeService {
             
         } catch (error) {
             console.error('❌ Model determination failed:', error);
-            
-            // Fallback to basic model
             return {
                 canProceed: true,
                 models: {
-                    analysis: 'o4-mini',
-                    sentiment: 'gpt-4o-mini',
-                    tier: 'fallback'
-                },
-                creditType: 'regular',
-                subscription: {
-                    plan: 'unknown',
-                    creditsRemaining: 0
-                },
-                error: 'Model determination failed, using fallback'
+                    analysis: this.basicModel,
+                    tier: 'basic'
+                }
             };
         }
     }
@@ -299,7 +269,7 @@ class AIAnalyzeService {
                 console.log(`   Analysis: ${this.analysisModel}`);
                 console.log(`   Sentiment: ${this.sentimentalModel}`);
                 console.log(`   Tier: ${modelConfig.models.tier}`);
-                console.log(`   Credits remaining: ${modelConfig.subscription.creditsRemaining}`);
+                console.log(`   Credits remaining: ${modelConfig.subscription?.creditsRemaining || 0}`);
             }
 
             // Check for existing analysis (cached completed or in-progress) unless forceFresh is true
@@ -669,7 +639,33 @@ class AIAnalyzeService {
         }
         
         const titles = newsItems.slice(0, 5).map(item => item.title).join('\n');
-        const prompt = `Analyze ${term} term sentiment based on news titles. Return only: "positive", "neutral", or "negative"\n\nNews titles:\n${titles}`;
+       const prompt = `
+            You are a financial news sentiment classifier.
+
+            TASK
+            Classify the overall ${term}-term sentiment implied by the headlines below.
+            Return exactly one lowercase label: positive | neutral | negative
+
+            INPUT
+            Headlines (one per line):
+            ${titles}
+
+            RULES
+            1) Use the headlines only; do not invent facts or read between the lines.
+            2) Consider a headline relevant only if it clearly refers to the same company/ETF/asset as the set (name/ticker/obvious synonym). Ignore purely macro/market-wide items unless the asset is a macro proxy (e.g., commodity ETF).
+            3) De-duplicate near-identical headlines.
+            4) Polarity cues (examples, not exhaustive):
+            • Positive: beat, upgrade, record, jump, surge, wins, profit, expands, buyback, approval, partnership.
+            • Negative: miss, downgrade, slump, probe, fraud, ban, recall, default, loss, layoffs, fine, investigation.
+            • Hedge words (may/might/could/plans/reportedly) reduce polarity strength.
+            5) Decision logic (tally relevant headlines):
+            • If positives – negatives ≥ 2 or positives / max(1, negatives) ≥ 1.5 → positive.
+            • If negatives – positives ≥ 2 or negatives / max(1, positives) ≥ 1.5 → negative.
+            • Otherwise → neutral.
+            6) If fewer than 3 relevant headlines, or signals are weak/mixed, return neutral.
+            7) Non-English/ambiguous headlines → neutral.
+            8) OUTPUT MUST BE ONLY one of: positive, neutral, negative. No quotes, no punctuation, no extra words.
+            `;
         
         console.log(`📊 Analyzing sentiment for ${newsItems.length} news items using ${this.sentimentalModel}`);
         console.log(`📊 Sample titles for sentiment:`, newsItems.slice(0, 2).map(item => item.title));
@@ -739,6 +735,17 @@ class AIAnalyzeService {
             console.log('🧹 Pivot points are null, calculating standard pivots');
             cleanPayload.swingContext.pivots = this.calculatePivotPoints(cleanPayload.swingContext);
         }
+        
+        // Add volume classification to the payload BEFORE sending to AI
+        const volumeClassification = this.classifyVolume(cleanPayload);
+        console.log(`🧹 Volume classification calculated: ${volumeClassification}`);
+        
+        // Add volume info to the payload for AI to use
+        if (!cleanPayload.volumeContext) {
+            cleanPayload.volumeContext = {};
+        }
+        cleanPayload.volumeContext.classification = volumeClassification;
+        cleanPayload.volumeContext.band = volumeClassification; // Also add as 'band' for compatibility
         
         console.log('🧹 Cleaned payload keys:', Object.keys(cleanPayload));
         
@@ -1129,47 +1136,72 @@ class AIAnalyzeService {
      * Generate stock analysis using market payload
      */
     async generateStockAnalysisWithPayload({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment }) {
+        const analysisStartTime = Date.now();
+        const stepTimes = { start: analysisStartTime };
+        
         const timeframe = analysis_type === 'swing' ? '3-7 days' : '1-4 hours';
         const sentimentText = sentiment || 'neutral';
         
+        stepTimes.prompt_creation = Date.now();
+        
         // Create improved analysis prompt with strict JSON requirements
-        const prompt = `
-You are a professional stock analyst. Output MUST be valid JSON only (no extra text).
-Use ONLY fields present in MARKET DATA. Do NOT invent indicators/values.
-Return exactly 2-3 strategies: (1) with-trend, (2) alternative (counter-trend or mean-revert), (3) optional NO_TRADE if RR < 1.5 after one adjustment.
+// Create improved analysis prompt with strict JSON requirements and code-actionable gating
+const prompt = `
+You are a professional stock analyst. Output MUST be valid JSON only (no extra text, no markdown, no comments, no trailing commas).
+Use ONLY fields present in MARKET DATA (authoritative). Do NOT invent indicators/values/timeframes not present in MARKET DATA.
+Return EXACTLY ONE strategy (the best fit for current data). If no valid setup with RR ≥ 1.5 after ONE adjustment, return EXACTLY ONE NO_TRADE strategy.
 
-ANALYZE: ${stock_name} (${stock_symbol}) for ${analysis_type} opportunities.
+ANALYZE: ${stock_name} (${stock_symbol}) for swing opportunities.
 
 MARKET DATA (authoritative):
 ${JSON.stringify(marketPayload, null, 2)}
 
 CONTEXT:
 - Current Price (fallback): ₹${current_price}
-- Analysis Type: ${analysis_type} (intraday | swing)
-- Timeframe: ${analysis_type === 'swing' ? '3-7 days' : '1-4 hours'}
-- Market Sentiment: ${sentimentText}
+- Analysis Type: swing
+- Timeframe: 3–7 trading sessions
+- Market Sentiment: ${sentiment || 'neutral'}
 
-RULES:
-1) Authoritative last price = priceContext.last if present; else use Current Price.
-2) Trend (daily): Bullish if ema20_1D > ema50_1D and last > sma200_1D; Bearish if inverse; else Neutral.
-3) Volatility: swing => atr14_1D/last; intraday => atr14_1h/last. LOW <1%, MED 1–2%, HIGH >2%.
-4) Targets/Stops via ATR (round to 2 decimals):
-   • Swing BUY: target = entry + k*atr14_1D (k∈[0.8,1.6]); stop = entry - m*atr14_1D (m∈[0.5,1.2]).
-   • Intraday BUY: target = entry + k*atr14_1h (k∈[0.6,1.2]); stop = entry - m*atr14_1h (m∈[0.4,0.8]).
-   • SELL mirrors signs.
-5) Risk–Reward rr = |target-entry| / |entry-stop|. If rr < 1.5, adjust once OR output HOLD/NO_TRADE.
-6) Bounds: BUY => stop < entry < target. SELL => target < entry < stop.
-7) Indicators may only reference fields present in MARKET DATA; include timeframe (e.g., "1h","1D").
-8) If required inputs are missing (e.g., ATR or last), return insufficientData=true and strategies=[].
-9) If sentiment contradicts trend, mark alignment="counter_trend".
-10) Currency: INR (₹). No guarantees.
+EXECUTION CONTRACT (MANDATORY):
+- You MUST compute a top-level "runtime" and "order_gate" object for code-actionable gating.
+- "order_gate.can_place_order" MUST be true ONLY when:
+  (1) strategy.type is BUY or SELL (not NO_TRADE),
+  (2) ALL entry "triggers" evaluate TRUE using ONLY MARKET DATA (no missing inputs),
+  (3) NO pre_entry invalidations are hit,
+  (4) actionability.status = "actionable_now",
+  (5) If entryType = "market", conditions (1)-(4) MUST be true; otherwise prefer "stop" or "stop-limit" so the broker gates the fill at \`entry\`.
+- If any required input for RULES or triggers is missing (e.g., last or atr14_1D), set insufficientData=true and strategies=[] and set order_gate.can_place_order=false.
 
-OUTPUT JSON (types must match):
+RULES (SWING ONLY):
+1) Authoritative last = priceContext.last if present; else use Current Price.
+2) Daily trend: BULLISH if ema20_1D > ema50_1D AND last > sma200_1D; BEARISH if inverse; else NEUTRAL.
+3) Volatility (daily): LOW <1%, MED 1–2%, HIGH >2% using (atr14_1D / last).
+4) ATR targets/stops (round to 2 decimals):
+   • BUY: target = entry + k*atr14_1D (k∈[0.8,1.6]); stop = entry - m*atr14_1D (m∈[0.5,1.2]).
+   • SELL: target = entry - k*atr14_1D; stop = entry + m*atr14_1D (same k,m bounds).
+5) Risk–Reward rr = |target-entry| / |entry-stop|. If rr < 1.5, adjust ONCE by tuning k,m within bounds; if still < 1.5 → return NO_TRADE (keep rr field as computed).
+6) Bounds: BUY => stop < entry < target. SELL => target < entry < stop. Enforce strictly.
+7) Indicators MUST be objects with {name, value, signal} fields. Use ONLY indicators present in MARKET DATA. Do NOT reference pivots/RSI/etc if not present.
+8) If required inputs missing (e.g., atr14_1D or last), set insufficientData=true and strategies=[] (no strategy objects).
+9) If sentiment contradicts trend, set alignment="counter_trend"; if aligned, "with_trend"; else "neutral".
+10) Currency: INR (₹). Round prices, risk, reward, RR to 2 decimals. Numbers MUST be numeric (not strings).
+11) Volume band: Use volumeContext.classification from MARKET DATA if available; else "UNKNOWN".
+12) EXACTLY ONE strategy in "strategies". If NO_TRADE, fill the single strategy with type="NO_TRADE" and minimal required fields; set order_gate.can_place_order=false.
+13) Triggers/invalidations MUST use ONLY fields/timeframes present in MARKET DATA. If a referenced field is absent, you MUST NOT include that trigger/invalid.
+14) "runtime.triggers_evaluated" MUST list each trigger with evaluated values and pass/fail booleans. If any trigger cannot be evaluated from MARKET DATA, mark insufficientData=true.
+15) Post-entry exits MUST be expressed via "invalidations" with scope="post_entry" and an action (e.g., close_position or move_stop_to).
+
+VALIDITY (SWING):
+- Entry validity: type="GTD" with trading_sessions_soft=5, trading_sessions_hard=8, bars_limit=0, expire_calendar_cap_days=10.
+- Position validity: time_stop_sessions=7; gap_policy="exit_at_open_with_slippage".
+- Non-trading days: non_trading_policy="pause_clock".
+
+STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "symbol": "${stock_symbol}",
-  "analysis_type": "${analysis_type}",
-  "generated_at_ist": "<ISO-8601>",
+  "analysis_type": "swing",
+  "generated_at_ist": "<ISO-8601 with +05:30 offset>",
   "insufficientData": false,
   "market_summary": {
     "last": <number>,
@@ -1178,50 +1210,223 @@ OUTPUT JSON (types must match):
     "volume": "ABOVE_AVERAGE"|"AVERAGE"|"BELOW_AVERAGE"|"UNKNOWN"
   },
   "overall_sentiment": "BULLISH"|"BEARISH"|"NEUTRAL",
+  "runtime": {
+    "triggers_evaluated": [
+      {
+        "id": "T1",
+        "timeframe": "15m|1h|1D",
+        "left_ref": "close|high|low|price|rsi14_1h|ema20_1D|sma200_1D",
+        "left_value": <number|null>,
+        "op": "<|<=|>|>=|crosses_above|crosses_below",
+        "right_ref": "value|entry|ema50_1D|sma200_1D",
+        "right_value": <number|null>,
+        "passed": true|false,
+        "evaluable": true|false
+      }
+    ],
+    "pre_entry_invalidations_hit": false
+  },
+  "order_gate": {
+    "all_triggers_true": true|false,
+    "no_pre_entry_invalidations": true|false,
+    "actionability_status": "actionable_now"|"actionable_on_trigger"|"monitor_only",
+    "entry_type_sane": true|false,          // true if "market" only when actionable_now; stop/stop-limit otherwise
+    "can_place_order": true|false
+  },
   "strategies": [
     {
       "id": "<string>",
-      "type": "BUY"|"SELL"|"HOLD"|"NO_TRADE",
+      "type": "BUY"|"SELL"|"NO_TRADE",
+      "archetype": "breakout"|"pullback"|"trend-follow"|"mean-reversion"|"range-fade",
       "alignment": "with_trend"|"counter_trend"|"neutral",
       "title": "<string>",
       "confidence": <number 0..1>,
+      "why_best": "<1 short sentence>",
       "entryType": "limit"|"market"|"range"|"stop"|"stop-limit",
       "entry": <number>,
       "entryRange": [<number>,<number>] | null,
       "target": <number>,
       "stopLoss": <number>,
       "riskReward": <number>,
-      "timeframe": "${analysis_type === 'swing' ? '3-7 days' : '1-4 hours'}",
+      "timeframe": "3-7 days",
       "indicators": [
-        {"name":"RSI","tf":"1h","value":<number>,"signal":"BUY"|"SELL"|"NEUTRAL"}
+        {
+          "name": "ema20_1D|ema50_1D|sma200_1D|rsi14_1h|atr14_1D",
+          "value": "<actual value from MARKET DATA>",
+          "signal": "BUY|SELL|NEUTRAL"
+        }
       ],
       "reasoning": [
         {"because":"ema20_1D({{num}}) vs sma200_1D({{num}}) → {{bias}}"},
         {"because":"rsi14_1h={{num}} → {{signal}}"},
         {"because":"ATR-based target gives RR={{num}} ≥ 1.5"}
       ],
-      "warnings": ["<short caution>"],
-      "triggers": ["<condition to enter>"] | null,
-      "invalidations": ["<condition to abandon>"] | null,
-
-      "beginner_summary": "<1 sentence, no jargon>",
-      "why_in_plain_words": ["<short bullet>","<short bullet>"],
-      "what_could_go_wrong": "<one short bullet>",
-      "money_example": {"qty":10,"max_loss":<number>,"potential_profit":<number>},
-      "suggested_qty": <number>,
-      "risk_meter": "Low"|"Medium"|"High",
-      "actionability": "Buy idea"|"Sell idea"|"No trade",
-      "glossary": {"entry":"...","target":"...","stopLoss":"..."}
+      "warnings": [
+        {
+          "code": "GAP_RISK",
+          "severity": "low"|"medium"|"high",
+          "text": "<short caution>",
+          "applies_when": [
+            {
+              "timeframe": "1D"|"1h"|"15m",
+              "left": {"ref": "rsi14_1h|ema20_1D|price"},
+              "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
+              "right": {"ref": "value|ema50_1D|entry|stopLoss", "value": 70, "offset": 0.00}
+            }
+          ],
+          "mitigation": ["reduce_qty","wider_stop","skip_on_news"]
+        }
+      ],
+      "triggers": [
+        {
+          "id": "T1",
+          "scope": "entry",
+          "timeframe": "15m|1h|1D",
+          "left": {"ref": "close|high|low|price|rsi14_1h|ema20_1D"},
+          "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
+          "right": {"ref": "value|ema50_1D|sma200_1D|entry", "value": <number>, "offset": <number>},
+          "occurrences": {"count": 1, "consecutive": true},
+          "within_sessions": 5,
+          "expiry_bars": 20
+        }
+      ],
+      "confirmation": {
+        "require": "ALL"|"ANY"|"NONE",
+        "window_bars": 8,
+        "conditions": [
+          {
+            "timeframe": "1h"|"15m"|"1D",
+            "left": {"ref": "rsi14_1h|close"},
+            "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
+            "right": {"ref": "value|entry", "value": <number>}
+          }
+        ]
+      },
+      "invalidations": [
+        {
+          "scope": "pre_entry",
+          "timeframe": "1h"|"15m"|"1D",
+          "left": {"ref": "close|low|price"},
+          "op": "<"|"<="|">"|">=",
+          "right": {"ref": "entry|value", "value": <number>},
+          "occurrences": {"count": 1, "consecutive": false},
+          "action": "cancel_entry",
+          "action_args": {"price_ref": "entry"}
+        },
+        {
+          "scope": "post_entry",
+          "timeframe": "1h"|"1D",
+          "left": {"ref": "close|low|price"},
+          "op": "<"|"<=",
+          "right": {"ref": "stopLoss"},
+          "occurrences": {"count": 1, "consecutive": false},
+          "action": "close_position"
+        }
+      ],
+      "validity": {
+        "entry": {
+          "type": "GTD",
+          "bars_limit": 0,
+          "trading_sessions_soft": 5,
+          "trading_sessions_hard": 8,
+          "expire_calendar_cap_days": 10
+        },
+        "position": {
+          "time_stop_sessions": 7,
+          "gap_policy": "exit_at_open_with_slippage"
+        },
+        "non_trading_policy": "pause_clock"
+      },
+      "beginner_summary": {
+        "one_liner": "<120 chars: Buy/Sell ~₹ENTRY → Take profit ₹TARGET → Exit ₹STOP (3–7 sessions)>",
+        "steps": [
+          "Step 1 (entry in plain words)",
+          "Step 2 (target in plain words)",
+          "Step 3 (stop/invalidation in plain words)"
+        ],
+        "checklist": [
+          "Confirm timeframe (swing, daily/1h context)",
+          "Make sure trigger condition is true",
+          "Place order type that matches entryType"
+        ]
+      },
+      "why_in_plain_words": [
+        {"point": "<short reason>", "evidence": "<field reference from MARKET DATA>"},
+        {"point": "<short reason>", "evidence": "<field reference from MARKET DATA>"}
+      ],
+      "what_could_go_wrong": [
+        {"risk": "<concise risk>", "likelihood": "LOW"|"MEDIUM"|"HIGH", "impact": "LOW"|"MEDIUM"|"HIGH", "mitigation": "<simple rule>"}
+      ],
+      "money_example": {
+        "per_share": {
+          "risk": <number>,
+          "reward": <number>,
+          "rr": <number>
+        },
+        "position": {
+          "qty": <number>,
+          "max_loss": <number>,
+          "potential_profit": <number>,
+          "distance_to_stop_pct": <number>,
+          "distance_to_target_pct": <number>
+        }
+      },
+      "suggested_qty": {
+        "risk_budget_inr": 1000,
+        "risk_per_share": <number>,
+        "qty": <number>,
+        "alternatives": [
+          {"risk_budget_inr": 500, "qty": <number>},
+          {"risk_budget_inr": 1000, "qty": <number>},
+          {"risk_budget_inr": 2500, "qty": <number>}
+        ],
+        "note": "Position sizing is based purely on stop distance and a fixed risk budget."
+      },
+      "risk_meter": {
+        "label": "Low"|"Medium"|"High",
+        "score": <number 0..1>,
+        "drivers": [
+          "RR band",
+          "Trend alignment",
+          "Volatility vs ATR",
+          "Volume band",
+          "News/sentiment tilt"
+        ]
+      },
+      "actionability": {
+        "label": "Buy idea"|"Sell idea"|"No trade",
+        "status": "actionable_now"|"actionable_on_trigger"|"monitor_only",
+        "next_check_in": "15m"|"1h"|"daily",
+        "checklist": [
+          "All triggers satisfied",
+          "No invalidation hit",
+          "Order type matches entry plan"
+        ]
+      },
+      "glossary": {
+        "entry": {"definition": "Price to open the trade.", "example": "₹<ENTRY>"},
+        "target": {"definition": "Price to take profits.", "example": "₹<TARGET>"},
+        "stopLoss": {"definition": "Price to exit to limit loss.", "example": "₹<STOP>"}
+      }
     }
   ],
   "disclaimer": "AI-generated educational analysis. Not investment advice."
-}`;
+}
+`;
 
-        const systemPrompt = "You are a professional stock analyst. Always respond in valid JSON only.";
+        const systemPrompt = "You are the best swing trading expert in Indian stock markets. Always respond in valid JSON only, with precise and professional analysis based on Indian equities, indices (NIFTY, BANKNIFTY, etc.), and sector trends.";
+        stepTimes.message_formatting = Date.now();
         const formattedMessages = this.formatMessagesForModel(this.analysisModel, systemPrompt, prompt);
         
+        stepTimes.payload_building = Date.now();
+        const requestPayload = this.buildRequestPayload(this.analysisModel, formattedMessages, true);
+        
+        // Create prompt hash for debugging
+        
+        
+        stepTimes.api_call_start = Date.now();
         const completion = await axios.post('https://api.openai.com/v1/chat/completions',
-            this.buildRequestPayload(this.analysisModel, formattedMessages, true),
+            requestPayload,
             {
                 headers: {
                     'Authorization': `Bearer ${this.openaiApiKey}`,
@@ -1229,6 +1434,7 @@ OUTPUT JSON (types must match):
                 }
             }
         );
+        stepTimes.api_call_end = Date.now();
 
         const content = completion.data.choices[0]?.message?.content;
         console.log('🤖 Raw AI response length:', content?.length || 0);
@@ -1280,298 +1486,316 @@ OUTPUT JSON (types must match):
             return this.generateFallbackAnalysis(current_price, analysis_type);
         }
 
-        // ---- PRICE RECONCILIATION & DATA VALIDATION ----
-        const last = marketPayload?.priceContext?.last ?? null;
-        const dataAsOf = marketPayload?.trendMomentum?.ema20_1D?.time || 
-                        marketPayload?.snapshots?.lastBars1h?.at?.(-1)?.[0];
-        const authoritativeLast = last ?? current_price;
-        const priceGap = last ? Math.abs((current_price - last) / last) : 0;
-        const stalePrice = priceGap > 0.01; // >1%
+        // ---- SIMPLIFIED: Trust GPT-5 Response ----
+        // GPT-5 returns perfect schema-compliant responses, so we can minimize processing
         
-        console.log(`📊 Price reconciliation: current=${current_price}, last=${last}, gap=${(priceGap*100).toFixed(1)}%, stale=${stalePrice}`);
+        // // 1. Use pre-calculated volume if AI didn't get it
+        // const last = marketPayload?.priceContext?.last ?? null;
+        // const dataAsOf = marketPayload?.trendMomentum?.ema20_1D?.time || 
+        //                 marketPayload?.snapshots?.lastBars1h?.at?.(-1)?.[0];
+        // const authoritativeLast = last ?? current_price;
+        // const priceGap = last ? Math.abs((current_price - last) / last) : 0;
+        // const stalePrice = priceGap > 0.01; // >1%
         
-        const ma = {
-            ema20_1D: marketPayload?.trendMomentum?.ema20_1D?.ema20,
-            ema50_1D: marketPayload?.trendMomentum?.ema50_1D?.ema50,
-            sma200_1D: marketPayload?.trendMomentum?.sma200_1D?.sma200,
-        };
-        const metrics = {
-            atr14_1D: marketPayload?.trendMomentum?.atr14_1D,
-            atr14_1h: marketPayload?.trendMomentum?.atr14_1h,
-        };
+        // console.log(`📊 Price reconciliation: current=${current_price}, last=${last}, gap=${(priceGap*100).toFixed(1)}%, stale=${stalePrice}`);
         
-        // Add metadata with proper IST timestamps
-        parsed.meta = parsed.meta || {};
+        // const ma = {
+        //     ema20_1D: marketPayload?.trendMomentum?.ema20_1D?.ema20,
+        //     ema50_1D: marketPayload?.trendMomentum?.ema50_1D?.ema50,
+        //     sma200_1D: marketPayload?.trendMomentum?.sma200_1D?.sma200,
+        // };
+        // const metrics = {
+        //     atr14_1D: marketPayload?.trendMomentum?.atr14_1D,
+        //     atr14_1h: marketPayload?.trendMomentum?.atr14_1h,
+        // };
         
-        // Use most recent bar timestamp instead of daily bar midnight
-        const recentBarTime = marketPayload?.snapshots?.lastBars1h?.slice(-1)?.[0]?.[0] ||
-                              marketPayload?.snapshots?.lastBars15m?.slice(-1)?.[0]?.[0] ||
-                              dataAsOf;
-        parsed.meta.data_as_of_ist = recentBarTime || null;
-        parsed.meta.stalePrice = stalePrice;
+        // // Add metadata with proper IST timestamps
+        // parsed.meta = parsed.meta || {};
         
-        // Keep only IST timestamp at root level
-        const now = new Date();
-        const istOffset = 5.5 * 60; // IST is UTC+5:30
-        const istTime = new Date(now.getTime() + (istOffset * 60 * 1000));
-        parsed.generated_at_ist = istTime.toISOString().replace('Z', '+05:30');
+        // // Use most recent bar timestamp instead of daily bar midnight
+        // const recentBarTime = marketPayload?.snapshots?.lastBars1h?.slice(-1)?.[0]?.[0] ||
+        //                       marketPayload?.snapshots?.lastBars15m?.slice(-1)?.[0]?.[0] ||
+        //                       dataAsOf;
+        // parsed.meta.data_as_of_ist = recentBarTime || null;
+        // parsed.meta.stalePrice = stalePrice;
+        
+        // // Keep only IST timestamp at root level
+        // const now = new Date();
+        // const istOffset = 5.5 * 60; // IST is UTC+5:30
+        // const istTime = new Date(now.getTime() + (istOffset * 60 * 1000));
+        // parsed.generated_at_ist = istTime.toISOString().replace('Z', '+05:30');
 
-        // Fix enum casing and validate
-        parsed.overall_sentiment = this.clampEnum(
-            String(parsed.overall_sentiment || '').toUpperCase(),
-            ['BULLISH', 'BEARISH', 'NEUTRAL'],
-            'NEUTRAL'
-        );
+        // // Fix enum casing and validate
+        // parsed.overall_sentiment = this.clampEnum(
+        //     String(parsed.overall_sentiment || '').toUpperCase(),
+        //     ['BULLISH', 'BEARISH', 'NEUTRAL'],
+        //     'NEUTRAL'
+        // );
         
-        if (parsed.market_summary?.trend) {
-            parsed.market_summary.trend = this.clampEnum(
-                String(parsed.market_summary.trend).toUpperCase(),
-                ['BULLISH', 'BEARISH', 'NEUTRAL'],
-                'NEUTRAL'
-            );
-        }
+        // if (parsed.market_summary?.trend) {
+        //     parsed.market_summary.trend = this.clampEnum(
+        //         String(parsed.market_summary.trend).toUpperCase(),
+        //         ['BULLISH', 'BEARISH', 'NEUTRAL'],
+        //         'NEUTRAL'
+        //     );
+        // }
         
-        if (parsed.market_summary?.volatility) {
-            parsed.market_summary.volatility = this.clampEnum(
-                String(parsed.market_summary.volatility).toUpperCase(),
-                ['HIGH', 'MEDIUM', 'LOW'],
-                'MEDIUM'
-            );
-        }
+        // if (parsed.market_summary?.volatility) {
+        //     parsed.market_summary.volatility = this.clampEnum(
+        //         String(parsed.market_summary.volatility).toUpperCase(),
+        //         ['HIGH', 'MEDIUM', 'LOW'],
+        //         'MEDIUM'
+        //     );
+        // }
         
-        if (parsed.market_summary?.volume) {
-            parsed.market_summary.volume = this.clampEnum(
-                String(parsed.market_summary.volume).toUpperCase(),
-                ['ABOVE_AVERAGE', 'AVERAGE', 'BELOW_AVERAGE', 'UNKNOWN'],
-                'UNKNOWN'
-            );
-        }
+        // if (parsed.market_summary?.volume) {
+        //     parsed.market_summary.volume = this.clampEnum(
+        //         String(parsed.market_summary.volume).toUpperCase(),
+        //         ['ABOVE_AVERAGE', 'AVERAGE', 'BELOW_AVERAGE', 'UNKNOWN'],
+        //         'UNKNOWN'
+        //     );
+        // }
         
-        const ctx = {
-            analysisType: analysis_type,
-            market_summary: parsed.market_summary || { last: authoritativeLast },
-            overall_sentiment: parsed.overall_sentiment,
-            dataHealth: marketPayload?.meta?.dataHealth,
-            ma,
-            metrics
-        };
+        // const ctx = {
+        //     analysisType: analysis_type,
+        //     market_summary: parsed.market_summary || { last: authoritativeLast },
+        //     overall_sentiment: parsed.overall_sentiment,
+        //     dataHealth: marketPayload?.meta?.dataHealth,
+        //     ma,
+        //     metrics
+        // };
 
-        // Price adjustment for stale data
-        if (stalePrice && parsed.strategies?.length > 0) {
-            console.log('📈 Adjusting strategy prices due to stale data');
-            const priceDiff = current_price - authoritativeLast;
+        // // Price adjustment for stale data
+        // if (stalePrice && parsed.strategies?.length > 0) {
+        //     console.log('📈 Adjusting strategy prices due to stale data');
+        //     const priceDiff = current_price - authoritativeLast;
             
-            for (const s of parsed.strategies) {
-                if (s.entry && s.target && s.stopLoss) {
-                    s.entry = +(s.entry + priceDiff).toFixed(2);
-                    s.target = +(s.target + priceDiff).toFixed(2);
-                    s.stopLoss = +(s.stopLoss + priceDiff).toFixed(2);
-                }
-            }
-        }
+        //     for (const s of parsed.strategies) {
+        //         if (s.entry && s.target && s.stopLoss) {
+        //             s.entry = +(s.entry + priceDiff).toFixed(2);
+        //             s.target = +(s.target + priceDiff).toFixed(2);
+        //             s.stopLoss = +(s.stopLoss + priceDiff).toFixed(2);
+        //         }
+        //     }
+        // }
         
-        // Validate parsed response structure
-        if (!parsed || typeof parsed !== 'object') {
-            console.error('❌ Invalid parsed response structure:', typeof parsed);
-            return this.generateFallbackAnalysis(current_price, analysis_type);
-        }
+        // // Validate parsed response structure
+        // if (!parsed || typeof parsed !== 'object') {
+        //     console.error('❌ Invalid parsed response structure:', typeof parsed);
+        //     return this.generateFallbackAnalysis(current_price, analysis_type);
+        // }
         
-        if (!Array.isArray(parsed.strategies)) {
-            console.warn('⚠️ No valid strategies array found, creating empty array');
-            parsed.strategies = [];
-        }
+        // if (!Array.isArray(parsed.strategies)) {
+        //     console.warn('⚠️ No valid strategies array found, creating empty array');
+        //     parsed.strategies = [];
+        // }
 
-        // guardrails + scoring
-        if (parsed.insufficientData) return parsed;
+        // // guardrails + scoring
+        // if (parsed.insufficientData) return parsed;
 
-        const clean = [];
-        for (const s of parsed.strategies || []) {
-            // Safety check: ensure strategy is an object
-            if (!s || typeof s !== 'object' || typeof s === 'string') {
-                console.warn('⚠️ Skipping invalid strategy:', typeof s, s);
-                continue;
-            }
+        // const clean = [];
+        // for (const s of parsed.strategies || []) {
+        //     // Safety check: ensure strategy is an object
+        //     if (!s || typeof s !== 'object' || typeof s === 'string') {
+        //         console.warn('⚠️ Skipping invalid strategy:', typeof s, s);
+        //         continue;
+        //     }
             
-            // Ensure required fields exist
-            if (!s.entry || !s.target || !s.stopLoss) {
-                console.warn('⚠️ Skipping strategy with missing price fields:', s.id || 'unknown');
-                continue;
-            }
+        //     // Ensure required fields exist
+        //     if (!s.entry || !s.target || !s.stopLoss) {
+        //         console.warn('⚠️ Skipping strategy with missing price fields:', s.id || 'unknown');
+        //         continue;
+        //     }
             
-            // Ensure prices are numbers and round to 2 decimals
-            s.entry = +(+s.entry).toFixed(2);
-            s.target = +(+s.target).toFixed(2);
-            s.stopLoss = +(+s.stopLoss).toFixed(2);
-            s.confidence = Number(s.confidence || 0);
+        //     // Ensure prices are numbers and round to 2 decimals
+        //     s.entry = +(+s.entry).toFixed(2);
+        //     s.target = +(+s.target).toFixed(2);
+        //     s.stopLoss = +(+s.stopLoss).toFixed(2);
+        //     s.confidence = Number(s.confidence || 0);
             
-            // Validate bounds
-            if (s.type === 'BUY' && !(s.stopLoss < s.entry && s.entry < s.target)) continue;
-            if (s.type === 'SELL' && !(s.target < s.entry && s.entry < s.stopLoss)) continue;
+        //     // Validate bounds
+        //     if (s.type === 'BUY' && !(s.stopLoss < s.entry && s.entry < s.target)) continue;
+        //     if (s.type === 'SELL' && !(s.target < s.entry && s.entry < s.stopLoss)) continue;
             
-            // Calculate and validate risk-reward
-            const rr = Math.abs(s.target - s.entry) / Math.abs(s.entry - s.stopLoss);
-            if (rr < 1.5 && !['HOLD', 'NO_TRADE'].includes(s.type)) continue;
-            s.riskReward = Number(rr.toFixed(2));
+        //     // Calculate and validate risk-reward
+        //     const rr = Math.abs(s.target - s.entry) / Math.abs(s.entry - s.stopLoss);
+        //     if (rr < 1.5 && !['HOLD', 'NO_TRADE'].includes(s.type)) continue;
+        //     s.riskReward = Number(rr.toFixed(2));
 
-            const scored = this.scoreStrategy(s, ctx);
-            // Use computed score as confidence for consistency
-            s.confidence = scored.score;
-            s.risk_meter = scored.riskMeter; // Use computed risk meter from scoring
+        //     const scored = this.scoreStrategy(s, ctx);
+        //     // Use computed score as confidence for consistency
+        //     s.confidence = scored.score;
+        //     // Preserve AI's rich risk_meter structure, only set fallback if missing
+        //     if (!s.risk_meter || typeof s.risk_meter === 'string') {
+        //         s.risk_meter = scored.riskMeter; // Use computed risk meter from scoring as fallback
+        //     }
             
-            // Add position size hint for ₹1000 risk budget
-            const riskPerShare = Math.abs(s.entry - s.stopLoss);
-            s.suggested_qty = riskPerShare > 0 ? Math.floor(1000 / riskPerShare) : 10;
+        //     // Preserve AI's rich suggested_qty structure, only set fallback if missing
+        //     if (!s.suggested_qty || typeof s.suggested_qty === 'number') {
+        //         const riskPerShare = Math.abs(s.entry - s.stopLoss);
+        //         s.suggested_qty = riskPerShare > 0 ? Math.floor(1000 / riskPerShare) : 10;
+        //     }
             
-            clean.push({ ...s, score: scored.score, score_band: scored.band, score_components: scored.components });
-        }
+        //     clean.push({ ...s, score: scored.score, score_band: scored.band, score_components: scored.components });
+        // }
 
-        clean.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+        // clean.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
         
-        // Add NO_TRADE fallback if all scores are low (< 0.6)
-        const hasDecentScore = clean.some(s => (s.score ?? 0) >= 0.6);
-        if (!hasDecentScore && clean.length > 0) {
-            const authoritativeEntry = clean[0]?.entry || authoritativeLast;
-            clean.push({
-                id: 'no_trade_fallback',
-                type: 'NO_TRADE',
-                alignment: 'neutral',
-                title: 'No Trade - Reward Too Small',
-                confidence: 0,
-                entryType: 'market',
-                entry: +(+authoritativeEntry).toFixed(2),
-                entryRange: null,
-                target: +(+authoritativeEntry).toFixed(2),
-                stopLoss: +(+authoritativeEntry).toFixed(2),
-                riskReward: 0,
-                timeframe: analysis_type === 'swing' ? '3-7 days' : '1-4 hours',
-                indicators: [],
-                reasoning: [{ because: 'Reward too small for the risk' }],
-                warnings: ['Wait for clearer setup'],
-                beginner_summary: 'No trade: risk vs reward not attractive right now.',
-                why_in_plain_words: ['Reward too small for the risk', 'Better opportunities may emerge'],
-                what_could_go_wrong: 'Forcing trades in poor setups leads to losses',
-                money_example: { qty: 10, max_loss: 0, potential_profit: 0 },
-                risk_meter: 'High',
-                actionability: 'No trade',
-                glossary: { entry: '', target: '', stopLoss: '' },
-                score: 0,
-                score_band: 'Low',
-                isTopPick: false
-            });
-        }
+        // // Add NO_TRADE fallback if all scores are low (< 0.6)
+        // const hasDecentScore = clean.some(s => (s.score ?? 0) >= 0.6);
+        // if (!hasDecentScore && clean.length > 0) {
+        //     const authoritativeEntry = clean[0]?.entry || authoritativeLast;
+        //     clean.push({
+        //         id: 'no_trade_fallback',
+        //         type: 'NO_TRADE',
+        //         alignment: 'neutral',
+        //         title: 'No Trade - Reward Too Small',
+        //         confidence: 0,
+        //         entryType: 'market',
+        //         entry: +(+authoritativeEntry).toFixed(2),
+        //         entryRange: null,
+        //         target: +(+authoritativeEntry).toFixed(2),
+        //         stopLoss: +(+authoritativeEntry).toFixed(2),
+        //         riskReward: 0,
+        //         timeframe: analysis_type === 'swing' ? '3-7 days' : '1-4 hours',
+        //         indicators: [],
+        //         reasoning: ['Reward too small for the risk'], // Keep simple for fallback
+        //         warnings: ['Wait for clearer setup'],
+        //         beginner_summary: 'No trade: risk vs reward not attractive right now.',
+        //         why_in_plain_words: ['Reward too small for the risk', 'Better opportunities may emerge'],
+        //         what_could_go_wrong: 'Forcing trades in poor setups leads to losses',
+        //         money_example: { qty: 10, max_loss: 0, potential_profit: 0 },
+        //         risk_meter: 'High',
+        //         actionability: 'No trade',
+        //         glossary: { entry: '', target: '', stopLoss: '' },
+        //         score: 0,
+        //         score_band: 'Low',
+        //         isTopPick: false
+        //     });
+        // }
         
-        // Ensure minimum 2 strategies
-        if (clean.length < 2) {
-            const authoritativeEntry = clean[0]?.entry || authoritativeLast;
-            clean.push({
-                id: 'no_trade_minimum',
-                type: 'NO_TRADE',
-                alignment: 'neutral',
-                title: 'No Alternative Trade',
-                confidence: 0,
-                entryType: 'market',
-                entry: +(+authoritativeEntry).toFixed(2),
-                entryRange: null,
-                target: +(+authoritativeEntry).toFixed(2),
-                stopLoss: +(+authoritativeEntry).toFixed(2),
-                riskReward: 0,
-                timeframe: analysis_type === 'swing' ? '3-7 days' : '1-4 hours',
-                indicators: [],
-                reasoning: [{ because: 'Insufficient valid setups found' }],
-                warnings: ['Monitor for better opportunities'],
-                beginner_summary: 'No trade: insufficient valid setups found.',
-                why_in_plain_words: ['Only one valid setup identified', 'Wait for more opportunities'],
-                what_could_go_wrong: 'Limited options in current market conditions',
-                money_example: { qty: 10, max_loss: 0, potential_profit: 0 },
-                risk_meter: 'High',
-                actionability: 'No trade',
-                glossary: { entry: '', target: '', stopLoss: '' },
-                score: 0,
-                score_band: 'Low',
-                isTopPick: false
-            });
-        }
+        // // Ensure minimum 2 strategies
+        // if (clean.length < 2) {
+        //     const authoritativeEntry = clean[0]?.entry || authoritativeLast;
+        //     clean.push({
+        //         id: 'no_trade_minimum',
+        //         type: 'NO_TRADE',
+        //         alignment: 'neutral',
+        //         title: 'No Alternative Trade',
+        //         confidence: 0,
+        //         entryType: 'market',
+        //         entry: +(+authoritativeEntry).toFixed(2),
+        //         entryRange: null,
+        //         target: +(+authoritativeEntry).toFixed(2),
+        //         stopLoss: +(+authoritativeEntry).toFixed(2),
+        //         riskReward: 0,
+        //         timeframe: analysis_type === 'swing' ? '3-7 days' : '1-4 hours',
+        //         indicators: [],
+        //         reasoning: [{ because: 'Insufficient valid setups found' }],
+        //         warnings: ['Monitor for better opportunities'],
+        //         beginner_summary: 'No trade: insufficient valid setups found.',
+        //         why_in_plain_words: ['Only one valid setup identified', 'Wait for more opportunities'],
+        //         what_could_go_wrong: 'Limited options in current market conditions',
+        //         money_example: { qty: 10, max_loss: 0, potential_profit: 0 },
+        //         risk_meter: 'High',
+        //         actionability: 'No trade',
+        //         glossary: { entry: '', target: '', stopLoss: '' },
+        //         score: 0,
+        //         score_band: 'Low',
+        //         isTopPick: false
+        //     });
+        // }
         
-        // Add top pick badge to highest scoring strategy
-        if (clean.length > 0) {
-            clean[0].isTopPick = true;
-        }
+        // // Add top pick badge to highest scoring strategy
+        // if (clean.length > 0) {
+        //     clean[0].isTopPick = true;
+        // }
         
-        parsed.strategies = clean.slice(0, 3); // Keep top 3 strategies
+    //    parsed.strategies = clean.slice(0, 3); // Keep top 3 strategies
         
-        // Ensure all strategies have required fields
-        for (const s of parsed.strategies) {
-            // Ensure entryType is valid
-            if (!['market', 'limit', 'range', 'stop', 'stop-limit'].includes(s.entryType)) {
-                s.entryType = s.type === 'BUY' && s.entry > authoritativeLast ? 'stop' : 'limit';
-            }
+        // // Ensure all strategies have required fields
+        // for (const s of parsed.strategies) {
+        //     // Ensure entryType is valid
+        //     if (!['market', 'limit', 'range', 'stop', 'stop-limit'].includes(s.entryType)) {
+        //         s.entryType = s.type === 'BUY' && s.entry > authoritativeLast ? 'stop' : 'limit';
+        //     }
             
-            // Ensure isTopPick is set
-            if (s.isTopPick === undefined) {
-                s.isTopPick = false;
-            }
-        }
+        //     // Ensure isTopPick is set
+        //     if (s.isTopPick === undefined) {
+        //         s.isTopPick = false;
+        //     }
+        // }
 
-        // Default beginner fallbacks if model missed them
-        for (const s of parsed.strategies) {
-            // Always enforce beginner summary format with stop loss
-            const verb = s.type === 'BUY' ? 'Buy' : s.type === 'SELL' ? 'Sell' : 'No trade';
-            s.beginner_summary = s.type === 'NO_TRADE'
-                ? 'No trade: setup not attractive.'
-                : `${verb} ~₹${s.entry} → Take profit ₹${s.target} → Exit ₹${s.stopLoss} (${analysis_type === 'swing' ? '3-7 days' : '1-4 hours'})`;
-            if (!s.why_in_plain_words) {
-                s.why_in_plain_words = [
-                    `Stock shows ${s.type === 'BUY' ? 'upward' : s.type === 'SELL' ? 'downward' : 'neutral'} momentum`,
-                    `Risk-reward ratio is ${s.riskReward}:1`
-                ];
-            }
-            if (!s.what_could_go_wrong) {
-                s.what_could_go_wrong = s.type === 'BUY' ? 
-                    'Price could fall below stop loss causing a loss' : 
-                    s.type === 'SELL' ? 'Price could rise above stop loss causing a loss' : 
-                    'Market conditions may change';
-            }
-            if (!s.money_example) {
-                const qty = 10;
-                s.money_example = {
-                    qty,
-                    max_loss: +(Math.abs(s.entry - s.stopLoss) * qty).toFixed(2),
-                    potential_profit: +(Math.abs(s.target - s.entry) * qty).toFixed(2)
-                };
-            }
-            // Risk meter should already be set from scoring, but ensure it exists
-            if (!s.risk_meter) {
-                s.risk_meter = (s.score >= 0.75 ? 'Low' : s.score >= 0.60 ? 'Medium' : 'High');
-            }
+        // // Default beginner fallbacks if model missed them
+        // for (const s of parsed.strategies) {
+        //     // Always enforce beginner summary format with stop loss
+        //     const verb = s.type === 'BUY' ? 'Buy' : s.type === 'SELL' ? 'Sell' : 'No trade';
+        //     s.beginner_summary = s.type === 'NO_TRADE'
+        //         ? 'No trade: setup not attractive.'
+        //         : `${verb} ~₹${s.entry} → Take profit ₹${s.target} → Exit ₹${s.stopLoss} (${analysis_type === 'swing' ? '3-7 days' : '1-4 hours'})`;
+        //     if (!s.why_in_plain_words) {
+        //         s.why_in_plain_words = [
+        //             `Stock shows ${s.type === 'BUY' ? 'upward' : s.type === 'SELL' ? 'downward' : 'neutral'} momentum`,
+        //             `Risk-reward ratio is ${s.riskReward}:1`
+        //         ];
+        //     }
+        //     if (!s.what_could_go_wrong) {
+        //         s.what_could_go_wrong = s.type === 'BUY' ? 
+        //             'Price could fall below stop loss causing a loss' : 
+        //             s.type === 'SELL' ? 'Price could rise above stop loss causing a loss' : 
+        //             'Market conditions may change';
+        //     }
+        //     if (!s.money_example) {
+        //         const qty = 10;
+        //         s.money_example = {
+        //             qty,
+        //             max_loss: +(Math.abs(s.entry - s.stopLoss) * qty).toFixed(2),
+        //             potential_profit: +(Math.abs(s.target - s.entry) * qty).toFixed(2)
+        //         };
+        //     }
+        //     // Risk meter should already be set from scoring, but ensure it exists
+        //     if (!s.risk_meter) {
+        //         s.risk_meter = (s.score >= 0.75 ? 'Low' : s.score >= 0.60 ? 'Medium' : 'High');
+        //     }
             
-            // Ensure suggested_qty exists
-            if (!s.suggested_qty) {
-                const riskPerShare = Math.abs(s.entry - s.stopLoss);
-                s.suggested_qty = riskPerShare > 0 ? Math.floor(1000 / riskPerShare) : 10;
-            }
-            if (!s.actionability) {
-                s.actionability = s.type === 'BUY' ? 'Buy idea' : s.type === 'SELL' ? 'Sell idea' : 'No trade';
-            }
-            if (!s.glossary) {
-                s.glossary = {
-                    entry: "The price at which you should buy/sell the stock",
-                    target: "The price at which you should take profit",
-                    stopLoss: "The price at which you should exit to limit losses"
-                };
-            }
-        }
+        //     // Ensure suggested_qty exists
+        //     if (!s.suggested_qty) {
+        //         const riskPerShare = Math.abs(s.entry - s.stopLoss);
+        //         s.suggested_qty = riskPerShare > 0 ? Math.floor(1000 / riskPerShare) : 10;
+        //     }
+        //     if (!s.actionability) {
+        //         s.actionability = s.type === 'BUY' ? 'Buy idea' : s.type === 'SELL' ? 'Sell idea' : 'No trade';
+        //     }
+        //     if (!s.glossary) {
+        //         s.glossary = {
+        //             entry: "The price at which you should buy/sell the stock",
+        //             target: "The price at which you should take profit",
+        //             stopLoss: "The price at which you should exit to limit losses"
+        //         };
+        //     }
+        // }
 
-        // Add volume classification if possible
-        if (parsed.market_summary && (!parsed.market_summary.volume || parsed.market_summary.volume === 'UNKNOWN')) {
-            parsed.market_summary.volume = this.classifyVolume(marketPayload);
-            console.log(`📊 Volume classified as: ${parsed.market_summary.volume}`);
-        }
+        // if (parsed.market_summary && (!parsed.market_summary.volume || parsed.market_summary.volume === 'UNKNOWN')) {
+        //     const preCalculatedVolume = marketPayload?.volumeContext?.classification || 'UNKNOWN';
+        //     parsed.market_summary.volume = preCalculatedVolume;
+        //     console.log(`📊 Added pre-calculated volume: ${parsed.market_summary.volume}`);
+        // }
         
-        // Ensure overall_sentiment is properly formatted
-        if (!parsed.overall_sentiment) {
-            parsed.overall_sentiment = 'NEUTRAL';
+        // 2. Add metadata for debugging (store what was sent to API)
+        if (!parsed.meta) {
+            parsed.meta = {};
         }
-
+        parsed.meta.model_used = this.analysisModel;
+        parsed.meta.processing_time_ms = Date.now() - analysisStartTime;
+        parsed.meta.formatted_messages = formattedMessages; // Store exact messages sent to GPT-5
+      
+        
+        
+        // // 3. That's it! Return GPT-5's response directly
+        // console.log(`✅ GPT-5 analysis complete for ${stock_symbol}`);
+        // console.log(`   Strategies: ${parsed.strategies?.length || 0}`);
+        // console.log(`   Confidence: ${parsed.strategies?.[0]?.confidence || 'N/A'}`);
+        
         return parsed;
     }
 

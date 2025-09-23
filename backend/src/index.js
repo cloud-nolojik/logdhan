@@ -28,6 +28,7 @@ console.log('✅ Environment validation passed');
 import { subscriptionService } from './services/subscription/subscriptionService.js';
 import { azureStorageService } from './services/storage/azureStorage.service.js';
 import { messagingService } from './services/messaging/messaging.service.js';
+import conditionMonitor from './services/conditionMonitor.service.js';
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -44,6 +45,8 @@ import creditsRoutes from './routes/credits.js';
 import marketRoutes from './routes/market.js';
 import aiRoutes from './routes/ai.js';
 import upstoxRoutes from './routes/upstox.js';
+import bulkAnalysisRoutes from './routes/bulkAnalysis.js';
+import webhookRoutes from './routes/webhook.js';
 
 
 const app = express();
@@ -100,6 +103,8 @@ app.use('/api/credits', creditsRoutes);
 app.use('/api/v1/market', marketRoutes);
 app.use('/api/v1/ai', aiRoutes);
 app.use('/api/v1/upstox', upstoxRoutes);
+app.use('/api/v1/bulk-analysis', bulkAnalysisRoutes);
+app.use('/api/webhook', webhookRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -182,6 +187,21 @@ async function initializeMessagingService() {
   }
 }
 
+// Initialize condition monitoring service
+async function initializeConditionMonitoring() {
+  try {
+    console.log('🔄 Initializing condition monitoring service...');
+    const bullAvailable = await conditionMonitor.initialize();
+    if (bullAvailable) {
+      console.log('✅ Condition monitoring initialized with Bull/Redis');
+    } else {
+      console.log('✅ Condition monitoring initialized with fallback mode');
+    }
+  } catch (error) {
+    console.error('❌ Failed to initialize condition monitoring:', error);
+  }
+}
+
 const PORT = process.env.PORT || 5650;
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
@@ -190,6 +210,7 @@ app.listen(PORT, async () => {
   await initializeAzureStorage();
   await initializeSubscriptionSystem();
   await initializeMessagingService();
+  await initializeConditionMonitoring();
   
   console.log('🚀 All services initialized successfully');
 }); 

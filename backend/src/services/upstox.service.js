@@ -1068,6 +1068,117 @@ class UpstoxService {
             return false;
         }
     }
+
+    /**
+     * Get candle data for technical analysis
+     */
+    async getCandleData(instrumentToken, interval, accessToken, count = 100) {
+        try {
+            console.log(`📊 Fetching ${interval} candles for ${instrumentToken}`);
+            
+            const response = await axios.get(
+                `${this.baseURL}/historical-candle/${instrumentToken}/${interval}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Accept': 'application/json'
+                    },
+                    params: {
+                        count: count
+                    }
+                }
+            );
+
+            return {
+                success: true,
+                data: response.data?.data?.candles || []
+            };
+
+        } catch (error) {
+            console.error(`❌ Get candle data error for ${interval}:`, error.response?.data || error.message);
+            return {
+                success: false,
+                error: 'get_candle_data_failed',
+                message: error.response?.data?.message || 'Failed to get candle data',
+                details: error.response?.data,
+                data: []
+            };
+        }
+    }
+
+    /**
+     * Get market depth (order book) data
+     */
+    async getMarketDepth(instrumentToken, accessToken) {
+        try {
+            console.log(`📊 Fetching market depth for ${instrumentToken}`);
+            
+            const response = await axios.get(
+                `${this.baseURL}/market-quote/quotes`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Accept': 'application/json'
+                    },
+                    params: {
+                        instrument_key: instrumentToken
+                    }
+                }
+            );
+
+            return {
+                success: true,
+                data: response.data?.data?.[instrumentToken]
+            };
+
+        } catch (error) {
+            console.error('❌ Get market depth error:', error.response?.data || error.message);
+            return {
+                success: false,
+                error: 'get_market_depth_failed',
+                message: error.response?.data?.message || 'Failed to get market depth',
+                details: error.response?.data,
+                data: null
+            };
+        }
+    }
+
+    /**
+     * Get live market data (LTP, volume, etc.)
+     */
+    async getLiveMarketData(instrumentTokens, accessToken) {
+        try {
+            console.log(`📊 Fetching live market data for ${instrumentTokens.length} instruments`);
+            
+            const response = await axios.get(
+                `${this.baseURL}/market-quote/ltp`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Accept': 'application/json'
+                    },
+                    params: {
+                        instrument_key: instrumentTokens.join(',')
+                    }
+                }
+            );
+
+            return {
+                success: true,
+                data: response.data?.data || {}
+            };
+
+        } catch (error) {
+            console.error('❌ Get live market data error:', error.response?.data || error.message);
+            return {
+                success: false,
+                error: 'get_live_market_data_failed',
+                message: error.response?.data?.message || 'Failed to get live market data',
+                details: error.response?.data,
+                data: {}
+            };
+        }
+    }
 }
 
 export default new UpstoxService();

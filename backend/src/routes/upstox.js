@@ -3,6 +3,7 @@ import upstoxService from '../services/upstox.service.js';
 import UpstoxUser from '../models/upstoxUser.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import crypto from 'crypto';
+import conditionValidator from '../services/conditionValidator.service.js';
 
 const router = express.Router();
 
@@ -228,7 +229,8 @@ router.post('/place-order', authenticateToken, async (req, res) => {
         console.log(`📋 Order placement request for user ${userId}:`, {
             strategyId: strategy?.id,
             instrumentToken,
-            analysisType
+            analysisType,
+            useBracketOrder
         });
 
         // Import StockAnalysis model
@@ -269,6 +271,63 @@ router.post('/place-order', authenticateToken, async (req, res) => {
             });
         }
 
+        // NEW: Real-time condition validation
+        console.log(`🔍 Starting real-time condition validation for ${instrumentToken}`);
+        
+        // Use the existing decrypt function from this file
+        const accessToken = decrypt(upstoxUser.access_token);
+        
+        // Validate conditions using real-time market data
+        const realtimeValidation = await conditionValidator.validateConditionsRealTime(
+            existingAnalysis,
+            accessToken
+        );
+        
+        console.log(`📊 Real-time validation result:`, {
+            valid: realtimeValidation.valid,
+            reason: realtimeValidation.reason,
+            current_price: realtimeValidation.realtime_data?.current_price
+        });
+        
+        if (!realtimeValidation.valid && !realtimeValidation.error) {
+            return res.status(400).json({
+                success: false,
+                error: 'entry_conditions_not_met_realtime',
+                message: realtimeValidation.reason,
+                data: {
+                    validation_details: realtimeValidation,
+                    analysis_id: existingAnalysis._id,
+                    current_market_data: realtimeValidation.realtime_data,
+                    failed_triggers: realtimeValidation.triggers?.filter(t => !t.passed) || [],
+                    suggestion: realtimeValidation.order_gate?.actionability_status === 'actionable_on_trigger' 
+                        ? 'Use conditional orders (stop/stop-limit) to execute when conditions are met'
+                        : 'Wait for market conditions to improve or use different strategy'
+                }
+            });
+        }
+        
+        // Additional check for market orders - must be actionable now with real-time data
+        if (strategy.entryType === 'market' && realtimeValidation.order_gate?.actionability_status !== 'actionable_now') {
+            return res.status(400).json({
+                success: false,
+                error: 'market_order_not_suitable_realtime',
+                message: 'Market orders can only be placed when real-time conditions are actionable now. Use limit/stop orders instead.',
+                data: {
+                    current_status: realtimeValidation.order_gate?.actionability_status,
+                    current_price: realtimeValidation.realtime_data?.current_price,
+                    suggested_entry_type: 'limit',
+                    failed_triggers: realtimeValidation.triggers?.filter(t => !t.passed) || []
+                }
+            });
+        }
+        
+        // Log successful validation
+        if (realtimeValidation.valid) {
+            console.log(`✅ All real-time conditions validated for order placement`);
+        } else if (realtimeValidation.error) {
+            console.warn(`⚠️ Real-time validation failed with error, proceeding with stored analysis data`);
+        }
+
         // Validate request
         if (!strategy || !instrumentToken) {
             return res.status(400).json({
@@ -289,8 +348,7 @@ router.post('/place-order', authenticateToken, async (req, res) => {
             });
         }
 
-        // Decrypt access token
-        const accessToken = decrypt(upstoxUser.access_token);
+        // accessToken already decrypted earlier for real-time validation
 
         // Convert AI strategy to Upstox order
         const orderData = await upstoxService.convertAIStrategyToOrder(
@@ -305,33 +363,49 @@ router.post('/place-order', authenticateToken, async (req, res) => {
             orderData.quantity = Math.max(1, parseInt(customQuantity));
         }
 
-        console.log(`📋 Placing ${useBracketOrder ? 'bracket' : 'single'} order:`, orderData);
-
-        // Place order on Upstox (bracket or single)
-        console.log('📋 About to place order with data:', orderData);
-        
-        let orderResult;
-        if (useBracketOrder) {
-            // ALWAYS use bracket method when useBracketOrder=true for consistent BRC_ tagging
-            console.log('📋 Using bracket method for consistent tagging (SL/target may be null)');
-            orderResult = await upstoxService.placeMultiOrderBracket(accessToken, orderData);
-        } else {
-            // Only use single order method when explicitly disabled
-            console.log('📋 Using single order method (useBracketOrder=false)');
-            orderResult = await upstoxService.placeOrder(accessToken, orderData);
-        }
-        
-        console.log('📋 Received orderResult:', orderResult);
-
-        // Update order statistics
-        await upstoxUser.updateOrderStats(orderResult.success);
-
-        if (orderResult.success) {
-            console.log('🔍 Raw Upstox orderResult:', JSON.stringify(orderResult, null, 2));
-            console.log('🔍 orderResult.data structure:', JSON.stringify(orderResult.data, null, 2));
+        // NEW: For limit orders with bracket orders, place only the primary order first
+        // SL and target will be placed via webhook when the limit order executes
+        if (useBracketOrder && orderData.orderType === 'LIMIT' && orderData.stopLoss && orderData.target) {
+            console.log('📋 Placing LIMIT order with deferred bracket orders (via webhook)');
             
-            // Track orders in the analysis
-            try {
+            // Place only the primary limit order
+            const primaryOrderData = {
+                ...orderData,
+                tag: `BRC_${Date.now()}` // Tag to identify this needs bracket orders
+            };
+            
+            console.log('📋 Placing primary limit order:', primaryOrderData);
+            const orderResult = await upstoxService.placeOrder(accessToken, primaryOrderData);
+            
+            if (orderResult.success) {
+                const orderId = orderResult.data?.data?.order_id || orderResult.data?.order_id;
+                
+                // Register this order for webhook processing
+                if (orderId) {
+                    try {
+                        const webhookRegistration = await fetch(`http://localhost:${process.env.PORT || 3000}/api/webhook/register-pending-bracket`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                orderId,
+                                userId,
+                                accessToken,
+                                stopLoss: orderData.stopLoss,
+                                target: orderData.target,
+                                instrumentToken,
+                                analysisType
+                            })
+                        });
+                        
+                        if (webhookRegistration.ok) {
+                            console.log('✅ Registered pending bracket orders for webhook processing');
+                        }
+                    } catch (webhookError) {
+                        console.error('⚠️ Failed to register webhook data:', webhookError);
+                    }
+                }
+                
+                // Track the primary order
                 await existingAnalysis.addPlacedOrders({
                     ...orderResult.data,
                     strategy_id: strategy.id,
@@ -339,28 +413,76 @@ router.post('/place-order', authenticateToken, async (req, res) => {
                     price: orderData.price,
                     transaction_type: orderData.transactionType,
                     product: orderData.product,
-                    tag: orderData.tag, // Pass the tag to store in database
-                    stopLoss: orderData.stopLoss, // Pass stop loss price
-                    target: orderData.target // Pass target price
+                    tag: primaryOrderData.tag,
+                    stopLoss: orderData.stopLoss,
+                    target: orderData.target,
+                    pending_bracket: true // Flag indicating bracket orders are pending
                 });
-                console.log('✅ Order tracking updated in analysis');
-            } catch (trackingError) {
-                console.error('⚠️ Failed to update order tracking:', trackingError);
-                // Don't fail the entire request for tracking errors
+                
+                // Update order statistics
+                await upstoxUser.updateOrderStats(true);
+                
+                res.json({
+                    success: true,
+                    data: orderResult.data.data || orderResult.data,
+                    message: 'Limit order placed. Stop-loss and target orders will be placed automatically after execution.',
+                    pending_bracket: true
+                });
+            } else {
+                await upstoxUser.updateOrderStats(false);
+                res.status(400).json(orderResult);
             }
             
-            // Extract the nested data from Upstox response
-            const flattenedResponse = {
-                success: true,
-                data: orderResult.data.data || orderResult.data, // Handle nested data
-                message: orderResult.data.message || 'Order placed successfully on Upstox'
-            };
-            
-            console.log('🔄 Flattened response:', JSON.stringify(flattenedResponse, null, 2));
-            res.json(flattenedResponse);
         } else {
-            console.log('❌ Raw Upstox orderResult (failed):', JSON.stringify(orderResult, null, 2));
-            res.status(400).json(orderResult);
+            // For MARKET orders or when bracket orders are disabled, use the existing logic
+            console.log(`📋 Placing ${useBracketOrder ? 'bracket' : 'single'} order:`, orderData);
+            
+            let orderResult;
+            if (useBracketOrder) {
+                console.log('📋 Using bracket method for MARKET order or immediate execution');
+                orderResult = await upstoxService.placeMultiOrderBracket(accessToken, orderData);
+            } else {
+                console.log('📋 Using single order method (useBracketOrder=false)');
+                orderResult = await upstoxService.placeOrder(accessToken, orderData);
+            }
+            
+            console.log('📋 Received orderResult:', orderResult);
+
+            // Update order statistics
+            await upstoxUser.updateOrderStats(orderResult.success);
+
+            if (orderResult.success) {
+                console.log('🔍 Raw Upstox orderResult:', JSON.stringify(orderResult, null, 2));
+                
+                // Track orders in the analysis
+                try {
+                    await existingAnalysis.addPlacedOrders({
+                        ...orderResult.data,
+                        strategy_id: strategy.id,
+                        quantity: orderData.quantity,
+                        price: orderData.price,
+                        transaction_type: orderData.transactionType,
+                        product: orderData.product,
+                        tag: orderData.tag,
+                        stopLoss: orderData.stopLoss,
+                        target: orderData.target
+                    });
+                    console.log('✅ Order tracking updated in analysis');
+                } catch (trackingError) {
+                    console.error('⚠️ Failed to update order tracking:', trackingError);
+                }
+                
+                const flattenedResponse = {
+                    success: true,
+                    data: orderResult.data.data || orderResult.data,
+                    message: orderResult.data.message || 'Order placed successfully on Upstox'
+                };
+                
+                res.json(flattenedResponse);
+            } else {
+                console.log('❌ Raw Upstox orderResult (failed):', JSON.stringify(orderResult, null, 2));
+                res.status(400).json(orderResult);
+            }
         }
 
     } catch (error) {
