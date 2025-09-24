@@ -4,7 +4,6 @@ import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import rateLimit from 'express-rate-limit';
-import conditionMonitor from '../services/conditionMonitor.service.js';
 
 const router = express.Router();
 
@@ -188,26 +187,6 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
                     message: 'Analysis retrieved from cache',
                     created_at: result.data.created_at
                 };
-            }
-
-            // NEW: Start condition monitoring if analysis is not actionable now
-            if (!result.cached && result.data?.analysis_data?.order_gate?.can_place_order === false) {
-                const strategy = result.data.analysis_data?.strategies?.[0];
-                if (strategy && strategy.type !== 'NO_TRADE') {
-                    try {
-                        console.log(`📋 Starting condition monitoring for analysis ${result.data._id}`);
-                        await conditionMonitor.startMonitoring(
-                            result.data._id.toString(),
-                            req.user.id,
-                            strategy
-                        );
-                        responseData.monitoring_started = true;
-                        responseData.monitoring_frequency = conditionMonitor.getMonitoringFrequency(strategy).description;
-                    } catch (monitorError) {
-                        console.error('⚠️ Failed to start condition monitoring:', monitorError);
-                        responseData.monitoring_error = monitorError.message;
-                    }
-                }
             }
 
             res.json(responseData);

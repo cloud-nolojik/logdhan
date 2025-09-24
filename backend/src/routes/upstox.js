@@ -3,9 +3,12 @@ import upstoxService from '../services/upstox.service.js';
 import UpstoxUser from '../models/upstoxUser.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import crypto from 'crypto';
-import conditionValidator from '../services/conditionValidator.service.js';
+// Removed condition validator - direct order placement only
 
 const router = express.Router();
+
+// Import trigger order service
+import triggerOrderService from '../services/triggerOrderService.js';
 
 // Encryption helpers for token storage
 const ENCRYPTION_KEY = process.env.UPSTOX_ENCRYPTION_KEY ? 
@@ -271,54 +274,48 @@ router.post('/place-order', authenticateToken, async (req, res) => {
             });
         }
 
-        // NEW: Real-time condition validation
-        console.log(`🔍 Starting real-time condition validation for ${instrumentToken}`);
-        
-        // Use the existing decrypt function from this file
+        // Get access token for API calls
         const accessToken = decrypt(upstoxUser.access_token);
+
+        // Check if this is a bypass call (from monitoring)
+        const bypassTriggers = req.body.bypassTriggers || false;
         
-        // Validate conditions using real-time market data
-        const realtimeValidation = await conditionValidator.validateConditionsRealTime(
-            existingAnalysis,
-            accessToken
-        );
-        
-        console.log(`📊 Real-time validation result:`, {
-            valid: realtimeValidation.valid,
-            reason: realtimeValidation.reason,
-            current_price: realtimeValidation.realtime_data?.current_price
-        });
-        
-        if (!realtimeValidation.valid && !realtimeValidation.error) {
-            return res.status(400).json({
-                success: false,
-                error: 'entry_conditions_not_met_realtime',
-                message: realtimeValidation.reason,
-                data: {
-                    validation_details: realtimeValidation,
-                    analysis_id: existingAnalysis._id,
-                    current_market_data: realtimeValidation.realtime_data,
-                    failed_triggers: realtimeValidation.triggers?.filter(t => !t.passed) || [],
-                    suggestion: realtimeValidation.order_gate?.actionability_status === 'actionable_on_trigger' 
-                        ? 'Use conditional orders (stop/stop-limit) to execute when conditions are met'
-                        : 'Wait for market conditions to improve or use different strategy'
+        if (!bypassTriggers) {
+            // Check trigger conditions before placing order
+            console.log(`🎯 Checking trigger conditions for analysis: ${existingAnalysis._id}`);
+            const triggerResult = await triggerOrderService.checkTriggerConditions(existingAnalysis, accessToken);
+            
+            if (triggerResult.triggersConditionsMet) {
+                console.log(`✅ Trigger conditions satisfied for ${existingAnalysis.stock_symbol} - proceeding to place order`);
+            } else {
+                console.log(`❌ Trigger conditions not met for ${existingAnalysis.stock_symbol}: ${triggerResult.reason}`);
+                
+                if (triggerResult.data.should_monitor) {
+                    // TODO: Create monitoring job in Bull MQ here
+                    console.log(`📋 Should create monitoring job with frequency: ${triggerResult.data.monitoring_frequency.description}`);
                 }
-            });
-        }
-        
-        // Additional check for market orders - must be actionable now with real-time data
-        if (strategy.entryType === 'market' && realtimeValidation.order_gate?.actionability_status !== 'actionable_now') {
-            return res.status(400).json({
-                success: false,
-                error: 'market_order_not_suitable_realtime',
-                message: 'Market orders can only be placed when real-time conditions are actionable now. Use limit/stop orders instead.',
-                data: {
-                    current_status: realtimeValidation.order_gate?.actionability_status,
-                    current_price: realtimeValidation.realtime_data?.current_price,
-                    suggested_entry_type: 'limit',
-                    failed_triggers: realtimeValidation.triggers?.filter(t => !t.passed) || []
-                }
-            });
+                
+                return res.status(400).json({
+                    success: false,
+                    error: triggerResult.reason,
+                    message: triggerResult.message,
+                    data: {
+                        analysis_id: existingAnalysis._id,
+                        stock_symbol: existingAnalysis.stock_symbol,
+                        current_price: triggerResult.data.current_price,
+                        triggers_conditions_met: false,
+                        failed_triggers: triggerResult.data.failed_triggers || [],
+                        invalidations: triggerResult.data.invalidations || [],
+                        should_monitor: triggerResult.data.should_monitor,
+                        monitoring_frequency: triggerResult.data.monitoring_frequency,
+                        strategy_entry: strategy.entry,
+                        entry_type: strategy.entryType,
+                        suggestion: 'Monitoring will be set up to check conditions automatically'
+                    }
+                });
+            }
+        } else {
+            console.log(`🚀 Bypassing trigger check - called from monitoring job`);
         }
         
         // Log successful validation

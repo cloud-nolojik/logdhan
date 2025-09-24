@@ -6,6 +6,7 @@ import { aiReviewService } from './ai/aiReview.service.js';
 import { subscriptionService } from './subscription/subscriptionService.js';
 import { Plan } from '../models/plan.js';
 import { Subscription } from '../models/subscription.js';
+import { getSectorForStock, getSectorNewsKeywords, getTrailingStopSuggestions, getSectorCorrelationMessage } from '../utils/sectorMapping.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -464,11 +465,15 @@ class AIAnalyzeService {
                 stockName: stock_name
             };
 
+            // Get sector information for enhanced analysis
+            const sectorInfo = getSectorForStock(stock_symbol, stock_name);
+            console.log(`🏭 Sector identified: ${sectorInfo.name} (${sectorInfo.code}) - Index: ${sectorInfo.index}`);
+
             // Fetch real market data in parallel
             console.log(`📰 Fetching news for: ${stock_name}`);
             const [candleData, newsData] = await Promise.all([
                 this.fetchRealMarketData(tradeData),
-                this.fetchNewsData(stock_name).catch(err => {
+                this.fetchSectorEnhancedNews(stock_name, sectorInfo).catch(err => {
                     console.warn('⚠️ News fetch failed, continuing without news:', err.message);
                     return null;
                 })
@@ -479,12 +484,12 @@ class AIAnalyzeService {
                 console.log(`📰 Sample headlines:`, newsData.slice(0, 3).map(item => item.title));
             }
 
-            // Analyze news sentiment
+            // Analyze news sentiment with sector context
             const sentiment = newsData ? 
-                await this.analyzeSentiment(newsData, tradeData.term) : 
+                await this.analyzeSectorSentiment(newsData, tradeData.term, sectorInfo) : 
                 'neutral';
                 
-            console.log(`📊 News sentiment analysis result: ${sentiment}`);
+            console.log(`📊 Sector-enhanced sentiment analysis result: ${sentiment}`);
 
             // Route to appropriate agent to process data
             const agentOut = await this.processMarketData(tradeData, candleData);
@@ -515,14 +520,15 @@ class AIAnalyzeService {
             console.log(`📊 Generated clean payload for stock analysis of ${stock_symbol}`);
             console.log(`🤖 Using AI models - Analysis: ${this.analysisModel}, Sentiment: ${this.sentimentalModel}`);
 
-            // Generate analysis with real market data
+            // Generate analysis with real market data and sector context
             const analysisResult = await this.generateStockAnalysisWithPayload({
                 stock_name,
                 stock_symbol, 
                 current_price,
                 analysis_type,
                 marketPayload: payload,
-                sentiment
+                sentiment,
+                sectorInfo
             });
 
             console.log(`✅ AI Analysis completed successfully for ${stock_symbol}`);
@@ -630,6 +636,50 @@ class AIAnalyzeService {
     }
 
     /**
+     * Fetch sector-enhanced news data with broader keywords
+     */
+    async fetchSectorEnhancedNews(stockName, sectorInfo) {
+        try {
+            console.log(`📰 Fetching sector-enhanced news for ${stockName} in ${sectorInfo.name} sector`);
+            
+            // Primary search for stock-specific news
+            const stockNews = await this.fetchNewsData(stockName);
+            
+            // Secondary search for sector-wide news if we have sector info
+            let sectorNews = [];
+            if (sectorInfo && sectorInfo.code !== 'OTHER') {
+                const sectorKeywords = getSectorNewsKeywords(sectorInfo.code);
+                const sectorQuery = `${sectorInfo.name} ${sectorKeywords.slice(0, 3).join(' ')}`;
+                
+                try {
+                    const sectorRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(sectorQuery)}&hl=en-IN&gl=IN&ceid=IN:en`;
+                    console.log(`📰 Fetching sector news from: ${sectorRssUrl}`);
+                    
+                    const sectorFeed = await this.rssParser.parseURL(sectorRssUrl);
+                    sectorNews = sectorFeed.items?.slice(0, 5) || []; // Limit to 5 sector news
+                    console.log(`📰 Found ${sectorNews.length} sector-specific news items`);
+                } catch (sectorError) {
+                    console.warn(`⚠️ Sector news fetch failed: ${sectorError.message}`);
+                }
+            }
+            
+            // Combine and deduplicate news
+            const allNews = [...stockNews, ...sectorNews];
+            const uniqueNews = allNews.filter((item, index, self) => 
+                index === self.findIndex(t => t.title === item.title)
+            );
+            
+            console.log(`📰 Total unique news items: ${uniqueNews.length} (${stockNews.length} stock + ${sectorNews.length} sector)`);
+            return uniqueNews.slice(0, 15); // Limit total to 15 items
+            
+        } catch (error) {
+            console.error('❌ Error fetching sector-enhanced news:', error.message);
+            // Fallback to regular news
+            return await this.fetchNewsData(stockName);
+        }
+    }
+
+    /**
      * Analyze news sentiment
      */
     async analyzeSentiment(newsItems, term) {
@@ -695,6 +745,83 @@ class AIAnalyzeService {
         } catch (error) {
             console.error('❌ Sentiment analysis failed:', error.message);
             return 'neutral';
+        }
+    }
+
+    /**
+     * Analyze news sentiment with sector context
+     */
+    async analyzeSectorSentiment(newsItems, term, sectorInfo) {
+        if (!newsItems || newsItems.length === 0) {
+            console.log('📊 No news items for sector sentiment analysis, returning neutral');
+            return 'neutral';
+        }
+        
+        const titles = newsItems.slice(0, 8).map(item => item.title).join('\n'); // More items for sector analysis
+        const sectorKeywords = sectorInfo ? getSectorNewsKeywords(sectorInfo.code) : [];
+        const sectorName = sectorInfo?.name || 'General Market';
+        
+        const prompt = `
+            You are a financial news sentiment classifier with sector expertise.
+
+            TASK
+            Classify the overall ${term}-term sentiment for ${sectorName} sector stocks, considering both company-specific and sector-wide factors.
+            Return exactly one lowercase label: positive | neutral | negative
+
+            SECTOR CONTEXT
+            - Sector: ${sectorName} (${sectorInfo?.code || 'OTHER'})
+            - Key Sector Keywords: ${sectorKeywords.slice(0, 8).join(', ')}
+            - Sector Index: ${sectorInfo?.index || 'NIFTY 50'}
+
+            INPUT
+            Headlines (mix of company-specific and sector news):
+            ${titles}
+
+            ENHANCED RULES
+            1) Weight sector-wide positive/negative trends heavily as they affect all sector stocks
+            2) Look for sector-specific themes: ${sectorKeywords.slice(0, 5).join(', ')}
+            3) Consider regulatory/policy changes affecting the entire sector
+            4) Polarity cues enhanced for ${sectorName}:
+            • Positive: expansion, approval, policy support, demand growth, price increases, new orders
+            • Negative: regulation, restrictions, demand decline, input cost inflation, policy headwinds
+            5) Sector correlation: Strong sector trends override individual stock noise
+            6) Decision logic (enhanced for sector context):
+            • If sector-wide positives dominate OR individual positives + sector support → positive
+            • If sector-wide negatives dominate OR individual negatives + sector headwinds → negative  
+            • Otherwise → neutral
+            7) Weight recent regulatory/policy news highly for ${sectorName} sector
+            8) OUTPUT MUST BE ONLY one of: positive, neutral, negative. No quotes, no punctuation.
+            `;
+        
+        console.log(`📊 Analyzing sector sentiment for ${newsItems.length} news items (${sectorName}) using ${this.sentimentalModel}`);
+        console.log(`📊 Sample titles for sector sentiment:`, newsItems.slice(0, 3).map(item => item.title));
+        
+        try {
+            const formattedMessages = this.formatMessagesForModel(this.sentimentalModel, prompt);
+            
+            const response = await axios.post('https://api.openai.com/v1/chat/completions', 
+                this.buildRequestPayload(
+                    this.sentimentalModel,
+                    formattedMessages,
+                    false // Sentiment analysis doesn't require JSON format
+                ), 
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.openaiApiKey}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+            
+            const sentiment = response.data.choices[0].message.content.toLowerCase().trim();
+            const validSentiment = ['positive', 'negative', 'neutral'].includes(sentiment) ? sentiment : 'neutral';
+            
+            console.log(`📊 Sector sentiment analysis result: "${sentiment}" -> "${validSentiment}" for ${sectorName}`);
+            return validSentiment;
+        } catch (error) {
+            console.error('❌ Sector sentiment analysis failed:', error.message);
+            // Fallback to regular sentiment analysis
+            return await this.analyzeSentiment(newsItems, term);
         }
     }
 
@@ -1135,12 +1262,16 @@ class AIAnalyzeService {
     /**
      * Generate stock analysis using market payload
      */
-    async generateStockAnalysisWithPayload({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment }) {
+    async generateStockAnalysisWithPayload({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo }) {
         const analysisStartTime = Date.now();
         const stepTimes = { start: analysisStartTime };
         
         const timeframe = analysis_type === 'swing' ? '3-7 days' : '1-4 hours';
         const sentimentText = sentiment || 'neutral';
+        
+        // Get sector-specific enhancements
+        const trailingStops = sectorInfo ? getTrailingStopSuggestions(sectorInfo.code, analysis_type) : null;
+        const sectorCorrelation = sectorInfo ? getSectorCorrelationMessage(sectorInfo.code) : null;
         
         stepTimes.prompt_creation = Date.now();
         
@@ -1161,6 +1292,10 @@ CONTEXT:
 - Analysis Type: swing
 - Timeframe: 3–7 trading sessions
 - Market Sentiment: ${sentiment || 'neutral'}
+- Sector: ${sectorInfo?.name || 'Unknown'} (${sectorInfo?.code || 'OTHER'})
+- Sector Index: ${sectorInfo?.index || 'NIFTY 50'}
+- Sector Correlation: ${sectorCorrelation || 'Monitor broader market trends'}${trailingStops ? `
+- Sector Trailing Stops: Conservative: ${trailingStops.conservative}x ATR, Moderate: ${trailingStops.moderate}x ATR, Aggressive: ${trailingStops.aggressive}x ATR` : ''}
 
 EXECUTION CONTRACT (MANDATORY):
 - You MUST compute a top-level "runtime" and "order_gate" object for code-actionable gating.

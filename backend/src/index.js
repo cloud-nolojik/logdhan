@@ -28,7 +28,7 @@ console.log('✅ Environment validation passed');
 import { subscriptionService } from './services/subscription/subscriptionService.js';
 import { azureStorageService } from './services/storage/azureStorage.service.js';
 import { messagingService } from './services/messaging/messaging.service.js';
-import conditionMonitor from './services/conditionMonitor.service.js';
+// Removed condition monitoring - direct order placement only
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -187,20 +187,7 @@ async function initializeMessagingService() {
   }
 }
 
-// Initialize condition monitoring service
-async function initializeConditionMonitoring() {
-  try {
-    console.log('🔄 Initializing condition monitoring service...');
-    const bullAvailable = await conditionMonitor.initialize();
-    if (bullAvailable) {
-      console.log('✅ Condition monitoring initialized with Bull/Redis');
-    } else {
-      console.log('✅ Condition monitoring initialized with fallback mode');
-    }
-  } catch (error) {
-    console.error('❌ Failed to initialize condition monitoring:', error);
-  }
-}
+// Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
 app.listen(PORT, async () => {
@@ -210,7 +197,7 @@ app.listen(PORT, async () => {
   await initializeAzureStorage();
   await initializeSubscriptionSystem();
   await initializeMessagingService();
-  await initializeConditionMonitoring();
+  // Condition monitoring removed
   
   console.log('🚀 All services initialized successfully');
 }); 
