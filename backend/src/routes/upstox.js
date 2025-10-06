@@ -7,8 +7,10 @@ import crypto from 'crypto';
 
 const router = express.Router();
 
-// Import trigger order service
+// Import services
 import triggerOrderService from '../services/triggerOrderService.js';
+import orderExecutionService from '../services/orderExecutionService.js';
+import agendaMonitoringService from '../services/agendaMonitoringService.js';
 
 // Encryption helpers for token storage
 const ENCRYPTION_KEY = process.env.UPSTOX_ENCRYPTION_KEY ? 
@@ -222,278 +224,205 @@ router.post('/place-order', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
         const {
-            strategy,
-            instrumentToken,
-            analysisType = 'swing',
+            strategyId,
             customQuantity = null,
-            useBracketOrder = true // Enable bracket orders by default
+            bypassTriggers = false // For monitoring jobs
         } = req.body;
 
         console.log(`📋 Order placement request for user ${userId}:`, {
-            strategyId: strategy?.id,
-            instrumentToken,
-            analysisType,
-            useBracketOrder
+            strategyId,
+            customQuantity,
+            bypassTriggers
         });
+
+        // Validate required fields
+        if (!strategyId) {
+            return res.status(400).json({
+                success: false,
+                error: 'invalid_request',
+                message: 'Strategy ID is required'
+            });
+        }
 
         // Import StockAnalysis model
         const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
 
-        // Find the existing analysis for this user and stock
-        const existingAnalysis = await StockAnalysis.findByInstrumentAndUser(
-            instrumentToken,
-            analysisType,
-            userId
-        );
+        // Find the analysis that contains this strategy
+        const existingAnalysis = await StockAnalysis.findOne({
+            'analysis_data.strategies.id': strategyId,
+            expires_at: { $gt: new Date() }
+        });
 
         if (!existingAnalysis) {
             return res.status(404).json({
                 success: false,
-                error: 'analysis_not_found',
-                message: 'No analysis found for this stock. Please run analysis first.'
+                error: 'strategy_not_found',
+                message: 'Strategy not found. Please run analysis first.'
             });
         }
 
-        // Check if orders have already been placed for this analysis
-        const hasActive = existingAnalysis.hasActiveOrders();
-        console.log(`📋 Checking if can place order - hasActiveOrders: ${hasActive}`);
-        if (existingAnalysis.placed_orders && existingAnalysis.placed_orders.length > 0) {
-            console.log(`📋 Existing orders: ${existingAnalysis.placed_orders.map(o => `${o.tag}:${o.status}`).join(', ')}`);
-        }
+        // Extract the specific strategy from the analysis
+        const strategy = existingAnalysis.analysis_data.strategies.find(s => s.id === strategyId);
         
-        if (hasActive) {
-            const activeOrderIds = existingAnalysis.getPlacedOrderIds();
-            return res.status(409).json({
-                success: false,
-                error: 'orders_already_placed',
-                message: `Orders already placed for this analysis. Active orders: ${activeOrderIds.join(', ')}`,
-                data: {
-                    existing_orders: existingAnalysis.placed_orders,
-                    analysis_id: existingAnalysis._id
-                }
-            });
-        }
-
-        // Get access token for API calls
-        const accessToken = decrypt(upstoxUser.access_token);
-
-        // Check if this is a bypass call (from monitoring)
-        const bypassTriggers = req.body.bypassTriggers || false;
+        // Use the new order execution service
+        const executionResult = await orderExecutionService.validateAndExecuteStrategy({
+            analysis: existingAnalysis,
+            strategyId,
+            userId,
+            customQuantity,
+            bypassTriggers
+        });
         
-        if (!bypassTriggers) {
-            // Check trigger conditions before placing order
-            console.log(`🎯 Checking trigger conditions for analysis: ${existingAnalysis._id}`);
-            const triggerResult = await triggerOrderService.checkTriggerConditions(existingAnalysis, accessToken);
-            
-            if (triggerResult.triggersConditionsMet) {
-                console.log(`✅ Trigger conditions satisfied for ${existingAnalysis.stock_symbol} - proceeding to place order`);
-            } else {
-                console.log(`❌ Trigger conditions not met for ${existingAnalysis.stock_symbol}: ${triggerResult.reason}`);
-                
-                if (triggerResult.data.should_monitor) {
-                    // TODO: Create monitoring job in Bull MQ here
-                    console.log(`📋 Should create monitoring job with frequency: ${triggerResult.data.monitoring_frequency.description}`);
-                }
-                
+        if (!executionResult.success) {
+            // Check if the error is due to missing triggers
+            if (executionResult.error === 'no_triggers' || executionResult.error === 'invalid_triggers') {
                 return res.status(400).json({
                     success: false,
-                    error: triggerResult.reason,
-                    message: triggerResult.message,
+                    error: executionResult.error,
+                    message: 'Cannot place order - Entry conditions not configured. The system needs specific market conditions (triggers) to know when to buy/sell. Please run a new analysis with proper entry conditions.',
                     data: {
-                        analysis_id: existingAnalysis._id,
-                        stock_symbol: existingAnalysis.stock_symbol,
-                        current_price: triggerResult.data.current_price,
-                        triggers_conditions_met: false,
-                        failed_triggers: triggerResult.data.failed_triggers || [],
-                        invalidations: triggerResult.data.invalidations || [],
-                        should_monitor: triggerResult.data.should_monitor,
-                        monitoring_frequency: triggerResult.data.monitoring_frequency,
-                        strategy_entry: strategy.entry,
-                        entry_type: strategy.entryType,
-                        suggestion: 'Monitoring will be set up to check conditions automatically'
+                        ...executionResult.data,
+                        user_friendly_explanation: 'Think of triggers as "IF-THEN" rules: IF price goes above ₹X, THEN place buy order',
+                        what_to_do: [
+                            '1. Run a fresh AI analysis for this stock',
+                            '2. Ensure the analysis includes entry conditions',
+                            '3. Try placing the order again'
+                        ],
+                        why_important: 'Without triggers, placing orders immediately could result in bad entry prices and losses'
                     }
                 });
             }
-        } else {
-            console.log(`🚀 Bypassing trigger check - called from monitoring job`);
+            
+            // Check if error is due to missing strategy parameters
+            if (['missing_entry_price', 'missing_stoploss', 'missing_target'].includes(executionResult.error)) {
+                return res.status(400).json({
+                    success: false,
+                    error: executionResult.error,
+                    message: executionResult.message,
+                    data: {
+                        ...executionResult.data,
+                        critical_for_trading: true,
+                        explanation: {
+                            entry_price: 'The price at which you want to buy/sell the stock',
+                            stop_loss: 'Maximum loss you are willing to take (protects capital)',
+                            target: 'Price at which you want to book profits'
+                        },
+                        what_to_do: 'Run a complete AI analysis that includes all three price levels'
+                    }
+                });
+            }
+            
+            // Show choice dialog instead of automatically starting monitoring
+            if (executionResult.shouldMonitor && executionResult.monitoringFrequency) {
+                console.log(`💡 Trigger conditions not met - showing choice dialog for analysis ${existingAnalysis._id}`);
+                
+                // Return choice dialog response
+                return res.status(200).json({
+                    success: false,
+                    error: 'conditions_not_ideal',
+                    message: '🕰️ Market conditions are not ideal for your order right now.',
+                    user_friendly_status: 'WAITING_FOR_BETTER_PRICE',
+                    data: {
+                        ...executionResult.data,
+                        should_monitor: true,
+                        monitoring_frequency: executionResult.monitoringFrequency,
+                        user_message: {
+                            title: 'Wait for Better Entry',
+                            description: `The current price of ₹${executionResult.data.current_price} is not optimal for your ${strategy.entryType || 'BUY'} order.`,
+                            recommendation: 'Start automatic monitoring to get the best price',
+                            what_monitoring_does: [
+                                '🎯 Watches the market continuously',
+                                '📈 Waits for your ideal entry conditions', 
+                                '⚡ Places order instantly when conditions are perfect',
+                                '🔔 Sends you notification immediately'
+                            ],
+                            why_wait: 'Entering at the right price can significantly improve your profits',
+                            action_button: 'Start Smart Monitoring',
+                            skip_button: 'Place Order Anyway (Not Recommended)',
+                            monitoring_details: {
+                                frequency: executionResult.monitoringFrequency.description || 'every 15 minutes',
+                                duration: 'Up to 5 trading days',
+                                stock_symbol: existingAnalysis.stock_symbol,
+                                target_entry: `₹${strategy.entry || 'calculated price'}`,
+                                current_price: `₹${executionResult.data.current_price}`,
+                                failed_conditions: executionResult.data.failed_triggers || []
+                            }
+                        },
+                        monitoring_available: true,
+                        manual_override_allowed: true,
+                        analysis_id: existingAnalysis._id,
+                        strategy_id: strategyId
+                    }
+                });
+            }
+            
+            // Return appropriate status code based on error type
+            let statusCode = 400;
+            if (executionResult.error === 'orders_already_placed') statusCode = 409;
+            if (executionResult.error === 'upstox_not_connected') statusCode = 401;
+            if (executionResult.error === 'strategy_not_found') statusCode = 404;
+            
+            // For triggers not met, provide user-friendly monitoring suggestion
+            if (executionResult.error === 'triggers_not_met' && executionResult.shouldMonitor) {
+                return res.status(200).json({
+                    success: false,
+                    error: 'conditions_not_ideal',
+                    message: '🕰️ Market conditions are not ideal for your order right now.',
+                    user_friendly_status: 'WAITING_FOR_BETTER_PRICE',
+                    data: {
+                        ...executionResult.data,
+                        should_monitor: true,
+                        monitoring_frequency: executionResult.monitoringFrequency,
+                        user_message: {
+                            title: 'Wait for Better Entry',
+                            description: `The current price of ₹${executionResult.data.current_price} is not optimal for your ${strategy.entryType || 'BUY'} order.`,
+                            recommendation: 'Start automatic monitoring to get the best price',
+                            what_monitoring_does: [
+                                '🎯 Watches the market continuously',
+                                '📈 Waits for your ideal entry conditions',
+                                '⚡ Places order instantly when conditions are perfect',
+                                '🔔 Sends you notification immediately'
+                            ],
+                            why_wait: 'Entering at the right price can significantly improve your profits',
+                            action_button: 'Start Smart Monitoring',
+                            skip_button: 'Place Order Anyway (Not Recommended)'
+                        },
+                        monitoring_available: true,
+                        manual_override_allowed: true
+                    }
+                });
+            }
+            
+            return res.status(statusCode).json({
+                success: false,
+                error: executionResult.error,
+                message: executionResult.message,
+                data: {
+                    ...executionResult.data,
+                    should_monitor: executionResult.shouldMonitor,
+                    monitoring_frequency: executionResult.monitoringFrequency,
+                    suggestion: executionResult.shouldMonitor ? 'You can manually start monitoring using /api/monitoring/start' : undefined
+                }
+            });
         }
         
-        // Log successful validation
-        if (realtimeValidation.valid) {
-            console.log(`✅ All real-time conditions validated for order placement`);
-        } else if (realtimeValidation.error) {
-            console.warn(`⚠️ Real-time validation failed with error, proceeding with stored analysis data`);
-        }
-
-        // Validate request
-        if (!strategy || !instrumentToken) {
-            return res.status(400).json({
-                success: false,
-                error: 'invalid_request',
-                message: 'Strategy and instrumentToken are required'
-            });
-        }
-
-        // Get Upstox user data
-        const upstoxUser = await UpstoxUser.findByUserId(userId);
-
-        if (!upstoxUser || !upstoxUser.isTokenValid()) {
-            return res.status(401).json({
-                success: false,
-                error: 'upstox_not_connected',
-                message: 'Upstox account not connected or token expired'
-            });
-        }
-
-        // accessToken already decrypted earlier for real-time validation
-
-        // Convert AI strategy to Upstox order
-        const orderData = await upstoxService.convertAIStrategyToOrder(
-            strategy,
-            instrumentToken,
-            analysisType,
-            accessToken
-        );
-
-        // Override quantity if custom quantity provided
-        if (customQuantity) {
-            orderData.quantity = Math.max(1, parseInt(customQuantity));
-        }
-
-        // NEW: For limit orders with bracket orders, place only the primary order first
-        // SL and target will be placed via webhook when the limit order executes
-        if (useBracketOrder && orderData.orderType === 'LIMIT' && orderData.stopLoss && orderData.target) {
-            console.log('📋 Placing LIMIT order with deferred bracket orders (via webhook)');
-            
-            // Place only the primary limit order
-            const primaryOrderData = {
-                ...orderData,
-                tag: `BRC_${Date.now()}` // Tag to identify this needs bracket orders
-            };
-            
-            console.log('📋 Placing primary limit order:', primaryOrderData);
-            const orderResult = await upstoxService.placeOrder(accessToken, primaryOrderData);
-            
-            if (orderResult.success) {
-                const orderId = orderResult.data?.data?.order_id || orderResult.data?.order_id;
-                
-                // Register this order for webhook processing
-                if (orderId) {
-                    try {
-                        const webhookRegistration = await fetch(`http://localhost:${process.env.PORT || 3000}/api/webhook/register-pending-bracket`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                orderId,
-                                userId,
-                                accessToken,
-                                stopLoss: orderData.stopLoss,
-                                target: orderData.target,
-                                instrumentToken,
-                                analysisType
-                            })
-                        });
-                        
-                        if (webhookRegistration.ok) {
-                            console.log('✅ Registered pending bracket orders for webhook processing');
-                        }
-                    } catch (webhookError) {
-                        console.error('⚠️ Failed to register webhook data:', webhookError);
-                    }
-                }
-                
-                // Track the primary order
-                await existingAnalysis.addPlacedOrders({
-                    ...orderResult.data,
-                    strategy_id: strategy.id,
-                    quantity: orderData.quantity,
-                    price: orderData.price,
-                    transaction_type: orderData.transactionType,
-                    product: orderData.product,
-                    tag: primaryOrderData.tag,
-                    stopLoss: orderData.stopLoss,
-                    target: orderData.target,
-                    pending_bracket: true // Flag indicating bracket orders are pending
-                });
-                
-                // Update order statistics
-                await upstoxUser.updateOrderStats(true);
-                
-                res.json({
-                    success: true,
-                    data: orderResult.data.data || orderResult.data,
-                    message: 'Limit order placed. Stop-loss and target orders will be placed automatically after execution.',
-                    pending_bracket: true
-                });
-            } else {
-                await upstoxUser.updateOrderStats(false);
-                res.status(400).json(orderResult);
-            }
-            
-        } else {
-            // For MARKET orders or when bracket orders are disabled, use the existing logic
-            console.log(`📋 Placing ${useBracketOrder ? 'bracket' : 'single'} order:`, orderData);
-            
-            let orderResult;
-            if (useBracketOrder) {
-                console.log('📋 Using bracket method for MARKET order or immediate execution');
-                orderResult = await upstoxService.placeMultiOrderBracket(accessToken, orderData);
-            } else {
-                console.log('📋 Using single order method (useBracketOrder=false)');
-                orderResult = await upstoxService.placeOrder(accessToken, orderData);
-            }
-            
-            console.log('📋 Received orderResult:', orderResult);
-
-            // Update order statistics
-            await upstoxUser.updateOrderStats(orderResult.success);
-
-            if (orderResult.success) {
-                console.log('🔍 Raw Upstox orderResult:', JSON.stringify(orderResult, null, 2));
-                
-                // Track orders in the analysis
-                try {
-                    await existingAnalysis.addPlacedOrders({
-                        ...orderResult.data,
-                        strategy_id: strategy.id,
-                        quantity: orderData.quantity,
-                        price: orderData.price,
-                        transaction_type: orderData.transactionType,
-                        product: orderData.product,
-                        tag: orderData.tag,
-                        stopLoss: orderData.stopLoss,
-                        target: orderData.target
-                    });
-                    console.log('✅ Order tracking updated in analysis');
-                } catch (trackingError) {
-                    console.error('⚠️ Failed to update order tracking:', trackingError);
-                }
-                
-                const flattenedResponse = {
-                    success: true,
-                    data: orderResult.data.data || orderResult.data,
-                    message: orderResult.data.message || 'Order placed successfully on Upstox'
-                };
-                
-                res.json(flattenedResponse);
-            } else {
-                console.log('❌ Raw Upstox orderResult (failed):', JSON.stringify(orderResult, null, 2));
-                res.status(400).json(orderResult);
-            }
-        }
+        // Success response - ensure data has required fields
+        const responseData = {
+            order_id: executionResult.data?.order_id || executionResult.data?.data?.order_id || null,
+            status: executionResult.data?.status || 'PLACED',
+            message: executionResult.message || 'Order placed successfully',
+            ...executionResult.data
+        };
+        
+        res.json({
+            success: true,
+            data: responseData,
+            message: executionResult.message,
+            pending_bracket: executionResult.pendingBracket
+        });
 
     } catch (error) {
         console.error('❌ Order placement error:', error);
-        
-        // Try to update failed order stats
-        try {
-            const upstoxUser = await UpstoxUser.findByUserId(req.user.id);
-            if (upstoxUser) {
-                await upstoxUser.updateOrderStats(false);
-            }
-        } catch (statsError) {
-            console.error('❌ Failed to update order stats:', statsError);
-        }
 
         res.status(500).json({
             success: false,

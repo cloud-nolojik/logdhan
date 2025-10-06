@@ -8,7 +8,493 @@
       "instrument_key": "NSE_EQ|INE377N01017",
       "exchange": "NSE",
       "segment": "NSE_EQ"
+    },
+{
+      "index": 2,
+      "originalName": "Ingersoll-Rand",
+      "trading_symbol": "INGERRAND",
+      "name": "INGERSOLL-RAND INDIA LTD",
+      "instrument_key": "NSE_EQ|INE177A01018",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 3,
+      "originalName": "Page Industries",
+      "trading_symbol": "HELPAGE",
+      "name": "Helpage Finlease Ltd.",
+      "instrument_key": "BSE_EQ|INE738P01015",
+      "exchange": "BSE",
+      "segment": "BSE_EQ"
+    },
+    {
+      "index": 4,
+      "originalName": "IRCTC",
+      "trading_symbol": "IRCTC",
+      "name": "INDIAN RAIL TOUR CORP LTD",
+      "instrument_key": "NSE_EQ|INE335Y01020",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 5,
+      "originalName": "Ganesh Housing",
+      "trading_symbol": "SHGANEL",
+      "name": "SHREE GANESH ELASTOPLAST LTD.",
+      "instrument_key": "BSE_EQ|INE400N01017",
+      "exchange": "BSE",
+      "segment": "BSE_EQ"
+    },
+    {
+      "index": 7,
+      "originalName": "Mazagon Dock",
+      "trading_symbol": "MAZDOCK",
+      "name": "MAZAGON DOCK SHIPBUIL LTD",
+      "instrument_key": "NSE_EQ|INE249Z01020",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 8,
+      "originalName": "Multi Comm. Exc.",
+      "trading_symbol": "MCX",
+      "name": "MULTI COMMODITY EXCHANGE OF IN",
+      "instrument_key": "BSE_EQ|INE745G01035",
+      "exchange": "BSE",
+      "segment": "BSE_EQ"
+    },
+    {
+      "index": 9,
+      "originalName": "Triveni Turbine",
+      "trading_symbol": "TRITURBINE",
+      "name": "TRIVENI TURBINE LIMITED",
+      "instrument_key": "NSE_EQ|INE152M01016",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 10,
+      "originalName": "KPIT Technologi.",
+      "trading_symbol": "KPITTECH",
+      "name": "KPIT Technologies Ltd",
+      "instrument_key": "BSE_EQ|INE04I401011",
+      "exchange": "BSE",
+      "segment": "BSE_EQ"
+    },
+    {
+      "index": 11,
+      "originalName": "Nippon Life Ind.",
+      "trading_symbol": "SILVERBEES",
+      "name": "NIPPONAMC - NETFSILVER",
+      "instrument_key": "NSE_EQ|INF204KC1402",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 12,
+      "originalName": "Blue Jet Health",
+      "trading_symbol": "BLUEJET",
+      "name": "BLUE JET HEALTHCARE LTD",
+      "instrument_key": "NSE_EQ|INE0KBH01020",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 13,
+      "originalName": "Action Const.Eq.",
+      "trading_symbol": "ACE",
+      "name": "ACTION CONST EQUIP LTD",
+      "instrument_key": "NSE_EQ|INE731H01025",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 14,
+      "originalName": "Bharat Electron",
+      "trading_symbol": "RRKABEL",
+      "name": "R R KABEL LIMITED",
+      "instrument_key": "NSE_EQ|INE777K01022",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 15,
+      "originalName": "ABB",
+      "trading_symbol": "ABBOTINDIA",
+      "name": "ABBOTT INDIA LIMITED",
+      "instrument_key": "NSE_EQ|INE358A01014",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 16,
+      "originalName": "Inox India",
+      "trading_symbol": "INOXINDIA",
+      "name": "INOX INDIA LIMITED",
+      "instrument_key": "NSE_EQ|INE616N01034",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 17,
+      "originalName": "CG Power & Ind",
+      "trading_symbol": "CGPOWER",
+      "name": "CG POWER AND IND SOL LTD",
+      "instrument_key": "NSE_EQ|INE067A01029",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 18,
+      "originalName": "Dhanuka Agritech",
+      "trading_symbol": "DRL",
+      "name": "DHANUKA REALTY LIMITED",
+      "instrument_key": "NSE_EQ|INE704V01015",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 19,
+      "originalName": "Kirl.Pneumatic",
+      "trading_symbol": "KIRLPNU",
+      "name": "KIRLOSKAR PNEUMATIC COM L",
+      "instrument_key": "NSE_EQ|INE811A01020",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 20,
+      "originalName": "eClerx Services",
+      "trading_symbol": "ECLERX",
+      "name": "ECLERX SERVICES LTD",
+      "instrument_key": "NSE_EQ|INE738I01010",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 21,
+      "originalName": "Newgen Software",
+      "trading_symbol": "NEWGEN",
+      "name": "NEWGEN SOFTWARE TECH LTD",
+      "instrument_key": "NSE_EQ|INE619B01017",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 22,
+      "originalName": "Fiem Industries",
+      "trading_symbol": "FIEMIND",
+      "name": "FIEM INDUSTRIES LIMITED",
+      "instrument_key": "NSE_EQ|INE737H01014",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 23,
+      "originalName": "LTIMindtree",
+      "trading_symbol": "EMULTIMQ",
+      "name": "EDELAMC - EMULTIMQ",
+      "instrument_key": "NSE_EQ|INF754K01TF1",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 24,
+      "originalName": "TBO Tek",
+      "trading_symbol": "TBOTEK",
+      "name": "TBO TEK LIMITED",
+      "instrument_key": "NSE_EQ|INE673O01025",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 25,
+      "originalName": "Dodla Dairy",
+      "trading_symbol": "DODLA",
+      "name": "DODLA DAIRY LIMITED",
+      "instrument_key": "NSE_EQ|INE021O01019",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 26,
+      "originalName": "Fine Organic",
+      "trading_symbol": "FINEORG",
+      "name": "FINE ORGANIC IND. LTD.",
+      "instrument_key": "NSE_EQ|INE686Y01026",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 27,
+      "originalName": "Godfrey Phillips",
+      "trading_symbol": "GODFRYPHLP",
+      "name": "GODFREY PHILLIPS INDIA LT",
+      "instrument_key": "NSE_EQ|INE260B01028",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 28,
+      "originalName": "Blue Star",
+      "trading_symbol": "BLUESTARCO",
+      "name": "BLUE STAR LIMITED",
+      "instrument_key": "NSE_EQ|INE472A01039",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 29,
+      "originalName": "Gabriel India",
+      "trading_symbol": "GABRIEL",
+      "name": "GABRIEL INDIA LTD",
+      "instrument_key": "NSE_EQ|INE524A01029",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 30,
+      "originalName": "Caplin Point Lab",
+      "trading_symbol": "CAPLIPOINT",
+      "name": "CAPLIN POINT LAB LTD.",
+      "instrument_key": "NSE_EQ|INE475E01026",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 32,
+      "originalName": "Schaeffler India",
+      "trading_symbol": "SCHAEFFLER",
+      "name": "SCHAEFFLER INDIA LIMITED",
+      "instrument_key": "NSE_EQ|INE513A01022",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 33,
+      "originalName": "Vesuvius India",
+      "trading_symbol": "VESUVIUS",
+      "name": "VESUVIUS INDIA LTD",
+      "instrument_key": "NSE_EQ|INE386A01023",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 34,
+      "originalName": "ICICI Lombard",
+      "trading_symbol": "ICICIGI",
+      "name": "ICICI LOMBARD GIC LIMITED",
+      "instrument_key": "NSE_EQ|INE765G01017",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 35,
+      "originalName": "Varun Beverages",
+      "trading_symbol": "VBL",
+      "name": "VARUN BEVERAGES LIMITED",
+      "instrument_key": "NSE_EQ|INE200M01039",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 36,
+      "originalName": "Jyothy Labs",
+      "trading_symbol": "JYOTHYLAB",
+      "name": "JYOTHY LABS LIMITED",
+      "instrument_key": "NSE_EQ|INE668F01031",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 37,
+      "originalName": "Zydus Lifesci.",
+      "trading_symbol": "ZYDUSWELL",
+      "name": "ZYDUS WELLNESS LIMITED",
+      "instrument_key": "NSE_EQ|INE768C01010",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 38,
+      "originalName": "KSB",
+      "trading_symbol": "KSB",
+      "name": "KSB LIMITED",
+      "instrument_key": "NSE_EQ|INE999A01023",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 39,
+      "originalName": "Hindustan Copper",
+      "trading_symbol": "HINDCOPPER",
+      "name": "HINDUSTAN COPPER LTD",
+      "instrument_key": "NSE_EQ|INE531E01026",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 40,
+      "originalName": "Siemens",
+      "trading_symbol": "ENRIN",
+      "name": "SIEMENS ENERGY INDIA LTD",
+      "instrument_key": "NSE_EQ|INE1NPP01017",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 41,
+      "originalName": "Godawari Power",
+      "trading_symbol": "GPIL",
+      "name": "GODAWARI POW & ISP LTD",
+      "instrument_key": "NSE_EQ|INE177H01039",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 42,
+      "originalName": "P I Industries",
+      "trading_symbol": "PIIND",
+      "name": "PI INDUSTRIES LTD",
+      "instrument_key": "NSE_EQ|INE603J01030",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 43,
+      "originalName": "Supreme Petroch.",
+      "trading_symbol": "SFML",
+      "name": "SUPREME FACILITY MGMT LTD",
+      "instrument_key": "NSE_EQ|INE0U6N01014",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 44,
+      "originalName": "Dr Reddy's Labs",
+      "trading_symbol": "DRREDDY",
+      "name": "DR. REDDY S LABORATORIES",
+      "instrument_key": "NSE_EQ|INE089A01031",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 45,
+      "originalName": "APL Apollo Tubes",
+      "trading_symbol": "APLAPOLLO",
+      "name": "APL APOLLO TUBES LTD",
+      "instrument_key": "NSE_EQ|INE702C01027",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 46,
+      "originalName": "Tube Investments",
+      "trading_symbol": "TIINDIA",
+      "name": "TUBE INVEST OF INDIA LTD",
+      "instrument_key": "NSE_EQ|INE974X01010",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 47,
+      "originalName": "Maruti Suzuki",
+      "trading_symbol": "MARUTI",
+      "name": "MARUTI SUZUKI INDIA LTD.",
+      "instrument_key": "NSE_EQ|INE585B01010",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 48,
+      "originalName": "Gravita India",
+      "trading_symbol": "GRAVITA",
+      "name": "GRAVITA INDIA LIMITED",
+      "instrument_key": "NSE_EQ|INE024L01027",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 49,
+      "originalName": "Jupiter Wagons",
+      "trading_symbol": "JWL",
+      "name": "JUPITER WAGONS LIMITED",
+      "instrument_key": "NSE_EQ|INE209L01016",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 50,
+      "originalName": "KEI Industries",
+      "trading_symbol": "MAKEINDIA",
+      "name": "MIRAEAMC - MAMFGETF",
+      "instrument_key": "NSE_EQ|INF769K01IB1",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 51,
+      "originalName": "Birlasoft Ltd",
+      "trading_symbol": "BSOFT",
+      "name": "BIRLASOFT LIMITED",
+      "instrument_key": "NSE_EQ|INE836A01035",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 52,
+      "originalName": "Grindwell Norton",
+      "trading_symbol": "GRINDWELL",
+      "name": "GRINDWELL NORTON LIMITED",
+      "instrument_key": "NSE_EQ|INE536A01023",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 53,
+      "originalName": "Transport Corp.",
+      "trading_symbol": "TCIFINANCE",
+      "name": "TCIFINANCELTD-ROLL SETT",
+      "instrument_key": "NSE_EQ|INE911B01018",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 54,
+      "originalName": "ZF Commercial",
+      "trading_symbol": "ZFCVINDIA",
+      "name": "ZF COM VE CTR SYS IND LTD",
+      "instrument_key": "NSE_EQ|INE342J01019",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 55,
+      "originalName": "Poly Medicure",
+      "trading_symbol": "POLYMED",
+      "name": "POLY MEDICURE LIMITED",
+      "instrument_key": "NSE_EQ|INE205C01021",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 6,
+      "originalName": "Natl. Aluminium",
+       "trading_symbol": "NATIONALUM",
+      "instrument_key": "NSE_EQ|INE139A01034",
+       "exchange": "NSE",
+      "segment": "NSE_EQ"
+    },
+    {
+      "index": 31,
+      "originalName": "JB Chemicals & Pharmaceuticals Limited ",
+      "trading_symbol": "JBCHEPHARM",
+      "instrument_key": "NSE_EQ|INE165A01027",
+      "exchange": "NSE",
+      "segment": "NSE_EQ"
+      
     }
+
   ]
 }
 

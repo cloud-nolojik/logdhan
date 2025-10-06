@@ -28,6 +28,8 @@ console.log('✅ Environment validation passed');
 import { subscriptionService } from './services/subscription/subscriptionService.js';
 import { azureStorageService } from './services/storage/azureStorage.service.js';
 import { messagingService } from './services/messaging/messaging.service.js';
+import agendaDailyReminderService from './services/agendaDailyReminderService.js'; // Using Agenda instead of BullMQ
+import agendaMonitoringService from './services/agendaMonitoringService.js';
 // Removed condition monitoring - direct order placement only
 
 import authRoutes from './routes/auth.js';
@@ -47,6 +49,7 @@ import aiRoutes from './routes/ai.js';
 import upstoxRoutes from './routes/upstox.js';
 import bulkAnalysisRoutes from './routes/bulkAnalysis.js';
 import webhookRoutes from './routes/webhook.js';
+import monitoringRoutes from './routes/agendaMonitoring.js'; // Using Agenda instead of BullMQ
 
 
 const app = express();
@@ -104,7 +107,8 @@ app.use('/api/v1/market', marketRoutes);
 app.use('/api/v1/ai', aiRoutes);
 app.use('/api/v1/upstox', upstoxRoutes);
 app.use('/api/v1/bulk-analysis', bulkAnalysisRoutes);
-app.use('/api/webhook', webhookRoutes);
+app.use('/api/v1/webhook', webhookRoutes);
+app.use('/api/v1/monitoring', monitoringRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -187,6 +191,28 @@ async function initializeMessagingService() {
   }
 }
 
+// Initialize Agenda daily reminder service
+async function initializeAgendaDailyReminderService() {
+  try {
+    console.log('🔄 Initializing Agenda daily reminder service...');
+    await agendaDailyReminderService.initialize();
+    console.log('✅ Agenda daily reminder service initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize Agenda daily reminder service:', error);
+  }
+}
+
+// Initialize Agenda monitoring service
+async function initializeAgendaMonitoringService() {
+  try {
+    console.log('🔄 Initializing Agenda monitoring service...');
+    await agendaMonitoringService.initialize();
+    console.log('✅ Agenda monitoring service initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize Agenda monitoring service:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -197,7 +223,9 @@ app.listen(PORT, async () => {
   await initializeAzureStorage();
   await initializeSubscriptionSystem();
   await initializeMessagingService();
-  // Condition monitoring removed
+  await initializeAgendaDailyReminderService();
+  await initializeAgendaMonitoringService();
+  // BullMQ condition monitoring removed - now using Agenda
   
   console.log('🚀 All services initialized successfully');
 }); 

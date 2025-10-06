@@ -2,42 +2,28 @@ import express from 'express';
 import { auth } from '../middleware/auth.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import aiAnalyzeService from '../services/aiAnalyze.service.js';
-import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { User } from '../models/user.js';
 import { getCurrentPrice } from '../utils/stock.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
-// Load stock list from JSON file
-let stockList = null;
-async function loadStockList() {
+// Get user's watchlist as stock list
+async function getUserWatchlist(userId) {
     try {
-        if (!stockList) {
-            // Build path relative to this file: src/routes -> src -> backend -> scripts
-            const stockListPath = path.join(__dirname, '..', '..', 'scripts', 'stock_list_output.json');
-            console.log(`🔍 Looking for stock list at: ${stockListPath}`);
-            const data = await fs.readFile(stockListPath, 'utf8');
-            const parsed = JSON.parse(data);
-            stockList = parsed.found || [];
-            console.log(`📊 Loaded ${stockList.length} stocks from stock list`);
+        const user = await User.findById(userId);
+        if (!user || !user.watchlist) {
+            console.log(`📊 No watchlist found for user ${userId}`);
+            return [];
         }
-        return stockList;
+        
+        const watchlist = user.watchlist || [];
+        console.log(`📊 Loaded ${watchlist.length} stocks from user's watchlist`);
+        return watchlist;
     } catch (error) {
-        console.error('❌ Error loading stock list:', error);
+        console.error('❌ Error loading user watchlist:', error);
         return [];
     }
 }
-
-// Test stock list loading on startup
-loadStockList().then(stocks => {
-    console.log(`🧪 Test: Successfully loaded ${stocks.length} stocks on startup`);
-}).catch(error => {
-    console.error('🧪 Test: Failed to load stocks on startup:', error.message);
-});
 
 // Route: Trigger bulk analysis for all stocks in the list
 router.post('/analyze-all', auth, async (req, res) => {
@@ -47,13 +33,13 @@ router.post('/analyze-all', auth, async (req, res) => {
         
         console.log(`🚀 Starting bulk analysis for user ${userId}, type: ${analysis_type}`);
         
-        // Load stock list
-        const stocks = await loadStockList();
+        // Get user's watchlist
+        const stocks = await getUserWatchlist(userId);
         if (stocks.length === 0) {
             return res.status(400).json({
                 success: false,
-                error: 'No stocks found in the list',
-                message: 'Stock list is empty or could not be loaded'
+                error: 'No stocks found in watchlist',
+                message: 'Your watchlist is empty. Please add stocks to your watchlist before running bulk analysis.'
             });
         }
         
@@ -142,8 +128,8 @@ router.get('/status', auth, async (req, res) => {
         
         let totalAnalyses = completedAnalyses.length + inProgressAnalyses.length + pendingAnalyses.length + failedAnalyses.length;
         
-        // Get target count from stock list
-        const stocks = await loadStockList();
+        // Get target count from user's watchlist
+        const stocks = await getUserWatchlist(userId);
         const targetCount = stocks.length;
         
         const completed = statusMap.completed || 0;

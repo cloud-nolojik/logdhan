@@ -197,8 +197,25 @@ class SubscriptionService {
 
       // Set expiry based on plan type
       const now = new Date();
-      //how to set endDate to life time make it 100 years
-      let endDate = new Date(now.getFullYear() + 100, now.getMonth(), now.getDate());
+      let endDate;
+      
+      // Calculate endDate based on plan type
+      if (plan.type === 'FREE_LIFETIME' || planId === 'basic_ads') {
+        // For lifetime/free plans, set to 100 years (effectively lifetime)
+        endDate = new Date(now.getFullYear() + 100, now.getMonth(), now.getDate());
+      } else if (planId === 'pro_monthly') {
+        // Monthly plan: add 30 days
+        endDate = new Date(now);
+        endDate.setDate(endDate.getDate() + 30);
+      } else if (planId === 'pro_annual') {
+        // Annual plan: add 365 days
+        endDate = new Date(now);
+        endDate.setDate(endDate.getDate() + 365);
+      } else {
+        // Default fallback: 30 days
+        endDate = new Date(now);
+        endDate.setDate(endDate.getDate() + 30);
+      }
 
 
       
