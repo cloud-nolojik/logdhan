@@ -11,11 +11,22 @@ import advancedTriggerEngine from './advancedTriggerEngine.js';
 
 class TriggerOrderService {
     /**
-     * Check if trigger conditions are met (ONLY CHECK, DON'T PLACE ORDER)
+     * Check if trigger conditions are met with smart timing
      * @param {Object} analysis - The stock analysis document
+     * @param {Date} currentTime - Current time for smart trigger filtering
      * @returns {Object} - Result of trigger check only
      */
-    async checkTriggerConditions(analysis) {
+    async checkTriggerConditionsWithTiming(analysis, currentTime = new Date()) {
+        return this.checkTriggerConditions(analysis, currentTime);
+    }
+
+    /**
+     * Check if trigger conditions are met (ONLY CHECK, DON'T PLACE ORDER)
+     * @param {Object} analysis - The stock analysis document
+     * @param {Date} currentTime - Current time for smart trigger filtering (optional)
+     * @returns {Object} - Result of trigger check only
+     */
+    async checkTriggerConditions(analysis, currentTime = null) {
         try {
             console.log(`🔍 Checking triggers for ${analysis.stock_symbol} (${analysis._id})`);
             
@@ -158,9 +169,66 @@ class TriggerOrderService {
             // Initialize session for advanced trigger engine
             advancedTriggerEngine.initializeSession(analysis._id.toString(), strategy);
             
-            // Get market data for all required timeframes
-            const triggers = strategy.triggers || [];
-            const marketData = await getMarketDataForTriggers(analysis.instrument_key, triggers);
+            // Smart trigger filtering based on current time
+            let triggersToCheck = strategy.triggers || [];
+            
+            if (currentTime) {
+                const currentMinute = currentTime.getMinutes();
+                const currentHour = currentTime.getHours();
+                
+                // Filter triggers based on timing relevance
+                const relevantTriggers = triggersToCheck.filter(trigger => {
+                    const timeframe = trigger.timeframe?.toLowerCase() || '15m';
+                    
+                    switch(timeframe) {
+                        case '1m':
+                            return true; // Always check 1-minute triggers
+                        case '5m':
+                            return currentMinute % 5 === 0; // Check every 5 minutes
+                        case '15m':
+                            return currentMinute % 15 === 0; // Check every 15 minutes
+                        case '30m':
+                            return currentMinute % 30 === 0; // Check every 30 minutes
+                        case '1h':
+                        case '60m':
+                            return currentMinute === 0; // Check only at hour boundaries
+                        case '1d':
+                        case 'day':
+                            return currentMinute === 15 && currentHour === 9; // Check at market open (9:15 AM)
+                        default:
+                            return true; // Default: check all unknown timeframes
+                    }
+                });
+                
+                console.log(`⏰ Trigger filtering: ${triggersToCheck.length} total, ${relevantTriggers.length} relevant at ${currentTime.toLocaleTimeString('en-US', {timeZone: 'Asia/Kolkata'})}`);
+                console.log(`📋 Relevant triggers: ${relevantTriggers.map(t => `${t.timeframe || '15m'}`).join(', ')}`);
+                
+                // If no triggers are relevant at this time, return "continue monitoring"
+                if (relevantTriggers.length === 0) {
+                    return {
+                        success: false,
+                        triggersConditionsMet: false,
+                        reason: 'no_relevant_triggers_at_this_time',
+                        message: `No triggers need evaluation at ${currentTime.toLocaleTimeString('en-US', {timeZone: 'Asia/Kolkata'})}. Next check will evaluate relevant timeframes.`,
+                        data: {
+                            analysis_id: analysis._id,
+                            current_time: currentTime.toISOString(),
+                            total_triggers: triggersToCheck.length,
+                            relevant_triggers: relevantTriggers.length,
+                            should_monitor: true,
+                            monitoring_frequency: this.getMonitoringFrequency(analysis),
+                            smart_monitoring_enabled: true,
+                            next_relevant_check: this.getNextRelevantCheckTime(triggersToCheck, currentTime)
+                        }
+                    };
+                }
+                
+                triggersToCheck = relevantTriggers;
+            }
+            
+            // Get market data for all required timeframes (even if not all triggers are being checked)
+            const allTriggers = strategy.triggers || [];
+            const marketData = await getMarketDataForTriggers(analysis.instrument_key, allTriggers);
             
             if (!marketData.current_price) {
                 throw new Error('Unable to fetch market data');
@@ -168,10 +236,16 @@ class TriggerOrderService {
             
             console.log(`📊 Market data fetched - Current: ${marketData.current_price}, Timeframes: ${Object.keys(marketData.timeframes).join(', ')}`);
             
+            // Create a temporary strategy with only the relevant triggers for evaluation
+            const tempStrategy = {
+                ...strategy,
+                triggers: triggersToCheck
+            };
+            
             // Use advanced trigger engine for comprehensive checking
             const engineResult = await advancedTriggerEngine.checkTriggers(
                 analysis._id.toString(), 
-                strategy, 
+                tempStrategy, 
                 marketData.timeframes
             );
 
@@ -843,37 +917,133 @@ class TriggerOrderService {
     }
     
     /**
-     * Get monitoring frequency based on trigger timeframes
+     * Get monitoring frequency based on trigger timeframes (SMART VERSION)
      */
     getMonitoringFrequency(analysis) {
         const strategy = analysis.analysis_data.strategies[0];
         const triggers = strategy.triggers || [];
         
-        // Find the shortest timeframe for most frequent checks
-        let shortestTimeframe = '15m'; // Default
+        // Find the GCD (Greatest Common Divisor) of all timeframe intervals
+        // This ensures we check at optimal intervals for all triggers
+        const timeframeMinutes = [];
         
         triggers.forEach(trigger => {
-            if (trigger.timeframe === '1m') shortestTimeframe = '1m';
-            else if (trigger.timeframe === '5m' && shortestTimeframe !== '1m') shortestTimeframe = '5m';
-            else if (trigger.timeframe === '15m' && !['1m', '5m'].includes(shortestTimeframe)) shortestTimeframe = '15m';
+            const timeframe = trigger.timeframe?.toLowerCase() || '15m';
+            switch(timeframe) {
+                case '1m': timeframeMinutes.push(1); break;
+                case '5m': timeframeMinutes.push(5); break;
+                case '15m': timeframeMinutes.push(15); break;
+                case '30m': timeframeMinutes.push(30); break;
+                case '1h':
+                case '60m': timeframeMinutes.push(60); break;
+                case '1d':
+                case 'day': timeframeMinutes.push(1440); break; // 24 hours = 1440 minutes
+                default: timeframeMinutes.push(15); // Default to 15 minutes
+            }
         });
         
+        // Find GCD of all timeframes, but cap at reasonable limits
+        let gcdMinutes = timeframeMinutes.length > 0 ? 
+            timeframeMinutes.reduce((a, b) => this.gcd(a, b)) : 15;
+            
+        // Practical limits: minimum 1 minute, maximum 15 minutes for monitoring frequency
+        gcdMinutes = Math.max(1, Math.min(gcdMinutes, 15));
+        
+        console.log(`📋 Trigger timeframes: ${triggers.map(t => t.timeframe || '15m').join(', ')}`);
+        console.log(`🔢 Calculated GCD interval: ${gcdMinutes} minutes`);
+        
         const frequencyMap = {
-            '1m': { interval_seconds: 60, description: 'every 1 minute', timeframe: '1m' },
-            '5m': { interval_seconds: 300, description: 'every 5 minutes', timeframe: '5m' }, 
-            '15m': { interval_seconds: 900, description: 'every 15 minutes', timeframe: '15m' },
-            '1h': { interval_seconds: 3600, description: 'every hour', timeframe: '1h' }
+            1: { interval_seconds: 60, description: 'every 1 minute', timeframe: '1m' },
+            5: { interval_seconds: 300, description: 'every 5 minutes', timeframe: '5m' },
+            15: { interval_seconds: 900, description: 'every 15 minutes', timeframe: '15m' }
         };
         
-        const selectedFrequency = frequencyMap[shortestTimeframe] || frequencyMap['15m'];
+        const selectedFrequency = frequencyMap[gcdMinutes] || {
+            interval_seconds: gcdMinutes * 60,
+            description: `every ${gcdMinutes} minutes`,
+            timeframe: `${gcdMinutes}m`
+        };
         
-        // Add max attempts calculation - import MarketHoursUtil at the top of file instead
-        // For now, use a simple calculation: 5 trading days * 7 hours * 3600 seconds / frequency
+        // Add max attempts calculation
         const marketSecondsPerDay = 7 * 60 * 60; // 7 hours
         const totalMarketSeconds = marketSecondsPerDay * 5; // 5 trading days
         selectedFrequency.maxAttempts = Math.floor(totalMarketSeconds / selectedFrequency.interval_seconds);
+        selectedFrequency.smart_monitoring = true; // Flag to indicate smart monitoring
         
         return selectedFrequency;
+    }
+    
+    /**
+     * Calculate Greatest Common Divisor (GCD) of two numbers
+     */
+    gcd(a, b) {
+        return b === 0 ? a : this.gcd(b, a % b);
+    }
+    
+    /**
+     * Get next time when triggers will be relevant for checking
+     * @param {Array} triggers - Array of trigger objects
+     * @param {Date} currentTime - Current time
+     * @returns {Object} - Next relevant check time info
+     */
+    getNextRelevantCheckTime(triggers, currentTime) {
+        const now = new Date(currentTime);
+        const nextChecks = [];
+        
+        triggers.forEach(trigger => {
+            const timeframe = trigger.timeframe?.toLowerCase() || '15m';
+            const nextCheck = new Date(now);
+            
+            switch(timeframe) {
+                case '1m':
+                    nextCheck.setMinutes(now.getMinutes() + 1, 0, 0);
+                    break;
+                case '5m':
+                    const next5Min = Math.ceil(now.getMinutes() / 5) * 5;
+                    nextCheck.setMinutes(next5Min, 0, 0);
+                    if (nextCheck <= now) nextCheck.setMinutes(nextCheck.getMinutes() + 5);
+                    break;
+                case '15m':
+                    const next15Min = Math.ceil(now.getMinutes() / 15) * 15;
+                    nextCheck.setMinutes(next15Min, 0, 0);
+                    if (nextCheck <= now) nextCheck.setMinutes(nextCheck.getMinutes() + 15);
+                    break;
+                case '30m':
+                    const next30Min = Math.ceil(now.getMinutes() / 30) * 30;
+                    nextCheck.setMinutes(next30Min, 0, 0);
+                    if (nextCheck <= now) nextCheck.setMinutes(nextCheck.getMinutes() + 30);
+                    break;
+                case '1h':
+                case '60m':
+                    nextCheck.setHours(now.getHours() + 1, 0, 0, 0);
+                    break;
+                case '1d':
+                case 'day':
+                    nextCheck.setDate(now.getDate() + 1);
+                    nextCheck.setHours(9, 15, 0, 0); // Next day market open
+                    break;
+                default:
+                    nextCheck.setMinutes(now.getMinutes() + 15, 0, 0);
+            }
+            
+            nextChecks.push({
+                timeframe,
+                nextCheck: nextCheck.toISOString(),
+                minutesFromNow: Math.ceil((nextCheck - now) / (1000 * 60))
+            });
+        });
+        
+        // Return the earliest next check
+        const earliest = nextChecks.reduce((min, check) => 
+            new Date(check.nextCheck) < new Date(min.nextCheck) ? check : min
+        );
+        
+        return {
+            next_check_time: earliest.nextCheck,
+            timeframe: earliest.timeframe,
+            minutes_from_now: earliest.minutesFromNow,
+            all_next_checks: nextChecks
+        };
     }
 }
 

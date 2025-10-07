@@ -4,6 +4,7 @@ import triggerOrderService from './triggerOrderService.js';
 import upstoxMarketTimingService from './upstoxMarketTiming.service.js';
 import UpstoxUser from '../models/upstoxUser.js';
 import StockAnalysis from '../models/stockAnalysis.js';
+import MonitoringHistory from '../models/monitoringHistory.js';
 import { decrypt } from '../utils/encryption.js';
 
 class AgendaMonitoringService {
@@ -87,6 +88,9 @@ class AgendaMonitoringService {
     }
 
     async executeMonitoringCheck(analysisId, strategyId, userId) {
+        const startTime = Date.now();
+        let historyEntry = null;
+        
         try {
             console.log(`🔍 Executing monitoring check for analysis ${analysisId}, strategy ${strategyId}`);
 
@@ -94,13 +98,45 @@ class AgendaMonitoringService {
             const analysis = await StockAnalysis.findById(analysisId);
             if (!analysis) {
                 console.log(`❌ Analysis ${analysisId} not found, stopping monitoring`);
+                
+                // Create history entry for stopped monitoring
+                await MonitoringHistory.create({
+                    analysis_id: analysisId,
+                    strategy_id: strategyId,
+                    user_id: userId,
+                    stock_symbol: 'Unknown',
+                    status: 'stopped',
+                    reason: 'Analysis not found',
+                    details: { error_message: 'Analysis document not found in database' },
+                    monitoring_duration_ms: Date.now() - startTime
+                });
+                
                 await this.stopMonitoring(analysisId, strategyId);
                 return;
             }
+            
+            // Initialize history entry
+            historyEntry = new MonitoringHistory({
+                analysis_id: analysisId,
+                strategy_id: strategyId,
+                user_id: userId,
+                stock_symbol: analysis.stock_symbol,
+                status: 'checking',
+                reason: 'Starting monitoring check',
+                details: {},
+                monitoring_duration_ms: 0
+            });
 
             // Check if analysis has expired
             if (analysis.expires_at && new Date(analysis.expires_at) < new Date()) {
                 console.log(`⏰ Analysis ${analysisId} has expired, stopping monitoring`);
+                
+                historyEntry.status = 'stopped';
+                historyEntry.reason = 'Analysis expired';
+                historyEntry.details.error_message = 'Analysis validity period ended';
+                historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                await historyEntry.save();
+                
                 await this.stopMonitoring(analysisId, strategyId);
                 return;
             }
@@ -108,6 +144,13 @@ class AgendaMonitoringService {
             // Check if orders are already placed
             if (analysis.hasActiveOrders()) {
                 console.log(`📋 Orders already placed for analysis ${analysisId}, stopping monitoring`);
+                
+                historyEntry.status = 'stopped';
+                historyEntry.reason = 'Orders already placed';
+                historyEntry.details.order_result = { message: 'Orders were already placed for this analysis' };
+                historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                await historyEntry.save();
+                
                 await this.stopMonitoring(analysisId, strategyId);
                 return;
             }
@@ -116,6 +159,13 @@ class AgendaMonitoringService {
             const upstoxUser = await UpstoxUser.findByUserId(userId);
             if (!upstoxUser || !upstoxUser.isTokenValid()) {
                 console.log(`🔑 Upstox token invalid for user ${userId}, pausing monitoring`);
+                
+                historyEntry.status = 'error';
+                historyEntry.reason = 'Upstox token invalid';
+                historyEntry.details.error_message = 'User needs to re-authenticate with Upstox';
+                historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                await historyEntry.save();
+                
                 await this.pauseMonitoring(analysisId, strategyId, 'upstox_token_invalid');
                 return;
             }
@@ -129,17 +179,49 @@ class AgendaMonitoringService {
                 const optimizedMsg = marketStatus.optimized ? ' (cached)' : ' (API)';
                 console.log(`🏪 Market is closed${optimizedMsg}, skipping monitoring check for ${analysisId}_${strategyId}`);
                 console.log(`📅 Reason: ${marketStatus.reason}, Next market session: ${marketStatus.nextOpen || 'Unknown'}`);
+                
+                // Save market closed status to history
+                historyEntry.status = 'market_closed';
+                historyEntry.reason = marketStatus.reason;
+                historyEntry.addMarketStatus({
+                    is_open: false,
+                    reason: marketStatus.reason,
+                    next_open: marketStatus.nextOpen
+                });
+                historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                await historyEntry.save();
+                
                 return; // Don't check triggers when market is closed
             }
             
             const optimizedMsg = marketStatus.optimized ? ' (cached)' : ' (API)';
             console.log(`📈 Market is open${optimizedMsg}, proceeding with monitoring check for ${analysisId}_${strategyId}`);
 
-            // Check trigger conditions
-            const triggerResult = await triggerOrderService.checkTriggerConditions(analysis);
+            // Smart trigger checking - only evaluate relevant triggers based on current time
+            const currentTime = new Date();
+            const triggerResult = await triggerOrderService.checkTriggerConditionsWithTiming(
+                analysis, 
+                currentTime
+            );
+            
+            // Add market status to history entry
+            historyEntry.addMarketStatus({
+                is_open: true,
+                reason: 'Market is open',
+                next_open: null
+            });
             
             if (triggerResult.triggersConditionsMet) {
                 console.log(`🎯 Triggers met for analysis ${analysisId}, strategy ${strategyId}! Placing order...`);
+                
+                historyEntry.status = 'conditions_met';
+                historyEntry.reason = 'All trigger conditions satisfied';
+                if (triggerResult.data) {
+                    historyEntry.addTriggerDetails(
+                        triggerResult.data.triggers || [],
+                        triggerResult.data.current_price
+                    );
+                }
                 
                 // Import order service dynamically to avoid circular dependency
                 const { default: orderService } = await import('./orderService.js');
@@ -154,19 +236,75 @@ class AgendaMonitoringService {
                     
                     if (orderResult.success) {
                         console.log(`✅ Order placed successfully for ${analysisId}_${strategyId}, stopping monitoring`);
+                        
+                        historyEntry.status = 'order_placed';
+                        historyEntry.reason = 'Order placed successfully';
+                        historyEntry.addOrderResult(orderResult);
+                        historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                        await historyEntry.save();
+                        
                         await this.stopMonitoring(analysisId, strategyId);
                     } else {
                         console.log(`❌ Order placement failed for ${analysisId}_${strategyId}: ${orderResult.message}`);
+                        
+                        historyEntry.status = 'error';
+                        historyEntry.reason = 'Order placement failed';
+                        historyEntry.details.error_message = orderResult.message;
+                        historyEntry.addOrderResult(orderResult);
+                        historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                        await historyEntry.save();
                     }
                 } catch (orderError) {
                     console.error(`❌ Error placing order for ${analysisId}_${strategyId}:`, orderError);
+                    
+                    historyEntry.status = 'error';
+                    historyEntry.reason = 'Order placement error';
+                    historyEntry.details.error_message = orderError.message;
+                    historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                    await historyEntry.save();
                 }
             } else {
                 console.log(`⏳ Triggers not yet met for ${analysisId}_${strategyId}, continuing monitoring`);
+                
+                historyEntry.status = 'triggers_not_met';
+                historyEntry.reason = triggerResult.message || 'Entry conditions not satisfied';
+                if (triggerResult.data) {
+                    historyEntry.addTriggerDetails(
+                        triggerResult.data.triggers || [],
+                        triggerResult.data.current_price
+                    );
+                }
+                historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                await historyEntry.save();
             }
 
         } catch (error) {
             console.error(`❌ Error in monitoring check for ${analysisId}_${strategyId}:`, error);
+            
+            // Save error to history if we have an entry
+            if (historyEntry) {
+                historyEntry.status = 'error';
+                historyEntry.reason = 'Monitoring check failed';
+                historyEntry.details.error_message = error.message;
+                historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                await historyEntry.save();
+            } else {
+                // Create error entry if we don't have one yet
+                try {
+                    await MonitoringHistory.create({
+                        analysis_id: analysisId,
+                        strategy_id: strategyId,
+                        user_id: userId,
+                        stock_symbol: 'Unknown',
+                        status: 'error',
+                        reason: 'Monitoring check failed',
+                        details: { error_message: error.message },
+                        monitoring_duration_ms: Date.now() - startTime
+                    });
+                } catch (historyError) {
+                    console.error('Failed to save error to monitoring history:', historyError);
+                }
+            }
         }
     }
 
