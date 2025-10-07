@@ -10,15 +10,15 @@ COMMIT_MSG="Auto-deploy on $(date '+%Y-%m-%d %H:%M:%S')"
 BRANCH="master"  # Change if using a different branch
 
 # === STEP 0: Git Commit and Push ===
-# echo "📦 Committing and pushing to GitHub..."
-# git add .
-# git commit -m "$COMMIT_MSG" || echo "⚠️ Nothing to commit"
-# git push origin HEAD:$BRANCH
+echo "📦 Committing and pushing to GitHub..."
+git add .
+git commit -m "$COMMIT_MSG" || echo "⚠️ Nothing to commit"
+git push origin HEAD:$BRANCH
 
-# if [ $? -ne 0 ]; then
-#   echo "❌ Git push failed. Aborting deployment."
-#   exit 1
-# fi
+if [ $? -ne 0 ]; then
+  echo "❌ Git push failed. Aborting deployment."
+  exit 1
+fi
 
 # === STEP 1: Build Frontend (Vite uses 'dist') ===
 echo "🔧 Building frontend..."

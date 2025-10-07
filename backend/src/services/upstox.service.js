@@ -433,7 +433,7 @@ class UpstoxService {
                 product,
                 validity,
                 price: orderType === 'MARKET' ? 0 : parseFloat(price || 0),
-                tag,
+                tag: orderData.tag || `ORDER_${Date.now()}`,
                 order_type: orderType,
                 transaction_type: transactionType.toUpperCase(),
                 disclosed_quantity: parseInt(disclosedQuantity),
@@ -1182,80 +1182,6 @@ class UpstoxService {
         }
     }
 
-    /**
-     * Convert AI strategy to Upstox order parameters
-     * @param {Object} strategy - AI strategy object
-     * @param {string} instrumentToken - Instrument token for the stock
-     * @param {string} analysisType - Type of analysis (swing, intraday, etc.)
-     * @param {string} accessToken - Upstox access token
-     * @returns {Object} - Order data ready for Upstox API
-     */
-    async convertAIStrategyToOrder(strategy, instrumentToken, analysisType, accessToken) {
-        try {
-            console.log(`🔄 Converting AI strategy to order:`, {
-                strategyType: strategy.type,
-                entry: strategy.entry,
-                target: strategy.target,
-                stopLoss: strategy.stopLoss,
-                instrumentToken,
-                analysisType
-            });
-
-            // Determine transaction type
-            const transactionType = strategy.type === 'BUY' ? 'BUY' : 'SELL';
-            
-            // Calculate quantity based on risk management (basic calculation)
-            const entryPrice = parseFloat(strategy.entry);
-            const stopLoss = parseFloat(strategy.stopLoss);
-            const target = parseFloat(strategy.target);
-            
-            // Default quantity calculation (can be overridden by customQuantity)
-            let quantity = 1; // Default minimum quantity
-            
-            // For swing trading, calculate based on risk amount
-            if (analysisType === 'swing') {
-                const riskPerShare = Math.abs(entryPrice - stopLoss);
-                const maxRiskAmount = 1000; // ₹1000 max risk per trade
-                quantity = Math.max(1, Math.floor(maxRiskAmount / riskPerShare));
-                quantity = Math.min(quantity, 100); // Cap at 100 shares
-            }
-
-            // Determine order type based on current market conditions
-            let orderType = 'LIMIT'; // Default to LIMIT orders
-            let price = entryPrice;
-
-            // For immediate execution scenarios, we might use MARKET orders
-            // But for AI strategies, LIMIT orders are generally safer
-
-            const orderData = {
-                instrument_token: instrumentToken,
-                quantity: quantity,
-                product: analysisType === 'swing' ? 'CNC' : 'MIS', // CNC for delivery, MIS for intraday
-                validity: 'DAY',
-                price: price,
-                tag: `AI_${strategy.type}_${Date.now()}`,
-                order_type: orderType,
-                transaction_type: transactionType,
-                disclosed_quantity: 0,
-                trigger_price: 0,
-                is_amo: false
-            };
-
-            // Add bracket order parameters if available
-            if (stopLoss && target) {
-                orderData.stopLoss = stopLoss;
-                orderData.target = target;
-            }
-
-            console.log(`✅ Converted strategy to order data:`, orderData);
-            
-            return orderData;
-
-        } catch (error) {
-            console.error('❌ Convert strategy to order error:', error);
-            throw new Error(`Failed to convert strategy to order: ${error.message}`);
-        }
-    }
 }
 
 export default new UpstoxService();
