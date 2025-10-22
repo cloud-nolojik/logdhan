@@ -575,40 +575,268 @@ stockAnalysisSchema.statics.isMarketOpen = function() {
     return currentTime >= marketOpen && currentTime <= marketClose;
 };
 
+// Method to check if analysis is allowed (4 PM - 9 AM, except 3-4 PM on trading days)
+stockAnalysisSchema.statics.isAnalysisAllowed = function() {
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+    const currentDay = istTime.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    const currentTime = istTime.getHours() * 60 + istTime.getMinutes(); // Total minutes
+    
+    // Never allow analysis on Saturday evening (after 4 PM) or Sunday
+    if (currentDay === 6 && currentTime >= 16 * 60) {
+        return { allowed: false, reason: "weekend_restriction", nextAllowed: "Monday 4:00 PM" };
+    }
+    if (currentDay === 0) {
+        return { allowed: false, reason: "weekend_restriction", nextAllowed: "Monday 4:00 PM" };
+    }
+    
+    // Trading days (Monday-Friday)
+    if (currentDay >= 1 && currentDay <= 5) {
+        // Allow: 4 PM - 11:59 PM OR 12 AM - 9 AM
+        const eveningStart = 16 * 60; // 4:00 PM
+        const morningEnd = 9 * 60;    // 9:00 AM
+        const marketPreClose = 15 * 60; // 3:00 PM
+        const marketClose = 15 * 60 + 30; // 3:30 PM
+        
+        // Special window: 3:00 PM - 4:00 PM (allowed on trading days only)
+        if (currentTime >= marketPreClose && currentTime < eveningStart) {
+            return { allowed: true, reason: "pre_close_window" };
+        }
+        
+        // Evening: 4 PM - 11:59 PM
+        if (currentTime >= eveningStart) {
+            return { allowed: true, reason: "evening_session" };
+        }
+        
+        // Morning: 12 AM - 9 AM
+        if (currentTime < morningEnd) {
+            return { allowed: true, reason: "morning_session" };
+        }
+        
+        // Market hours (9:15 AM - 3:00 PM): Not allowed
+        const marketOpen = 9 * 60 + 15; // 9:15 AM
+        if (currentTime >= marketOpen && currentTime < marketPreClose) {
+            const nextTime = Math.floor(marketPreClose / 60) + ":" + String(marketPreClose % 60).padStart(2, '0');
+            return { allowed: false, reason: "market_hours", nextAllowed: `Today ${nextTime} PM` };
+        }
+        
+        // Gap between 9 AM - 9:15 AM: Not allowed (pre-market)
+        if (currentTime >= morningEnd && currentTime < marketOpen) {
+            return { allowed: false, reason: "pre_market", nextAllowed: "Today 3:00 PM" };
+        }
+    }
+    
+    // Saturday morning: allow until 9 AM only
+    if (currentDay === 6 && currentTime < 9 * 60) {
+        return { allowed: true, reason: "saturday_morning" };
+    }
+    
+    return { allowed: false, reason: "general_restriction", nextAllowed: "Today 4:00 PM" };
+};
+
+// Method to check if bulk analysis is allowed (4 PM to next trading day 8:45 AM)
+stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+    const currentDay = istTime.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    const currentTime = istTime.getHours() * 60 + istTime.getMinutes(); // Total minutes
+    
+    // Import MarketTiming for holiday checking
+    const MarketTiming = (await import('./marketTiming.js')).default;
+    
+    // Helper function to check if a date is a trading day
+    const isTradingDay = async (date) => {
+        const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD format
+        const marketTiming = await MarketTiming.findOne({ date: dateStr });
+        
+        // If no record exists, assume it's a trading day if it's a weekday
+        if (!marketTiming) {
+            const dayOfWeek = date.getDay();
+            return dayOfWeek >= 1 && dayOfWeek <= 5; // Monday to Friday
+        }
+        
+        return marketTiming.isMarketOpen;
+    };
+    
+    // Helper function to find next trading day
+    const findNextTradingDay = async (fromDate) => {
+        let checkDate = new Date(fromDate);
+        checkDate.setDate(checkDate.getDate() + 1); // Start from next day
+        
+        let maxDays = 10; // Prevent infinite loop
+        while (maxDays > 0) {
+            if (await isTradingDay(checkDate)) {
+                return checkDate;
+            }
+            checkDate.setDate(checkDate.getDate() + 1);
+            maxDays--;
+        }
+        
+        // Fallback: return next Monday if can't find trading day
+        const nextMonday = new Date(fromDate);
+        nextMonday.setDate(nextMonday.getDate() + ((1 + 7 - nextMonday.getDay()) % 7 || 7));
+        return nextMonday;
+    };
+    
+    // Check if current time is within allowed window
+    const bulkStartTime = 16 * 60; // 4:00 PM
+    const bulkEndTime = 8 * 60 + 45; // 8:45 AM
+    
+    // Current date for checking if it's a trading day
+    const currentDate = new Date(istTime);
+    currentDate.setHours(0, 0, 0, 0);
+    
+    // IMPORTANT: Handle early morning hours (12 AM - 8:45 AM) first
+    // These are continuation of previous day's session
+    if (currentTime < bulkEndTime) {
+        // This is early morning - check if we're in continuation of yesterday's session
+        const yesterdayDate = new Date(currentDate);
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        
+        const yesterdayWasTradingDay = await isTradingDay(yesterdayDate);
+        
+        // If yesterday was a trading day, then we're in the continuation session
+        if (yesterdayWasTradingDay) {
+            return { 
+                allowed: true, 
+                reason: "morning_session", 
+                validUntil: `Today 8:45 AM`
+            };
+        }
+        
+        // If yesterday was not a trading day, check if today is a trading day
+        const todayIsTradingDay = await isTradingDay(currentDate);
+        if (todayIsTradingDay) {
+            return { 
+                allowed: true, 
+                reason: "monday_morning", 
+                validUntil: "Today 8:45 AM"
+            };
+        }
+        
+        // Neither yesterday nor today is trading day - weekend/holiday
+        const nextTradingDay = await findNextTradingDay(currentDate);
+        return { 
+            allowed: false, 
+            reason: "holiday", 
+            nextAllowed: `${nextTradingDay.toLocaleDateString('en-IN', {timeZone: 'Asia/Kolkata'})} 4:00 PM`
+        };
+    }
+    
+    // Handle afternoon/evening hours (8:45 AM onwards)
+    const currentDateIsTradingDay = await isTradingDay(currentDate);
+    
+    // Case 1: Friday afternoon/evening or Weekend
+    if ((currentDay === 5 && currentTime >= bulkStartTime) || currentDay === 6 || currentDay === 0) {
+        // Find next trading day after current date
+        const nextTradingDay = await findNextTradingDay(currentDate);
+        const nextTradingDayEnd = new Date(nextTradingDay);
+        nextTradingDayEnd.setHours(8, 45, 0, 0);
+        
+        return { 
+            allowed: true, 
+            reason: "weekend_session", 
+            validUntil: nextTradingDayEnd.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})
+        };
+    }
+    
+    // Case 2: Weekday afternoon/evening (Monday-Thursday)
+    if (currentDay >= 1 && currentDay <= 5) {
+        // If current day is a trading day
+        if (currentDateIsTradingDay) {
+            // Before 4 PM: Not allowed
+            if (currentTime < bulkStartTime) {
+                return { 
+                    allowed: false, 
+                    reason: "before_session", 
+                    nextAllowed: "Today 4:00 PM"
+                };
+            }
+            
+            // After 4 PM: Allowed until next trading day 8:45 AM
+            const nextTradingDay = await findNextTradingDay(currentDate);
+            const nextTradingDayEnd = new Date(nextTradingDay);
+            nextTradingDayEnd.setHours(8, 45, 0, 0);
+            
+            return { 
+                allowed: true, 
+                reason: "weekday_session", 
+                validUntil: nextTradingDayEnd.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})
+            };
+        } else {
+            // Current day is holiday
+            const nextTradingDay = await findNextTradingDay(currentDate);
+            return { 
+                allowed: false, 
+                reason: "holiday", 
+                nextAllowed: `${nextTradingDay.toLocaleDateString('en-IN', {timeZone: 'Asia/Kolkata'})} 4:00 PM`
+            };
+        }
+    }
+    
+    // Default: Not allowed
+    return { 
+        allowed: false, 
+        reason: "outside_window", 
+        nextAllowed: "Today 4:00 PM"
+    };
+};
+
 // Removed old canRunBulkAnalysis - now using upstoxMarketTimingService.canRunBulkAnalysis()
 
-stockAnalysisSchema.statics.getExpiryTime = function() {
+stockAnalysisSchema.statics.getExpiryTime = async function() {
     const now = new Date();
     const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
     
-    // Extend expiry time to keep strategies valid for longer
-    // Strategies will expire at the end of the next trading day
-    const nextTradingDay = new Date(istTime);
+    // Import MarketTiming for holiday checking
+    const MarketTiming = (await import('./marketTiming.js')).default;
     
-    if (this.isMarketOpen()) {
-        // If market is open, expire at end of next trading day
-        nextTradingDay.setDate(nextTradingDay.getDate() + 1);
-        nextTradingDay.setHours(23, 59, 59, 999); // End of next day
-    } else {
-        // If market is closed, expire at end of current day (if it's a trading day) or next trading day
-        if (istTime.getDay() >= 1 && istTime.getDay() <= 5) {
-            // It's a weekday evening/night, expire at end of tomorrow
-            nextTradingDay.setDate(nextTradingDay.getDate() + 1);
-        } else {
-            // It's weekend, expire at end of next Monday
-            while (nextTradingDay.getDay() !== 1) { // Find next Monday
-                nextTradingDay.setDate(nextTradingDay.getDate() + 1);
-            }
+    // Helper function to check if a date is a trading day
+    const isTradingDay = async (date) => {
+        const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD format
+        const marketTiming = await MarketTiming.findOne({ date: dateStr });
+        
+        // If no record exists, assume it's a trading day if it's a weekday
+        if (!marketTiming) {
+            const dayOfWeek = date.getDay();
+            return dayOfWeek >= 1 && dayOfWeek <= 5; // Monday to Friday
         }
-        nextTradingDay.setHours(23, 59, 59, 999); // End of day
-    }
+        
+        return marketTiming.isMarketOpen;
+    };
     
-    // Skip weekends for final check
-    while (nextTradingDay.getDay() === 0 || nextTradingDay.getDay() === 6) {
-        nextTradingDay.setDate(nextTradingDay.getDate() + 1);
-    }
+    // Helper function to find next trading day
+    const findNextTradingDay = async (fromDate) => {
+        let checkDate = new Date(fromDate);
+        checkDate.setDate(checkDate.getDate() + 1); // Start from next day
+        
+        let maxDays = 10; // Prevent infinite loop
+        while (maxDays > 0) {
+            if (await isTradingDay(checkDate)) {
+                return checkDate;
+            }
+            checkDate.setDate(checkDate.getDate() + 1);
+            maxDays--;
+        }
+        
+        // Fallback: return next Monday if can't find trading day
+        const nextMonday = new Date(fromDate);
+        nextMonday.setDate(nextMonday.getDate() + ((1 + 7 - nextMonday.getDay()) % 7 || 7));
+        return nextMonday;
+    };
     
-    return nextTradingDay;
+    // Current date for checking if it's a trading day
+    const currentDate = new Date(istTime);
+    currentDate.setHours(0, 0, 0, 0);
+    
+    // Find next trading day and set expiry to 8:45 AM
+    const nextTradingDay = await findNextTradingDay(currentDate);
+    const expiryTime = new Date(nextTradingDay);
+    expiryTime.setHours(8, 45, 0, 0); // 8:45 AM next trading day
+    
+    console.log(`📅 [EXPIRY] Strategy expires at next trading day 8:45 AM: ${expiryTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
+    
+    return expiryTime;
 };
 
 stockAnalysisSchema.statics.getAnalysisStats = function(userId) {

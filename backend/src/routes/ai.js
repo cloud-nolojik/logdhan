@@ -49,28 +49,25 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
             });
         }
 
-        // Check if stock analysis is allowed based on market timing
-        const userId = req.user.id;
-        const user = await User.findById(userId);
-        const accessToken = user?.upstoxData?.access_token;
+        // Check if stock analysis is allowed based on market timing (same as bulk analysis)
+        const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
         
-        if (accessToken) {
-            const analysisPermission = await upstoxMarketTimingService.canRunBulkAnalysis(accessToken);
-            
-            if (!analysisPermission.allowed) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Stock analysis not allowed at this time',
-                    message: analysisPermission.reason,
-                    nextAllowedTime: analysisPermission.nextAllowedTime,
-                    marketStatus: analysisPermission.marketStatus
-                });
-            }
-            
-            console.log(`✅ Stock analysis approved: ${analysisPermission.reason}`);
-        } else {
-            console.log('⚠️ No Upstox token found, proceeding without market timing check');
+        if (!analysisPermission.allowed) {
+            console.log(`❌ [STOCK ANALYSIS] Individual analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+            return res.status(423).json({
+                success: false,
+                error: 'stock_analysis_not_allowed',
+                message: `Stock analysis is only available from 4:00 PM to 8:45 AM next trading day. ${analysisPermission.reason}`,
+                reason: analysisPermission.reason,
+                nextAllowed: analysisPermission.nextAllowed,
+                validUntil: analysisPermission.validUntil
+            });
         }
+        
+        console.log(`✅ [STOCK ANALYSIS] Individual analysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);
+
+        // Get user ID from authenticated request
+        const userId = req.user.id;
 
         // Lookup stock details from database
         const stockInfo = await Stock.getByInstrumentKey(instrument_key);

@@ -8,6 +8,21 @@ import { getCurrentPrice } from '../utils/stock.js';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
 
 const router = express.Router();
+
+// Helper function to get user-friendly bulk analysis messages
+function getBulkAnalysisMessage(reason) {
+    const messages = {
+        before_session: "🕐 Bulk analysis starts at 4:00 PM after market close.",
+        session_ended: "⏰ Today's analysis session has ended. Bulk analysis will be available again at 4:00 PM.",
+        weekend_session: "📈 Weekend analysis session is active! Analyze multiple stocks to plan for Monday.",
+        holiday: "🏖️ Market is closed today. Bulk analysis will resume on the next trading day at 4:00 PM.",
+        outside_window: "🚫 Bulk analysis is only available from 4:00 PM to 8:45 AM next trading day.",
+        weekday_session: "✅ Evening analysis session is active! Plan your trades for tomorrow.",
+        monday_morning: "🌅 Monday morning session - analyze stocks before market opens at 9:15 AM."
+    };
+    
+    return messages[reason] || "Bulk analysis is currently not available. Please try again during the allowed window.";
+}
 import mongoose from 'mongoose';
 
 // Get user's watchlist as stock list
@@ -48,27 +63,22 @@ router.post('/analyze-all', auth, async (req, res) => {
         });
         //console.log(`🗑️ [ANALYZE-ALL] Deleted ${sessionDeleteResult.deletedCount} existing sessions`);
         
-        // Check if bulk analysis is allowed based on market timing
-        const user = await User.findById(userId);
-        const accessToken = user?.upstoxData?.access_token;
+        // Check if bulk analysis is allowed (4 PM to next trading day 8:45 AM)
+        const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
         
-        if (accessToken) {
-            const analysisPermission = await upstoxMarketTimingService.canRunBulkAnalysis(accessToken);
-            
-            if (!analysisPermission.allowed) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Bulk analysis not allowed at this time',
-                    message: analysisPermission.reason,
-                    nextAllowedTime: analysisPermission.nextAllowedTime,
-                    marketStatus: analysisPermission.marketStatus
-                });
-            }
-            
-            ////console.log((`✅ Bulk analysis approved: ${analysisPermission.reason}`);
-        } else {
-            ////console.log(('⚠️ No Upstox token found, proceeding without market timing check');
+        if (!analysisPermission.allowed) {
+            console.log(`❌ [BULK TIMING] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+            return res.status(423).json({
+                success: false,
+                error: 'bulk_analysis_not_allowed',
+                message: getBulkAnalysisMessage(analysisPermission.reason),
+                reason: analysisPermission.reason,
+                nextAllowed: analysisPermission.nextAllowed,
+                validUntil: analysisPermission.validUntil
+            });
         }
+        
+        console.log(`✅ [BULK TIMING] Analysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);
         
         // Get user's watchlist
         const watchlistStocks = await getUserWatchlist(userId);
@@ -627,7 +637,7 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                             current_price: 0.01, // Use minimal valid price instead of 0
                             user_id: userId,
                             status: 'failed',
-                            expires_at: StockAnalysis.getExpiryTime(),
+                            expires_at: await StockAnalysis.getExpiryTime(),
                             progress: {
                                 percentage: 0,
                                 current_step: `Price fetch failed: ${priceError.message}`,
@@ -673,7 +683,7 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                             current_price: 0.01, // Use minimal valid price for schema
                             user_id: userId,
                             status: 'failed',
-                            expires_at: StockAnalysis.getExpiryTime(),
+                            expires_at: await StockAnalysis.getExpiryTime(),
                             progress: {
                                 percentage: 0,
                                 current_step: `Invalid price: ${currentPrice}`,
@@ -729,7 +739,7 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                         current_price: 0.01, // Use minimal valid price for failed analysis
                         user_id: userId,
                         status: 'failed',
-                        expires_at: StockAnalysis.getExpiryTime(),
+                        expires_at: await StockAnalysis.getExpiryTime(),
                         progress: {
                             percentage: 0,
                             current_step: `Failed: ${error.message}`,
@@ -973,7 +983,7 @@ async function markStockAsFailed(session, stock, errorReason, retryCount = 0) {
             current_price: 0.01, // Use minimal valid price for failed analysis
             user_id: session.user_id,
             status: 'failed',
-            expires_at: StockAnalysis.getExpiryTime(),
+            expires_at: await StockAnalysis.getExpiryTime(),
             progress: {
                 percentage: 0,
                 current_step: `Failed: ${errorReason}`,
@@ -1090,6 +1100,23 @@ router.post('/reanalyze-stock', auth, async (req, res) => {
                 message: 'instrument_key, stock_name, and stock_symbol are required'
             });
         }
+        
+        // Check if stock analysis is allowed based on market timing (same as bulk analysis)
+        const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
+        
+        if (!analysisPermission.allowed) {
+            console.log(`❌ [REANALYZE STOCK] Individual reanalysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+            return res.status(423).json({
+                success: false,
+                error: 'stock_reanalysis_not_allowed',
+                message: getBulkAnalysisMessage(analysisPermission.reason),
+                reason: analysisPermission.reason,
+                nextAllowed: analysisPermission.nextAllowed,
+                validUntil: analysisPermission.validUntil
+            });
+        }
+        
+        console.log(`✅ [REANALYZE STOCK] Individual reanalysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);
         
         ////console.log((`🔄 Reanalyzing stock ${stock_symbol} for user ${userId}`);
         
@@ -1212,6 +1239,33 @@ router.get('/debug/sessions', auth, async (req, res) => {
             success: false,
             error: 'Failed to get debug sessions',
             message: error.message
+        });
+    }
+});
+
+// Route: Check if bulk analysis timing is allowed
+router.get('/timing-check', auth, async (req, res) => {
+    try {
+        const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
+        
+        const response = {
+            success: true,
+            data: {
+                allowed: analysisPermission.allowed,
+                reason: analysisPermission.reason,
+                message: getBulkAnalysisMessage(analysisPermission.reason),
+                nextAllowed: analysisPermission.nextAllowed || null,
+                validUntil: analysisPermission.validUntil || null
+            }
+        };
+        
+        res.json(response);
+    } catch (error) {
+        console.error('❌ Error checking bulk analysis timing:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to check timing',
+            message: 'Unable to check if bulk analysis is allowed at this time'
         });
     }
 });
