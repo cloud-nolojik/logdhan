@@ -64,16 +64,16 @@ router.get('/', auth, async (req, res) => {
     const user = await User.findById(req.user.id);
     const watchlist = user.watchlist || [];
     
-    console.log(`Fetching prices for ${watchlist.length} items in watchlist...`);
+    //console.log(`Fetching prices for ${watchlist.length} items in watchlist...`);
     const startTime = Date.now();
     
     const watchlistWithPrices = await Promise.all(
       watchlist.map((item, index) =>
         limit(async () => {
           try {
-            console.log(`Processing watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol}`);
+           // console.log(`Processing watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol}`);
             const currentPrice = await getCurrentPrice(item.instrument_key);
-            console.log(`Completed watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol} = ${currentPrice}`);
+            //console.log(`Completed watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol} = ${currentPrice}`);
             
             return {
               instrument_key: item.instrument_key,

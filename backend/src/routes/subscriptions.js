@@ -746,10 +746,10 @@ router.get('/ad-status', auth, async (req, res) => {
     
     // Get ad limit from plan restrictions
     const plan = await subscriptionService.getPlanById(subscription.planId);
-    console.log(`🔍 Ad Status Debug - planId: ${subscription.planId}`);
-    console.log(`🔍 Ad Status Debug - plan found: ${plan ? 'yes' : 'no'}`);
-    console.log(`🔍 Ad Status Debug - plan.restrictions:`, plan?.restrictions);
-    console.log(`🔍 Ad Status Debug - plan.restrictions.rewardedAdLimit:`, plan?.restrictions?.rewardedAdLimit);
+    // console.log(`🔍 Ad Status Debug - planId: ${subscription.planId}`);
+    // console.log(`🔍 Ad Status Debug - plan found: ${plan ? 'yes' : 'no'}`);
+    // console.log(`🔍 Ad Status Debug - plan.restrictions:`, plan?.restrictions);
+    // console.log(`🔍 Ad Status Debug - plan.restrictions.rewardedAdLimit:`, plan?.restrictions?.rewardedAdLimit);
     
     const dailyLimit = plan?.restrictions?.rewardedAdLimit || 0; // Default 0 for non-ad plans (0 means unlimited)
     const adsWatchedToday = isToday ? subscription.credits.dailyRewardedCount : 0;

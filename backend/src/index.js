@@ -82,13 +82,37 @@ app.use('/charts', (req, res, next) => {
   next();
 }, express.static(path.join(process.cwd(), 'temp', 'charts')));
 
-// Connect to MongoDB
-mongoose.connect(requiredVars.MONGODB_URI)
+// Connect to MongoDB with robust connection settings
+mongoose.connect(requiredVars.MONGODB_URI, {
+  // Connection pool settings
+  maxPoolSize: 10, // Maintain up to 10 socket connections
+  serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
+  socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+  connectTimeoutMS: 10000, // Give up initial connection after 10 seconds
+  
+  // Resilience settings  
+  maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
+  retryWrites: true, // Automatically retry write operations
+  retryReads: true, // Automatically retry read operations
+})
   .then(() => console.log('✅ Connected to MongoDB'))
   .catch(err => {
     console.error('❌ MongoDB connection error:', err);
     process.exit(1);
   });
+
+// Handle MongoDB connection events
+mongoose.connection.on('error', (err) => {
+  console.error('❌ MongoDB connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.log('⚠️ MongoDB disconnected');
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log('🔄 MongoDB reconnected');
+});
 
 // Routes
 app.use('/api/v1/auth', authRoutes);

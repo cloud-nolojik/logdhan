@@ -249,8 +249,8 @@ const stockAnalysisSchema = new mongoose.Schema({
     },
     expires_at: {
         type: Date,
-        required: true,
-        index: true
+        required: true
+        // Index removed - using explicit schema.index() below with TTL
     },
     user_id: {
         type: mongoose.Schema.Types.ObjectId,
@@ -575,28 +575,40 @@ stockAnalysisSchema.statics.isMarketOpen = function() {
     return currentTime >= marketOpen && currentTime <= marketClose;
 };
 
+// Removed old canRunBulkAnalysis - now using upstoxMarketTimingService.canRunBulkAnalysis()
+
 stockAnalysisSchema.statics.getExpiryTime = function() {
     const now = new Date();
     const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
     
-    // If market is open, expire at market close (3:30 PM)
-    // If market is closed, expire at next market open (9:15 AM next trading day)
+    // Extend expiry time to keep strategies valid for longer
+    // Strategies will expire at the end of the next trading day
+    const nextTradingDay = new Date(istTime);
+    
     if (this.isMarketOpen()) {
-        const today = new Date(istTime);
-        today.setHours(15, 30, 0, 0); // 3:30 PM today
-        return today;
+        // If market is open, expire at end of next trading day
+        nextTradingDay.setDate(nextTradingDay.getDate() + 1);
+        nextTradingDay.setHours(23, 59, 59, 999); // End of next day
     } else {
-        // Set expiry to next trading day 9:15 AM
-        const nextDay = new Date(istTime);
-        nextDay.setDate(nextDay.getDate() + 1);
-        nextDay.setHours(9, 15, 0, 0); // 9:15 AM
-        
-        // Skip weekends
-        while (nextDay.getDay() === 0 || nextDay.getDay() === 6) {
-            nextDay.setDate(nextDay.getDate() + 1);
+        // If market is closed, expire at end of current day (if it's a trading day) or next trading day
+        if (istTime.getDay() >= 1 && istTime.getDay() <= 5) {
+            // It's a weekday evening/night, expire at end of tomorrow
+            nextTradingDay.setDate(nextTradingDay.getDate() + 1);
+        } else {
+            // It's weekend, expire at end of next Monday
+            while (nextTradingDay.getDay() !== 1) { // Find next Monday
+                nextTradingDay.setDate(nextTradingDay.getDate() + 1);
+            }
         }
-        return nextDay;
+        nextTradingDay.setHours(23, 59, 59, 999); // End of day
     }
+    
+    // Skip weekends for final check
+    while (nextTradingDay.getDay() === 0 || nextTradingDay.getDay() === 6) {
+        nextTradingDay.setDate(nextTradingDay.getDate() + 1);
+    }
+    
+    return nextTradingDay;
 };
 
 stockAnalysisSchema.statics.getAnalysisStats = function(userId) {

@@ -214,7 +214,7 @@ export async function getCurrentPrice(instrumentKey) {
 
     for (const format of apiFormats) {
       try {
-        console.log(`Trying ${format.name} API for ${instrumentKey}...`);
+    //    console.log(`Trying ${format.name} API for ${instrumentKey}...`);
         
         const response = await axios.get(format.url, axiosConfig);
         const candles = response.data?.data?.candles || [];
@@ -222,7 +222,7 @@ export async function getCurrentPrice(instrumentKey) {
         if (candles.length > 0) {
           const latest = candles[0]; // last candle
           const currentPrice = latest ? latest[4] : null; // close price
-          console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
+         // console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
           return currentPrice;
         }
       } catch (apiError) {

@@ -4,6 +4,8 @@ import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import rateLimit from 'express-rate-limit';
+import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
+import { User } from '../models/user.js';
 
 const router = express.Router();
 
@@ -47,8 +49,30 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
             });
         }
 
+        // Check if stock analysis is allowed based on market timing
+        const userId = req.user.id;
+        const user = await User.findById(userId);
+        const accessToken = user?.upstoxData?.access_token;
+        
+        if (accessToken) {
+            const analysisPermission = await upstoxMarketTimingService.canRunBulkAnalysis(accessToken);
+            
+            if (!analysisPermission.allowed) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Stock analysis not allowed at this time',
+                    message: analysisPermission.reason,
+                    nextAllowedTime: analysisPermission.nextAllowedTime,
+                    marketStatus: analysisPermission.marketStatus
+                });
+            }
+            
+            console.log(`✅ Stock analysis approved: ${analysisPermission.reason}`);
+        } else {
+            console.log('⚠️ No Upstox token found, proceeding without market timing check');
+        }
+
         // Lookup stock details from database
-        console.log(`🔍 Looking up stock details for: ${instrument_key}`);
         const stockInfo = await Stock.getByInstrumentKey(instrument_key);
         
         if (!stockInfo) {
@@ -62,7 +86,6 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
         const stock_name = stockInfo.name;
         const stock_symbol = stockInfo.trading_symbol;
 
-        console.log(`📊 Found stock: ${stock_name} (${stock_symbol})`);
 
         // Get current price from latest candle data
         let current_price = null;
@@ -89,7 +112,6 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
                         let latestCandle = null;
                         let latestTimestamp = null;
                         
-                        console.log(`💰 Analyzing ${candles.length} candles to find most recent price...`);
                         
                         for (const candle of candles) {
                             const timestamp = Array.isArray(candle) ? candle[0] : candle.time;
@@ -105,11 +127,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
                             const newPrice = Array.isArray(latestCandle) ? latestCandle[4] : latestCandle.close;
                             const candleTime = Array.isArray(latestCandle) ? latestCandle[0] : latestCandle.time;
                             
-                            console.log(`💰 Most recent candle: ${candleTime} with close price ₹${newPrice}`);
-                            console.log(`💰 Total candles analyzed: ${candles.length}`);
-                            
                             current_price = newPrice;
-                            console.log(`💰 Updated current_price from latest market data: ₹${current_price}`);
                         } else {
                             console.warn(`⚠️ No valid candle found in ${candles.length} candles`);
                         }
@@ -153,12 +171,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
             });
         }
 
-        const userId = req.user.id;
-
         // TESTING: Skip rate limiting check
-        console.log(`🧪 TESTING: Skipping rate limiting for user ${userId}`);
-
-        console.log(`📊 AI Analysis request: ${stock_symbol} (${analysis_type}) by user ${userId}`);
 
         // Start AI analysis
         const result = await aiReviewService.analyzeStock({

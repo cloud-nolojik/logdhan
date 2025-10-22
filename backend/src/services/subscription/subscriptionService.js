@@ -124,10 +124,10 @@ class SubscriptionService {
         planData,
         { upsert: true, new: true }
       );
-      console.log(`✅ Plan ${planData.planId} initialized/updated with restrictions:`, updatedPlan.restrictions);
+      //console.log(`✅ Plan ${planData.planId} initialized/updated with restrictions:`, updatedPlan.restrictions);
     }
 
-    console.log('✅ Default subscription plans initialized');
+    //console.log('✅ Default subscription plans initialized');
   }
 
   /**
@@ -192,7 +192,7 @@ class SubscriptionService {
       let paymentUrl = null;
       let sessionId = null;
 
-      console.log(`Creating trial subscription for ${planId} - no Cashfree integration needed`);
+      //console.log(`Creating trial subscription for ${planId} - no Cashfree integration needed`);
       
 
       // Set expiry based on plan type
@@ -310,7 +310,7 @@ class SubscriptionService {
       subscription.status = 'ACTIVE';
       await subscription.save();
 
-      console.log(`✅ Subscription activated: ${subscription.subscriptionId}`);
+      //console.log(`✅ Subscription activated: ${subscription.subscriptionId}`);
       return subscription;
 
     } catch (error) {
@@ -410,7 +410,7 @@ class SubscriptionService {
         carryCredits = Math.min(proratedCredits, rolloverCap);
         behavior = 'monthly_to_yearly_prorated';
         
-        console.log(`📊 Pro-rating: ${daysRemaining} days remaining, ${unused} unused monthly credits → ${proratedCredits} yearly equivalent, carrying ${carryCredits}`);
+        //console.log(`📊 Pro-rating: ${daysRemaining} days remaining, ${unused} unused monthly credits → ${proratedCredits} yearly equivalent, carrying ${carryCredits}`);
       } else {
         // Regular upgrade: carry unused up to rollover limit
         carryCredits = Math.min(unused, rolloverCap);
@@ -455,7 +455,7 @@ class SubscriptionService {
 
       await session.commitTransaction();
 
-      console.log(`✅ Plan upgraded: ${oldPlan.name} → ${newPlan.name} for user ${userId}. Carried ${carryCredits}/${unused} credits.`);
+      //console.log(`✅ Plan upgraded: ${oldPlan.name} → ${newPlan.name} for user ${userId}. Carried ${carryCredits}/${unused} credits.`);
       
       return {
         subscription,
@@ -510,7 +510,7 @@ class SubscriptionService {
           // Record credit reset
 
           resetCount++;
-          console.log(`Monthly reset for user ${subscription.userId}: ${subscription.planCredits} + ${rollover} rollover`);
+          //console.log(`Monthly reset for user ${subscription.userId}: ${subscription.planCredits} + ${rollover} rollover`);
 
         } catch (error) {
           console.error(`Error resetting subscription ${subscription._id}:`, error);
@@ -538,7 +538,7 @@ class SubscriptionService {
       if (idempotencyKey) {
         const existingProcess = await this.checkWebhookIdempotency(idempotencyKey);
         if (existingProcess) {
-          console.log(`Webhook already processed: ${idempotencyKey}`);
+          //console.log(`Webhook already processed: ${idempotencyKey}`);
           return existingProcess;
         }
       }
@@ -548,7 +548,7 @@ class SubscriptionService {
       const paymentId = event.payment?.cf_payment_id;
 
       if (!subscriptionId) {
-        console.log('No subscription ID in webhook payload');
+        //console.log('No subscription ID in webhook payload');
         return;
       }
 
@@ -557,7 +557,7 @@ class SubscriptionService {
       });
 
       if (!subscription) {
-        console.log(`Subscription not found for ID: ${subscriptionId}`);
+        //console.log(`Subscription not found for ID: ${subscriptionId}`);
         return;
       }
 
@@ -592,7 +592,7 @@ class SubscriptionService {
           break;
 
         default:
-          console.log(`Unhandled webhook event type: ${payload.type}`);
+          //console.log(`Unhandled webhook event type: ${payload.type}`);
           result = { message: 'Event type not handled' };
       }
 
@@ -616,7 +616,7 @@ class SubscriptionService {
     try {
       // TODO: Implement Redis or MongoDB collection for idempotency tracking
       // For now, log the check
-      console.log(`Checking idempotency for key: ${idempotencyKey}`);
+      //console.log(`Checking idempotency for key: ${idempotencyKey}`);
       return null; // No previous processing found
     } catch (error) {
       console.error('Error checking webhook idempotency:', error);
@@ -630,7 +630,7 @@ class SubscriptionService {
   async storeWebhookIdempotency(idempotencyKey, result) {
     try {
       // TODO: Store in Redis with 24h TTL or MongoDB collection
-      console.log(`Storing idempotency record: ${idempotencyKey}`);
+      //console.log(`Storing idempotency record: ${idempotencyKey}`);
     } catch (error) {
       console.error('Error storing webhook idempotency:', error);
     }
@@ -641,7 +641,7 @@ class SubscriptionService {
    */
   async handlePaymentAuthorized(subscription, event, paymentId) {
     try {
-      console.log(`Payment authorized but not captured: ${paymentId} for subscription: ${subscription.cashfreeSubscriptionId}`);
+      //console.log(`Payment authorized but not captured: ${paymentId} for subscription: ${subscription.cashfreeSubscriptionId}`);
       
       // Mark as pending capture
       subscription.status = 'BANK_APPROVAL_PENDING';
@@ -726,7 +726,7 @@ class SubscriptionService {
       } else if (subscription.planId === 'basic_ads') {
         // Free plan credits never roll over to paid plans
         rolloverCredits = 0;
-        console.log(`Free plan credits (${subscription.credits.remaining}) will not roll over to ${plan.name}`);
+        //console.log(`Free plan credits (${subscription.credits.remaining}) will not roll over to ${plan.name}`);
       }
 
       // Reset credits for new billing cycle
@@ -764,7 +764,7 @@ class SubscriptionService {
         // Record credit history
       }
 
-      console.log(`✅ Subscription renewed: ${subscription.subscriptionId}`);
+      //console.log(`✅ Subscription renewed: ${subscription.subscriptionId}`);
 
     } catch (error) {
       console.error('Error handling successful charge:', error);
@@ -780,7 +780,7 @@ class SubscriptionService {
       subscription.status = 'ON_HOLD';
       await subscription.save();
       
-      console.log(`⚠️ Subscription payment failed: ${subscription.subscriptionId}`);
+      //console.log(`⚠️ Subscription payment failed: ${subscription.subscriptionId}`);
       
       // TODO: Send notification to user about failed payment
       
@@ -823,13 +823,13 @@ class SubscriptionService {
 
     if (now > gracePeriodEnd && subscription.status !== 'EXPIRED') {
       // Grace period over - downgrade to basic
-      console.log(`⬇️ Downgrading expired subscription ${subscription.subscriptionId} to basic plan`);
+      //console.log(`⬇️ Downgrading expired subscription ${subscription.subscriptionId} to basic plan`);
       
       await this.downgradeToBasicPlan(subscription);
       
     } else if (now > endDate && now <= gracePeriodEnd && subscription.status === 'ACTIVE') {
       // Just expired - enter grace period
-      console.log(`⏰ Moving subscription ${subscription.subscriptionId} to grace period`);
+      //console.log(`⏰ Moving subscription ${subscription.subscriptionId} to grace period`);
       
       subscription.status = 'GRACE_PERIOD';
       subscription.metadata = {
@@ -899,7 +899,7 @@ class SubscriptionService {
     
     await subscription.save();
     
-    console.log(`✅ Subscription downgraded to basic plan: ${subscription.subscriptionId}`);
+    //console.log(`✅ Subscription downgraded to basic plan: ${subscription.subscriptionId}`);
     return subscription;
   }
 
@@ -951,7 +951,7 @@ class SubscriptionService {
       return { canUse: false, reason: 'No active subscription' };
     }
 
-    console.log(`canUserUseCredits called for user ${userId}, planId: ${subscription.planId}`);
+   // //console.log(`canUserUseCredits called for user ${userId}, planId: ${subscription.planId}`);
 
     // Get plan to check daily/weekly restrictions
     const plan = await this.getPlanById(subscription.planId);
@@ -984,20 +984,20 @@ class SubscriptionService {
         
         if (isFromRewardedAd) {
           // Allow unlimited ad reviews for basic plan
-          console.log(`Ad-based review allowed - no limits on ad reviews for basic plan`);
+          //console.log(`Ad-based review allowed - no limits on ad reviews for basic plan`);
           // Remove daily ad limit restriction - users can watch unlimited ads
           
           // No total daily limit for basic plan with ads - allow unlimited
-          console.log(`Total reviews today: ${totalReviewsToday} - no limit enforced for basic plan with ads`);
+          //console.log(`Total reviews today: ${totalReviewsToday} - no limit enforced for basic plan with ads`);
         } else {
           // For non-ad reviews on basic plan, allow unlimited reviews
           // Users can always watch ads to get more reviews - no daily limits
-          console.log(`Basic plan non-ad review allowed - no daily restrictions, user can watch ads anytime`);
+          //console.log(`Basic plan non-ad review allowed - no daily restrictions, user can watch ads anytime`);
         }
       } else {
         // For paid plans (pro_monthly, pro_yearly) - no daily limits, only check credit pool
         // Skip daily limit checks - let them use their monthly/yearly credits freely
-        console.log(`Paid plan ${subscription.planId} - checking credit pool only, no daily restrictions`);
+        //console.log(`Paid plan ${subscription.planId} - checking credit pool only, no daily restrictions`);
       }
     }
 
@@ -1053,7 +1053,7 @@ class SubscriptionService {
       }
     } else {
       // Fallback if plan or restrictions missing
-      console.log('Warning: Plan or restrictions missing for subscription:', subscription.planId);
+      //console.log('Warning: Plan or restrictions missing for subscription:', subscription.planId);
       if (subscription.planId === 'basic_ads') {
         dailyUsageStats = {
           limit: 7,
@@ -1068,13 +1068,13 @@ class SubscriptionService {
     }
 
     const result = { canUse: true, subscription, ...dailyUsageStats };
-    console.log(`canUserUseCredits returning:`, { 
-      canUse: result.canUse, 
-      limit: result.limit, 
-      used: result.used,
-      planId: subscription.planId,
-      dailyUsage: subscription.dailyUsage
-    });
+    //console.log(`canUserUseCredits returning:`, { 
+    //   canUse: result.canUse, 
+    //   limit: result.limit, 
+    //   used: result.used,
+    //   planId: subscription.planId,
+    //   dailyUsage: subscription.dailyUsage
+    // });
     return result;
   }
 
@@ -1083,8 +1083,8 @@ class SubscriptionService {
    */
   async deductCredits(userId, creditsNeeded, description, serviceType = 'ai_review', isFromRewardedAd = false, creditType = 'regular') {
     try {
-      console.log(`\n=== deductCredits called ===`);
-      console.log(`userId: ${userId}, creditsNeeded: ${creditsNeeded}, serviceType: ${serviceType}, isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
+      //console.log(`\n=== deductCredits called ===`);
+      //console.log(`userId: ${userId}, creditsNeeded: ${creditsNeeded}, serviceType: ${serviceType}, isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
       
       const checkResult = await this.canUserUseCredits(userId, creditsNeeded, isFromRewardedAd);
       if (!checkResult.canUse) {
@@ -1097,17 +1097,17 @@ class SubscriptionService {
         throw new Error('Subscription not found');
       }
       
-      console.log(`Subscription found: planId=${subscription.planId}, dailyUsage before:`, subscription.dailyUsage);
+      //console.log(`Subscription found: planId=${subscription.planId}, dailyUsage before:`, subscription.dailyUsage);
       
       // Use the proper subscription model method for credit deduction
       const { Subscription } = await import('../../models/subscription.js');
       const deductionResult = await Subscription.deductCreditsAtomic(userId, creditsNeeded, creditType);
       
-      console.log(`Credit deduction result:`, deductionResult.deductedFrom);
+      //console.log(`Credit deduction result:`, deductionResult.deductedFrom);
       
       // Get the fresh subscription after deduction
       const updatedSubscription = await this.getUserActiveSubscription(userId);
-      console.log(`Credits remaining after deduction: ${updatedSubscription.getTotalAvailableCredits()}`);
+      //console.log(`Credits remaining after deduction: ${updatedSubscription.getTotalAvailableCredits()}`);
       
       // Get plan for daily usage tracking
       const plan = await this.getPlanById(subscription.planId);
@@ -1138,19 +1138,19 @@ class SubscriptionService {
         // Increment the appropriate counter
         if (isFromRewardedAd && updatedSubscription.planId === 'basic_ads') {
           updatedSubscription.dailyUsage.rewardedAdCount += 1;
-          console.log(`Incremented rewardedAdCount to ${updatedSubscription.dailyUsage.rewardedAdCount} for user ${userId}`);
+          //console.log(`Incremented rewardedAdCount to ${updatedSubscription.dailyUsage.rewardedAdCount} for user ${userId}`);
         } else if (!isFromRewardedAd) {
           updatedSubscription.dailyUsage.reviewCount += 1;
-          console.log(`Incremented reviewCount to ${updatedSubscription.dailyUsage.reviewCount} for user ${userId}`);
+          //console.log(`Incremented reviewCount to ${updatedSubscription.dailyUsage.reviewCount} for user ${userId}`);
         }
         
-        console.log(`dailyUsage after increment:`, updatedSubscription.dailyUsage);
+        //console.log(`dailyUsage after increment:`, updatedSubscription.dailyUsage);
       } else {
-        console.log(`WARNING: Plan or restrictions not found for planId: ${updatedSubscription.planId}`);
+        //console.log(`WARNING: Plan or restrictions not found for planId: ${updatedSubscription.planId}`);
       }
 
       await updatedSubscription.save();
-      console.log(`Subscription saved successfully`);
+      //console.log(`Subscription saved successfully`);
 
       // Update user credits
       const user = await User.findById(userId);
@@ -1245,7 +1245,7 @@ class SubscriptionService {
     subscription.authenticatedAt = new Date();
     await subscription.save();
     
-    console.log(`✅ Subscription mandate authenticated: ${subscription.subscriptionId}`);
+    //console.log(`✅ Subscription mandate authenticated: ${subscription.subscriptionId}`);
   }
 
   /**
@@ -1259,7 +1259,7 @@ class SubscriptionService {
     // Add initial credits to user
     await this.activateSubscription(subscription._id);
     
-    console.log(`✅ Subscription activated: ${subscription.subscriptionId}`);
+    //console.log(`✅ Subscription activated: ${subscription.subscriptionId}`);
   }
 
   /**
@@ -1270,7 +1270,7 @@ class SubscriptionService {
     subscription.cancelledAt = new Date(event.cancelledAt) || new Date();
     await subscription.save();
     
-    console.log(`✅ Subscription cancelled: ${subscription.subscriptionId}`);
+    //console.log(`✅ Subscription cancelled: ${subscription.subscriptionId}`);
   }
 
   /**
@@ -1281,7 +1281,7 @@ class SubscriptionService {
     subscription.pausedAt = new Date(event.pausedAt) || new Date();
     await subscription.save();
     
-    console.log(`✅ Subscription paused: ${subscription.subscriptionId}`);
+    //console.log(`✅ Subscription paused: ${subscription.subscriptionId}`);
   }
 
   /**
@@ -1292,7 +1292,7 @@ class SubscriptionService {
     subscription.resumedAt = new Date(event.resumedAt) || new Date();
     await subscription.save();
     
-    console.log(`✅ Subscription resumed: ${subscription.subscriptionId}`);
+    //console.log(`✅ Subscription resumed: ${subscription.subscriptionId}`);
   }
 
   /**
@@ -1315,7 +1315,7 @@ class SubscriptionService {
     
     await subscription.save();
     
-    console.log(`❌ Subscription payment failed: ${subscription.subscriptionId} (${event.failureReason})`);
+    //console.log(`❌ Subscription payment failed: ${subscription.subscriptionId} (${event.failureReason})`);
   }
 
   /**
@@ -1340,7 +1340,7 @@ class SubscriptionService {
       subscription.cancellationReason = reason;
       await subscription.save();
 
-      console.log(`✅ Subscription cancelled: ${subscription.subscriptionId}`);
+      //console.log(`✅ Subscription cancelled: ${subscription.subscriptionId}`);
       return subscription;
 
     } catch (error) {
@@ -1370,7 +1370,7 @@ class SubscriptionService {
       subscription.pausedAt = new Date();
       await subscription.save();
 
-      console.log(`✅ Subscription paused: ${subscription.subscriptionId}`);
+      //console.log(`✅ Subscription paused: ${subscription.subscriptionId}`);
       return subscription;
 
     } catch (error) {
@@ -1400,7 +1400,7 @@ class SubscriptionService {
       subscription.resumedAt = new Date();
       await subscription.save();
 
-      console.log(`✅ Subscription resumed: ${subscription.subscriptionId}`);
+      //console.log(`✅ Subscription resumed: ${subscription.subscriptionId}`);
       return subscription;
 
     } catch (error) {
@@ -1431,7 +1431,7 @@ class SubscriptionService {
       const dailyLimit = plan?.restrictions?.rewardedAdLimit || 0;
       const adsWatchedToday = isToday ? subscription.credits.dailyRewardedCount : 0;
 
-      console.log(`🔍 ProcessRewardedAd Debug - planId: ${subscription.planId}, dailyLimit: ${dailyLimit}, adsWatchedToday: ${adsWatchedToday}`);
+      //console.log(`🔍 ProcessRewardedAd Debug - planId: ${subscription.planId}, dailyLimit: ${dailyLimit}, adsWatchedToday: ${adsWatchedToday}`);
 
       // Only check limit if dailyLimit > 0 (0 means unlimited)
       if (dailyLimit > 0 && adsWatchedToday >= dailyLimit) {
@@ -1456,7 +1456,7 @@ class SubscriptionService {
       // If dailyLimit is 0 (unlimited), return a high number for UI display
       const adsRemainingToday = dailyLimit === 0 ? 999 : Math.max(0, dailyLimit - subscription.credits.dailyRewardedCount);
 
-      console.log(`✅ Rewarded ad processed for user ${userId}: +${creditsAwarded} credits (${adsRemainingToday} remaining today)`);
+      //console.log(`✅ Rewarded ad processed for user ${userId}: +${creditsAwarded} credits (${adsRemainingToday} remaining today)`);
 
       return {
         creditsAwarded,
@@ -1517,21 +1517,21 @@ class SubscriptionService {
 
       // Ensure plan exists in Cashfree first
       if (!plan.cashfreePlanId) {
-        console.log(`Creating missing Cashfree plan for: ${planId}`);
+        //console.log(`Creating missing Cashfree plan for: ${planId}`);
         throw 'Cashfree plan not found. Please contact support to resolve this issue.';
         // const cashfreePlan = await this.createCashfreePlan(plan);
         // mandateData.cashfreePlanId = cashfreePlan.plan_id;
       }
 
-      console.log(`🔄 Generating payment URL for user ${userId}, plan ${planId}, amount ₹${plan.price}`);
+      //console.log(`🔄 Generating payment URL for user ${userId}, plan ${planId}, amount ₹${plan.price}`);
       
       const cashfreeResponse = await cashfreeSubscriptionService.createSubscriptionMandate(mandateData);
       
-      console.log('📦 Cashfree response received:', {
-        subscriptionId: cashfreeResponse.subscriptionId,
-        subscriptionSessionId: cashfreeResponse.subscriptionSessionId,
-        subscriptionStatus: cashfreeResponse.subscriptionStatus
-      });
+      //console.log('📦 Cashfree response received:', {
+      //   subscriptionId: cashfreeResponse.subscriptionId,
+      //   subscriptionSessionId: cashfreeResponse.subscriptionSessionId,
+      //   subscriptionStatus: cashfreeResponse.subscriptionStatus
+      // });
 
       // Generate checkout URL pointing to nolojik-webapp
       const checkoutParams = new URLSearchParams({
@@ -1544,7 +1544,7 @@ class SubscriptionService {
 
       const paymentUrl = `https://nolojik.com/logdhan/checkout?${checkoutParams.toString()}`;
 
-      console.log(`✅ Payment URL generated: ${paymentUrl}`);
+      //console.log(`✅ Payment URL generated: ${paymentUrl}`);
 
       return {
         paymentUrl,
@@ -1615,15 +1615,15 @@ class SubscriptionService {
     try {
       const { cf_subscription_id } = statusData;
       
-      console.log('🔄 Processing subscription status from Cashfree:', statusData);
+      //console.log('🔄 Processing subscription status from Cashfree:', statusData);
 
       // First, query Cashfree to get the actual subscription status and details
       let cashfreeData = null;
       if (cf_subscription_id) {
         try {
-          console.log('🔍 Querying Cashfree for subscription status:', cf_subscription_id);
+          //console.log('🔍 Querying Cashfree for subscription status:', cf_subscription_id);
           cashfreeData = await cashfreeSubscriptionService.getSubscriptionStatus(cf_subscription_id);
-          console.log('📊 Cashfree subscription data:', JSON.stringify(cashfreeData));
+          //console.log('📊 Cashfree subscription data:', JSON.stringify(cashfreeData));
         } catch (error) {
           console.warn('⚠️ Failed to get Cashfree status, using provided status:', error.message);
         }
@@ -1635,7 +1635,7 @@ class SubscriptionService {
           const parts = cf_subscription_id.split('_');
           if (parts.length >= 3) {
             userId = parts[2]; // Extract userId from middle part
-            console.log('🔍 Extracted userId from cf_subscriptionId:', userId);
+            //console.log('🔍 Extracted userId from cf_subscriptionId:', userId);
           }
         }
 
@@ -1671,7 +1671,7 @@ class SubscriptionService {
       // Process based on status
       if (cashfreeData && cashfreeData.subscription_status == "ACTIVE") {
         // UPDATE the existing subscription with new plan details
-        console.log('✅ Updating existing subscription with new plan:', plan?.planId);
+        //console.log('✅ Updating existing subscription with new plan:', plan?.planId);
         
         if (plan) {
           // Update all plan-related fields
@@ -1696,7 +1696,7 @@ class SubscriptionService {
             // Parse Cashfree's date format (e.g., "2025-09-16T12:58:53+05:30")
             endDate = new Date(cashfreeData.next_schedule_date);
             nextResetAt = endDate;
-            console.log(`📅 Using Cashfree next_schedule_date: ${cashfreeData.next_schedule_date}`);
+            //console.log(`📅 Using Cashfree next_schedule_date: ${cashfreeData.next_schedule_date}`);
           } else {
             // Fallback to calculating based on plan type
             if (plan.billingCycle === 'MONTHLY') {
@@ -1710,7 +1710,7 @@ class SubscriptionService {
               endDate = new Date(now.getFullYear() + 100, now.getMonth(), now.getDate());
               nextResetAt = endDate;
             }
-            console.log(`📅 Calculated endDate (no Cashfree data): ${endDate.toISOString()}`);
+            //console.log(`📅 Calculated endDate (no Cashfree data): ${endDate.toISOString()}`);
           }
           
           subscription.billing = {
@@ -1755,7 +1755,7 @@ class SubscriptionService {
         };       
       } 
       else {
-        console.log('❌ Payment failed - NOT updating subscription plan');
+        //console.log('❌ Payment failed - NOT updating subscription plan');
         // Don't change the plan, just log the failure
         subscription.metadata = {
           ...subscription.metadata,
@@ -1769,7 +1769,7 @@ class SubscriptionService {
         };
       } 
        await subscription.save();
-      console.log(`✅ Updated subscription ${subscription._id} with new Cashfree ID: ${subscription.cashfreeSubscriptionId}`);
+      //console.log(`✅ Updated subscription ${subscription._id} with new Cashfree ID: ${subscription.cashfreeSubscriptionId}`);
 
      
       return {

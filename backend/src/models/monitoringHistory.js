@@ -23,8 +23,8 @@ const monitoringHistorySchema = new mongoose.Schema({
     },
     check_timestamp: {
         type: Date,
-        default: Date.now,
-        index: true
+        default: Date.now
+        // Index removed - using explicit schema.index() below with TTL
     },
     status: {
         type: String,

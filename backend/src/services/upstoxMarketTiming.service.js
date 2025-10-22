@@ -410,6 +410,77 @@ class UpstoxMarketTimingService {
     }
 
     /**
+     * Check if bulk analysis is allowed based on market timing and your requirements
+     * Allowed: After 4 PM till 8:45 AM on trading days, anytime on holidays/weekends
+     * @param {string} accessToken - Upstox access token
+     * @returns {Promise<Object>}
+     */
+    async canRunBulkAnalysis(accessToken) {
+        try {
+            const now = new Date();
+            const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+            const dateStr = istTime.toISOString().split('T')[0]; // YYYY-MM-DD format
+            
+            // Get market timing for today
+            const marketStatus = await this.getMarketStatusOptimized(dateStr, accessToken);
+            
+            // If it's a holiday or weekend, allow anytime
+            if (!marketStatus.isOpen && (marketStatus.reason === 'Holiday' || marketStatus.reason === 'Weekend')) {
+                return {
+                    allowed: true,
+                    reason: `Analysis allowed anytime on ${marketStatus.reason.toLowerCase()}s`,
+                    marketStatus: marketStatus
+                };
+            }
+            
+            // For trading days, check time restrictions
+            const hours = istTime.getHours();
+            const minutes = istTime.getMinutes();
+            const currentTime = hours * 60 + minutes; // Convert to minutes
+            
+            // Define time windows
+            const marketClose = 16 * 60;     // 4:00 PM (market closes at 3:30 PM, allow from 4:00 PM)
+            const nextDayStart = 8 * 60 + 45; // 8:45 AM next day
+            const endOfDay = 24 * 60;        // Midnight
+            
+            // Allow after 4:00 PM till midnight
+            if (currentTime >= marketClose) {
+                return {
+                    allowed: true,
+                    reason: 'Post-market analysis window (after 4:00 PM)',
+                    marketStatus: marketStatus
+                };
+            }
+            
+            // Allow from midnight till 8:45 AM
+            if (currentTime <= nextDayStart) {
+                return {
+                    allowed: true,
+                    reason: 'Pre-market analysis window (before 8:45 AM)',
+                    marketStatus: marketStatus
+                };
+            }
+            
+            // Blocked during restricted hours (8:45 AM - 4:00 PM on trading days)
+            return {
+                allowed: false,
+                reason: 'Bulk analysis is not available during market hours (8:45 AM - 4:00 PM on trading days)',
+                nextAllowedTime: 'Today at 4:00 PM',
+                marketStatus: marketStatus
+            };
+            
+        } catch (error) {
+            console.error('❌ Error checking bulk analysis eligibility:', error.message);
+            // On error, be conservative and disallow
+            return {
+                allowed: false,
+                reason: 'Unable to verify market timing. Please try again later.',
+                error: error.message
+            };
+        }
+    }
+
+    /**
      * Clear cache (useful for testing or force refresh)
      */
     clearCache() {

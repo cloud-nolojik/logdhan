@@ -128,7 +128,7 @@ class AIReviewService {
       const user = await User.findById(userId).select('tradingExperience');
       return user?.tradingExperience || 'intermediate'; // Default to intermediate if not set
     } catch (error) {
-      console.error('Error fetching user experience:', error);
+//       console.error('Error fetching user experience:', error);
       return 'intermediate'; // Safe fallback
     }
   }
@@ -162,7 +162,7 @@ class AIReviewService {
     try {
       return JSON.parse(cleaned);
     } catch (error) {
-      console.error('Failed to parse JSON after cleaning:', cleaned.substring(0, 200));
+//       console.error('Failed to parse JSON after cleaning:', cleaned.substring(0, 200));
       throw new Error(`JSON parsing failed: ${error.message}`);
     }
   }
@@ -389,8 +389,8 @@ class AIReviewService {
    */
   async determineAIModel(userId, isFromRewardedAd = false, creditType = 'regular') {
     try {
-      console.log(`\n🔍 Determining AI model for user: ${userId}`);
-      console.log(`   isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
+//       console.log(`\n🔍 Determining AI model for user: ${userId}`);
+//       console.log(`   isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
       
       // Import required services
       const { Subscription } = await import('../../models/subscription.js');
@@ -453,7 +453,7 @@ class AIReviewService {
         analysisModel = 'gpt-5';
         sentimentModel = 'gpt-4o-mini';
         modelTier = 'advanced';
-        console.log(`🎁 Bonus credits - using advanced analysis model (o4-mini)`);
+//         console.log(`🎁 Bonus credits - using advanced analysis model (o4-mini)`);
       }
       // Priority 1.5: Check if this is from rewarded ad (basic model for sustainability) 
       else if (isFromRewardedAd) {
@@ -461,7 +461,7 @@ class AIReviewService {
         analysisModel = 'o4-mini';
         sentimentModel = 'gpt-4o-mini';
         modelTier = 'ad-supported';
-        console.log(`🎁 Ad-supported review - using basic models (o4-mini) for sustainability`);
+//         console.log(`🎁 Ad-supported review - using basic models (o4-mini) for sustainability`);
       }
       // Priority 2: Check plan type for paying users
       else if (plan && plan.analysisLevel === 'advanced') {
@@ -475,13 +475,13 @@ class AIReviewService {
           analysisModel = 'gpt-5';
           sentimentModel = 'gpt-4o-mini';
           modelTier = 'advanced';
-          console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models (gpt-5)`);
+//           console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models (gpt-5)`);
         } else {
           // Paid user exhausted credits - fallback to basic model
           analysisModel = 'o4-mini';
           sentimentModel = 'gpt-4o-mini';
           modelTier = 'basic-fallback';
-          console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models (o4-mini)`);
+//           console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models (o4-mini)`);
         }
       }
       // Priority 3: Basic/free plan users
@@ -490,7 +490,7 @@ class AIReviewService {
         analysisModel = 'o4-mini';
         sentimentModel = 'gpt-4o-mini';
         modelTier = 'basic';
-        console.log(`📱 Basic/free plan - using basic models (o4-mini)`);
+//         console.log(`📱 Basic/free plan - using basic models (o4-mini)`);
       }
       
       return {
@@ -510,7 +510,7 @@ class AIReviewService {
       };
       
     } catch (error) {
-      console.error('Error determining AI model:', error);
+//       console.error('Error determining AI model:', error);
       return {
         canProceed: false,
         error: 'Failed to determine AI model configuration. Please try again.',
@@ -540,7 +540,7 @@ class AIReviewService {
       
       if (!modelConfig.canProceed) {
         // Cannot proceed with review - save error status
-        console.error(`❌ Cannot proceed with AI review: ${modelConfig.error}`);
+//         console.error(`❌ Cannot proceed with AI review: ${modelConfig.error}`);
         
         // Update trade log with error status
         try {
@@ -563,7 +563,7 @@ class AIReviewService {
           
           await StockLog.findByIdAndUpdate(tradeData.logId, errorData, { new: true });
         } catch (updateError) {
-          console.error('Error updating trade log with error status:', updateError);
+//           console.error('Error updating trade log with error status:', updateError);
         }
         
         return {
@@ -579,23 +579,23 @@ class AIReviewService {
       this.sentimentalModel = modelConfig.models.sentiment;
       this.creditType = modelConfig.creditType;
       
-      console.log(`✅ Model selection complete:`);
-      console.log(`   Analysis: ${this.analysisModel}`);
-      console.log(`   Sentiment: ${this.sentimentalModel}`);
-      console.log(`   Tier: ${modelConfig.models.tier}`);
-      console.log(`   Credit Type: ${this.creditType}`);
-      console.log(`   Credits remaining: ${modelConfig.subscription.creditsRemaining}`);
+//       console.log(`✅ Model selection complete:`);
+//       console.log(`   Analysis: ${this.analysisModel}`);
+//       console.log(`   Sentiment: ${this.sentimentalModel}`);
+//       console.log(`   Tier: ${modelConfig.models.tier}`);
+//       console.log(`   Credit Type: ${this.creditType}`);
+//       console.log(`   Credits remaining: ${modelConfig.subscription.creditsRemaining}`);
     }
     
     // Allow manual overrides for testing (only if not already set by determineAIModel)
     if (tradeData.sentimentModel && !userId) {
       this.sentimentalModel = tradeData.sentimentModel;
-      console.log(`🔄 Override: Using custom sentiment model: ${tradeData.sentimentModel}`);
+//       console.log(`🔄 Override: Using custom sentiment model: ${tradeData.sentimentModel}`);
     }
     
     if (tradeData.analysisModel && !userId) {
       this.analysisModel = tradeData.analysisModel;
-      console.log(`🔄 Override: Using custom analysis model: ${tradeData.analysisModel}`);
+//       console.log(`🔄 Override: Using custom analysis model: ${tradeData.analysisModel}`);
     }
     try {
     //   console.log('🤖 Starting AI Review Process for:', tradeData.logId);
@@ -604,7 +604,7 @@ class AIReviewService {
       const validation = this.validateTradeReview(tradeData);
       
       if (!validation.shouldReview) {
-        console.log(`⏰ SKIPPING REVIEW - ${validation.reason}`);
+//         console.log(`⏰ SKIPPING REVIEW - ${validation.reason}`);
         
         // Update database with rejection (no AI processing, no chart generation)
         await this.updateTradeLogWithRejection(tradeData.logId, validation.reason);
@@ -619,7 +619,7 @@ class AIReviewService {
   
     const userExperience = userId ? await this.getUserExperience(userId) : 'intermediate';
 
-    const {endpoints} = this.buildCandleUrls(tradeData);
+    const {endpoints} = await this.buildCandleUrls(tradeData);
 
     // 1) Fetch all candle endpoints in parallel (each endpoint has {frame, kind, url})
 const candleFetches = endpoints.map(ep =>
@@ -693,11 +693,11 @@ const candleSets = candleResults.reduce((acc, r) => {
         // Only create charts if we have required snapshot data
         if (payload?.snapshots?.lastBars1m?.length && payload?.snapshots?.lastBars3m?.length) {
           const { microUrl, fullUrl } = await createAndUploadIntradayCharts(payload, rawAiReview);
-          console.log('Charts uploaded:', { microUrl, fullUrl });
+//           console.log('Charts uploaded:', { microUrl, fullUrl });
           rawAiReview.microChartUrl = microUrl;
           rawAiReview.fullChartUrl = fullUrl;
         } else {
-          console.log('⚠️ Skipping chart creation: missing snapshot bars data');
+//           console.log('⚠️ Skipping chart creation: missing snapshot bars data');
         }
     }
     else if(tradeData.term == 'short'){
@@ -724,7 +724,7 @@ const candleSets = candleResults.reduce((acc, r) => {
       }, candleSummary);
        
         const { microUrl, fullUrl } = await createAndUploadShortTermCharts( payload, rawAiReview );
-       console.log('Charts uploaded:', { microUrl, fullUrl });
+//        console.log('Charts uploaded:', { microUrl, fullUrl });
       rawAiReview.microChartUrl = microUrl;
       rawAiReview.fullChartUrl = fullUrl;
     }
@@ -751,7 +751,7 @@ const candleSets = candleResults.reduce((acc, r) => {
       }, candleSummary);
       
       const { microUrl, fullUrl } = await createAndUploadMediumTermCharts( payload, rawAiReview );
-      console.log('Charts uploaded:', { microUrl, fullUrl });
+//       console.log('Charts uploaded:', { microUrl, fullUrl });
       rawAiReview.microChartUrl = microUrl;
       rawAiReview.fullChartUrl = fullUrl;
 
@@ -826,7 +826,7 @@ const candleSets = candleResults.reduce((acc, r) => {
 
       // Display final cost summary
       const costSummary = aiCostTracker.getCostBreakdown();
-      console.log(costSummary);
+//       console.log(costSummary);
       
       // Update trade log with comprehensive review information
       if (tradeData.logId) {
@@ -848,11 +848,11 @@ const candleSets = candleResults.reduce((acc, r) => {
         });
       }
       
-      console.log('AI Review result:', { success: true, result: rawAiReview });
+//       console.log('AI Review result:', { success: true, result: rawAiReview });
      
       
     } catch (error) {
-      console.error('❌ AI Review failed:', error);
+//       console.error('❌ AI Review failed:', error);
       
       // Save error status to database
       if (tradeData.logId) {
@@ -878,9 +878,9 @@ buildIntradayReviewPayload(agentOut, tradeData, newsSentiment) {
   const candleCount = last1m?.length || 0;
   const lastCandleTime = last1m?.length ? last1m[last1m.length - 1].time : null;
   if (candleCount > 0) {
-    console.log(`📊 INTRADAY DATA: ${candleCount} candles | Last: ${lastCandleTime} | Price: ${last}`);
+//     console.log(`📊 INTRADAY DATA: ${candleCount} candles | Last: ${lastCandleTime} | Price: ${last}`);
   } else {
-    console.log(`❌ INTRADAY DATA: No 1m candles available`);
+//     console.log(`❌ INTRADAY DATA: No 1m candles available`);
   }
 
   // small helpers from your indicators
@@ -918,7 +918,7 @@ buildIntradayReviewPayload(agentOut, tradeData, newsSentiment) {
   const distanceFromLastPct = (last && entry) ? Math.abs(entry - last) / last * 100 : null;
   
   // DEBUG: Consolidated deviation calculation
-  console.log(`💰 DEVIATION: Entry=${entry} | Last=${last} | Deviation=${distanceFromLastPct?.toFixed(2)}% | LogID=${tradeData?.logId || 'N/A'}`);
+//   console.log(`💰 DEVIATION: Entry=${entry} | Last=${last} | Deviation=${distanceFromLastPct?.toFixed(2)}% | LogID=${tradeData?.logId || 'N/A'}`);
   const rr = (entry != null && stop != null && target != null)
     ? Math.abs(target - entry) / Math.max(1e-9, Math.abs(entry - stop))
     : null;
@@ -1088,7 +1088,7 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
   
   // DEBUG: Clean short-term summary
   const priceSource = c1h?.length ? '1h' : (c1D?.length ? '1D' : 'NO_DATA');
-  console.log(`💰 SHORT DEVIATION: Entry=${entry} | Last=${last}(${priceSource}) | Dev=${distanceFromLastPct?.toFixed(2)}% | Log=${tradeData?.logId}`);
+//   console.log(`💰 SHORT DEVIATION: Entry=${entry} | Last=${last}(${priceSource}) | Dev=${distanceFromLastPct?.toFixed(2)}% | Log=${tradeData?.logId}`);
 
   const rr = (entry != null && stop != null && target != null)
     ? Math.abs(target - entry) / Math.max(1e-9, Math.abs(entry - stop))
@@ -1295,7 +1295,7 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
 
   // DEBUG: Clean medium-term summary  
   const priceSource = c1h?.length ? '1h' : (c1D?.length ? '1D' : 'NO_DATA');
-  console.log(`💰 MEDIUM DEVIATION: Entry=${entry} | Last=${last}(${priceSource}) | Dev=${distanceFromLastPct?.toFixed(2)}% | Log=${tradeData?.logId}`);
+//   console.log(`💰 MEDIUM DEVIATION: Entry=${entry} | Last=${last}(${priceSource}) | Dev=${distanceFromLastPct?.toFixed(2)}% | Log=${tradeData?.logId}`);
 
   const rr = (entry != null && stop != null && target != null)
     ? Math.abs(target - entry) / Math.max(1e-9, Math.abs(entry - stop))
@@ -1468,40 +1468,110 @@ termToFrames = {
   medium:   ['1h', '1D','1W']     // Multi-week to monthly trades
 };
 
-// Indian market holidays for 2024-2025 (update annually)
-// Source: NSE/BSE holiday calendar
-indianMarketHolidays = [
-  // 2024
-  '2024-01-26', // Republic Day
-  '2024-03-08', // Mahashivratri
-  '2024-03-25', // Holi
-  '2024-03-29', // Good Friday
-  '2024-04-11', // Id-Ul-Fitr
-  '2024-04-17', // Ram Navami
-  '2024-05-01', // Maharashtra Day
-  '2024-06-17', // Bakri Id
-  '2024-08-15', // Independence Day
-  '2024-08-19', // Parsi New Year
-  '2024-10-02', // Gandhi Jayanti
-  '2024-11-01', // Diwali-Laxmi Pujan
-  '2024-11-15', // Guru Nanak Jayanti
-  '2024-11-20', // Maharashtra Election
-  // 2025 - Official NSE Holiday List
-  '2025-02-26', // Mahashivratri
-  '2025-03-14', // Holi
-  '2025-03-31', // Id-Ul-Fitr (Ramadan Eid)
-  '2025-04-10', // Shri Mahavir Jayanti
-  '2025-04-14', // Dr. Baba Saheb Ambedkar Jayanti
-  '2025-04-18', // Good Friday
-  '2025-05-01', // Maharashtra Day
-  '2025-08-15', // Independence Day
-  '2025-08-27', // Ganesh Chaturthi
-  '2025-10-02', // Mahatma Gandhi Jayanti/Dussehra
-  '2025-10-21', // Diwali Laxmi Pujan
-  '2025-10-22', // Diwali-Balipratipada
-  '2025-11-05', // Prakash Gurpurb Sri Guru Nanak Dev
-  '2025-12-25', // Christmas
-];
+// Market holidays cache - fetched from Upstox API by year
+marketHolidaysCache = new Map(); // year -> Set of holiday dates
+
+/**
+ * Fetch market holidays from Upstox API for a specific year
+ */
+async fetchMarketHolidays(year, upstoxToken = null) {
+  try {
+    // Import MarketTiming model
+    const MarketTiming = (await import('../../models/marketTiming.js')).default;
+    
+    // Check if we already have holidays for this year in memory cache
+    if (this.marketHolidaysCache.has(year)) {
+      // console.log(`📅 Using memory cached holidays for ${year}`);
+      return this.marketHolidaysCache.get(year);
+    }
+
+    // Check database first for existing holiday data for this year
+    const startOfYear = `${year}-01-01`;
+    const endOfYear = `${year}-12-31`;
+    
+    const existingHolidays = await MarketTiming.find({
+      date: { $gte: startOfYear, $lte: endOfYear },
+      isHoliday: true,
+      validUntil: { $gt: new Date() } // Only get non-expired records
+    }).select('date');
+
+    // If we have holidays in DB, use them
+    if (existingHolidays.length > 0) {
+      const holidays = new Set(existingHolidays.map(h => h.date));
+      this.marketHolidaysCache.set(year, holidays);
+      // console.log(`📅 Using ${holidays.size} holidays from database for ${year}`);
+      return holidays;
+    }
+
+    // No holidays in DB, must fetch from API - requires token
+    if (!upstoxToken) {
+      console.error(`❌ No Upstox token available and no holiday data in DB for ${year}. Cannot fetch holidays - business day calculation will fail.`);
+      throw new Error(`Holiday data required for ${year} but no Upstox token available`);
+    }
+
+    const response = await axios.get('https://api.upstox.com/v2/market/holidays', {
+      headers: {
+        'Authorization': `Bearer ${upstoxToken}`,
+        'Accept': 'application/json'
+      },
+      timeout: 10000
+    });
+
+    if (response.data?.status === 'success' && Array.isArray(response.data.data)) {
+      const holidays = new Set();
+      const holidayDocs = [];
+      
+      response.data.data.forEach(holiday => {
+        if (holiday.date && holiday.holiday_type === 'TRADING_HOLIDAY') {
+          const holidayYear = new Date(holiday.date).getFullYear();
+          
+          // Only include holidays for the requested year
+          if (holidayYear === year) {
+            // Check if NSE is closed (most relevant for equity trading)
+            const nseClosed = holiday.closed_exchanges?.includes('NSE') || 
+                             holiday.open_exchanges?.every(ex => ex.exchange !== 'NSE');
+            if (nseClosed) {
+              holidays.add(holiday.date);
+              
+              // Prepare document for database storage
+              holidayDocs.push({
+                date: holiday.date,
+                exchange: 'NSE',
+                isHoliday: true,
+                isMarketOpen: false,
+                reason: holiday.description || 'Market Holiday',
+                upstoxData: holiday,
+                fetchedAt: new Date(),
+                validUntil: new Date(year + 1, 11, 31) // Valid until end of next year
+              });
+            }
+          }
+        }
+      });
+
+      // Store holidays in database for future use
+      if (holidayDocs.length > 0) {
+        try {
+          await MarketTiming.insertMany(holidayDocs, { ordered: false }); // Continue on duplicates
+          console.log(`💾 Stored ${holidayDocs.length} holidays in database for ${year}`);
+        } catch (dbError) {
+          // Log but don't fail - duplicates are expected
+          console.log(`💾 Some holidays may already exist in DB for ${year}`);
+        }
+      }
+
+      // Cache the holidays for this year in memory
+      this.marketHolidaysCache.set(year, holidays);
+      return holidays;
+    }
+    
+    throw new Error('Invalid response from Upstox holidays API');
+    
+  } catch (error) {
+    console.error(`❌ Failed to fetch market holidays for ${year}:`, error.message);
+    return new Set(); // Return empty set on error
+  }
+}
 
 /**
  * Parse a timeframe string like: '1m','3m','15m','1h','4h','1D','1W','1Mo'
@@ -1608,146 +1678,47 @@ unitPath(u, mode = 'intraday') {
 }
 
 
-buildCandleUrls(tradeData) {
+async buildCandleUrls(tradeData) {
   const { instrument_key, term } = tradeData;
   const t = (term || '').toLowerCase();
 
-  // IST anchors
+  // FORCE HISTORICAL DATA ONLY (for morning runs at 5:00 AM)
+  // Always use previous day as the latest data point
   const now = this.getCurrentIST('date');         // IST Date object
-  const todayISO = this.isoIST(now);
-  const yesterdayISO = this.isoIST(this.addDays(now, -1));
-  const live = this.sessionHasStartedIST();       // boolean (09:15–15:30 IST)
+  const previousDay = this.addDays(now, -1);     // Force previous day
+  const todayISO = this.isoIST(previousDay);      // Use previous day as "today"
+  const yesterdayISO = this.isoIST(this.addDays(previousDay, -1));
+  const live = false;                             // Force not live to avoid intraday endpoints
   
   const frames = this.termToFrames[t] || [];
   
   // DEBUG: Clean endpoint creation summary
-  console.log(`🔍 ENDPOINT DEBUG: ${t.toUpperCase()} | Today: ${todayISO} | Live: ${live} | Frames: [${frames.join(',')}]`);
+//   console.log(`🔍 ENDPOINT DEBUG: ${t.toUpperCase()} | Today: ${todayISO} | Live: ${live} | Frames: [${frames.join(',')}]`);
   
   const endpoints = [];
 
-  // ---------- INTRADAY (time-aware, target-based) ----------
-  if (t === 'intraday') {
-    const TARGETS = { '1m': 375, '3m': 125, '15m': 50 };
-    const PER_DAY = { '1m': 375, '3m': 125, '15m': 25 };
-
-    const minutesSoFar = this.getTradingMinutesElapsedIST(); // 0..375
-    const todayIsBusinessDay = this.isBusinessDayIST(this.indianMarketHolidays, now);
-
-
-    frames.forEach((f) => {
-      const { n, u } = this.parseFrame(f);
-      const upIntra = this.unitPath(u, 'intraday');
-
-      // 1) Today’s live stream
-      endpoints.push({
-        frame: f,
-        kind: 'intraday',
-        url: `https://api.upstox.com/v3/historical-candle/intraday/${instrument_key}/${upIntra}/${n}`,
-      });
-
-      // 2) Bars already today
-      let todayBars = 0;
-      if (u === 'm') todayBars = Math.floor(minutesSoFar / n);
-      if (u === 'h') todayBars = Math.floor(minutesSoFar / (n * 60));
-
-      // 3) Top-up with past days to hit target
-      const target = TARGETS[f] ?? 0;
-      const perDay = PER_DAY[f] ?? 0;
-      let deficit = Math.max(0, target - todayBars);
-
-      // Calculate required historical data in a single date range
-      if (deficit > 0 && perDay > 0) {
-        // Helper to find date range covering required business days
-        const startDate = todayIsBusinessDay ? this.addDays(now, -1) : now;
-        let businessDays = Math.ceil(deficit / perDay);
-        let currentDate = new Date(startDate);
-        let fromDate = new Date(startDate);
-        let daysChecked = 0;
-        let businessDaysFound = 0;
-        
-        // Go backwards until we find enough business days
-        while (businessDaysFound < businessDays && daysChecked < 60) {
-          currentDate = this.addDays(currentDate, -1);
-          if (this.isBusinessDayIST(this.indianMarketHolidays, currentDate)) {
-            businessDaysFound++;
-            fromDate = currentDate;
-          }
-          daysChecked++;
-        }
-        
-        // Single API call for the entire range
-        const { n, u } = this.parseFrame(f);
-        const upHist = this.unitPath(u, 'historical');
-        endpoints.push({
-          frame: f,
-          kind: 'historical',
-          url: `https://api.upstox.com/v3/historical-candle/${instrument_key}/${upHist}/${n}/${this.isoIST(startDate)}/${this.isoIST(fromDate)}`,
-        });
-      }
-    });
-
-    return {
-      endpoints,
-      latestCandleUrl: live
-        ? `https://api.upstox.com/v3/historical-candle/intraday/${instrument_key}/minutes/1`
-        : null,
-      sessionHasStarted: live,
-      todayISO,
-    };
-  }
-
-  // ---------- SHORT (target-based like intraday, but for 15m/1h/1D) ----------
-  if (t === 'short' || t === 'shortterm') {
-    // Targets you want visible/usable (matches your short-term agent limits)
+  // ---------- SWING/SHORT (target-based for 15m/1h/1D) ----------
+  if (t === 'short' || t === 'shortterm' || t === 'swing') {
+    // Targets for swing trading (historical data only)
     const TARGETS = { '15m': 200, '1h': 160, '1D': 260 };
     // Bars a typical trading day contributes for each frame
     const PER_DAY = { '15m': 25, '1h': 6, '1D': 1 };
 
-    // For live session, we can add intraday streams for 15m and 60m (not for 1D)
-    const minutesSoFar = this.getTradingMinutesElapsedIST(); // 0..375
-    const todayIsBusinessDay = this.isBusinessDayIST(this.indianMarketHolidays, now);
-    
-    console.log(`🔍 SHORT TERM: BusinessDay=${todayIsBusinessDay} | Minutes=${minutesSoFar} | Live=${live}`);
+    // Check if previous day was a business day (for return data)
+    const todayIsBusinessDay = await this.isBusinessDayIST(previousDay, process.env.UPSTOX_API_KEY);
 
-
-    frames.forEach((f) => {
+    for (const f of frames) {
       const { n, u } = this.parseFrame(f);
 
-      // 1) Intraday stream for intraday-capable frames (15m/1h) if today is business day (live or just closed)
-      if ((f === '15m' || f === '1h') && todayIsBusinessDay) {
-        const upIntra = this.unitPath(u, 'intraday');
-        endpoints.push({
-          frame: f,
-          kind: 'intraday',
-          url: `https://api.upstox.com/v3/historical-candle/intraday/${instrument_key}/${upIntra}/${n}`,
-        });
-        console.log(`   ✅ Added INTRADAY ${f} endpoint`);
-      }
-
-      // 2) How many bars we have today (for business days, either live or completed session)
-      let todayBars = 0;
-      if (todayIsBusinessDay) {
-        // If market is live, use actual elapsed time; if closed, assume full session (375 minutes)
-        const effectiveMinutes = live ? minutesSoFar : 375; // Full trading day = 375 minutes
-        if (u === 'm') todayBars = Math.floor(effectiveMinutes / n);          // 15m → 25 max
-        if (u === 'h') todayBars = Math.floor(effectiveMinutes / (n * 60));   // 1h → 6 max
-        console.log(`   📊 ${f}: ${todayBars} today's bars (${effectiveMinutes}min)`);
-      }
-
-      // For 1D, we consider only full daily bars → count 0 for the current day
-      if (f === '1D') todayBars = 0;
-
-      // 3) Top-up with historical D-1, D-2... to hit target
+      // Get full target amount from historical data only (no live data)
       const target = TARGETS[f] ?? 0;
       const perDay = PER_DAY[f] ?? 0;
-      let deficit = Math.max(0, target - todayBars);
+      let deficit = target; // Need full target since no live data
 
       // Calculate required historical data in a single date range
       if (deficit > 0 && perDay > 0) {
-        // For 1D, start from today if market is closed, otherwise yesterday
-        const startDate = (f === '1D') 
-          ? (live ? this.addDays(now, -1) : now)
-          : (todayIsBusinessDay ? this.addDays(now, -1) : now);
+        // Always start from previous day for historical data only
+        const startDate = previousDay;
           
         let businessDays = Math.ceil(deficit / perDay);
         let currentDate = new Date(startDate);
@@ -1755,10 +1726,16 @@ buildCandleUrls(tradeData) {
         let daysChecked = 0;
         let businessDaysFound = 0;
         
+        // console.log(`📊 [DATE CALC] Frame ${f}: need ${deficit} bars, ${perDay} per day = ${businessDays} business days`);
+        
         // Go backwards until we find enough business days
         while (businessDaysFound < businessDays && daysChecked < 365) {
           currentDate = this.addDays(currentDate, -1);
-          if (this.isBusinessDayIST(this.indianMarketHolidays, currentDate)) {
+          const isBusinessDay = await this.isBusinessDayIST(currentDate, process.env.UPSTOX_API_KEY);
+          if (daysChecked < 5) { // Debug first 5 days
+            // console.log(`📊 [DEBUG] Day ${daysChecked}: ${this.isoIST(currentDate)} = business day? ${isBusinessDay}`);
+          }
+          if (isBusinessDay) {
             businessDaysFound++;
             fromDate = currentDate;
           }
@@ -1766,15 +1743,16 @@ buildCandleUrls(tradeData) {
         }
         
         // Single API call for the entire range
-        const { n, u } = this.parseFrame(f);
         const upHist = this.unitPath(u, 'historical');
+        const finalUrl = `https://api.upstox.com/v3/historical-candle/${instrument_key}/${upHist}/${n}/${this.isoIST(startDate)}/${this.isoIST(fromDate)}`;
+        
         endpoints.push({
           frame: f,
           kind: 'historical',
-          url: `https://api.upstox.com/v3/historical-candle/${instrument_key}/${upHist}/${n}/${this.isoIST(startDate)}/${this.isoIST(fromDate)}`,
+          url: finalUrl,
         });
       }
-    });
+    }
 
     return {
       endpoints,
@@ -1795,10 +1773,10 @@ if (t === 'medium' || t === 'mediumterm') {
   const PER_WEEK = { '1W': 1 };
 
   const minutesSoFar = this.getTradingMinutesElapsedIST(); // 0..375
-  const todayIsBusinessDay = this.isBusinessDayIST(this.indianMarketHolidays, now);
+  const todayIsBusinessDay = await this.isBusinessDayIST(now, process.env.UPSTOX_API_KEY);
 
   // Helper: go back N business days to get a fromDate that yields 'need' bars
-  const backfillBusinessDays = (startDate, need, perDay) => {
+  const backfillBusinessDays = async (startDate, need, perDay) => {
     let businessDays = Math.ceil(need / perDay);
     let currentDate = new Date(startDate);
     let fromDate = new Date(startDate);
@@ -1806,7 +1784,7 @@ if (t === 'medium' || t === 'mediumterm') {
 
     while (found < businessDays && daysChecked < 365) {
       currentDate = this.addDays(currentDate, -1);
-      if (this.isBusinessDayIST(this.indianMarketHolidays, currentDate)) {
+      if (await this.isBusinessDayIST(currentDate, process.env.UPSTOX_API_KEY)) {
         found++;
         fromDate = currentDate;
       }
@@ -1816,7 +1794,7 @@ if (t === 'medium' || t === 'mediumterm') {
   };
 
   // Helper: go back N business weeks (use week steps; 1W = 1 per week)
-  const backfillBusinessWeeks = (startDate, needWeeks) => {
+  const backfillBusinessWeeks = async (startDate, needWeeks) => {
     // anchor to last completed week if we're in a live session/business day
     // so we don’t include the partial current week
     let current = new Date(startDate);
@@ -1827,7 +1805,7 @@ if (t === 'medium' || t === 'mediumterm') {
       // if any business day exists in that week, count it
       // (simple approach: check the Friday of that week)
       const friday = this.addDays(current, 4); // Mon + 4 = Fri
-      if (this.isBusinessDayIST(this.indianMarketHolidays, friday)) {
+      if (await this.isBusinessDayIST(friday, process.env.UPSTOX_API_KEY)) {
         weeksFound++;
         fromDate = friday;
       }
@@ -1836,62 +1814,35 @@ if (t === 'medium' || t === 'mediumterm') {
     return fromDate;
   };
 
-  frames.forEach((f) => {
+  for (const f of frames) {
     const { n, u } = this.parseFrame(f);
 
-    // 1) Live intraday stream for 1h (timing aid) if market live & business day
-    if (f === '1h' && todayIsBusinessDay && live) {
-      const upIntra = this.unitPath(u, 'intraday');
-      endpoints.push({
-        frame: f,
-        kind: 'intraday',
-        url: `https://api.upstox.com/v3/historical-candle/intraday/${instrument_key}/${upIntra}/${n}`,
-      });
-    }
-
-    // 2) Count bars contributed "today" (only meaningful for 1h while live)
-    let todayBars = 0;
-    if (f === '1h' && todayIsBusinessDay && live) {
-      todayBars = Math.floor(minutesSoFar / (n * 60)); // ~6 max
-    }
-    if (f === '1D' || f === '1W') {
-      // For medium-term we only consider fully completed higher timeframe bars.
-      // During live session, current day/week is partial → count 0.
-      todayBars = 0;
-    }
-
-    // 3) Top-up with historical range to hit target
+    // Get full target amount from historical data only (no live data)
     const target   = TARGETS[f] ?? 0;
     const perDay   = PER_DAY[f]  ?? 0;
     const perWeek  = PER_WEEK[f] ?? 0;
-    let deficit    = Math.max(0, target - todayBars);
+    let deficit    = target; // Need full target since no live data
 
     if (deficit > 0) {
-      // Decide start anchor:
-      // - For 1D: if live, start from yesterday; else today
-      // - For 1W: always start from last completed week anchor
-      // - For 1h: if live, start from yesterday; else today
+      // Always start from previous day for historical data only
       let startDate;
-      if (f === '1D') {
-        startDate = live ? this.addDays(now, -1) : now;
-      } else if (f === '1W') {
-        // Anchor at last completed week: if live & business day, use last week Friday; else use last week Friday from 'now'
-        const anchor = (todayIsBusinessDay && live) ? this.addDays(now, -1) : now;
-        // Move anchor to last Friday (approx) for a stable week boundary
+      if (f === '1W') {
+        // For weekly data, anchor to last completed week (use previous day as anchor)
+        const anchor = previousDay;
         const weekday = anchor.getDay(); // 0=Sun..6=Sat
         // distance to last Friday (5)
         const deltaToFriday = (weekday >= 5) ? (weekday - 5) : (weekday + 2); 
         startDate = this.addDays(anchor, -deltaToFriday);
       } else {
-        // 1h
-        startDate = (todayIsBusinessDay && live) ? this.addDays(now, -1) : now;
+        // For 1D and 1h, use previous day
+        startDate = previousDay;
       }
 
       let fromDate;
       if (f === '1W' && perWeek > 0) {
-        fromDate = backfillBusinessWeeks(startDate, Math.ceil(deficit / perWeek));
+        fromDate = await backfillBusinessWeeks(startDate, Math.ceil(deficit / perWeek));
       } else if (perDay > 0) {
-        fromDate = backfillBusinessDays(startDate, deficit, perDay);
+        fromDate = await backfillBusinessDays(startDate, deficit, perDay);
       }
 
       const upHist = this.unitPath(u, 'historical');
@@ -1901,7 +1852,7 @@ if (t === 'medium' || t === 'mediumterm') {
         url: `https://api.upstox.com/v3/historical-candle/${instrument_key}/${upHist}/${n}/${this.isoIST(startDate)}/${this.isoIST(fromDate)}`,
       });
     }
-  });
+  }
 
   return {
     endpoints,
@@ -1912,29 +1863,19 @@ if (t === 'medium' || t === 'mediumterm') {
   };
 }
 
-  // ---------- MEDIUM / LONG (existing range-based logic) ----------
+  // ---------- DEFAULT/FALLBACK (historical data only) ----------
   const lookbacks = {
-    m: { from: this.addMonths(now, -1),  to: live ? this.addDays(now, -1) : now },
-    h: { from: this.addMonths(now, -3),  to: live ? this.addDays(now, -1) : now },
-    d: { from: this.addYears (now, -3),  to: now },
-    w: { from: this.addYears (now, -10), to: now },
+    m: { from: this.addMonths(previousDay, -1),  to: previousDay },
+    h: { from: this.addMonths(previousDay, -3),  to: previousDay },
+    d: { from: this.addYears (previousDay, -3),  to: previousDay },
+    w: { from: this.addYears (previousDay, -10), to: previousDay },
   };
 
   frames.forEach((f) => {
     const { n, u } = this.parseFrame(f);
-    const upIntra = this.unitPath(u, 'intraday');
     const upHist  = this.unitPath(u, 'historical');
 
-    // today’s intraday minutes/hours only if session live
-    if ((u === 'm' || u === 'h') && live) {
-      endpoints.push({
-        frame: f,
-        kind: 'intraday',
-        url: `https://api.upstox.com/v3/historical-candle/intraday/${instrument_key}/${upIntra}/${n}`,
-      });
-    }
-
-    // historical window for context
+    // historical window for context (no intraday)
     const { from, to } = lookbacks[u] || {};
     if (from && to) {
       endpoints.push({
@@ -1948,63 +1889,38 @@ if (t === 'medium' || t === 'mediumterm') {
   return {
     endpoints,
     latestCandleUrl: null,
-    sessionHasStarted: live,
+    sessionHasStarted: false,
     todayISO,
   };
 }
 
 /**
- * isBusinessDayIST
- * - Accepts holidays as: Array<string>, Set<string>, { [dateISO]: boolean }, string, or a predicate fn(dateISO)=>boolean
- * - Optionally pass a Date to check (defaults to "now" in IST)
+ * Check if a date is a business day (not weekend or holiday)
+ * Uses Upstox API to fetch holidays for the year
  */
-isBusinessDayIST(holidays, date = new Date()) {
+async isBusinessDayIST(date = new Date(), upstoxToken = null) {
   // Convert 'date' to IST calendar day
   const ist = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   const day = ist.getDay(); // 0=Sun .. 6=Sat
   const dateISO = ist.toISOString().slice(0, 10); // YYYY-MM-DD
 
-  // Weekend check
-  if (day === 0 || day === 6) return false;
+  // Weekend check (Saturday=6, Sunday=0)
+  if (day === 0 || day === 6) {
+    return false;
+  }
 
-  // Normalize holidays into a predicate
-  const isHoliday = (() => {
-    if (!holidays) return () => false;
+  // Get holidays for this year
+  const year = ist.getFullYear();
+  const holidays = await this.fetchMarketHolidays(year, upstoxToken);
 
-    // Predicate function
-    if (typeof holidays === 'function') {
-      return (d) => !!holidays(d);
-    }
-
-    // Array of strings
-    if (Array.isArray(holidays)) {
-      const set = new Set(holidays);
-      return (d) => set.has(d);
-    }
-
-    // Set<string>
-    if (holidays instanceof Set) {
-      return (d) => holidays.has(d);
-    }
-
-    // Object map { 'YYYY-MM-DD': true }
-    if (typeof holidays === 'object') {
-      const keys = new Set(Object.keys(holidays));
-      return (d) => keys.has(d) && !!holidays[d];
-    }
-
-    // Single string
-    if (typeof holidays === 'string') {
-      return (d) => d === holidays;
-    }
-
-    // Anything else -> no holidays
-    return () => false;
-  })();
-
-  const result = !isHoliday(dateISO);
-  if (!result) console.log(`🏖️ HOLIDAY: ${dateISO} is not a business day`);
-  return result;
+  // Check if this date is a holiday
+  const isHoliday = holidays.has(dateISO);
+  
+  if (isHoliday) {
+   // console.log(`🏖️ HOLIDAY: ${dateISO} is a market holiday`);
+  }
+  
+  return !isHoliday;
 }
 
 getTradingMinutesElapsedIST() {
@@ -2025,7 +1941,7 @@ getTradingMinutesElapsedIST() {
    * Fetch candle data from Upstox API
    */
   async fetchCandleData(url) {
-    console.log(`📡 Fetching candle data from: ${url}`);
+//     console.log(`📡 Fetching candle data from: ${url}`);
     
     // DEBUG: Log URL details - Upstox uses path params, not query params
     const urlParts = url.split('/');
@@ -2037,7 +1953,7 @@ getTradingMinutesElapsedIST() {
     const toDate = isIntraday ? 'TODAY' : urlParts[7];
     const fromDate = isIntraday ? 'TODAY' : urlParts[8];
     
-    console.log(`📡 FETCH: ${instrument} | ${interval} | ${fromDate} → ${toDate}`);
+//     console.log(`📡 FETCH: ${instrument} | ${interval} | ${fromDate} → ${toDate}`);
     
     try {
       const response = await axios.get(url, {
@@ -2048,12 +1964,12 @@ getTradingMinutesElapsedIST() {
       
       // Check if data exists in nested structure
       const actualCandles = response.data?.data?.candles || response.data?.candles;
-      console.log(`✅ Candle data received: ${actualCandles?.length || 0} candles`);
+//       console.log(`✅ Candle data received: ${actualCandles?.length || 0} candles`);
       
       // DEBUG: Check response structure
       if (!actualCandles && response.data) {
-        console.log(`❌ RESPONSE STRUCTURE ISSUE:`, Object.keys(response.data));
-        console.log(`   Raw response.data:`, JSON.stringify(response.data).substring(0, 200));
+//         console.log(`❌ RESPONSE STRUCTURE ISSUE:`, Object.keys(response.data));
+//         console.log(`   Raw response.data:`, JSON.stringify(response.data).substring(0, 200));
       }
       
       // DEBUG: Check candle order for both API types
@@ -2062,21 +1978,21 @@ getTradingMinutesElapsedIST() {
         const lastCandle = actualCandles[actualCandles.length - 1];
         const isIntraday = url.includes('/intraday/');
         
-        console.log(`   📈 ${isIntraday ? 'INTRADAY' : 'HISTORICAL'} - ${actualCandles.length} candles`);
-        console.log(`   🕐 Array[0]: ${firstCandle[0]} | Close: ${firstCandle[4]}`);
-        console.log(`   🕐 Array[-1]: ${lastCandle[0]} | Close: ${lastCandle[4]}`);
+//         console.log(`   📈 ${isIntraday ? 'INTRADAY' : 'HISTORICAL'} - ${actualCandles.length} candles`);
+//         console.log(`   🕐 Array[0]: ${firstCandle[0]} | Close: ${firstCandle[4]}`);
+//         console.log(`   🕐 Array[-1]: ${lastCandle[0]} | Close: ${lastCandle[4]}`);
         
         // Determine chronological order
         const firstTime = new Date(firstCandle[0]).getTime();
         const lastTime = new Date(lastCandle[0]).getTime();
         const isNewestFirst = firstTime > lastTime;
         
-        console.log(`   📊 ORDER: ${isNewestFirst ? 'NEWEST→OLDEST' : 'OLDEST→NEWEST'} | API: ${isIntraday ? 'intraday' : 'historical'}`);
+//         console.log(`   📊 ORDER: ${isNewestFirst ? 'NEWEST→OLDEST' : 'OLDEST→NEWEST'} | API: ${isIntraday ? 'intraday' : 'historical'}`);
       }
       
       // If no candles (market closed), return empty structure
       if (!actualCandles || actualCandles.length === 0) {
-        console.warn('⚠️ No candle data available (market may be closed)');
+//         console.warn('⚠️ No candle data available (market may be closed)');
         return {
           status: 'success',
           candles: [],
@@ -2092,7 +2008,7 @@ getTradingMinutesElapsedIST() {
       
       return response.data;
     } catch (error) {
-      console.error(`❌ Failed to fetch candle data from ${url}:`, error.message);
+//       console.error(`❌ Failed to fetch candle data from ${url}:`, error.message);
       return {
         status: 'error',
         candles: [],
@@ -2146,12 +2062,12 @@ getTradingMinutesElapsedIST() {
       item.data.candles.length > 0
     );
 
-    console.log(`📊 Data summary: ${labeledData.length} total endpoints, ${validData.length} with valid candles`);
+//     console.log(`📊 Data summary: ${labeledData.length} total endpoints, ${validData.length} with valid candles`);
     
     // Log each endpoint's data status
     labeledData.forEach((item) => {
       const candleCount = item.data?.candles?.length || 0;
-      console.log(`  ${item.frame} (${item.kind}): ${candleCount} candles - ${item.data?.message || 'No message'}`);
+//       console.log(`  ${item.frame} (${item.kind}): ${candleCount} candles - ${item.data?.message || 'No message'}`);
     });
   
     if (t === 'intraday') {
@@ -2167,7 +2083,7 @@ getTradingMinutesElapsedIST() {
     }
   
   
-    console.warn(`⚠️ No matching agent found for term: ${t}`);
+//     console.warn(`⚠️ No matching agent found for term: ${t}`);
     return null;
   }
 
@@ -2352,7 +2268,13 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
 
     // trim to limit + buffer, then compute indicators on trimmed
     const trimmed = take(merged, frame);
-    const indicators = this._computeShortSelectedIndicators(trimmed, INDSET[frame])
+    const indicators = this._computeShortSelectedIndicators(trimmed, INDSET[frame]);
+    
+    console.log(`📊 [INDICATOR DEBUG] Frame ${frame}: calculated ${Object.keys(indicators || {}).length} indicators`);
+    if (indicators?.error) {
+      console.error(`❌ [INDICATOR ERROR] Frame ${frame}: ${indicators.error}`);
+    }
+    
     return { candles: trimmed, indicators };
   };
 
@@ -2459,20 +2381,20 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
   };
 
   // frame → limit we want to SHOW (add buffer for indicator warm-up)
-  const LIMITS = { '1h': 160, '1D': 260, '1W': 120 }; // ~months→years
+  const LIMITS = { '15m': 200, '1h': 160, '1D': 260 }; // swing trading timeframes
   const BUF = 50;
   const take = (arr, frame) => arr.slice(-(LIMITS[frame] + BUF));
 
   // indicators per frame
   const INDSET = {
+    '15m': ['ema20','ema50','rsi14','atr14','vwap'],              // intraday timing
     '1h': ['ema20','ema50','rsi14','atr14'],                      // timing within swing
     '1D': ['ema20','ema50','sma200','rsi14','atr14','pivotClassic'], // primary bias + levels
-    '1W': ['ema20','ema50','sma200','rsi14','atr14'],             // structural trend
   };
 
   // ---------- structure incoming data -> byFrame ----------
   const byFrame = labeledData.reduce((acc, x) => {
-    const frame = x.frame; // '1h'|'1D'|'1W'
+    const frame = x.frame; // '15m'|'1h'|'1D'
     if (!frame) return acc;
 
     acc[frame] ??= { intraday: [], historical: [] };
@@ -2507,15 +2429,15 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
     return { candles: trimmed, indicators };
   };
 
-  // Build each requested frame if present
-  ['1h','1D','1W'].forEach(f => {
+  // Build each requested frame if present - changed to support swing trading
+  ['15m','1h','1D'].forEach(f => {
     const built = buildFrame(f);
     if (built) out.frames[f] = built;
   });
 
   // ---------- Context layers ----------
   const daily  = out.frames['1D']?.candles || [];
-  const weekly = out.frames['1W']?.candles || [];
+  const hourly = out.frames['1h']?.candles || [];
 
   // Previous day / week context
   if (daily.length) {
@@ -2781,7 +2703,7 @@ _computeIntradaySelectedIndicators(candles, keys) {
       aboveVWAP : out.vwap  ? last > (out.vwap.at(-1)  ?? 0) : undefined,
     };
   } catch (err) {
-    console.error('Indicator calc failed:', err);
+//     console.error('Indicator calc failed:', err);
     out.error = 'Indicator calculation failed';
   }
 
@@ -2875,7 +2797,7 @@ _computeShortSelectedIndicators(candles, keys) {
     }
 
   } catch (err) {
-    console.error('Short-term indicator calc failed:', err);
+//     console.error('Short-term indicator calc failed:', err);
     out.error = 'Indicator calculation failed';
   }
 
@@ -2919,7 +2841,7 @@ addDays(date, days) {
    * Fetch latest candle data
    */
   async fetchLatestCandle(url) {
-    console.log(`📡 Fetching latest candle from: ${url}`);
+//     console.log(`📡 Fetching latest candle from: ${url}`);
     
     try {
       const response = await axios.get(url, {
@@ -2930,7 +2852,7 @@ addDays(date, days) {
       
       // Check if data exists in nested structure
       const actualCandles = response.data?.data?.candles || response.data?.candles;
-      console.log(`✅ Latest candle received: ${actualCandles?.length || 0} candles`);
+//       console.log(`✅ Latest candle received: ${actualCandles?.length || 0} candles`);
       
       // Ensure we return the correct structure
       if (response.data?.data?.candles) {
@@ -2941,7 +2863,7 @@ addDays(date, days) {
       return response.data;
       
     } catch (error) {
-      console.error(`❌ Failed to fetch latest candle:`, error.message);
+//       console.error(`❌ Failed to fetch latest candle:`, error.message);
       return {
         status: 'error',
         candles: [],
@@ -3029,7 +2951,7 @@ ${titles.slice(-30).join('\n')}`;
       'sentiment'
     );
     
-    console.log(`💰 Sentiment Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
+//     console.log(`💰 Sentiment Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
     
     // Update stock log with cost
     if (logId && logId !== 'N/A') {
@@ -3042,7 +2964,7 @@ try {
   try {
     return this.safeJSONParse(content);
   } catch (err) {
-    console.error('Failed to parse sentiment analysis response:', err, 'Raw content:', content);
+//     console.error('Failed to parse sentiment analysis response:', err, 'Raw content:', content);
     return {
       shortTermSentiment: {
         category: "Neutral",
@@ -3053,7 +2975,7 @@ try {
   }
 }
     } catch (error) {
-      console.error('❌ Sentiment analysis failed:', error);
+//       console.error('❌ Sentiment analysis failed:', error);
       // Return default neutral sentiment on error
       return {
         shortTermSentiment: {
@@ -3076,7 +2998,7 @@ safeJSONParse(content) {
 
     return JSON.parse(cleaned);
   } catch (err) {
-    console.error('Failed to parse JSON from model:', err, 'Raw content:', content);
+//     console.error('Failed to parse JSON from model:', err, 'Raw content:', content);
     return {
       shortTermSentiment: {
         category: "Neutral",
@@ -3243,7 +3165,7 @@ ${JSON.stringify(payload)}
     false,
     'analysis'
   );
-  console.log(`💰 Intraday Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
+//   console.log(`💰 Intraday Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
 
   // Parse & return JSON result with token usage (use cleanJsonResponse for o4-mini compatibility)
   const parsedResult = this.cleanJsonResponse(raw);
@@ -3271,7 +3193,7 @@ ${JSON.stringify(payload)}
 
     return parsedResult;
   } catch (error) {
-    console.error('❌ Intraday analysis failed:', error);
+//     console.error('❌ Intraday analysis failed:', error);
     throw new Error(`Intraday analysis failed: ${error.message}`);
   }
 }
@@ -3537,7 +3459,7 @@ Return ONLY the JSON object described above.
     'analysis'
   );
   
-  console.log(`💰 Intraday Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
+//   console.log(`💰 Intraday Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
   
   // Update stock log with cost
   if (tradeData.logId) {
@@ -3824,7 +3746,7 @@ Return ONLY the JSON object described above.
     'analysis'
   );
   
-  console.log(`💰 Short-term Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
+//   console.log(`💰 Short-term Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
   
   // Update stock log with cost
   if (tradeData.logId) {
@@ -3853,7 +3775,7 @@ Return ONLY the JSON object described above.
   
     return sanitized;
   } catch (error) {
-    console.error('❌ Short-term analysis failed:', error);
+//     console.error('❌ Short-term analysis failed:', error);
     throw new Error(`Short-term analysis failed: ${error.message}`);
   }
 }
@@ -4115,7 +4037,7 @@ Return ONLY the JSON object described above.
     'analysis'
   );
   
-  console.log(`💰 Medium-term Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
+//   console.log(`💰 Medium-term Analysis Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
   
   // Update stock log with cost
   if (tradeData.logId) {
@@ -4154,7 +4076,7 @@ Return ONLY the JSON object described above.
   
     return cleaned;
   } catch (error) {
-    console.error('❌ Medium-term analysis failed:', error);
+//     console.error('❌ Medium-term analysis failed:', error);
     throw new Error(`Medium-term analysis failed: ${error.message}`);
   }
 }
@@ -4450,14 +4372,14 @@ async sanitizeReview(review) {
           a.plan.targets = [roundTick(newT1), roundTick(newT2)];
           a.plan.notes = a.plan.notes || [];
           a.plan.notes.push('Targets adjusted to meet 1.8R minimum requirement');
-          console.log(`Fixed medium-term RR: T1=${newT1}, T2=${newT2} for entry=${entry}, stop=${stop}`);
+//           console.log(`Fixed medium-term RR: T1=${newT1}, T2=${newT2} for entry=${entry}, stop=${stop}`);
         } else if (a.plan.side === 'short') {
           const newT1 = entry - minReward;
           const newT2 = entry - (minReward * 1.4);
           a.plan.targets = [roundTick(newT1), roundTick(newT2)];
           a.plan.notes = a.plan.notes || [];
           a.plan.notes.push('Targets adjusted to meet 1.8R minimum requirement');
-          console.log(`Fixed medium-term RR: T1=${newT1}, T2=${newT2} for entry=${entry}, stop=${stop}`);
+//           console.log(`Fixed medium-term RR: T1=${newT1}, T2=${newT2} for entry=${entry}, stop=${stop}`);
         }
         
         // Also update correctedPlan if it exists
@@ -4588,11 +4510,11 @@ async sanitizeReview(review) {
         reviewCompletedAt: new Date()
       }, { new: true });
 
-      console.log('✅ Trade log updated with market hours rejection');
+//       console.log('✅ Trade log updated with market hours rejection');
       return updatedLogEntry;
       
     } catch (error) {
-      console.error('❌ Failed to update trade log with rejection:', error.message);
+//       console.error('❌ Failed to update trade log with rejection:', error.message);
       throw error;
     }
   }
@@ -4656,12 +4578,12 @@ async sanitizeReview(review) {
       const updatedLogEntry = await StockLog.findByIdAndUpdate(logId, updateData, { new: true });
 
 
-        console.log(`🔍 Credit deduction check: isValid = ${result?.analysis?.isValid}, condition passes: ${result?.analysis?.isValid != null}`);
-        console.log(`🔍 User ID: ${logEntry.user}, isFromRewardedAd: ${logEntry.isFromRewardedAd}`);
+//         console.log(`🔍 Credit deduction check: isValid = ${result?.analysis?.isValid}, condition passes: ${result?.analysis?.isValid != null}`);
+//         console.log(`🔍 User ID: ${logEntry.user}, isFromRewardedAd: ${logEntry.isFromRewardedAd}`);
         
         if(result?.analysis?.isValid  != null){
           try {
-              console.log(`💳 Starting credit deduction for user ${logEntry.user}...`);
+//               console.log(`💳 Starting credit deduction for user ${logEntry.user}...`);
               // Deduct credits after successful AI review
               await subscriptionService.deductCredits(
                 logEntry.user, 
@@ -4671,22 +4593,22 @@ async sanitizeReview(review) {
                 logEntry.isFromRewardedAd || false,
                 this.creditType || 'regular'
               );
-              console.log(`✅ AI review successful for ${logEntry.stock.trading_symbol} - credits deducted`);
+//               console.log(`✅ AI review successful for ${logEntry.stock.trading_symbol} - credits deducted`);
             } catch (error) {
-              console.error('❌ Error deducting credits after AI review:', error);
+//               console.error('❌ Error deducting credits after AI review:', error);
               // Continue even if credit deduction fails - review is already complete
             }
         } else {
-          console.log(`⚠️ Credits NOT deducted - isValid is null for user ${logEntry.user}`);
+//           console.log(`⚠️ Credits NOT deducted - isValid is null for user ${logEntry.user}`);
         }
       
 
     
-      console.log('✅ Trade log updated and notification sent successfully');
+//       console.log('✅ Trade log updated and notification sent successfully');
       return updatedLogEntry;
       
     } catch (error) {
-      console.error('❌ Failed to update trade log and send notification:', error.message);
+//       console.error('❌ Failed to update trade log and send notification:', error.message);
       throw error;
     }
   }
@@ -4700,7 +4622,7 @@ async sanitizeReview(review) {
     try {
       const stockLog = await StockLog.findById(logId);
       if (!stockLog) {
-        console.warn(`⚠️ Stock log not found for ID: ${logId}`);
+//         console.warn(`⚠️ Stock log not found for ID: ${logId}`);
         return;
       }
 
@@ -4741,13 +4663,13 @@ async sanitizeReview(review) {
       stockLog.apiCosts.analysis = metadata.sessionCosts.byCallType.analysis?.totalCost || 0;
 
       await stockLog.save();
-      console.log(`💾 Updated trade log ${logId} with comprehensive review metadata`);
-      console.log(`   Total Cost: $${metadata.sessionCosts.totalCost.toFixed(4)}`);
-      console.log(`   Models: ${metadata.modelDetails.sentimentModel} + ${metadata.modelDetails.analysisModel}`);
-      console.log(`   Tokens: ${metadata.tokenUsage.totalTokens} (${metadata.tokenUsage.inputTokens}+${metadata.tokenUsage.outputTokens})`);
-      console.log(`   User Level: ${metadata.userExperience}`);
+//       console.log(`💾 Updated trade log ${logId} with comprehensive review metadata`);
+//       console.log(`   Total Cost: $${metadata.sessionCosts.totalCost.toFixed(4)}`);
+//       console.log(`   Models: ${metadata.modelDetails.sentimentModel} + ${metadata.modelDetails.analysisModel}`);
+//       console.log(`   Tokens: ${metadata.tokenUsage.totalTokens} (${metadata.tokenUsage.inputTokens}+${metadata.tokenUsage.outputTokens})`);
+//       console.log(`   User Level: ${metadata.userExperience}`);
     } catch (error) {
-      console.error(`❌ Failed to update trade log with metadata:`, error);
+//       console.error(`❌ Failed to update trade log with metadata:`, error);
     }
   }
 
@@ -4779,9 +4701,9 @@ async sanitizeReview(review) {
         { new: true }
       );
 
-      console.log(`🐛 Debug info saved for trade ${logId}`);
+//       console.log(`🐛 Debug info saved for trade ${logId}`);
     } catch (error) {
-      console.error(`❌ Failed to save debug info:`, error);
+//       console.error(`❌ Failed to save debug info:`, error);
     }
   }
 
@@ -4795,7 +4717,7 @@ async sanitizeReview(review) {
     try {
       const stockLog = await StockLog.findById(logId);
       if (!stockLog) {
-        console.warn(`⚠️ Stock log not found for ID: ${logId}`);
+//         console.warn(`⚠️ Stock log not found for ID: ${logId}`);
         return;
       }
 
@@ -4827,9 +4749,9 @@ async sanitizeReview(review) {
       stockLog.apiCosts.total = (stockLog.apiCosts.sentiment || 0) + (stockLog.apiCosts.analysis || 0);
 
       await stockLog.save();
-      console.log(`💾 Updated stock log ${logId} with ${callType} cost: $${cost.toFixed(4)}`);
+//       console.log(`💾 Updated stock log ${logId} with ${callType} cost: $${cost.toFixed(4)}`);
     } catch (error) {
-      console.error(`❌ Failed to update stock log with cost:`, error);
+//       console.error(`❌ Failed to update stock log with cost:`, error);
     }
   }
 
@@ -4863,7 +4785,7 @@ async sanitizeReview(review) {
    */
   async saveErrorStatus(tradeLogId, error) {
     try {
-      console.error(`❌ AI Review failed for trade ${tradeLogId}:`, error.message);
+//       console.error(`❌ AI Review failed for trade ${tradeLogId}:`, error.message);
       
       const errorData = {
         reviewStatus: 'error',
@@ -4885,9 +4807,9 @@ async sanitizeReview(review) {
      
       await StockLog.findByIdAndUpdate(tradeLogId, errorData, { new: true });
       
-      console.log(`💾 Updated trade log ${tradeLogId} with error status`);
+//       console.log(`💾 Updated trade log ${tradeLogId} with error status`);
     } catch (dbError) {
-      console.error(`❌ Failed to save error status for trade ${tradeLogId}:`, dbError);
+//       console.error(`❌ Failed to save error status for trade ${tradeLogId}:`, dbError);
     }
   }
 

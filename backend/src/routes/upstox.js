@@ -614,7 +614,6 @@ router.get('/analysis-orders/:analysisId', authenticateToken, async (req, res) =
         const userId = req.user.id;
         const { analysisId } = req.params;
 
-        console.log(`📋 Get analysis orders for user ${userId}, analysis: ${analysisId}`);
 
         // Get the analysis
         const StockAnalysis = (await import('../models/stockAnalysis.js')).default;

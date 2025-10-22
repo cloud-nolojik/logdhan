@@ -44,8 +44,8 @@ const MarketTimingSchema = new mongoose.Schema({
     },
     validUntil: {
         type: Date,
-        required: true,
-        index: true // For cleanup queries
+        required: true
+        // Index removed - using explicit schema.index() below with TTL
     }
 }, {
     timestamps: true

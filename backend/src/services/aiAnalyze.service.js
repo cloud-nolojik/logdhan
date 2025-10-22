@@ -81,7 +81,7 @@ class AIAnalyzeService {
             const contentStr = typeof content === 'string' ? content : JSON.stringify(content);
             return crypto.createHash('sha256').update(contentStr).digest('hex').substring(0, 16);
         } catch (error) {
-            console.error('❌ Error creating prompt hash:', error.message);
+            // console.error('❌ Error creating prompt hash:', error.message);
             return 'hash_error';
         }
     }
@@ -95,8 +95,8 @@ class AIAnalyzeService {
      */
     async determineAIModel(userId, isFromRewardedAd = false, creditType = 'regular') {
         try {
-            console.log(`\n🔍 Determining AI model for user: ${userId}`);
-            console.log(`   isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
+            // console.log(`\n🔍 Determining AI model for user: ${userId}`);
+            // console.log(`   isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
             
             // Check if user can use credits
             const canUse = await subscriptionService.canUserUseCredits(userId, 1, isFromRewardedAd);
@@ -151,12 +151,12 @@ class AIAnalyzeService {
             // Priority 1: Check if using bonus credits (advanced analysis)
             if (creditType === 'bonus') {
                 modelTier = 'advanced';
-                console.log(`🎁 Bonus credits - using advanced analysis model`);
+                // console.log(`🎁 Bonus credits - using advanced analysis model`);
             }
             // Priority 1.5: Check if this is from rewarded ad (basic model for sustainability) 
             else if (isFromRewardedAd) {
                 modelTier = 'ad-supported';
-                console.log(`🎁 Ad-supported analysis - using basic models for sustainability`);
+                // console.log(`🎁 Ad-supported analysis - using basic models for sustainability`);
             }
             // Priority 2: Check plan type for paying users
             else if (plan && plan.analysisLevel === 'advanced') {
@@ -167,23 +167,23 @@ class AIAnalyzeService {
                 
                 if (totalCredits > 0) {
                     modelTier = 'advanced';
-                    console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models`);
+                    // console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models`);
                 } else {
                     modelTier = 'basic-fallback';
-                    console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models`);
+                    // console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models`);
                 }
             }
             // Priority 3: Basic/free plan users
             else {
                 modelTier = 'basic';
-                console.log(`📱 Basic/free plan - using basic models`);
+                // console.log(`📱 Basic/free plan - using basic models`);
             }
             
             // Get models from simplified configuration
             const analysisModel = modelTier === 'advanced' ? this.advancedModel : this.basicModel;
             const sentimentModel = this.analysisModel; // Use main analysis model for sentiment
             
-            console.log(`🤖 Selected models: Analysis=${analysisModel}, Sentiment=${sentimentModel}, Tier=${modelTier}`);
+            // console.log(`🤖 Selected models: Analysis=${analysisModel}, Sentiment=${sentimentModel}, Tier=${modelTier}`);
             
             return {
                 canProceed: true,
@@ -202,7 +202,7 @@ class AIAnalyzeService {
             };
             
         } catch (error) {
-            console.error('❌ Model determination failed:', error);
+            // console.error('❌ Model determination failed:', error);
             return {
                 canProceed: true,
                 models: {
@@ -240,7 +240,7 @@ class AIAnalyzeService {
         const originalAnalysisModel = this.analysisModel;
         
         try {
-            console.log(`🔍 Starting AI analysis for ${stock_symbol} (${analysis_type})`);
+            // console.log(`🔍 Starting AI analysis for ${stock_symbol} (${analysis_type})`);
 
             // Determine AI models based on user subscription
             if (user_id) {
@@ -252,7 +252,7 @@ class AIAnalyzeService {
                 
                 if (!modelConfig.canProceed) {
                     // Cannot proceed with analysis - return error
-                    console.error(`❌ Cannot proceed with AI analysis: ${modelConfig.error}`);
+                    // console.error(`❌ Cannot proceed with AI analysis: ${modelConfig.error}`);
                     
                     return {
                         success: false,
@@ -266,28 +266,28 @@ class AIAnalyzeService {
                 this.analysisModel = modelConfig.models.analysis;
                 this.sentimentalModel = modelConfig.models.sentiment;
                 
-                console.log(`✅ Model selection complete:`);
-                console.log(`   Analysis: ${this.analysisModel}`);
-                console.log(`   Sentiment: ${this.sentimentalModel}`);
-                console.log(`   Tier: ${modelConfig.models.tier}`);
-                console.log(`   Credits remaining: ${modelConfig.subscription?.creditsRemaining || 0}`);
+                // console.log(`✅ Model selection complete:`);
+                // console.log(`   Analysis: ${this.analysisModel}`);
+                // console.log(`   Sentiment: ${this.sentimentalModel}`);
+                // console.log(`   Tier: ${modelConfig.models.tier}`);
+                // console.log(`   Credits remaining: ${modelConfig.subscription?.creditsRemaining || 0}`);
             }
 
             // Check for existing analysis (cached completed or in-progress) unless forceFresh is true
             if (!forceFresh) {
-                console.log(`🔍 Checking for existing analysis...`);
+                // console.log(`🔍 Checking for existing analysis...`);
                 const existing = await StockAnalysis.findByInstrumentAndUser(instrument_key, analysis_type, user_id);
                 
                 if (existing) {
                     if (existing.status === 'completed') {
-                        console.log(`✅ Found cached completed analysis from ${existing.created_at}`);
+                        // console.log(`✅ Found cached completed analysis from ${existing.created_at}`);
                         return {
                             success: true,
                             data: existing,
                             cached: true
                         };
                     } else if (existing.status === 'in_progress') {
-                        console.log(`⏳ Analysis already in progress, returning progress status`);
+                        // console.log(`⏳ Analysis already in progress, returning progress status`);
                         return {
                             success: true,
                             data: existing,
@@ -296,12 +296,12 @@ class AIAnalyzeService {
                     }
                 }
             } else {
-                console.log(`🔄 Force fresh analysis requested - skipping cache check`);
+                // console.log(`🔄 Force fresh analysis requested - skipping cache check`);
                 // If there's an existing in-progress analysis, we should still wait for it to complete
                 // to avoid duplicate analysis requests
                 const existing = await StockAnalysis.findByInstrumentAndUser(instrument_key, analysis_type, user_id);
                 if (existing && existing.status === 'in_progress') {
-                    console.log(`⏳ Fresh analysis requested but analysis already in progress, returning progress status`);
+                    // console.log(`⏳ Fresh analysis requested but analysis already in progress, returning progress status`);
                     return {
                         success: true,
                         data: existing,
@@ -311,12 +311,18 @@ class AIAnalyzeService {
                 
                 // If there's a completed analysis, delete it to make room for fresh analysis
                 if (existing && existing.status === 'completed') {
-                    console.log(`🗑️ Deleting existing cached analysis to make room for fresh analysis`);
+                    // console.log(`🗑️ Deleting existing cached analysis to make room for fresh analysis`);
                     await StockAnalysis.deleteOne({ _id: existing._id });
                 }
             }
 
-            console.log(`🚀 Proceeding with fresh analysis for ${stock_symbol}`);
+            // console.log(`🚀 Proceeding with fresh analysis for ${stock_symbol}`);
+
+            // Validate current_price before creating analysis
+            const validPrice = parseFloat(current_price);
+            if (!validPrice || isNaN(validPrice) || validPrice <= 0) {
+                throw new Error(`Invalid current price: ${current_price}. Cannot proceed with analysis.`);
+            }
 
             // Create new analysis record with progress tracking
             const pendingAnalysis = new StockAnalysis({
@@ -324,7 +330,7 @@ class AIAnalyzeService {
                 stock_name,
                 stock_symbol,
                 analysis_type,
-                current_price,
+                current_price: validPrice,
                 user_id,
                 status: 'in_progress',
                 expires_at: StockAnalysis.getExpiryTime(), // Market-aware expiry
@@ -347,7 +353,7 @@ class AIAnalyzeService {
             });
 
             await pendingAnalysis.save();
-            console.log(`📝 Created pending analysis record: ${pendingAnalysis._id}`);
+            // console.log(`📝 Created pending analysis record: ${pendingAnalysis._id}`);
 
             try {
                 // Generate AI analysis with progress tracking
@@ -366,15 +372,15 @@ class AIAnalyzeService {
                 pendingAnalysis.analysis_data = analysisResult;
                 await pendingAnalysis.markCompleted();
 
-                console.log(`✅ AI analysis completed and saved for ${stock_symbol}`);
+                // console.log(`✅ AI analysis completed and saved for ${stock_symbol}`);
 
                 // Deduct credits after successful analysis
                 if (user_id) {
                     try {
                         await subscriptionService.deductCredits(user_id, 1, isFromRewardedAd);
-                        console.log(`💳 Credits deducted for user ${user_id}`);
+                        // console.log(`💳 Credits deducted for user ${user_id}`);
                     } catch (creditError) {
-                        console.warn('⚠️ Credit deduction failed:', creditError.message);
+                        // console.warn('⚠️ Credit deduction failed:', creditError.message);
                     }
                 }
 
@@ -388,12 +394,12 @@ class AIAnalyzeService {
                 // Mark analysis as failed using new method
                 await pendingAnalysis.markFailed(analysisError.message);
                 
-                console.error(`❌ Analysis failed for ${stock_symbol}:`, analysisError.message);
+                // console.error(`❌ Analysis failed for ${stock_symbol}:`, analysisError.message);
                 throw analysisError;
             }
 
         } catch (error) {
-            console.error('❌ AI Analysis Error:', error);
+            // console.error('❌ AI Analysis Error:', error);
             
             return {
                 success: false,
@@ -444,7 +450,7 @@ class AIAnalyzeService {
             return result;
             
         } catch (error) {
-            console.error('❌ Progress tracking analysis failed:', error);
+            // console.error('❌ Progress tracking analysis failed:', error);
             throw error;
         }
     }
@@ -454,7 +460,7 @@ class AIAnalyzeService {
      */
     async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key }) {
         try {
-            console.log(`🚀 Starting real data fetch for ${stock_symbol} (${analysis_type})`);
+            // console.log(`🚀 Starting real data fetch for ${stock_symbol} (${analysis_type})`);
             
             // Create trade data structure for API calls
             const tradeData = {
@@ -467,21 +473,21 @@ class AIAnalyzeService {
 
             // Get sector information for enhanced analysis
             const sectorInfo = getSectorForStock(stock_symbol, stock_name);
-            console.log(`🏭 Sector identified: ${sectorInfo.name} (${sectorInfo.code}) - Index: ${sectorInfo.index}`);
+            // console.log(`🏭 Sector identified: ${sectorInfo.name} (${sectorInfo.code}) - Index: ${sectorInfo.index}`);
 
             // Fetch real market data in parallel
-            console.log(`📰 Fetching news for: ${stock_name}`);
+//             console.log(`📰 Fetching news for: ${stock_name}`);
             const [candleData, newsData] = await Promise.all([
                 this.fetchRealMarketData(tradeData),
                 this.fetchSectorEnhancedNews(stock_name, sectorInfo).catch(err => {
-                    console.warn('⚠️ News fetch failed, continuing without news:', err.message);
+//                     console.warn('⚠️ News fetch failed, continuing without news:', err.message);
                     return null;
                 })
             ]);
 
-            console.log(`📰 News data result: ${newsData ? `${newsData.length} articles found` : 'No news data'}`);
+//             console.log(`📰 News data result: ${newsData ? `${newsData.length} articles found` : 'No news data'}`);
             if (newsData && newsData.length > 0) {
-                console.log(`📰 Sample headlines:`, newsData.slice(0, 3).map(item => item.title));
+//                 console.log(`📰 Sample headlines:`, newsData.slice(0, 3).map(item => item.title));
             }
 
             // Analyze news sentiment with sector context
@@ -489,7 +495,7 @@ class AIAnalyzeService {
                 await this.analyzeSectorSentiment(newsData, tradeData.term, sectorInfo) : 
                 'neutral';
                 
-            console.log(`📊 Sector-enhanced sentiment analysis result: ${sentiment}`);
+//             console.log(`📊 Sector-enhanced sentiment analysis result: ${sentiment}`);
 
             // Route to appropriate agent to process data
             const agentOut = await this.processMarketData(tradeData, candleData);
@@ -501,6 +507,24 @@ class AIAnalyzeService {
             } else {
                 payload = this.aiReviewService.buildIntradayReviewPayload(agentOut, tradeData, sentiment);
             }
+            
+            // // Log critical market data being sent to AI
+            // console.log(`📊 [DATA AUDIT] Market data payload for ${stock_symbol}:`, {
+            //     priceContext: payload?.priceContext ? {
+            //         last: payload.priceContext.last,
+            //         open: payload.priceContext.open,
+            //         high: payload.priceContext.high,
+            //         low: payload.priceContext.low
+            //     } : 'missing',
+            //     indicators_1D: payload?.indicators_1D ? {
+            //         atr14_1D: payload.indicators_1D.atr14_1D,
+            //         ema20_1D: payload.indicators_1D.ema20_1D,
+            //         ema50_1D: payload.indicators_1D.ema50_1D,
+            //         sma200_1D: payload.indicators_1D.sma200_1D,
+            //         availableIndicators: Object.keys(payload.indicators_1D)
+            //     } : 'missing',
+            //     volumeContext: payload?.volumeContext || 'missing'
+            // });
 
             // Clean payload for stock analysis - remove user plan sections
             payload = this.cleanPayloadForStockAnalysis(payload);
@@ -514,11 +538,11 @@ class AIAnalyzeService {
                         ? `${newsData.length} news articles analyzed. Overall sentiment: ${sentiment}`
                         : "No recent news found"
                 };
-                console.log(`📰 Updated newsLite with our analysis:`, payload.newsLite);
+//                 console.log(`📰 Updated newsLite with our analysis:`, payload.newsLite);
             }
 
-            console.log(`📊 Generated clean payload for stock analysis of ${stock_symbol}`);
-            console.log(`🤖 Using AI models - Analysis: ${this.analysisModel}, Sentiment: ${this.sentimentalModel}`);
+//             console.log(`📊 Generated clean payload for stock analysis of ${stock_symbol}`);
+//             console.log(`🤖 Using AI models - Analysis: ${this.analysisModel}, Sentiment: ${this.sentimentalModel}`);
 
             // Generate analysis with real market data and sector context
             const analysisResult = await this.generateStockAnalysisWithPayload({
@@ -531,13 +555,13 @@ class AIAnalyzeService {
                 sectorInfo
             });
 
-            console.log(`✅ AI Analysis completed successfully for ${stock_symbol}`);
-            console.log(`📋 Analysis result:`, JSON.stringify(analysisResult, null, 2));
+//             console.log(`✅ AI Analysis completed successfully for ${stock_symbol}`);
+//             console.log(`📋 Analysis result:`, JSON.stringify(analysisResult, null, 2));
 
             return analysisResult;
 
         } catch (error) {
-            console.error('❌ Failed to generate analysis with real data:', error);
+//             console.error('❌ Failed to generate analysis with real data:', error);
             
             // For testing: Don't use fallback, show the actual error
             throw error;
@@ -548,29 +572,32 @@ class AIAnalyzeService {
      * Fetch real market data from Upstox API
      */
     async fetchRealMarketData(tradeData) {
-        const { endpoints } = this.aiReviewService.buildCandleUrls(tradeData);
+        const { endpoints } = await this.aiReviewService.buildCandleUrls(tradeData);
         
-        console.log(`📡 Fetching ${endpoints.length} candle endpoints`);
+//         console.log(`📡 Fetching ${endpoints.length} candle endpoints`);
         
-        // Fetch all endpoints in parallel
-        const candleFetches = endpoints.map(ep =>
-            this.fetchCandleData(ep.url)
-                .then(res => ({
+        // Fetch endpoints one by one (synchronous)
+        const candleResults = [];
+        
+        for (const ep of endpoints) {
+            try {
+                const res = await this.fetchCandleData(ep.url);
+                candleResults.push({
                     status: 'fulfilled',
                     frame: ep.frame,
                     kind: ep.kind,
                     candles: res?.data?.candles || res?.candles || [],
                     raw: res
-                }))
-                .catch(err => ({
+                });
+            } catch (err) {
+                candleResults.push({
                     status: 'rejected',
                     frame: ep.frame,
                     kind: ep.kind,
                     error: err?.message || String(err)
-                }))
-        );
-
-        const candleResults = await Promise.all(candleFetches);
+                });
+            }
+        }
         
         // Organize results by frame
         const candleSets = candleResults.reduce((acc, r) => {
@@ -593,19 +620,31 @@ class AIAnalyzeService {
         return { endpoints, candleSets };
     }
 
+
+
     /**
      * Fetch candle data from Upstox API
      */
     async fetchCandleData(url) {
         try {
-            const response = await axios.get(url, {
+            // console.log(`Fetching data candle data from URL: ${url}`);
+            
+            // Try encoding the URL properly
+            const encodedUrl = url.replace(/\|/g, '%7C');
+            
+            const response = await axios.get(encodedUrl, {
                 headers: {
                     'Accept': 'application/json',
-                    'Authorization': `Bearer ${this.upstoxApiKey}`
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                 },
-                timeout: 10000
+                timeout: 10000,
+                validateStatus: function (status) {
+                    return status < 500; // Accept any status code less than 500
+                }
             });
             
+            // console.log(`Response status: ${response.status}`);
+            // console.log(`Fetching data ${JSON.stringify(response.data)}`);
             return response.data;
         } catch (error) {
             console.error(`❌ Candle fetch error:`, error.message);
@@ -619,18 +658,18 @@ class AIAnalyzeService {
     async fetchNewsData(stockName) {
         try {
             const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(stockName)}&hl=en-IN&gl=IN&ceid=IN:en`;
-            console.log(`📰 Fetching news from RSS URL: ${rssUrl}`);
+//             console.log(`📰 Fetching news from RSS URL: ${rssUrl}`);
             
             const feed = await this.rssParser.parseURL(rssUrl);
-            console.log(`📰 RSS feed parsed. Found ${feed.items?.length || 0} items`);
+//             console.log(`📰 RSS feed parsed. Found ${feed.items?.length || 0} items`);
             
             if (feed.items && feed.items.length > 0) {
-                console.log(`📰 First few titles:`, feed.items.slice(0, 3).map(item => item.title));
+//                 console.log(`📰 First few titles:`, feed.items.slice(0, 3).map(item => item.title));
             }
             
             return feed.items;
         } catch (error) {
-            console.error('📰 News fetch error:', error.message);
+//             console.error('📰 News fetch error:', error.message);
             throw error;
         }
     }
@@ -640,7 +679,7 @@ class AIAnalyzeService {
      */
     async fetchSectorEnhancedNews(stockName, sectorInfo) {
         try {
-            console.log(`📰 Fetching sector-enhanced news for ${stockName} in ${sectorInfo.name} sector`);
+//             console.log(`📰 Fetching sector-enhanced news for ${stockName} in ${sectorInfo.name} sector`);
             
             // Primary search for stock-specific news
             const stockNews = await this.fetchNewsData(stockName);
@@ -653,13 +692,13 @@ class AIAnalyzeService {
                 
                 try {
                     const sectorRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(sectorQuery)}&hl=en-IN&gl=IN&ceid=IN:en`;
-                    console.log(`📰 Fetching sector news from: ${sectorRssUrl}`);
+//                     console.log(`📰 Fetching sector news from: ${sectorRssUrl}`);
                     
                     const sectorFeed = await this.rssParser.parseURL(sectorRssUrl);
                     sectorNews = sectorFeed.items?.slice(0, 5) || []; // Limit to 5 sector news
-                    console.log(`📰 Found ${sectorNews.length} sector-specific news items`);
+//                     console.log(`📰 Found ${sectorNews.length} sector-specific news items`);
                 } catch (sectorError) {
-                    console.warn(`⚠️ Sector news fetch failed: ${sectorError.message}`);
+//                     console.warn(`⚠️ Sector news fetch failed: ${sectorError.message}`);
                 }
             }
             
@@ -669,11 +708,11 @@ class AIAnalyzeService {
                 index === self.findIndex(t => t.title === item.title)
             );
             
-            console.log(`📰 Total unique news items: ${uniqueNews.length} (${stockNews.length} stock + ${sectorNews.length} sector)`);
+//             console.log(`📰 Total unique news items: ${uniqueNews.length} (${stockNews.length} stock + ${sectorNews.length} sector)`);
             return uniqueNews.slice(0, 15); // Limit total to 15 items
             
         } catch (error) {
-            console.error('❌ Error fetching sector-enhanced news:', error.message);
+//             console.error('❌ Error fetching sector-enhanced news:', error.message);
             // Fallback to regular news
             return await this.fetchNewsData(stockName);
         }
@@ -684,7 +723,7 @@ class AIAnalyzeService {
      */
     async analyzeSentiment(newsItems, term) {
         if (!newsItems || newsItems.length === 0) {
-            console.log('📊 No news items for sentiment analysis, returning neutral');
+//             console.log('📊 No news items for sentiment analysis, returning neutral');
             return 'neutral';
         }
         
@@ -717,8 +756,8 @@ class AIAnalyzeService {
             8) OUTPUT MUST BE ONLY one of: positive, neutral, negative. No quotes, no punctuation, no extra words.
             `;
         
-        console.log(`📊 Analyzing sentiment for ${newsItems.length} news items using ${this.sentimentalModel}`);
-        console.log(`📊 Sample titles for sentiment:`, newsItems.slice(0, 2).map(item => item.title));
+//         console.log(`📊 Analyzing sentiment for ${newsItems.length} news items using ${this.sentimentalModel}`);
+//         console.log(`📊 Sample titles for sentiment:`, newsItems.slice(0, 2).map(item => item.title));
         
         try {
             const formattedMessages = this.formatMessagesForModel(this.sentimentalModel, prompt);
@@ -740,10 +779,10 @@ class AIAnalyzeService {
             const sentiment = response.data.choices[0].message.content.toLowerCase().trim();
             const validSentiment = ['positive', 'negative', 'neutral'].includes(sentiment) ? sentiment : 'neutral';
             
-            console.log(`📊 Sentiment analysis result: "${sentiment}" -> "${validSentiment}"`);
+//             console.log(`📊 Sentiment analysis result: "${sentiment}" -> "${validSentiment}"`);
             return validSentiment;
         } catch (error) {
-            console.error('❌ Sentiment analysis failed:', error.message);
+//             console.error('❌ Sentiment analysis failed:', error.message);
             return 'neutral';
         }
     }
@@ -753,7 +792,7 @@ class AIAnalyzeService {
      */
     async analyzeSectorSentiment(newsItems, term, sectorInfo) {
         if (!newsItems || newsItems.length === 0) {
-            console.log('📊 No news items for sector sentiment analysis, returning neutral');
+//             console.log('📊 No news items for sector sentiment analysis, returning neutral');
             return 'neutral';
         }
         
@@ -793,8 +832,8 @@ class AIAnalyzeService {
             8) OUTPUT MUST BE ONLY one of: positive, neutral, negative. No quotes, no punctuation.
             `;
         
-        console.log(`📊 Analyzing sector sentiment for ${newsItems.length} news items (${sectorName}) using ${this.sentimentalModel}`);
-        console.log(`📊 Sample titles for sector sentiment:`, newsItems.slice(0, 3).map(item => item.title));
+//         console.log(`📊 Analyzing sector sentiment for ${newsItems.length} news items (${sectorName}) using ${this.sentimentalModel}`);
+//         console.log(`📊 Sample titles for sector sentiment:`, newsItems.slice(0, 3).map(item => item.title));
         
         try {
             const formattedMessages = this.formatMessagesForModel(this.sentimentalModel, prompt);
@@ -816,10 +855,10 @@ class AIAnalyzeService {
             const sentiment = response.data.choices[0].message.content.toLowerCase().trim();
             const validSentiment = ['positive', 'negative', 'neutral'].includes(sentiment) ? sentiment : 'neutral';
             
-            console.log(`📊 Sector sentiment analysis result: "${sentiment}" -> "${validSentiment}" for ${sectorName}`);
+//             console.log(`📊 Sector sentiment analysis result: "${sentiment}" -> "${validSentiment}" for ${sectorName}`);
             return validSentiment;
         } catch (error) {
-            console.error('❌ Sector sentiment analysis failed:', error.message);
+//             console.error('❌ Sector sentiment analysis failed:', error.message);
             // Fallback to regular sentiment analysis
             return await this.analyzeSentiment(newsItems, term);
         }
@@ -829,8 +868,8 @@ class AIAnalyzeService {
      * Clean payload for stock analysis by removing user plan sections
      */
     cleanPayloadForStockAnalysis(payload) {
-        console.log('🧹 Starting payload cleanup for stock analysis...');
-        console.log('🧹 Original payload keys:', Object.keys(payload));
+//         console.log('🧹 Starting payload cleanup for stock analysis...');
+//         console.log('🧹 Original payload keys:', Object.keys(payload));
         
         const cleanPayload = { ...payload };
         
@@ -839,33 +878,33 @@ class AIAnalyzeService {
         
         sectionsToRemove.forEach(section => {
             if (cleanPayload[section]) {
-                console.log(`🧹 Removing ${section} from payload`);
+//                 console.log(`🧹 Removing ${section} from payload`);
                 delete cleanPayload[section];
             } else {
-                console.log(`🧹 Section ${section} not found in payload`);
+//                 console.log(`🧹 Section ${section} not found in payload`);
             }
         });
         
         // Also fix newsLite if it's empty - populate with our sentiment analysis
         if (cleanPayload.newsLite && (cleanPayload.newsLite.sentimentScore === 0 || cleanPayload.newsLite.notes === "")) {
-            console.log('🧹 newsLite is empty, will be handled by our news processing');
+//             console.log('🧹 newsLite is empty, will be handled by our news processing');
         }
         
         // Add basic support/resistance levels if they're empty
         if (cleanPayload.levels && cleanPayload.levels.supports?.length === 0 && cleanPayload.levels.resistances?.length === 0) {
-            console.log('🧹 Support/resistance levels are empty, calculating basic levels');
+//             console.log('🧹 Support/resistance levels are empty, calculating basic levels');
             cleanPayload.levels = this.calculateBasicLevels(cleanPayload);
         }
         
         // Calculate pivot points if they're missing
         if (cleanPayload.swingContext && cleanPayload.swingContext.pivots === null) {
-            console.log('🧹 Pivot points are null, calculating standard pivots');
+//             console.log('🧹 Pivot points are null, calculating standard pivots');
             cleanPayload.swingContext.pivots = this.calculatePivotPoints(cleanPayload.swingContext);
         }
         
         // Add volume classification to the payload BEFORE sending to AI
         const volumeClassification = this.classifyVolume(cleanPayload);
-        console.log(`🧹 Volume classification calculated: ${volumeClassification}`);
+//         console.log(`🧹 Volume classification calculated: ${volumeClassification}`);
         
         // Add volume info to the payload for AI to use
         if (!cleanPayload.volumeContext) {
@@ -874,7 +913,7 @@ class AIAnalyzeService {
         cleanPayload.volumeContext.classification = volumeClassification;
         cleanPayload.volumeContext.band = volumeClassification; // Also add as 'band' for compatibility
         
-        console.log('🧹 Cleaned payload keys:', Object.keys(cleanPayload));
+//         console.log('🧹 Cleaned payload keys:', Object.keys(cleanPayload));
         
         return cleanPayload;
     }
@@ -883,7 +922,7 @@ class AIAnalyzeService {
      * Calculate basic support/resistance levels from available data
      */
     calculateBasicLevels(payload) {
-        console.log('📊 Calculating basic support/resistance levels...');
+//         console.log('📊 Calculating basic support/resistance levels...');
         
         const supports = [];
         const resistances = [];
@@ -902,8 +941,8 @@ class AIAnalyzeService {
             const ema50 = payload.trendMomentum?.ema50_1D?.ema50;
             const sma200 = payload.trendMomentum?.sma200_1D?.sma200;
             
-            console.log(`📊 Price context: current=${currentPrice}, swingHigh20=${swingHigh20}, swingLow20=${swingLow20}`);
-            console.log(`📊 MAs: ema20=${ema20}, ema50=${ema50}, sma200=${sma200}`);
+//             console.log(`📊 Price context: current=${currentPrice}, swingHigh20=${swingHigh20}, swingLow20=${swingLow20}`);
+//             console.log(`📊 MAs: ema20=${ema20}, ema50=${ema50}, sma200=${sma200}`);
             
             // Calculate resistance levels (above current price)
             [swingHigh20, weeklyHigh, ema20, ema50, sma200, prevClose].forEach((level, index) => {
@@ -965,8 +1004,8 @@ class AIAnalyzeService {
                 index === self.findIndex(l => Math.abs(l.price - level.price) < 2) // Within ₹2
             ).sort((a, b) => b.price - a.price).slice(0, 3); // Top 3 closest
             
-            console.log(`📊 Calculated ${uniqueSupports.length} support levels:`, uniqueSupports.map(s => `${s.price}(${s.type})`));
-            console.log(`📊 Calculated ${uniqueResistances.length} resistance levels:`, uniqueResistances.map(r => `${r.price}(${r.type})`));
+//             console.log(`📊 Calculated ${uniqueSupports.length} support levels:`, uniqueSupports.map(s => `${s.price}(${s.type})`));
+//             console.log(`📊 Calculated ${uniqueResistances.length} resistance levels:`, uniqueResistances.map(r => `${r.price}(${r.type})`));
             
             return {
                 supports: uniqueSupports,
@@ -974,7 +1013,7 @@ class AIAnalyzeService {
             };
             
         } catch (error) {
-            console.error('📊 Error calculating basic levels:', error.message);
+//             console.error('📊 Error calculating basic levels:', error.message);
             return { supports: [], resistances: [] };
         }
     }
@@ -984,13 +1023,13 @@ class AIAnalyzeService {
      */
     classifyVolume(marketPayload) {
         try {
-            console.log('📊 Starting volume classification...');
+//             console.log('📊 Starting volume classification...');
             
             const dailyBars = marketPayload?.snapshots?.lastBars1D;
-            console.log(`📊 Daily bars available: ${dailyBars?.length || 0}`);
+//             console.log(`📊 Daily bars available: ${dailyBars?.length || 0}`);
             
             if (!dailyBars || dailyBars.length < 5) {
-                console.log('📊 Insufficient volume data for classification');
+//                 console.log('📊 Insufficient volume data for classification');
                 return 'UNKNOWN';
             }
             
@@ -1001,11 +1040,11 @@ class AIAnalyzeService {
                 return volume;
             }).filter(v => v && v > 0);
             
-            console.log(`📊 Extracted ${volumes.length} valid volume readings from ${recentBars.length} bars`);
-            console.log(`📊 Sample volumes:`, volumes.slice(-5).map(v => parseInt(v/1000000) + 'M')); // Last 5 in millions
+//             console.log(`📊 Extracted ${volumes.length} valid volume readings from ${recentBars.length} bars`);
+//             console.log(`📊 Sample volumes:`, volumes.slice(-5).map(v => parseInt(v/1000000) + 'M')); // Last 5 in millions
             
             if (volumes.length < 5) {
-                console.log('📊 Insufficient valid volume data');
+//                 console.log('📊 Insufficient valid volume data');
                 return 'UNKNOWN';
             }
             
@@ -1019,7 +1058,7 @@ class AIAnalyzeService {
             // Get latest volume
             const latestVolume = volumes[volumes.length - 1];
             
-            console.log(`📊 Volume analysis: latest=${(latestVolume/1000000).toFixed(1)}M, median=${(medianVolume/1000000).toFixed(1)}M, ratio=${(latestVolume/medianVolume).toFixed(2)}`);
+//             console.log(`📊 Volume analysis: latest=${(latestVolume/1000000).toFixed(1)}M, median=${(medianVolume/1000000).toFixed(1)}M, ratio=${(latestVolume/medianVolume).toFixed(2)}`);
             
             // Classify based on deviation from median
             const ratio = latestVolume / medianVolume;
@@ -1028,11 +1067,11 @@ class AIAnalyzeService {
             else if (ratio <= 0.7) classification = 'BELOW_AVERAGE';
             else classification = 'AVERAGE';
             
-            console.log(`📊 Volume classified as: ${classification}`);
+//             console.log(`📊 Volume classified as: ${classification}`);
             return classification;
             
         } catch (error) {
-            console.error('📊 Error classifying volume:', error.message);
+//             console.error('📊 Error classifying volume:', error.message);
             return 'UNKNOWN';
         }
     }
@@ -1041,12 +1080,12 @@ class AIAnalyzeService {
      * Calculate standard pivot points from previous session data
      */
     calculatePivotPoints(swingContext) {
-        console.log('📊 Calculating pivot points...');
+//         console.log('📊 Calculating pivot points...');
         
         try {
             const prevSession = swingContext.prevSession;
             if (!prevSession || !prevSession.high || !prevSession.low || !prevSession.close) {
-                console.warn('📊 Insufficient data for pivot calculation');
+//                 console.warn('📊 Insufficient data for pivot calculation');
                 return null;
             }
             
@@ -1054,7 +1093,7 @@ class AIAnalyzeService {
             const low = prevSession.low;
             const close = prevSession.close;
             
-            console.log(`📊 Previous session data: H=${high}, L=${low}, C=${close}`);
+//             console.log(`📊 Previous session data: H=${high}, L=${low}, C=${close}`);
             
             // Standard Pivot Point calculation
             const pivot = (high + low + close) / 3;
@@ -1085,15 +1124,15 @@ class AIAnalyzeService {
                 }
             };
             
-            console.log(`📊 Calculated pivots:`, pivots);
-            console.log(`📊 Support levels: S3=${pivots.s3}, S2=${pivots.s2}, S1=${pivots.s1}`);
-            console.log(`📊 Pivot: ${pivots.pivot}`);
-            console.log(`📊 Resistance levels: R1=${pivots.r1}, R2=${pivots.r2}, R3=${pivots.r3}`);
+//             console.log(`📊 Calculated pivots:`, pivots);
+//             console.log(`📊 Support levels: S3=${pivots.s3}, S2=${pivots.s2}, S1=${pivots.s1}`);
+//             console.log(`📊 Pivot: ${pivots.pivot}`);
+//             console.log(`📊 Resistance levels: R1=${pivots.r1}, R2=${pivots.r2}, R3=${pivots.r3}`);
             
             return pivots;
             
         } catch (error) {
-            console.error('📊 Error calculating pivot points:', error.message);
+//             console.error('📊 Error calculating pivot points:', error.message);
             return null;
         }
     }
@@ -1127,11 +1166,14 @@ class AIAnalyzeService {
         });
 
         // Route to appropriate agent based on term
+        let agentResult;
         if (tradeData.term === 'intraday') {
-            return await this.aiReviewService.runIntradayAgent(labeledData, tradeData);
+            agentResult = await this.aiReviewService.runIntradayAgent(labeledData, tradeData);
         } else {
-            return await this.aiReviewService.runShortTermAgent(labeledData, tradeData);
+            agentResult = await this.aiReviewService.runShortTermAgent(labeledData, tradeData);
         }
+        
+        return agentResult;
     }
 
     /**
@@ -1572,8 +1614,8 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         stepTimes.api_call_end = Date.now();
 
         const content = completion.data.choices[0]?.message?.content;
-        console.log('🤖 Raw AI response length:', content?.length || 0);
-        console.log('🤖 Response preview:', content?.substring(0, 200) + '...');
+//         console.log('🤖 Raw AI response length:', content?.length || 0);
+//         console.log('🤖 Response preview:', content?.substring(0, 200) + '...');
         
         let parsed;
         try {
@@ -1610,12 +1652,12 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                 }
             }
             
-            console.log('🤖 Cleaned JSON length:', cleanContent.length);
+//             console.log('🤖 Cleaned JSON length:', cleanContent.length);
             parsed = JSON.parse(cleanContent);
             
         } catch (e) {
-            console.error('❌ JSON parse failed. Raw content:', content);
-            console.error('❌ Parse error:', e.message);
+//             console.error('❌ JSON parse failed. Raw content:', content);
+//             console.error('❌ Parse error:', e.message);
             
             // Return fallback analysis instead of throwing
             return this.generateFallbackAnalysis(current_price, analysis_type);
@@ -1925,6 +1967,23 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         parsed.meta.formatted_messages = formattedMessages; // Store exact messages sent to GPT-5
       
         
+        
+        // Check if AI returned insufficientData and log the reason
+        if (parsed.insufficientData === true) {
+            console.log(`🚨 [INSUFFICIENT DATA] AI detected missing data for ${stock_symbol}:`);
+            console.log(`   insufficientData: ${parsed.insufficientData}`);
+            console.log(`   strategies: ${parsed.strategies?.length || 0} strategies`);
+            console.log(`   market_summary:`, parsed.market_summary || 'missing');
+            console.log(`   runtime.triggers_evaluated:`, parsed.runtime?.triggers_evaluated || 'missing');
+            
+            // Log what data was missing based on the AI's analysis
+            const missingData = [];
+            if (!parsed.market_summary?.last) missingData.push('market_summary.last');
+            if (!parsed.runtime?.triggers_evaluated?.length) missingData.push('runtime.triggers_evaluated');
+            if (parsed.strategies?.length === 0) missingData.push('no strategies generated');
+            
+            console.log(`🔍 [INSUFFICIENT DATA] Likely missing data elements:`, missingData);
+        }
         
         // // 3. That's it! Return GPT-5's response directly
         // console.log(`✅ GPT-5 analysis complete for ${stock_symbol}`);

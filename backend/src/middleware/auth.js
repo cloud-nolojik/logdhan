@@ -5,7 +5,6 @@ import TokenBlacklist from '../models/tokenBlacklist.js';
 export const auth = async (req, res, next) => {
   try {
     const token = req.header('Authorization')?.replace('Bearer ', '');
-    console.log('🔑 Token:', token);  
     if (!token) {
       return res.status(401).json({ error: 'Authentication required' });
     }

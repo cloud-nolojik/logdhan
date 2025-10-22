@@ -114,7 +114,7 @@ export async function getCurrentPrice(instrumentKey,sendCandles = false) {
       'Accept': 'application/json',
       'x-api-key': API_KEY
     },
-    timeout: 10000 // 10 second timeout
+    timeout: 15000 // Increased to 15 second timeout for better reliability
   };
 
   try {
@@ -142,19 +142,19 @@ export async function getCurrentPrice(instrumentKey,sendCandles = false) {
 
     for (const format of apiFormats) {
       try {
-        console.log(`Trying ${format.name} API for ${instrumentKey}...`);
+       // console.log(`Trying ${format.name} API for ${instrumentKey}...`);
         
         const response = await axios.get(format.url, axiosConfig);
         const candles = response.data?.data?.candles || [];
         
         if (candles.length > 0) {
           if (sendCandles) {
-            console.log(`✅ Success with ${format.name} - Returning ${candles.length} candles for ${instrumentKey}`);
+           // console.log(`✅ Success with ${format.name} - Returning ${candles.length} candles for ${instrumentKey}`);
             return candles;
           } else {
             const latest = candles[0]; // last candle
             const currentPrice = latest ? latest[4] : null; // close price
-            console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
+           // console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
             return currentPrice;
           }
         } else {

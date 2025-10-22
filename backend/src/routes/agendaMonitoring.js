@@ -310,24 +310,17 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
             });
         }
         
-        console.log(`📊 [AGENDA] GET MONITORING STATUS API CALLED for analysis: ${analysisId}`);
-        console.log(`📋 Analysis has ${analysis.analysis_data?.strategies?.length || 0} strategies`);
         
         // Get monitoring status for each strategy in the analysis
         const strategies = analysis.analysis_data?.strategies || [];
         const strategyStatuses = {};
         let hasAnyActiveMonitoring = false;
         
-        console.log(`🔍 Checking status for each strategy:`);
         
         // Check monitoring status for each strategy
         for (const strategy of strategies) {
-            console.log(`\n🎯 Getting status for strategy ${strategy.id}:`);
             const strategyStatus = await agendaMonitoringService.getMonitoringStatus(analysisId, strategy.id);
             strategyStatuses[strategy.id] = strategyStatus;
-            
-            console.log(`   ✓ Strategy ${strategy.id} monitoring: ${strategyStatus.isMonitoring}`);
-            console.log(`   ✓ State: ${strategyStatus.state || 'none'}`);
             
             if (strategyStatus.isMonitoring) {
                 hasAnyActiveMonitoring = true;
@@ -335,14 +328,7 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
         }
         
         // Also get analysis-level status for backward compatibility
-        console.log(`\n📊 Getting analysis-level status for backward compatibility:`);
         const analysisStatus = await agendaMonitoringService.getMonitoringStatus(analysisId);
-        
-        console.log(`📤 [AGENDA] API RESPONSE SUMMARY:`);
-        console.log(`   ✓ Has any active monitoring: ${hasAnyActiveMonitoring}`);
-        console.log(`   ✓ Strategy statuses:`, Object.entries(strategyStatuses).map(([id, status]) => 
-            `${id}: ${status.isMonitoring ? 'ACTIVE' : 'INACTIVE'} (${status.state || 'none'})`
-        ));
         
         res.json({
             success: true,
