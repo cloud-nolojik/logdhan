@@ -837,12 +837,25 @@ class DailyDataPrefetchService {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         
+        console.log(`🔍 [PREFETCH SERVICE] getDataForAnalysis called:`);
+        console.log(`   - instrumentKey: "${instrumentKey}"`);
+        console.log(`   - analysisType: "${analysisType}"`);
+        console.log(`   - today: ${today.toISOString()}`);
+        
         try {
             const data = await PreFetchedData.getDataForAnalysis(
                 instrumentKey, 
-                ['5m', '15m', '1h', '1d'], 
+                ['5m', '15m', '1h', '1d', '1D'], // Include both '1d' and '1D' for compatibility
                 today
             );
+            
+            console.log(`📊 [PREFETCH RESULT] Query completed for ${instrumentKey}`);
+            console.log(`   - Records found: ${data ? data.length : 'null'}`);
+            if (data && data.length > 0) {
+                data.forEach((record, index) => {
+                    console.log(`   - Record ${index + 1}: ${record.timeframe} (${record.bars_count} bars, trading_date: ${record.trading_date.toISOString()}, id: ${record._id})`);
+                });
+            }
             
             if (data && data.length > 0) {
                 console.log(`📦 [PREFETCH] Using pre-fetched data for ${instrumentKey}: ${data.length} timeframes`);

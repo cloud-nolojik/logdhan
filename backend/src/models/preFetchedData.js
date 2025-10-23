@@ -14,7 +14,7 @@ const preFetchedDataSchema = new mongoose.Schema({
     timeframe: {
         type: String,
         required: true,
-        enum: ['5m', '15m', '1h', '1d']
+        enum: ['5m', '15m', '1h', '1d', '1D']  // Allow both '1d' and '1D' for compatibility
     },
     trading_date: {
         type: Date,
@@ -89,11 +89,77 @@ preFetchedDataSchema.index({ trading_date: 1 }, { expireAfterSeconds: 30 * 24 * 
 
 // Static methods
 preFetchedDataSchema.statics.getDataForAnalysis = function(instrumentKey, timeframes, tradingDate) {
+    console.log(`🔍 [PREFETCH QUERY] Looking for data for ${instrumentKey}`);
+    console.log(`   - Timeframes: [${timeframes.join(', ')}]`);
+    console.log(`   - Trading date: ${tradingDate.toISOString()}`);
+    
+    // First, let's check what data exists for this instrument_key
+    console.log(`🔍 [PREFETCH DEBUG] Checking all existing data for ${instrumentKey}...`);
+    
     return this.find({
-        instrument_key: instrumentKey,
-        timeframe: { $in: timeframes },
-        trading_date: tradingDate
-    }).lean();
+        instrument_key: instrumentKey
+    }).lean().then(allRecords => {
+        console.log(`📊 [PREFETCH DEBUG] Found ${allRecords.length} total records for ${instrumentKey}:`);
+        allRecords.forEach((record, index) => {
+            console.log(`   - Record ${index + 1}: timeframe=${record.timeframe}, bars=${record.bars_count}, trading_date=${record.trading_date.toISOString()}, id=${record._id}`);
+        });
+        
+        // Now run the optimized query
+        console.log(`🔍 [PREFETCH DEBUG] Running optimized query for timeframes: [${timeframes.join(', ')}]`);
+        
+        return this.aggregate([
+            {
+                $match: {
+                    instrument_key: instrumentKey,
+                    timeframe: { $in: timeframes }
+                }
+            },
+            {
+                $sort: { 
+                    timeframe: 1,
+                    trading_date: -1,  // Most recent trading date first
+                    updated_at: -1     // Most recent update first
+                }
+            },
+            {
+                $group: {
+                    _id: '$timeframe',
+                    latest_record: { $first: '$$ROOT' }
+                }
+            },
+            {
+                $replaceRoot: { newRoot: '$latest_record' }
+            },
+            {
+                $sort: { timeframe: 1 }
+            }
+        ]).then(result => {
+            console.log(`📊 [PREFETCH DEBUG] Aggregation query result: ${result.length} records`);
+            result.forEach((record, index) => {
+                console.log(`   - Result ${index + 1}: timeframe=${record.timeframe}, bars=${record.bars_count}, trading_date=${record.trading_date.toISOString()}, id=${record._id}`);
+            });
+            
+            // Check which timeframes are missing
+            const foundTimeframes = result.map(r => r.timeframe);
+            const missingTimeframes = timeframes.filter(tf => !foundTimeframes.includes(tf));
+            if (missingTimeframes.length > 0) {
+                console.log(`❌ [PREFETCH DEBUG] Missing timeframes: [${missingTimeframes.join(', ')}]`);
+                
+                // For each missing timeframe, check if any data exists
+                missingTimeframes.forEach(tf => {
+                    const recordsForTimeframe = allRecords.filter(r => r.timeframe === tf);
+                    console.log(`   - ${tf}: ${recordsForTimeframe.length} records found in database`);
+                    if (recordsForTimeframe.length > 0) {
+                        recordsForTimeframe.forEach((record, i) => {
+                            console.log(`     Record ${i + 1}: bars=${record.bars_count}, date=${record.trading_date.toISOString()}, id=${record._id}`);
+                        });
+                    }
+                });
+            }
+            
+            return result;
+        });
+    });
 };
 
 preFetchedDataSchema.statics.getAvailableStocks = function(tradingDate) {

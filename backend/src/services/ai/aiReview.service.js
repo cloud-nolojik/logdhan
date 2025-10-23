@@ -1044,6 +1044,11 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
   const ind15  = agentOut?.frames?.['15m']?.indicators || {};
   const ind1h  = agentOut?.frames?.['1h']?.indicators || {};
   const ind1D  = agentOut?.frames?.['1D'] ?.indicators || {};
+  
+  console.log(`🔍 [PAYLOAD DEBUG] Building payload with indicators:`);
+  console.log(`   - 15m indicators: ${Object.keys(ind15).join(', ') || 'none'}`);
+  console.log(`   - 1h indicators: ${Object.keys(ind1h).join(', ') || 'none'}`);
+  console.log(`   - 1D indicators: ${Object.keys(ind1D).join(', ') || 'none'}`);
 
   const vwap15 = Array.isArray(ind15.vwap) ? ind15.vwap.at(-1) : null;
 
@@ -1055,6 +1060,14 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
   const rsi14_1h = Array.isArray(ind1h.rsi14) ? ind1h.rsi14.at(-1) : null;
   const atr14_1h = Array.isArray(ind1h.atr14) ? ind1h.atr14.at(-1) : null;
   const atr14_1D  = Array.isArray(ind1D.atr14) ? ind1D.atr14.at(-1) : null;
+  
+  console.log(`🔍 [PAYLOAD DEBUG] Extracted indicator values:`);
+  console.log(`   - ema20_1D: ${ema20_1D}`);
+  console.log(`   - ema50_1D: ${ema50_1D}`);
+  console.log(`   - sma200_1D: ${sma200_1D}`);
+  console.log(`   - rsi14_1h: ${rsi14_1h}`);
+  console.log(`   - atr14_1h: ${atr14_1h}`);
+  console.log(`   - atr14_1D: ${atr14_1D}`);
 
   // trend bias from 1D (if your short indicators set it)
   const trendBias = agentOut?.frames?.['1D']?.indicators?.trendBias
@@ -2286,10 +2299,28 @@ async runIntradayAgent(labeledData, tradeData = {}, newsData = null) {
 
 async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
   // ---------- helpers ----------
-  const mapRaw = (arr = []) =>
-    arr.map(a => ({
-      time: a[0], open:+a[1], high:+a[2], low:+a[3], close:+a[4], volume:+a[5]
-    }));
+  const mapRaw = (arr = []) => {
+    console.log(`🔍 [MAP DEBUG] Converting ${arr.length} candles from array to object format`);
+    if (arr.length > 0) {
+      console.log(`   - Sample input candle:`, arr[0]);
+      console.log(`   - Sample input types: [${typeof arr[0]?.[0]}, ${typeof arr[0]?.[1]}, ${typeof arr[0]?.[2]}, ${typeof arr[0]?.[3]}, ${typeof arr[0]?.[4]}, ${typeof arr[0]?.[5]}]`);
+    }
+    
+    const mapped = arr.map((a, index) => {
+      const converted = {
+        time: a[0], open:+a[1], high:+a[2], low:+a[3], close:+a[4], volume:+a[5]
+      };
+      
+      if (index < 2) { // Log first 2 for debugging
+        console.log(`   - Candle ${index} converted:`, converted);
+      }
+      
+      return converted;
+    });
+    
+    console.log(`   - Mapped to ${mapped.length} objects`);
+    return mapped;
+  };
 
   const sortByTime = (a,b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
 
@@ -2354,10 +2385,47 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
     return { candles: trimmed, indicators };
   };
 
-  // Build each requested frame if present
-  ['15m','1h','1D'].forEach(f => {
-    const built = buildFrame(f);
-    if (built) out.frames[f] = built;
+  // Build each requested frame if present - map to correct frame names
+  const frameMapping = {
+    '15m': '15minute',
+    '1h': '1hour', 
+    '1D': '1day'
+  };
+  
+  // Modified buildFrame to accept both fullName and shortName for indicator selection
+  const buildFrameWithMapping = (fullName, shortName) => {
+    const chunksIntra = (byFrame[fullName]?.intraday || []).map(mapRaw);
+    const chunksHist  = (byFrame[fullName]?.historical || []).map(mapRaw);
+
+    if (!chunksIntra.length && !chunksHist.length) return null;
+
+    // merge historical slices first, then intraday (intraday wins on same timestamps)
+    const merged = mergeCandles(
+      ...chunksHist.flat(),
+      ...chunksIntra.flat()
+    );
+
+    // trim to limit + buffer, then compute indicators on trimmed using SHORT name for INDSET
+    const trimmed = take(merged, shortName); // Use shortName for LIMITS
+    const indicators = this._computeShortSelectedIndicators(trimmed, INDSET[shortName]); // Use shortName for INDSET
+    
+    console.log(`📊 [INDICATOR DEBUG] Frame ${fullName} (${shortName}): calculated ${Object.keys(indicators || {}).length} indicators`);
+    if (indicators?.error) {
+      console.error(`❌ [INDICATOR ERROR] Frame ${fullName} (${shortName}): ${indicators.error}`);
+    }
+    
+    return { candles: trimmed, indicators };
+  };
+  
+  ['15m','1h','1D'].forEach(shortName => {
+    const fullName = frameMapping[shortName];
+    const built = buildFrameWithMapping(fullName, shortName);
+    if (built) {
+      out.frames[shortName] = built; // Use short name for output
+      console.log(`📊 [FRAME MAPPED] ${fullName} → ${shortName}: ${built.candles?.length || 0} candles, ${Object.keys(built.indicators || {}).length} indicators`);
+    } else {
+      console.log(`⚠️ [FRAME MISSING] No data for ${fullName} (${shortName})`);
+    }
   });
 
   // ---------- Swing context (prev day / weekly / gaps) ----------
@@ -2787,10 +2855,19 @@ _computeIntradaySelectedIndicators(candles, keys) {
 }
 
 _computeShortSelectedIndicators(candles, keys) {
-  if (!Array.isArray(candles) || candles.length < 20) return { error: 'Insufficient data' };
+  console.log(`🔍 [INDICATOR DEBUG] Computing indicators for ${candles?.length || 0} candles`);
+  console.log(`   - Keys requested:`, keys);
+  console.log(`   - Sample candle structure:`, candles?.[0] ? Object.keys(candles[0]) : 'none');
+  console.log(`   - Sample candle values:`, candles?.[0]);
+  
+  if (!Array.isArray(candles) || candles.length < 20) {
+    console.log(`❌ [INDICATOR DEBUG] Insufficient data: ${candles?.length || 0} candles (need ≥20)`);
+    return { error: 'Insufficient data' };
+  }
 
   const n = candles.length;
   const lastClose = candles[n - 1]?.close ?? 0;
+  console.log(`   - Last close: ${lastClose}`);
   const out = {};
 
   // small helpers
@@ -2808,16 +2885,46 @@ _computeShortSelectedIndicators(candles, keys) {
 
   try {
     // ---------------- Core MAs / EMAs ----------------
-    if (keys.includes('ema9'))   out.ema9   = this.calculateEMA(candles, 9);
-    if (keys.includes('ema20'))  out.ema20  = this.calculateEMA(candles, 20);
-    if (keys.includes('ema50'))  out.ema50  = this.calculateEMA(candles, 50);
+    if (keys.includes('ema9')) {
+      const emaResult = this.calculateEMA(candles, 9);
+      out.ema9 = Array.isArray(emaResult) ? emaResult.map(c => c.ema9) : [];
+      console.log(`   - ema9: ${out.ema9.length} values, last = ${out.ema9.at(-1)}`);
+    }
+    if (keys.includes('ema20')) {
+      const emaResult = this.calculateEMA(candles, 20);
+      out.ema20 = Array.isArray(emaResult) ? emaResult.map(c => c.ema20) : [];
+      console.log(`   - ema20: ${out.ema20.length} values, last = ${out.ema20.at(-1)}`);
+    }
+    if (keys.includes('ema50')) {
+      const emaResult = this.calculateEMA(candles, 50);
+      out.ema50 = Array.isArray(emaResult) ? emaResult.map(c => c.ema50) : [];
+      console.log(`   - ema50: ${out.ema50.length} values, last = ${out.ema50.at(-1)}`);
+    }
 
-    if (keys.includes('sma50'))  out.sma50  = this.calculateSMA(candles, safeLen(50));
-    if (keys.includes('sma200')) out.sma200 = this.calculateSMA(candles, safeLen(200));
+    if (keys.includes('sma50')) {
+      const smaResult = this.calculateSMA(candles, safeLen(50));
+      out.sma50 = Array.isArray(smaResult) ? smaResult.map(c => c.sma50).filter(v => v !== null && v !== undefined) : [];
+      console.log(`   - sma50: ${out.sma50.length} values, last = ${out.sma50.at(-1)}`);
+    }
+    if (keys.includes('sma200')) {
+      const smaResult = this.calculateSMA(candles, safeLen(200));
+      out.sma200 = Array.isArray(smaResult) ? smaResult.map(c => c.sma200).filter(v => v !== null && v !== undefined) : [];
+      console.log(`   - sma200: ${out.sma200.length} values, last = ${out.sma200.at(-1)}`);
+    }
 
     // ---------------- Momentum / Volatility ----------------
-    if (keys.includes('rsi14'))  out.rsi14  = this.calculateRSI(candles, 14);
-    if (keys.includes('atr14'))  out.atr14  = this.calculateATR(candles, 14);
+    if (keys.includes('rsi14')) {
+      const rsiResult = this.calculateRSI(candles, 14);
+      // RSI returns sparse array of numbers, filter out undefined values
+      out.rsi14 = Array.isArray(rsiResult) ? rsiResult.filter(v => v !== undefined) : [];
+      console.log(`   - rsi14: ${out.rsi14.length} values, last = ${out.rsi14.at(-1)}`);
+    }
+    if (keys.includes('atr14')) {
+      const atrResult = this.calculateATR(candles, 14);
+      // ATR returns sparse array of numbers, filter out undefined values
+      out.atr14 = Array.isArray(atrResult) ? atrResult.filter(v => v !== undefined) : [];
+      console.log(`   - atr14: ${out.atr14.length} values, last = ${out.atr14.at(-1)}`);
+    }
 
     // ---------------- Volume / VWAP ----------------
     if (keys.includes('vwap'))         out.vwap         = this.calculateVWAP(candles);
@@ -2873,8 +2980,11 @@ _computeShortSelectedIndicators(candles, keys) {
     }
 
   } catch (err) {
-//     console.error('Short-term indicator calc failed:', err);
-    out.error = 'Indicator calculation failed';
+    console.error(`❌ [INDICATOR CALC] Error calculating indicators:`, err.message);
+    console.error(`   - Keys requested:`, keys);
+    console.error(`   - Candles count:`, candles?.length);
+    console.error(`   - Error stack:`, err.stack);
+    out.error = `Indicator calculation failed: ${err.message}`;
   }
 
   return out;

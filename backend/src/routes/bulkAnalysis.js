@@ -93,7 +93,6 @@ router.post('/analyze-all', auth, async (req, res) => {
         // Only delete expired or failed analyses - keep valid ones that haven't expired
         const now = new Date();
         const deleteResult = await StockAnalysis.deleteMany({
-            user_id: userId,
             analysis_type: analysis_type,
             $or: [
                 { expires_at: { $lt: now } }, // Expired analyses
@@ -307,9 +306,14 @@ router.get('/status', auth, async (req, res) => {
                     try {
                         const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
                         const analysis = await StockAnalysis.findOne({
-                            user_id: userId,
                             stock_symbol: stock.trading_symbol,
-                            expires_at: { $gt: new Date() }
+                            status: 'completed',
+                            expires_at: { $gt: new Date() },
+                            // Only get valid analyses with actual strategies
+                            $and: [
+                                { 'analysis_data.insufficientData': { $ne: true } },
+                                { 'analysis_data.strategies.0': { $exists: true } }
+                            ]
                         }).sort({ created_at: -1 });
 
                         if (analysis && analysis.analysis_data?.strategies?.length > 0) {
@@ -440,13 +444,16 @@ router.get('/strategies', auth, async (req, res) => {
             userObjectId = userId;
         }
 
-        // Fetch ALL analyses (both completed and failed) without limiting the query
-        // We'll limit the final strategies array instead to avoid excluding successful analyses
+        // Fetch only valid completed analyses (with actual strategies, not insufficient data failures)
         const analyses = await StockAnalysis.find({
-            user_id: userObjectId,
             analysis_type: analysis_type,
-            status: { $in: ['completed', 'failed'] }, // Include both completed and failed
-            expires_at: { $gt: new Date() }
+            status: 'completed',
+            expires_at: { $gt: new Date() },
+            // Only include analyses with actual usable data
+            $and: [
+                { 'analysis_data.insufficientData': { $ne: true } },
+                { 'analysis_data.strategies.0': { $exists: true } } // Has at least one strategy
+            ]
         })
         .select('instrument_key stock_name stock_symbol current_price analysis_data created_at status progress')
         .sort({ created_at: -1 });
@@ -636,36 +643,45 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                     
                     // Create a failed analysis record
                     try {
-                        const failedAnalysis = new StockAnalysis({
-                            instrument_key: stock.instrument_key,
-                            stock_name: stock.name,
-                            stock_symbol: stock.trading_symbol,
-                            analysis_type: analysisType,
-                            current_price: 0.01, // Use minimal valid price instead of 0
-                            user_id: userId,
-                            status: 'failed',
-                            expires_at: await StockAnalysis.getExpiryTime(),
-                            progress: {
-                                percentage: 0,
-                                current_step: `Price fetch failed: ${priceError.message}`,
-                                steps_completed: 0,
-                                total_steps: 8,
-                                estimated_time_remaining: 0,
-                                last_updated: new Date()
+                        const failedAnalysis = await StockAnalysis.findOneAndUpdate(
+                            {
+                                instrument_key: stock.instrument_key,
+                                analysis_type: analysisType
                             },
-                            analysis_data: {
-                                schema_version: '1.3',
-                                symbol: stock.trading_symbol,
+                            {
+                                instrument_key: stock.instrument_key,
+                                stock_name: stock.name,
+                                stock_symbol: stock.trading_symbol,
                                 analysis_type: analysisType,
-                                insufficientData: true,
-                                strategies: [],
-                                overall_sentiment: 'NEUTRAL',
-                                error_reason: `Price fetch failed: ${priceError.message}`,
-                                failed_at: new Date().toISOString()
+                                current_price: 0.01, // Use minimal valid price instead of 0
+                                status: 'failed',
+                                expires_at: await StockAnalysis.getExpiryTime(),
+                                progress: {
+                                    percentage: 0,
+                                    current_step: `Price fetch failed: ${priceError.message}`,
+                                    steps_completed: 0,
+                                    total_steps: 8,
+                                    estimated_time_remaining: 0,
+                                    last_updated: new Date()
+                                },
+                                analysis_data: {
+                                    schema_version: '1.3',
+                                    symbol: stock.trading_symbol,
+                                    analysis_type: analysisType,
+                                    insufficientData: true,
+                                    strategies: [],
+                                    overall_sentiment: 'NEUTRAL',
+                                    error_reason: `Price fetch failed: ${priceError.message}`,
+                                    failed_at: new Date().toISOString()
+                                },
+                                created_at: new Date()
+                            },
+                            {
+                                upsert: true,
+                                new: true,
+                                runValidators: true
                             }
-                        });
-                        
-                        await failedAnalysis.save();
+                        );
                         ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol} (price fetch failed)`);
                     } catch (saveError) {
                         console.error(`❌ Failed to save failed analysis record for ${stock.trading_symbol}:`, saveError.message);
@@ -682,13 +698,17 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                     
                     // Create failed record for invalid price
                     try {
-                        const failedAnalysis = new StockAnalysis({
+                        const failedAnalysis = await StockAnalysis.findOneAndUpdate(
+                            {
+                                instrument_key: stock.instrument_key,
+                                analysis_type: analysisType
+                            },
+                            {
                             instrument_key: stock.instrument_key,
                             stock_name: stock.name,
                             stock_symbol: stock.trading_symbol,
                             analysis_type: analysisType,
                             current_price: 0.01, // Use minimal valid price for schema
-                            user_id: userId,
                             status: 'failed',
                             expires_at: await StockAnalysis.getExpiryTime(),
                             progress: {
@@ -708,9 +728,15 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                                 overall_sentiment: 'NEUTRAL',
                                 error_reason: `Invalid or missing price data: ${currentPrice}`,
                                 failed_at: new Date().toISOString()
-                            }
-                        });
-                        await failedAnalysis.save();
+                            },
+                            created_at: new Date()
+                        },
+                        {
+                            upsert: true,
+                            new: true,
+                            runValidators: true
+                        }
+                    );
                         ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol} (invalid price)`);
                     } catch (saveError) {
                         console.error(`❌ Failed to save failed analysis for invalid price ${stock.trading_symbol}:`, saveError.message);
@@ -738,36 +764,45 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                 
                 // Create a failed analysis record so it's tracked properly
                 try {
-                    const failedAnalysis = new StockAnalysis({
-                        instrument_key: stock.instrument_key,
-                        stock_name: stock.name,
-                        stock_symbol: stock.trading_symbol,
-                        analysis_type: analysisType,
-                        current_price: 0.01, // Use minimal valid price for failed analysis
-                        user_id: userId,
-                        status: 'failed',
-                        expires_at: await StockAnalysis.getExpiryTime(),
-                        progress: {
-                            percentage: 0,
-                            current_step: `Failed: ${error.message}`,
-                            steps_completed: 0,
-                            total_steps: 8,
-                            estimated_time_remaining: 0,
-                            last_updated: new Date()
+                    const failedAnalysis = await StockAnalysis.findOneAndUpdate(
+                        {
+                            instrument_key: stock.instrument_key,
+                            analysis_type: analysisType
                         },
-                        analysis_data: {
-                            schema_version: '1.3',
-                            symbol: stock.trading_symbol,
+                        {
+                            instrument_key: stock.instrument_key,
+                            stock_name: stock.name,
+                            stock_symbol: stock.trading_symbol,
                             analysis_type: analysisType,
-                            insufficientData: true,
-                            strategies: [],
-                            overall_sentiment: 'NEUTRAL',
-                            error_reason: error.message,
-                            failed_at: new Date().toISOString()
+                            current_price: 0.01, // Use minimal valid price for failed analysis
+                            status: 'failed',
+                            expires_at: await StockAnalysis.getExpiryTime(),
+                            progress: {
+                                percentage: 0,
+                                current_step: `Failed: ${error.message}`,
+                                steps_completed: 0,
+                                total_steps: 8,
+                                estimated_time_remaining: 0,
+                                last_updated: new Date()
+                            },
+                            analysis_data: {
+                                schema_version: '1.3',
+                                symbol: stock.trading_symbol,
+                                analysis_type: analysisType,
+                                insufficientData: true,
+                                strategies: [],
+                                overall_sentiment: 'NEUTRAL',
+                                error_reason: error.message,
+                                failed_at: new Date().toISOString()
+                            },
+                            created_at: new Date()
+                        },
+                        {
+                            upsert: true,
+                            new: true,
+                            runValidators: true
                         }
-                    });
-                    
-                    await failedAnalysis.save();
+                    );
                     ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol}: ${failedAnalysis._id}`);
                 } catch (saveError) {
                     console.error(`❌ Failed to save failed analysis record for ${stock.trading_symbol}:`, saveError.message);
@@ -809,13 +844,17 @@ async function processSessionBasedBulkAnalysis(session) {
                 continue; // Already processed in this session
             }
             
-            // Check if valid analysis already exists in database
+            // Check if valid analysis already exists in database (completed AND has usable data)
             const existingAnalysis = await StockAnalysis.findOne({
-                user_id: session.user_id,
                 instrument_key: stock.instrument_key,
                 analysis_type: session.analysis_type,
                 status: 'completed',
-                expires_at: { $gt: now }
+                expires_at: { $gt: now },
+                // Ensure analysis has actual strategies and not insufficient data
+                $and: [
+                    { 'analysis_data.insufficientData': { $ne: true } },
+                    { 'analysis_data.strategies.0': { $exists: true } } // Has at least one strategy
+                ]
             });
             
             if (existingAnalysis) {
@@ -1016,36 +1055,45 @@ async function markStockAsFailed(session, stock, errorReason, retryCount = 0) {
     
     // Create failed analysis record
     try {
-        const failedAnalysis = new StockAnalysis({
-            instrument_key: stock.instrument_key,
-            stock_name: stock.stock_name,
-            stock_symbol: stock.trading_symbol,
-            analysis_type: session.analysis_type,
-            current_price: 0.01, // Use minimal valid price for failed analysis
-            user_id: session.user_id,
-            status: 'failed',
-            expires_at: await StockAnalysis.getExpiryTime(),
-            progress: {
-                percentage: 0,
-                current_step: `Failed: ${errorReason}`,
-                steps_completed: 0,
-                total_steps: 8,
-                estimated_time_remaining: 0,
-                last_updated: new Date()
+        const failedAnalysis = await StockAnalysis.findOneAndUpdate(
+            {
+                instrument_key: stock.instrument_key,
+                analysis_type: session.analysis_type
             },
-            analysis_data: {
-                schema_version: '1.3',
-                symbol: stock.trading_symbol,
+            {
+                instrument_key: stock.instrument_key,
+                stock_name: stock.stock_name,
+                stock_symbol: stock.trading_symbol,
                 analysis_type: session.analysis_type,
-                insufficientData: true,
-                strategies: [],
-                overall_sentiment: 'NEUTRAL',
-                error_reason: errorReason,
-                failed_at: new Date().toISOString()
+                current_price: 0.01, // Use minimal valid price for failed analysis
+                status: 'failed',
+                expires_at: await StockAnalysis.getExpiryTime(),
+                progress: {
+                    percentage: 0,
+                    current_step: `Failed: ${errorReason}`,
+                    steps_completed: 0,
+                    total_steps: 8,
+                    estimated_time_remaining: 0,
+                    last_updated: new Date()
+                },
+                analysis_data: {
+                    schema_version: '1.3',
+                    symbol: stock.trading_symbol,
+                    analysis_type: session.analysis_type,
+                    insufficientData: true,
+                    strategies: [],
+                    overall_sentiment: 'NEUTRAL',
+                    error_reason: errorReason,
+                    failed_at: new Date().toISOString()
+                },
+                created_at: new Date()
+            },
+            {
+                upsert: true,
+                new: true,
+                runValidators: true
             }
-        });
-        
-        await failedAnalysis.save();
+        );
     } catch (saveError) {
         console.error(`❌ Failed to save failed analysis record for ${stock.trading_symbol}:`, saveError.message);
     }
@@ -1164,7 +1212,6 @@ router.post('/reanalyze-stock', auth, async (req, res) => {
         // Only delete existing analysis if it's expired, failed, or explicitly requested for reanalysis
         // For reanalysis, we DO want to force fresh analysis even if current one is valid
         const deleteResult = await StockAnalysis.deleteMany({
-            user_id: userId,
             instrument_key: instrument_key,
             analysis_type: analysis_type
             // Note: For reanalysis endpoint, we delete ALL existing analyses to force fresh analysis

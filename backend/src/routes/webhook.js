@@ -36,10 +36,9 @@ async function placeBracketOrders(orderUpdate, originalOrderData) {
             console.log('✅ Stop-loss order placed:', slResult);
             
             // Update analysis with SL order
-            const analysis = await StockAnalysis.findByInstrumentAndUser(
+            const analysis = await StockAnalysis.findByInstrument(
                 instrumentToken,
-                originalOrderData.analysisType,
-                userId
+                originalOrderData.analysisType
             );
             
             if (analysis) {
@@ -71,10 +70,9 @@ async function placeBracketOrders(orderUpdate, originalOrderData) {
             console.log('✅ Target order placed:', targetResult);
             
             // Update analysis with target order
-            const analysis = await StockAnalysis.findByInstrumentAndUser(
+            const analysis = await StockAnalysis.findByInstrument(
                 instrumentToken,
-                originalOrderData.analysisType,
-                userId
+                originalOrderData.analysisType
             );
             
             if (analysis) {

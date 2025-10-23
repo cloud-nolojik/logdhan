@@ -284,8 +284,8 @@ router.get('/stats', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
         
-        const stats = await StockAnalysis.getAnalysisStats(userId);
-        const recentAnalyses = await StockAnalysis.findActiveForUser(userId, 5);
+        const stats = await StockAnalysis.getAnalysisStats();
+        const recentAnalyses = await StockAnalysis.findActive(5);
         
         res.json({
             success: true,
@@ -335,7 +335,7 @@ router.delete('/analysis/:analysisId', authenticateToken, async (req, res) => {
             });
         }
 
-        await StockAnalysis.deleteOne({ _id: analysisId, user_id: userId });
+        await StockAnalysis.deleteOne({ _id: analysisId });
 
         res.json({
             success: true,

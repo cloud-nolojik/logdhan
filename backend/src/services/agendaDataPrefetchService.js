@@ -112,7 +112,15 @@ class AgendaDataPrefetchService {
             console.log('🗑️ [AGENDA DATA] Starting chart cleanup job');
             
             try {
-                const { azureStorageService } = await import('../storage/azureStorage.service.js');
+                let azureStorageService;
+                try {
+                    const azureModule = await import('../storage/azureStorage.service.js');
+                    azureStorageService = azureModule.azureStorageService || azureModule.default;
+                } catch (importError) {
+                    console.log('⚠️ [AGENDA DATA] Azure storage service not available, skipping cloud cleanup');
+                    azureStorageService = null;
+                }
+                
                 const path = await import('path');
                 const fs = await import('fs');
                 
@@ -146,11 +154,15 @@ class AgendaDataPrefetchService {
                 }
                 
                 // Clean up Azure storage
-                try {
-                    await azureStorageService.cleanupOldCharts(24);
-                    console.log('✅ [AGENDA DATA] Azure chart cleanup completed');
-                } catch (azureError) {
-                    console.warn('⚠️ [AGENDA DATA] Azure chart cleanup failed:', azureError.message);
+                if (azureStorageService) {
+                    try {
+                        await azureStorageService.cleanupOldCharts(24);
+                        console.log('✅ [AGENDA DATA] Azure chart cleanup completed');
+                    } catch (azureError) {
+                        console.warn('⚠️ [AGENDA DATA] Azure chart cleanup failed:', azureError.message);
+                    }
+                } else {
+                    console.log('⚠️ [AGENDA DATA] Skipping Azure cleanup - service not available');
                 }
                 
                 console.log(`✅ [AGENDA DATA] Chart cleanup completed: ${localFilesDeleted} local files deleted`);

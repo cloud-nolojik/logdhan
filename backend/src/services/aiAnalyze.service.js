@@ -278,7 +278,7 @@ class AIAnalyzeService {
             // Check for existing analysis (cached completed or in-progress) unless forceFresh is true
             if (!forceFresh) {
                 // console.log(`🔍 Checking for existing analysis...`);
-                const existing = await StockAnalysis.findByInstrumentAndUser(instrument_key, analysis_type, user_id);
+                const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
                 
                 if (existing) {
                     if (existing.status === 'completed') {
@@ -301,7 +301,7 @@ class AIAnalyzeService {
                 // console.log(`🔄 Force fresh analysis requested - skipping cache check`);
                 // If there's an existing in-progress analysis, we should still wait for it to complete
                 // to avoid duplicate analysis requests
-                const existing = await StockAnalysis.findByInstrumentAndUser(instrument_key, analysis_type, user_id);
+                const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
                 if (existing && existing.status === 'in_progress') {
                     // console.log(`⏳ Fresh analysis requested but analysis already in progress, returning progress status`);
                     return {
@@ -309,12 +309,6 @@ class AIAnalyzeService {
                         data: existing,
                         inProgress: true
                     };
-                }
-                
-                // If there's a completed analysis, delete it to make room for fresh analysis
-                if (existing && existing.status === 'completed') {
-                    // console.log(`🗑️ Deleting existing cached analysis to make room for fresh analysis`);
-                    await StockAnalysis.deleteOne({ _id: existing._id });
                 }
             }
 
@@ -326,35 +320,44 @@ class AIAnalyzeService {
                 throw new Error(`Invalid current price: ${current_price}. Cannot proceed with analysis.`);
             }
 
-            // Create new analysis record with progress tracking
-            const pendingAnalysis = new StockAnalysis({
-                instrument_key,
-                stock_name,
-                stock_symbol,
-                analysis_type,
-                current_price: validPrice,
-                user_id,
-                status: 'in_progress',
-                expires_at: await StockAnalysis.getExpiryTime(), // Market-aware expiry
-                progress: {
-                    percentage: 0,
-                    current_step: 'Starting analysis...',
-                    steps_completed: 0,
-                    total_steps: 8,
-                    estimated_time_remaining: 90,
-                    last_updated: new Date()
+            // Use upsert to prevent duplicate analysis records
+            const pendingAnalysis = await StockAnalysis.findOneAndUpdate(
+                {
+                    instrument_key,
+                    analysis_type
                 },
-                analysis_data: {
-                    schema_version: '1.3',
-                    symbol: stock_symbol,
+                {
+                    instrument_key,
+                    stock_name,
+                    stock_symbol,
                     analysis_type,
-                    insufficientData: false,
-                    strategies: [],
-                    overall_sentiment: 'NEUTRAL'
+                    current_price: validPrice,
+                    status: 'in_progress',
+                    expires_at: await StockAnalysis.getExpiryTime(), // Market-aware expiry
+                    progress: {
+                        percentage: 0,
+                        current_step: 'Starting analysis...',
+                        steps_completed: 0,
+                        total_steps: 8,
+                        estimated_time_remaining: 90,
+                        last_updated: new Date()
+                    },
+                    analysis_data: {
+                        schema_version: '1.3',
+                        symbol: stock_symbol,
+                        analysis_type,
+                        insufficientData: false,
+                        strategies: [],
+                        overall_sentiment: 'NEUTRAL'
+                    },
+                    created_at: new Date() // Update creation time for fresh analysis
+                },
+                {
+                    upsert: true, // Create if doesn't exist, update if exists
+                    new: true,    // Return the updated document
+                    runValidators: true
                 }
-            });
-
-            await pendingAnalysis.save();
+            );
             // console.log(`📝 Created pending analysis record: ${pendingAnalysis._id}`);
 
             try {
@@ -370,20 +373,30 @@ class AIAnalyzeService {
                     pendingAnalysis // Pass analysis record for progress updates
                 );
 
-                // Update analysis with results and mark completed
+                // Update analysis with results and mark completed or failed based on data sufficiency
                 pendingAnalysis.analysis_data = analysisResult;
-                await pendingAnalysis.markCompleted();
+                
+                // Check if AI returned insufficientData and mark as failed if so
+                if (analysisResult.insufficientData === true) {
+                    console.log(`❌ [ANALYSIS STATUS] Marking ${stock_symbol} as failed due to insufficient data`);
+                    await pendingAnalysis.markFailed('Insufficient market data for analysis');
+                } else {
+                    console.log(`✅ [ANALYSIS STATUS] Marking ${stock_symbol} as completed with valid analysis`);
+                    await pendingAnalysis.markCompleted();
+                }
 
                 // console.log(`✅ AI analysis completed and saved for ${stock_symbol}`);
 
-                // Deduct credits after successful analysis
-                if (user_id) {
+                // Deduct credits only after successful analysis (not for insufficient data)
+                if (user_id && analysisResult.insufficientData !== true) {
                     try {
                         await subscriptionService.deductCredits(user_id, 1, isFromRewardedAd);
-                        // console.log(`💳 Credits deducted for user ${user_id}`);
+                        console.log(`💳 Credits deducted for user ${user_id} - successful analysis`);
                     } catch (creditError) {
-                        // console.warn('⚠️ Credit deduction failed:', creditError.message);
+                        console.warn('⚠️ Credit deduction failed:', creditError.message);
                     }
+                } else if (user_id && analysisResult.insufficientData === true) {
+                    console.log(`💰 No credits deducted for ${stock_symbol} - insufficient data failure`);
                 }
 
                 return {
@@ -866,6 +879,7 @@ class AIAnalyzeService {
      * Convert pre-fetched data to the format expected by AI analysis
      */
     convertPreFetchedToCandleSets(preFetchedData) {
+        console.log(`🔄 [CONVERT DEBUG] Starting conversion of ${preFetchedData.length} timeframe datasets`);
         const candleSets = { byFrame: {} };
         
         // Map timeframes to the format expected by AI analysis
@@ -873,18 +887,70 @@ class AIAnalyzeService {
             '5m': '5minute',
             '15m': '15minute', 
             '1h': '1hour',
-            '1d': '1day'
+            '1d': '1day',
+            '1D': '1day'  // Handle both lowercase and uppercase 1D
         };
         
-        preFetchedData.forEach(data => {
+        preFetchedData.forEach((data, index) => {
+            console.log(`🔄 [CONVERT DEBUG] Processing dataset ${index + 1}/${preFetchedData.length}:`);
+            console.log(`   - Timeframe: ${data.timeframe}`);
+            console.log(`   - Candle data type: ${typeof data.candle_data}`);
+            console.log(`   - Candle data length: ${data.candle_data?.length || 'undefined'}`);
+            console.log(`   - First candle structure:`, data.candle_data?.[0] ? Object.keys(data.candle_data[0]) : 'none');
+            
             const frameKey = timeframeMapping[data.timeframe] || data.timeframe;
+            console.log(`   - Mapped to frameKey: ${frameKey}`);
+            
+            // Convert object format to array format expected by AI agents
+            // Pre-fetched: {timestamp, open, high, low, close, volume}
+            // AI expects: [timestamp, open, high, low, close, volume]
+            const convertedCandles = data.candle_data.map((candle, candleIndex) => {
+                if (candleIndex < 2) { // Log first 2 candles for debugging
+                    console.log(`   - Candle ${candleIndex} before conversion:`, {
+                        timestamp: candle.timestamp,
+                        open: candle.open,
+                        high: candle.high,
+                        low: candle.low,
+                        close: candle.close,
+                        volume: candle.volume
+                    });
+                }
+                
+                const converted = [
+                    candle.timestamp.toISOString(), // Convert Date object to ISO string like API format
+                    candle.open,
+                    candle.high,
+                    candle.low,
+                    candle.close,
+                    candle.volume
+                ];
+                
+                if (candleIndex < 2) { // Log first 2 converted candles
+                    console.log(`   - Candle ${candleIndex} after conversion:`, converted);
+                }
+                
+                return converted;
+            });
+            
+            console.log(`   - Converted ${convertedCandles.length} candles to array format`);
+            console.log(`   - Sample converted structure: [${typeof convertedCandles[0]?.[0]}, ${typeof convertedCandles[0]?.[1]}, ...]`);
             
             candleSets.byFrame[frameKey] = {
-                intraday: [data.candle_data], // Put candles in intraday array
+                intraday: convertedCandles, // Use converted candles directly
                 historical: [] // Keep historical empty for pre-fetched data
             };
             
-            console.log(`📊 [CONVERT] ${data.timeframe} → ${frameKey}: ${data.candle_data.length} candles`);
+            console.log(`   - Final candleSets.byFrame[${frameKey}].intraday type: ${typeof candleSets.byFrame[frameKey].intraday}`);
+            console.log(`   - Final candleSets.byFrame[${frameKey}].intraday length: ${candleSets.byFrame[frameKey].intraday.length}`);
+            console.log(`   - Final candleSets.byFrame[${frameKey}].intraday[0] type: ${typeof candleSets.byFrame[frameKey].intraday[0]}`);
+            console.log(`📊 [CONVERT] ${data.timeframe} → ${frameKey}: ${data.candle_data.length} candles (object→array)`);
+        });
+        
+        console.log(`🔄 [CONVERT DEBUG] Final candleSets structure:`);
+        console.log(`   - Total frames: ${Object.keys(candleSets.byFrame).length}`);
+        Object.keys(candleSets.byFrame).forEach(frame => {
+            const frameData = candleSets.byFrame[frame];
+            console.log(`   - Frame "${frame}": intraday=${frameData.intraday.length} candles, historical=${frameData.historical.length} candles`);
         });
         
         return candleSets;
@@ -1464,29 +1530,142 @@ class AIAnalyzeService {
      */
     async processMarketData(tradeData, candleData) {
         const { endpoints, candleSets } = candleData;
+        console.log(`🔍 [PROCESS DEBUG] Processing market data for ${tradeData.stockSymbol}`);
+        console.log(`   - Has endpoints: ${!!endpoints && endpoints.length > 0}`);
+        console.log(`   - Has candleSets: ${!!candleSets}`);
+        console.log(`   - CandleSets byFrame keys:`, Object.keys(candleSets?.byFrame || {}));
         
-        // Label data for agent processing - use correct structure expected by runShortTermAgent
-        const labeledData = endpoints.map((endpoint) => {
-            const frameData = candleSets.byFrame?.[endpoint.frame];
-            
-            let candles = [];
-            
-            if (frameData) {
-                if (endpoint.kind === 'intraday' && frameData.intraday?.length > 0) {
-                    candles = frameData.intraday[0] || [];
-                } else if (endpoint.kind === 'historical' && frameData.historical?.length > 0) {
+        // Label data for agent processing - handle both API endpoints and pre-fetched data
+        let labeledData = [];
+        
+        if (endpoints && endpoints.length > 0) {
+            console.log(`🔍 [PROCESS DEBUG] Using API endpoint data (${endpoints.length} endpoints)`);
+            // API endpoint data: map endpoints to their corresponding candle data
+            labeledData = endpoints.map((endpoint, index) => {
+                console.log(`🔍 [PROCESS DEBUG] Processing endpoint ${index + 1}/${endpoints.length}:`);
+                console.log(`   - Frame: ${endpoint.frame}`);
+                console.log(`   - Kind: ${endpoint.kind}`);
+                
+                const frameData = candleSets.byFrame?.[endpoint.frame];
+                console.log(`   - FrameData exists: ${!!frameData}`);
+                
+                let candles = [];
+                
+                if (frameData) {
+                    console.log(`   - FrameData.intraday type: ${typeof frameData.intraday}`);
+                    console.log(`   - FrameData.intraday length: ${frameData.intraday?.length || 'undefined'}`);
+                    console.log(`   - FrameData.historical length: ${frameData.historical?.length || 'undefined'}`);
+                    
+                    if (endpoint.kind === 'intraday' && frameData.intraday?.length > 0) {
+                        // Fixed: Check if intraday is array of arrays or direct array of candles
+                        // If first element is array AND its first element is also array, it's nested
+                        // Otherwise, if first element is array with 6 elements (candle), it's direct array
+                        if (Array.isArray(frameData.intraday[0]) && Array.isArray(frameData.intraday[0][0])) {
+                            console.log(`   - Using intraday[0] (array of arrays format)`);
+                            candles = frameData.intraday[0] || [];
+                        } else if (Array.isArray(frameData.intraday[0]) && frameData.intraday[0].length === 6) {
+                            console.log(`   - Using intraday directly (array of candles format)`);
+                            candles = frameData.intraday || [];
+                        } else {
+                            console.log(`   - Using intraday directly (fallback format)`);
+                            candles = frameData.intraday || [];
+                        }
+                    } else if (endpoint.kind === 'historical' && frameData.historical?.length > 0) {
+                        console.log(`   - Using historical data (flattened)`);
+                        candles = frameData.historical.flat();
+                    }
+                }
+                
+                console.log(`   - Final candles count: ${candles.length}`);
+                console.log(`   - Sample candle structure:`, candles[0] ? typeof candles[0] : 'none');
+                
+                return {
+                    frame: endpoint.frame,  // Changed from 'label' to 'frame'
+                    kind: endpoint.kind,     // Added 'kind' property
+                    data: { candles },       // Wrap candles in data object
+                    candles: candles         // Also include direct candles for compatibility
+                };
+            });
+        } else if (candleSets?.byFrame) {
+            console.log(`🔍 [PROCESS DEBUG] Using pre-fetched data`);
+            // Pre-fetched data: extract directly from candleSets.byFrame
+            labeledData = Object.entries(candleSets.byFrame).map(([frameKey, frameData], index) => {
+                console.log(`🔍 [PROCESS DEBUG] Processing pre-fetched frame ${index + 1}/${Object.keys(candleSets.byFrame).length}:`);
+                console.log(`   - FrameKey: ${frameKey}`);
+                console.log(`   - FrameData.intraday type: ${typeof frameData.intraday}`);
+                console.log(`   - FrameData.intraday length: ${frameData.intraday?.length || 'undefined'}`);
+                console.log(`   - FrameData.intraday[0] type:`, frameData.intraday?.[0] ? typeof frameData.intraday[0] : 'none');
+                console.log(`   - FrameData.historical length: ${frameData.historical?.length || 'undefined'}`);
+                
+                let candles = [];
+                let kind = 'prefetched';
+                
+                // Get candles from intraday first, then historical
+                if (frameData.intraday?.length > 0) {
+                    // Fixed: Check if intraday is array of arrays or direct array of candles
+                    // If first element is array AND its first element is also array, it's nested
+                    // Otherwise, if first element is array with 6 elements (candle), it's direct array
+                    if (Array.isArray(frameData.intraday[0]) && Array.isArray(frameData.intraday[0][0])) {
+                        console.log(`   - Using intraday[0] (array of arrays format)`);
+                        candles = frameData.intraday[0] || [];
+                    } else if (Array.isArray(frameData.intraday[0]) && frameData.intraday[0].length === 6) {
+                        console.log(`   - Using intraday directly (array of candles format)`);
+                        candles = frameData.intraday || [];
+                    } else {
+                        console.log(`   - Using intraday directly (fallback format)`);
+                        candles = frameData.intraday || [];
+                    }
+                    kind = 'intraday';
+                } else if (frameData.historical?.length > 0) {
+                    console.log(`   - Using historical data (flattened)`);
                     candles = frameData.historical.flat();
+                    kind = 'historical';
+                }
+                
+                console.log(`   - Final candles count: ${candles.length}`);
+                console.log(`   - Sample candle structure:`, candles[0] ? typeof candles[0] : 'none');
+                
+                return {
+                    frame: frameKey,         // Use the frame key from byFrame
+                    kind: kind,              // Set kind based on data source
+                    data: { candles },       // Wrap candles in data object
+                    candles: candles         // Also include direct candles for compatibility
+                };
+            });
+        }
+
+        // Debug: Log AI request data structure for comparison
+        console.log(`🔍 [AI REQUEST DEBUG] ${tradeData.stockSymbol} - Data structure for AI:`);
+        console.log(`   - Data source: ${endpoints?.length > 0 ? 'API endpoints' : 'Pre-fetched data'}`);
+        console.log(`   - Total timeframes: ${labeledData.length}`);
+        labeledData.forEach((item, index) => {
+            console.log(`   - [${index}] Frame: ${item.frame}, Kind: ${item.kind}, Candles: ${item.candles?.length || 0}`);
+            if (item.candles?.length > 0) {
+                const firstCandle = item.candles[0];
+                const lastCandle = item.candles[item.candles.length - 1];
+                
+                // Debug: Check candle structure
+                console.log(`     First candle structure:`, typeof firstCandle, Array.isArray(firstCandle));
+                if (Array.isArray(firstCandle)) {
+                    console.log(`     First: ${firstCandle[0]}, Last: ${lastCandle[0]}`);
+                } else if (firstCandle && typeof firstCandle === 'object') {
+                    console.log(`     First: ${firstCandle.timestamp || firstCandle.time || 'no timestamp'}, Last: ${lastCandle.timestamp || lastCandle.time || 'no timestamp'}`);
+                } else {
+                    console.log(`     First: ${JSON.stringify(firstCandle).substring(0, 100)}...`);
                 }
             }
-            
-            return {
-                frame: endpoint.frame,  // Changed from 'label' to 'frame'
-                kind: endpoint.kind,     // Added 'kind' property
-                data: { candles },       // Wrap candles in data object
-                candles: candles         // Also include direct candles for compatibility
-            };
         });
-
+        
+        // Final debug: Log the exact structure being sent to AI
+        console.log(`🚀 [FINAL DEBUG] Sending to AI agent - ${tradeData.term} analysis:`);
+        console.log(`   - LabeledData length: ${labeledData.length}`);
+        labeledData.forEach((item, index) => {
+            console.log(`   - Item ${index}: frame=${item.frame}, kind=${item.kind}`);
+            console.log(`     - data.candles length: ${item.data?.candles?.length || 'undefined'}`);
+            console.log(`     - candles length: ${item.candles?.length || 'undefined'}`);
+            console.log(`     - First 2 candles:`, item.candles?.slice(0, 2) || 'none');
+        });
+        
         // Route to appropriate agent based on term
         let agentResult;
         if (tradeData.term === 'intraday') {
@@ -2320,8 +2499,8 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     /**
      * Get cached analysis if available and not expired
      */
-    async getCachedAnalysis(instrument_key, analysis_type, user_id) {
-        return await StockAnalysis.findByInstrumentAndUser(instrument_key, analysis_type, user_id);
+    async getCachedAnalysis(instrument_key, analysis_type) {
+        return await StockAnalysis.findByInstrument(instrument_key, analysis_type);
     }
 
     /**
@@ -2413,10 +2592,10 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     }
 
     /**
-     * Get user's analysis history
+     * Get recent analysis history (shared across all users)
      */
     async getUserAnalysisHistory(user_id, limit = 10) {
-        return await StockAnalysis.findActiveForUser(user_id, limit)
+        return await StockAnalysis.findActive(limit)
             .select('instrument_key stock_name stock_symbol analysis_type current_price created_at analysis_data.market_summary analysis_data.strategies');
     }
 

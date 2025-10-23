@@ -252,12 +252,6 @@ const stockAnalysisSchema = new mongoose.Schema({
         required: true
         // Index removed - using explicit schema.index() below with TTL
     },
-    user_id: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true,
-        index: true
-    },
     // Order tracking fields - consolidated bracket orders
     placed_orders: [{
         tag: {
@@ -302,11 +296,10 @@ const stockAnalysisSchema = new mongoose.Schema({
     last_order_placed_at: Date
 });
 
-// Compound index for efficient queries
+// Compound index for efficient queries - shared across all users
 stockAnalysisSchema.index({ 
     instrument_key: 1, 
     analysis_type: 1, 
-    user_id: 1,
     expires_at: 1 
 });
 
@@ -314,9 +307,8 @@ stockAnalysisSchema.index({
 stockAnalysisSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 });
 
 // Static methods
-stockAnalysisSchema.statics.findActiveForUser = function(userId, limit = 10) {
+stockAnalysisSchema.statics.findActive = function(limit = 10) {
     return this.find({
-        user_id: userId,
         status: 'completed',
         expires_at: { $gt: new Date() }
     })
@@ -324,22 +316,20 @@ stockAnalysisSchema.statics.findActiveForUser = function(userId, limit = 10) {
     .limit(limit);
 };
 
-stockAnalysisSchema.statics.findByInstrumentAndUser = function(instrumentKey, analysisType, userId) {
+stockAnalysisSchema.statics.findByInstrument = function(instrumentKey, analysisType) {
     return this.findOne({
         instrument_key: instrumentKey,
         analysis_type: analysisType,
-        user_id: userId,
         status: { $in: ['completed', 'in_progress'] },
         expires_at: { $gt: new Date() }
     })
     .sort({ created_at: -1 });
 };
 
-stockAnalysisSchema.statics.findInProgressAnalysis = function(instrumentKey, analysisType, userId) {
+stockAnalysisSchema.statics.findInProgressAnalysis = function(instrumentKey, analysisType) {
     return this.findOne({
         instrument_key: instrumentKey,
         analysis_type: analysisType,
-        user_id: userId,
         status: 'in_progress',
         expires_at: { $gt: new Date() }
     })
@@ -849,9 +839,9 @@ stockAnalysisSchema.statics.getExpiryTime = async function() {
     return expiryTime;
 };
 
-stockAnalysisSchema.statics.getAnalysisStats = function(userId) {
+stockAnalysisSchema.statics.getAnalysisStats = function() {
     return this.aggregate([
-        { $match: { user_id: mongoose.Types.ObjectId(userId) } },
+        { $match: { status: 'completed', expires_at: { $gt: new Date() } } },
         {
             $group: {
                 _id: '$analysis_type',
