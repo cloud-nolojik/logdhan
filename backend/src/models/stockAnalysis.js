@@ -646,12 +646,17 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
     
     // Helper function to check if a date is a trading day
     const isTradingDay = async (date) => {
-        const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD format
+        // Fix: Use IST date components to avoid timezone conversion issues
+        const istDate = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+        const year = istDate.getFullYear();
+        const month = String(istDate.getMonth() + 1).padStart(2, '0');
+        const day = String(istDate.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${day}`; // YYYY-MM-DD format
         const marketTiming = await MarketTiming.findOne({ date: dateStr });
         
         // If no record exists, assume it's a trading day if it's a weekday
         if (!marketTiming) {
-            const dayOfWeek = date.getDay();
+            const dayOfWeek = istDate.getDay();
             return dayOfWeek >= 1 && dayOfWeek <= 5; // Monday to Friday
         }
         
@@ -793,12 +798,17 @@ stockAnalysisSchema.statics.getExpiryTime = async function() {
     
     // Helper function to check if a date is a trading day
     const isTradingDay = async (date) => {
-        const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD format
+        // Fix: Use IST date components to avoid timezone conversion issues
+        const istDate = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+        const year = istDate.getFullYear();
+        const month = String(istDate.getMonth() + 1).padStart(2, '0');
+        const day = String(istDate.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${day}`; // YYYY-MM-DD format
         const marketTiming = await MarketTiming.findOne({ date: dateStr });
         
         // If no record exists, assume it's a trading day if it's a weekday
         if (!marketTiming) {
-            const dayOfWeek = date.getDay();
+            const dayOfWeek = istDate.getDay();
             return dayOfWeek >= 1 && dayOfWeek <= 5; // Monday to Friday
         }
         

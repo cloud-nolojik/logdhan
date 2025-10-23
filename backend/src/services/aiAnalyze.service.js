@@ -2,13 +2,13 @@ import axios from 'axios';
 import Parser from 'rss-parser';
 import crypto from 'crypto';
 import StockAnalysis from '../models/stockAnalysis.js';
+import PreFetchedData from '../models/preFetchedData.js';
 import { aiReviewService } from './ai/aiReview.service.js';
 import { subscriptionService } from './subscription/subscriptionService.js';
 import { Plan } from '../models/plan.js';
 import { Subscription } from '../models/subscription.js';
 import { getSectorForStock, getSectorNewsKeywords, getTrailingStopSuggestions, getSectorCorrelationMessage } from '../utils/sectorMapping.js';
 import dailyDataPrefetchService from './dailyDataPrefetch.service.js';
-import PreFetchedData from '../models/preFetchedData.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -621,6 +621,11 @@ class AIAnalyzeService {
         const result = await this.fetchRealMarketData(tradeData);
         result.source = 'live_api';
         result.fetchTime = Date.now() - startTime;
+        
+        // Store the fetched data for future use (cache for other users)
+        console.log(`🔄 [CACHE STORE] Attempting to store fetched data for ${tradeData.stockSymbol}`);
+        await this.storeFetchedDataInCache(tradeData, result);
+        
         return result;
     }
 
@@ -2421,6 +2426,124 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     async canUserAnalyze(user_id, instrument_key, analysis_type) {
         // Always return true for testing
         return true;
+    }
+
+    /**
+     * Store fetched candle data in PreFetchedData collection for future use
+     * This optimizes performance by caching user-requested data for other users
+     */
+    async storeFetchedDataInCache(tradeData, candleResult) {
+        try {
+            const { stockSymbol, instrument_key } = tradeData;
+            const candleSets = candleResult.candleSets;
+            
+            if (!candleSets?.byFrame) {
+                console.log(`⚠️ [CACHE STORE] No candle data to store for ${stockSymbol}`);
+                return;
+            }
+
+            const currentDate = new Date();
+            const istTime = new Date(currentDate.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+            const tradingDate = new Date(istTime);
+            tradingDate.setHours(0, 0, 0, 0);
+
+            let storedCount = 0;
+
+            // Process each timeframe
+            for (const [timeframe, data] of Object.entries(candleSets.byFrame)) {
+                try {
+                    // Combine intraday and historical candles
+                    const allCandles = [];
+                    
+                    // Add historical candles first
+                    if (data.historical) {
+                        data.historical.forEach(candleArray => {
+                            if (Array.isArray(candleArray)) {
+                                allCandles.push(...candleArray);
+                            }
+                        });
+                    }
+                    
+                    // Add intraday candles
+                    if (data.intraday) {
+                        data.intraday.forEach(candleArray => {
+                            if (Array.isArray(candleArray)) {
+                                allCandles.push(...candleArray);
+                            }
+                        });
+                    }
+
+                    if (allCandles.length === 0) {
+                        console.log(`⚠️ [CACHE STORE] No candles found for ${stockSymbol} ${timeframe}`);
+                        continue;
+                    }
+
+                    // Transform candles to our schema format
+                    const transformedCandles = allCandles.map(candle => ({
+                        timestamp: new Date(candle[0]), // Upstox format: [timestamp, open, high, low, close, volume]
+                        open: parseFloat(candle[1]),
+                        high: parseFloat(candle[2]),
+                        low: parseFloat(candle[3]),
+                        close: parseFloat(candle[4]),
+                        volume: parseInt(candle[5] || 0)
+                    }));
+
+                    // Sort by timestamp
+                    transformedCandles.sort((a, b) => a.timestamp - b.timestamp);
+
+                    const lastBarTime = transformedCandles.length > 0 ? 
+                        transformedCandles[transformedCandles.length - 1].timestamp : null;
+
+                    // Upsert the data (update if exists, insert if new)
+                    await PreFetchedData.findOneAndUpdate(
+                        {
+                            instrument_key: instrument_key,
+                            timeframe: timeframe
+                        },
+                        {
+                            $set: {
+                                stock_symbol: stockSymbol,
+                                trading_date: tradingDate,
+                                candle_data: transformedCandles,
+                                updated_at: new Date(),
+                                bars_count: transformedCandles.length,
+                                data_quality: {
+                                    missing_bars: 0,
+                                    has_gaps: false,
+                                    last_bar_time: lastBarTime
+                                },
+                                upstox_payload: {
+                                    source: 'user_request',
+                                    fetched_at: new Date(),
+                                    original_data: data
+                                }
+                            },
+                            $setOnInsert: {
+                                fetched_at: new Date()
+                            }
+                        },
+                        {
+                            upsert: true,
+                            new: true
+                        }
+                    );
+
+                    storedCount++;
+                    console.log(`✅ [CACHE STORE] Stored ${transformedCandles.length} ${timeframe} candles for ${stockSymbol}`);
+
+                } catch (error) {
+                    console.error(`❌ [CACHE STORE] Failed to store ${timeframe} data for ${stockSymbol}:`, error.message);
+                }
+            }
+
+            if (storedCount > 0) {
+                console.log(`🎯 [CACHE STORE] Successfully stored ${storedCount} timeframes for ${stockSymbol} in PreFetchedData`);
+            }
+
+        } catch (error) {
+            console.error(`❌ [CACHE STORE] Failed to store fetched data for ${tradeData.stockSymbol}:`, error.message);
+            // Don't throw error - storage failure shouldn't break analysis
+        }
     }
 }
 

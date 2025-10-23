@@ -421,33 +421,45 @@ class DailyDataPrefetchService {
     }
 
     /**
-     * Fetch candle data for specific stock and timeframe
+     * Fetch candle data for specific stock and timeframe with smart endpoint selection
      */
-    async fetchCandleData(instrumentKey, timeframe) {
+    async fetchCandleData(instrumentKey, timeframe, forceCurrentDay = false) {
         try {
-            // Use existing aiReview service to build candle URLs
-            const tempTradeData = {
-                term: 'short', // For swing trading
-                instrument_key: instrumentKey,
-                stock: instrumentKey
-            };
+            let candleData, candles;
 
-            const { endpoints } = await aiReviewService.buildCandleUrls(tempTradeData);
-            
-            // Find the endpoint for our desired timeframe
-            const targetEndpoint = endpoints.find(ep => 
-                ep.url.includes(`interval=${timeframe}`) || 
-                ep.timeframe === timeframe
-            );
+            if (forceCurrentDay && (timeframe === '5m' || timeframe === '15m' || timeframe === '1h')) {
+                // Use V3 Intraday API for current day data
+                console.log(`📊 [PREFETCH] Using V3 intraday API for current day ${timeframe} data`);
+                
+                const intradayUrl = this.buildIntradayV3Url(instrumentKey, timeframe);
+                candleData = await aiReviewService.fetchCandleData(intradayUrl);
+                candles = candleData?.data?.candles || candleData?.candles || [];
+                
+            } else {
+                // Use existing historical data approach
+                const tempTradeData = {
+                    term: 'short', // For swing trading
+                    instrument_key: instrumentKey,
+                    stock: instrumentKey
+                };
 
-            if (!targetEndpoint) {
-                console.warn(`⚠️ [PREFETCH] No endpoint found for timeframe ${timeframe}`);
-                return null;
+                const { endpoints } = await aiReviewService.buildCandleUrls(tempTradeData);
+                
+                // Find the endpoint for our desired timeframe
+                const targetEndpoint = endpoints.find(ep => 
+                    ep.url.includes(`interval=${timeframe}`) || 
+                    ep.timeframe === timeframe
+                );
+
+                if (!targetEndpoint) {
+                    console.warn(`⚠️ [PREFETCH] No endpoint found for timeframe ${timeframe}`);
+                    return null;
+                }
+
+                // Fetch the data
+                candleData = await aiReviewService.fetchCandleData(targetEndpoint.url);
+                candles = candleData?.data?.candles || candleData?.candles || [];
             }
-
-            // Fetch the data
-            const candleData = await aiReviewService.fetchCandleData(targetEndpoint.url);
-            const candles = candleData?.data?.candles || candleData?.candles || [];
 
             // Convert to our standard format
             const formattedCandles = candles.map(candle => ({
@@ -464,6 +476,229 @@ class DailyDataPrefetchService {
         } catch (error) {
             console.error(`❌ [PREFETCH] Error fetching candle data:`, error);
             throw error;
+        }
+    }
+
+    /**
+     * Build V3 Intraday URL for current day data (reused from aiReview.service.js)
+     */
+    buildIntradayV3Url(instrumentKey, timeframe) {
+        // Map our timeframes to V3 API format
+        const timeframeMapping = {
+            '5m': { unit: 'minutes', interval: '5' },
+            '15m': { unit: 'minutes', interval: '15' },
+            '30m': { unit: 'minutes', interval: '30' },
+            '1h': { unit: 'hours', interval: '1' },
+            '2h': { unit: 'hours', interval: '2' },
+            '1d': { unit: 'days', interval: '1' }
+        };
+
+        const mapping = timeframeMapping[timeframe];
+        if (!mapping) {
+            throw new Error(`Unsupported timeframe for V3 intraday API: ${timeframe}`);
+        }
+
+        // V3 Intraday API URL format: 
+        // https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/{unit}/{interval}
+        return `https://api.upstox.com/v3/historical-candle/intraday/${instrumentKey}/${mapping.unit}/${mapping.interval}`;
+    }
+
+    /**
+     * Run current day data pre-fetch after market close (after 4:00 PM)
+     */
+    async runCurrentDayPrefetch() {
+        const now = new Date();
+        const hours = now.getHours();
+        const minutes = now.getMinutes();
+        const currentTimeMinutes = hours * 60 + minutes;
+        const PREFETCH_AFTER = 16 * 60; // 4:00 PM
+
+        if (currentTimeMinutes < PREFETCH_AFTER) {
+            console.log(`⏰ [CURRENT DAY PREFETCH] Too early to fetch current day data (${hours}:${String(minutes).padStart(2, '0')}). Will run after 4:00 PM.`);
+            return { success: false, reason: 'too_early' };
+        }
+
+        // Check if today is a trading day
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const isTradingDay = await this.isTradingDay(today);
+        if (!isTradingDay) {
+            console.log(`📅 [CURRENT DAY PREFETCH] ${today.toDateString()} is not a trading day, skipping`);
+            return { success: false, reason: 'not_trading_day' };
+        }
+
+        console.log(`🚀 [CURRENT DAY PREFETCH] Starting current day data pre-fetch for ${today.toDateString()}`);
+
+        // Get unique stocks from all user watchlists
+        const uniqueStocks = await this.getUniqueWatchlistStocks();
+        console.log(`📊 [CURRENT DAY PREFETCH] Found ${uniqueStocks.length} unique stocks to update`);
+
+        if (uniqueStocks.length === 0) {
+            return { success: false, reason: 'no_stocks' };
+        }
+
+        let successCount = 0;
+        let totalBars = 0;
+        let totalApiCalls = 0;
+        const errors = [];
+
+        try {
+            // Process stocks in smaller batches for current day updates
+            for (let i = 0; i < uniqueStocks.length; i += this.maxConcurrentFetches) {
+                const batch = uniqueStocks.slice(i, i + this.maxConcurrentFetches);
+                
+                console.log(`📦 [CURRENT DAY PREFETCH] Processing batch ${Math.floor(i/this.maxConcurrentFetches) + 1}/${Math.ceil(uniqueStocks.length/this.maxConcurrentFetches)} (${batch.length} stocks)`);
+
+                // Process batch concurrently
+                const batchPromises = batch.map(stock => this.prefetchCurrentDayStock(stock, today));
+                const batchResults = await Promise.allSettled(batchPromises);
+
+                // Process results
+                for (const result of batchResults) {
+                    if (result.status === 'fulfilled') {
+                        successCount++;
+                        totalBars += result.value.totalBars;
+                        totalApiCalls += result.value.apiCalls;
+                    } else {
+                        errors.push(result.reason);
+                        console.error(`❌ [CURRENT DAY PREFETCH] Batch error:`, result.reason);
+                    }
+                }
+
+                // Rate limiting delay between batches
+                if (i + this.maxConcurrentFetches < uniqueStocks.length) {
+                    await this.delay(this.delayBetweenFetches);
+                }
+            }
+
+            console.log(`✅ [CURRENT DAY PREFETCH] Current day pre-fetch completed successfully`);
+            console.log(`📊 [CURRENT DAY PREFETCH] Summary: ${successCount}/${uniqueStocks.length} stocks, ${totalBars} bars, ${totalApiCalls} API calls`);
+
+            return { 
+                success: true, 
+                results: { successCount, totalBars, totalApiCalls, errors }
+            };
+
+        } catch (error) {
+            console.error(`❌ [CURRENT DAY PREFETCH] Current day pre-fetch failed:`, error);
+            return { 
+                success: false, 
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Pre-fetch current day data for a single stock (intraday timeframes only)
+     */
+    async prefetchCurrentDayStock(stock, tradingDate) {
+        const startTime = Date.now();
+        let totalBars = 0;
+        let apiCalls = 0;
+
+        console.log(`📈 [CURRENT DAY PREFETCH] Updating current day data for ${stock.stock_symbol} (${stock.instrument_key})`);
+
+        try {
+            // Only fetch intraday timeframes for current day
+            const intradayTimeframes = ['5m', '15m', '1h'];
+            
+            for (const timeframe of intradayTimeframes) {
+                try {
+                    // Fetch current day data using V3 API
+                    const currentDayData = await this.fetchCandleData(stock.instrument_key, timeframe, true);
+                    
+                    if (currentDayData && currentDayData.length > 0) {
+                        // Check if we already have data for today
+                        const existingData = await PreFetchedData.findOne({
+                            instrument_key: stock.instrument_key,
+                            timeframe: timeframe
+                        });
+
+                        if (existingData) {
+                            // Merge current day data with existing historical data
+                            const mergedResult = await this.mergeCurrentDayData(existingData, currentDayData, tradingDate);
+                            if (mergedResult.success) {
+                                totalBars += mergedResult.newBars;
+                                apiCalls++;
+                                console.log(`✅ [CURRENT DAY PREFETCH] ${stock.stock_symbol} ${timeframe}: ${mergedResult.newBars} current day bars merged`);
+                            }
+                        } else {
+                            // Store current day data as new record
+                            await this.storeCandleData(stock, timeframe, tradingDate, currentDayData);
+                            totalBars += currentDayData.length;
+                            apiCalls++;
+                            console.log(`✅ [CURRENT DAY PREFETCH] ${stock.stock_symbol} ${timeframe}: ${currentDayData.length} current day bars stored`);
+                        }
+                    }
+
+                    // Small delay between timeframe requests
+                    await this.delay(200);
+
+                } catch (error) {
+                    console.error(`❌ [CURRENT DAY PREFETCH] Error processing ${stock.stock_symbol} ${timeframe}:`, error.message);
+                }
+            }
+
+            const duration = Date.now() - startTime;
+            console.log(`⏱️ [CURRENT DAY PREFETCH] ${stock.stock_symbol} completed in ${duration}ms (${totalBars} new bars, ${apiCalls} API calls)`);
+
+            return { totalBars, apiCalls, duration };
+
+        } catch (error) {
+            console.error(`❌ [CURRENT DAY PREFETCH] Failed to process ${stock.stock_symbol}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Merge current day data with existing historical data
+     */
+    async mergeCurrentDayData(existingData, currentDayData, tradingDate) {
+        try {
+            const existingCandles = existingData.candle_data || [];
+            
+            // Filter current day data to only include new timestamps
+            const existingTimestamps = new Set(existingCandles.map(c => new Date(c.timestamp).getTime()));
+            const newCandles = currentDayData.filter(candle => 
+                !existingTimestamps.has(new Date(candle.timestamp).getTime())
+            );
+
+            if (newCandles.length === 0) {
+                return { success: true, newBars: 0, totalBars: existingCandles.length };
+            }
+
+            // Merge and sort all candles
+            const allCandles = [...existingCandles, ...newCandles]
+                .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+            // Keep only required number of bars (remove oldest if necessary)
+            const maxBars = this.barsRequired[existingData.timeframe] || 200;
+            const finalCandles = allCandles.slice(-maxBars);
+
+            // Update the existing record
+            existingData.candle_data = finalCandles;
+            existingData.bars_count = finalCandles.length;
+            existingData.trading_date = tradingDate;
+            existingData.updated_at = new Date();
+            existingData.current_day_updated = true;
+            existingData.data_quality = this.analyzeDataQuality(finalCandles, existingData.timeframe);
+
+            await existingData.save();
+
+            return {
+                success: true,
+                newBars: newCandles.length,
+                totalBars: finalCandles.length
+            };
+
+        } catch (error) {
+            console.error(`❌ [CURRENT DAY PREFETCH] Error merging current day data:`, error);
+            return {
+                success: false,
+                error: error.message,
+                newBars: 0
+            };
         }
     }
 

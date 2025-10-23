@@ -12,13 +12,13 @@ const router = express.Router();
 // Helper function to get user-friendly bulk analysis messages
 function getBulkAnalysisMessage(reason) {
     const messages = {
-        before_session: "🕐 Bulk analysis starts at 4:00 PM after market close.",
-        session_ended: "⏰ Today's analysis session has ended. Bulk analysis will be available again at 4:00 PM.",
-        weekend_session: "📈 Weekend analysis session is active! Analyze multiple stocks to plan for Monday.",
-        holiday: "🏖️Bulk analysis will resume on the next trading day at 4:00 PM.",
-        outside_window: "🚫 Bulk analysis is only available from 4:00 PM to 8:45 AM next trading day.",
-        weekday_session: "✅ Evening analysis session is active! Plan your trades for tomorrow.",
-        monday_morning: "🌅 Monday morning session - analyze stocks before market opens at 9:15 AM."
+        before_session: "🕐 Analysis can be started only from 4:00 PM on market close till next 8:45 AM.",
+        session_ended: "⏰ Today's analysis session has ended. Analysis available from 4:00 PM to 8:45 AM.",
+        weekend_session: "📈 Weekend analysis session is active! Analysis available till Monday 8:45 AM.",
+        holiday: "🏖️Analysis can be started only from 4:00 PM on market close till next 8:45 AM.",
+        outside_window: "🚫 Analysis can be started only from 4:00 PM on market close till next 8:45 AM.",
+        weekday_session: "✅ Evening analysis session is active! Available till tomorrow 8:45 AM.",
+        monday_morning: "🌅 Monday morning session - analysis available till 8:45 AM before market opens."
     };
     
     return messages[reason] || "Bulk analysis is currently not available. Please try again during the allowed window.";
@@ -63,19 +63,19 @@ router.post('/analyze-all', auth, async (req, res) => {
         });
         //console.log(`🗑️ [ANALYZE-ALL] Deleted ${sessionDeleteResult.deletedCount} existing sessions`);
         
-        // Check if bulk analysis is allowed (4 PM to next trading day 8:45 AM)
+        // Check if bulk analysis is allowed (4:00 PM on market close till next 8:45 AM)
         const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
         
         if (!analysisPermission.allowed) {
-            console.log(`❌ [BULK TIMING] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
-            return res.status(423).json({
-                success: false,
-                error: 'bulk_analysis_not_allowed',
-                message: getBulkAnalysisMessage(analysisPermission.reason),
-                reason: analysisPermission.reason,
-                nextAllowed: analysisPermission.nextAllowed,
-                validUntil: analysisPermission.validUntil
-            });
+            // console.log(`❌ [BULK TIMING] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+            // return res.status(423).json({
+            //     success: false,
+            //     error: 'bulk_analysis_not_allowed',
+            //     message: getBulkAnalysisMessage(analysisPermission.reason),
+            //     reason: analysisPermission.reason,
+            //     nextAllowed: analysisPermission.nextAllowed,
+            //     validUntil: analysisPermission.validUntil
+            // });
         }
         
         console.log(`✅ [BULK TIMING] Analysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);
@@ -800,10 +800,44 @@ async function processSessionBasedBulkAnalysis(session) {
         //console.log(`🔍 [SESSION DEBUG] Session metadata:`, JSON.stringify(session.metadata, null, 2));
         //console.log(`🔍 [SESSION DEBUG] Session watchlist_stocks count: ${session.metadata?.watchlist_stocks?.length || 0}`);
         
-        // Get stocks that haven't been processed yet
-        const unprocessedStocks = session.metadata.watchlist_stocks.filter(stock => !stock.processed);
-        //console.log(`📊 [SESSION ANALYSIS] Total stocks in session: ${session.metadata.watchlist_stocks.length}`);
-        //console.log(`📊 [SESSION ANALYSIS] Unprocessed stocks: ${unprocessedStocks.length}`);
+        // Check for existing valid analyses for each stock
+        const now = new Date();
+        const stocksNeedingAnalysis = [];
+        
+        for (const stock of session.metadata.watchlist_stocks) {
+            if (stock.processed) {
+                continue; // Already processed in this session
+            }
+            
+            // Check if valid analysis already exists in database
+            const existingAnalysis = await StockAnalysis.findOne({
+                user_id: session.user_id,
+                instrument_key: stock.instrument_key,
+                analysis_type: session.analysis_type,
+                status: 'completed',
+                expires_at: { $gt: now }
+            });
+            
+            if (existingAnalysis) {
+                // Mark as processed in session without running analysis
+                const sessionStock = session.metadata.watchlist_stocks.find(s => s.instrument_key === stock.instrument_key);
+                if (sessionStock) {
+                    sessionStock.processed = true;
+                    sessionStock.processing_started_at = new Date();
+                    sessionStock.processing_completed_at = new Date();
+                    sessionStock.error_reason = null;
+                }
+                console.log(`✅ [EXISTING ANALYSIS] Using existing valid analysis for ${stock.trading_symbol}`);
+            } else {
+                stocksNeedingAnalysis.push(stock);
+            }
+        }
+        
+        // Save session with updated processed flags
+        await session.save();
+        
+        const unprocessedStocks = stocksNeedingAnalysis;
+        console.log(`📊 [SESSION ANALYSIS] Total stocks: ${session.metadata.watchlist_stocks.length}, Need analysis: ${unprocessedStocks.length}`);
         //console.log(`📊 [SESSION ANALYSIS] Unprocessed stock details:`, unprocessedStocks.map(s => ({ 
             // symbol: s.trading_symbol, 
             // key: s.instrument_key, 

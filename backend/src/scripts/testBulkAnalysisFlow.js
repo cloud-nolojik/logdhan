@@ -19,7 +19,6 @@ import axios from 'axios';
 import { User } from '../models/user.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import AnalysisSession from '../models/analysisSession.js';
-import AIAnalysisCache from '../models/aiAnalysisCache.js';
 import MarketTiming from '../models/marketTiming.js';
 
 // Test configuration

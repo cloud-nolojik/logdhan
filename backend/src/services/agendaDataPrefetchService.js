@@ -1,6 +1,5 @@
 import Agenda from 'agenda';
 import dailyDataPrefetchService from './dailyDataPrefetch.service.js';
-import AIAnalysisCache from '../models/aiAnalysisCache.js';
 import DailyJobStatus from '../models/dailyJobStatus.js';
 import MarketTiming from '../models/marketTiming.js';
 
@@ -180,6 +179,29 @@ class AgendaDataPrefetchService {
                 throw error;
             }
         });
+
+        // Current day data pre-fetch job (runs after 4:00 PM on trading days)
+        this.agenda.define('current-day-prefetch', async (job) => {
+            console.log('🌆 [AGENDA DATA] Starting current day data pre-fetch job');
+            
+            try {
+                const result = await dailyDataPrefetchService.runCurrentDayPrefetch();
+                
+                if (result.success) {
+                    console.log('✅ [AGENDA DATA] Current day data pre-fetch completed successfully');
+                    console.log(`📊 [AGENDA DATA] Current day summary: ${result.results?.successCount || 0} stocks, ${result.results?.totalBars || 0} bars`);
+                    this.stats.successfulJobs++;
+                } else {
+                    console.log(`⚠️ [AGENDA DATA] Current day data pre-fetch skipped: ${result.reason}`);
+                    this.stats.successfulJobs++;
+                }
+                
+            } catch (error) {
+                console.error('❌ [AGENDA DATA] Current day data pre-fetch failed:', error);
+                this.stats.failedJobs++;
+                throw error;
+            }
+        });
     }
 
     /**
@@ -214,15 +236,21 @@ class AgendaDataPrefetchService {
         try {
             // Cancel any existing recurring jobs to avoid duplicates
             await this.agenda.cancel({
-                name: { $in: ['daily-data-prefetch', 'chart-cleanup'] }
+                name: { $in: ['daily-data-prefetch', 'chart-cleanup', 'current-day-prefetch'] }
             });
 
-            // Daily data pre-fetch: 1:00 AM IST on weekdays
+            // Daily data pre-fetch: 1:00 AM IST on weekdays (historical data)
             // Note: Agenda uses node-cron syntax
             await this.agenda.every('0 1 * * 1-5', 'daily-data-prefetch', {}, {
                 timezone: 'Asia/Kolkata'
             });
             console.log('📅 [AGENDA DATA] Scheduled daily data pre-fetch for 1:00 AM IST (weekdays)');
+
+            // Current day data pre-fetch: 4:05 PM IST on weekdays (after market close)
+            await this.agenda.every('5 16 * * 1-5', 'current-day-prefetch', {}, {
+                timezone: 'Asia/Kolkata'
+            });
+            console.log('📅 [AGENDA DATA] Scheduled current day data pre-fetch for 4:05 PM IST (weekdays)');
 
             // Chart cleanup: Every hour
             await this.agenda.every('0 * * * *', 'chart-cleanup', {}, {

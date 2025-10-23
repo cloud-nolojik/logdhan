@@ -1,7 +1,5 @@
 import express from 'express';
 import aiReviewService from '../services/aiAnalyze.service.js';
-import CachedAiAnalysisService from '../services/cachedAiAnalysis.service.js';
-import AIAnalysisCache from '../models/aiAnalysisCache.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
@@ -12,7 +10,6 @@ import { User } from '../models/user.js';
 const router = express.Router();
 
 // Initialize cached AI analysis service
-const cachedAiAnalysisService = new CachedAiAnalysisService(aiReviewService);
 
 // Rate limiting disabled for testing
 // const analysisRateLimit = rateLimit({
@@ -62,7 +59,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
             return res.status(423).json({
                 success: false,
                 error: 'stock_analysis_not_allowed',
-                message: `Stock analysis is only available from 4:00 PM to 8:45 AM next trading day. ${analysisPermission.reason}`,
+                message: `Analysis can be started only from 4:00 PM on market close till next 8:45 AM. ${analysisPermission.reason}`,
                 reason: analysisPermission.reason,
                 nextAllowed: analysisPermission.nextAllowed,
                 validUntil: analysisPermission.validUntil
@@ -175,43 +172,23 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
 
         // TESTING: Skip rate limiting check
 
-        // Start AI analysis with caching
-        const result = await cachedAiAnalysisService.analyzeStockWithCache({
+        // Start AI analysis directly
+        const result = await aiReviewService.analyzeStock(
             instrument_key,
             stock_name,
             stock_symbol,
-            current_price: price,
+            price,
             analysis_type,
-            user_id: userId,
-            isFromRewardedAd,
-            creditType,
-            forceFresh
-        });
+            userId
+        );
 
         if (result.success) {
             const responseData = {
                 success: true,
                 data: result.data,
-                cached: result.cached || false,
                 analysis_id: result.data._id
             };
 
-            // Add enhanced cache info for debugging
-            if (result.cached && result.cache_info) {
-                responseData.cache_info = {
-                    message: 'Analysis retrieved from cache',
-                    created_at: result.data.created_at,
-                    expires_at: result.cache_info.expires_at,
-                    usage_count: result.cache_info.usage_count,
-                    served_from: result.cache_info.served_from,
-                    generated_at: result.cache_info.generated_at
-                };
-            } else if (result.cached) {
-                responseData.cache_info = {
-                    message: 'Analysis retrieved from user-specific cache',
-                    created_at: result.data.created_at
-                };
-            }
 
             res.json(responseData);
         } else {

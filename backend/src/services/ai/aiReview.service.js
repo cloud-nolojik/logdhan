@@ -1682,13 +1682,33 @@ async buildCandleUrls(tradeData) {
   const { instrument_key, term } = tradeData;
   const t = (term || '').toLowerCase();
 
-  // FORCE HISTORICAL DATA ONLY (for morning runs at 5:00 AM)
-  // Always use previous day as the latest data point
+  // SMART DATA SELECTION: Current day intraday data after 4:00 PM, historical data before
   const now = this.getCurrentIST('date');         // IST Date object
-  const previousDay = this.addDays(now, -1);     // Force previous day
-  const todayISO = this.isoIST(previousDay);      // Use previous day as "today"
-  const yesterdayISO = this.isoIST(this.addDays(previousDay, -1));
-  const live = false;                             // Force not live to avoid intraday endpoints
+  const { hours, minutes } = this.getCurrentIST('object');
+  const currentTimeMinutes = hours * 60 + minutes;
+  const ANALYSIS_ALLOWED_AFTER = 16 * 60; // 4:00 PM (16:00)
+  
+  // Determine if we should use current day intraday data or historical data
+  const isAfter4PM = currentTimeMinutes >= ANALYSIS_ALLOWED_AFTER;
+  const todayIsBusinessDay = await this.isBusinessDayIST(now, process.env.UPSTOX_API_KEY);
+  const useCurrentDayData = isAfter4PM && todayIsBusinessDay;
+  
+  let todayISO, yesterdayISO, live;
+  
+  if (useCurrentDayData) {
+    // Use current day data with V3 intraday endpoints
+    todayISO = this.isoIST(now);                    // Current day
+    yesterdayISO = this.isoIST(this.addDays(now, -1));
+    live = true;                                    // Enable intraday endpoints
+    console.log(`📊 [CANDLE URLs] Using CURRENT DAY intraday data (after 4:00 PM): ${todayISO}`);
+  } else {
+    // Use historical data only (for morning runs or before 4:00 PM)
+    const previousDay = this.addDays(now, -1);     // Force previous day
+    todayISO = this.isoIST(previousDay);            // Use previous day as "today"
+    yesterdayISO = this.isoIST(this.addDays(previousDay, -1));
+    live = false;                                   // Force not live to avoid intraday endpoints
+    console.log(`📊 [CANDLE URLs] Using HISTORICAL data only (before 4:00 PM or non-business day): ${todayISO}`);
+  }
   
   const frames = this.termToFrames[t] || [];
   
@@ -1697,60 +1717,68 @@ async buildCandleUrls(tradeData) {
   
   const endpoints = [];
 
-  // ---------- SWING/SHORT (target-based for 15m/1h/1D) ----------
+  // ---------- SWING/SHORT (Smart endpoint selection based on timing) ----------
   if (t === 'short' || t === 'shortterm' || t === 'swing') {
-    // Targets for swing trading (historical data only)
+    // Targets for swing trading
     const TARGETS = { '15m': 200, '1h': 160, '1D': 260 };
     // Bars a typical trading day contributes for each frame
     const PER_DAY = { '15m': 25, '1h': 6, '1D': 1 };
 
-    // Check if previous day was a business day (for return data)
-    const todayIsBusinessDay = await this.isBusinessDayIST(previousDay, process.env.UPSTOX_API_KEY);
-
     for (const f of frames) {
       const { n, u } = this.parseFrame(f);
-
-      // Get full target amount from historical data only (no live data)
       const target = TARGETS[f] ?? 0;
       const perDay = PER_DAY[f] ?? 0;
-      let deficit = target; // Need full target since no live data
 
-      // Calculate required historical data in a single date range
-      if (deficit > 0 && perDay > 0) {
-        // Always start from previous day for historical data only
-        const startDate = previousDay;
+      if (target > 0) {
+        if (useCurrentDayData && (f === '5m' || f === '15m' || f === '1h')) {
+          // Use V3 Intraday API for current day data (after 4:00 PM)
+          const intradayUrl = this.buildIntradayV3Url(instrument_key, f);
           
-        let businessDays = Math.ceil(deficit / perDay);
-        let currentDate = new Date(startDate);
-        let fromDate = new Date(startDate);
-        let daysChecked = 0;
-        let businessDaysFound = 0;
-        
-        // console.log(`📊 [DATE CALC] Frame ${f}: need ${deficit} bars, ${perDay} per day = ${businessDays} business days`);
-        
-        // Go backwards until we find enough business days
-        while (businessDaysFound < businessDays && daysChecked < 365) {
-          currentDate = this.addDays(currentDate, -1);
-          const isBusinessDay = await this.isBusinessDayIST(currentDate, process.env.UPSTOX_API_KEY);
-          if (daysChecked < 5) { // Debug first 5 days
-            // console.log(`📊 [DEBUG] Day ${daysChecked}: ${this.isoIST(currentDate)} = business day? ${isBusinessDay}`);
+          endpoints.push({
+            frame: f,
+            kind: 'intraday_v3',
+            url: intradayUrl,
+            timeframe: f
+          });
+          
+          console.log(`📊 [V3 INTRADAY] ${f}: ${intradayUrl}`);
+          
+          // For intraday timeframes, also get some historical context
+          if (perDay > 0) {
+            const historicalTarget = Math.floor(target * 0.7); // 70% from historical for context
+            const businessDaysNeeded = Math.ceil(historicalTarget / perDay);
+            
+            const fromDate = await this.calculateHistoricalFromDate(yesterdayISO, businessDaysNeeded);
+            const upHist = this.unitPath(u, 'historical');
+            const historicalUrl = `https://api.upstox.com/v3/historical-candle/${instrument_key}/${upHist}/${n}/${yesterdayISO}/${fromDate}`;
+            
+            endpoints.push({
+              frame: f,
+              kind: 'historical_context',
+              url: historicalUrl,
+            });
+            
+            console.log(`📊 [HISTORICAL CONTEXT] ${f}: ${historicalUrl}`);
           }
-          if (isBusinessDay) {
-            businessDaysFound++;
-            fromDate = currentDate;
+        } else {
+          // Use Historical API (before 4:00 PM, non-business day, or daily data)
+          if (perDay > 0) {
+            const businessDaysNeeded = Math.ceil(target / perDay);
+            const referenceDate = useCurrentDayData ? yesterdayISO : todayISO;
+            
+            const fromDate = await this.calculateHistoricalFromDate(referenceDate, businessDaysNeeded);
+            const upHist = this.unitPath(u, 'historical');
+            const finalUrl = `https://api.upstox.com/v3/historical-candle/${instrument_key}/${upHist}/${n}/${referenceDate}/${fromDate}`;
+            
+            endpoints.push({
+              frame: f,
+              kind: 'historical',
+              url: finalUrl,
+            });
+            
+            console.log(`📊 [HISTORICAL] ${f}: ${finalUrl}`);
           }
-          daysChecked++;
         }
-        
-        // Single API call for the entire range
-        const upHist = this.unitPath(u, 'historical');
-        const finalUrl = `https://api.upstox.com/v3/historical-candle/${instrument_key}/${upHist}/${n}/${this.isoIST(startDate)}/${this.isoIST(fromDate)}`;
-        
-        endpoints.push({
-          frame: f,
-          kind: 'historical',
-          url: finalUrl,
-        });
       }
     }
 
@@ -1892,6 +1920,54 @@ if (t === 'medium' || t === 'mediumterm') {
     sessionHasStarted: false,
     todayISO,
   };
+}
+
+/**
+ * Build V3 Intraday URL for current day data
+ */
+buildIntradayV3Url(instrumentKey, timeframe) {
+  // Map our timeframes to V3 API format
+  const timeframeMapping = {
+    '5m': { unit: 'minutes', interval: '5' },
+    '15m': { unit: 'minutes', interval: '15' },
+    '30m': { unit: 'minutes', interval: '30' },
+    '1h': { unit: 'hours', interval: '1' },
+    '2h': { unit: 'hours', interval: '2' },
+    '1d': { unit: 'days', interval: '1' }
+  };
+
+  const mapping = timeframeMapping[timeframe];
+  if (!mapping) {
+    throw new Error(`Unsupported timeframe for V3 intraday API: ${timeframe}`);
+  }
+
+  // V3 Intraday API URL format: 
+  // https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/{unit}/{interval}
+  return `https://api.upstox.com/v3/historical-candle/intraday/${instrumentKey}/${mapping.unit}/${mapping.interval}`;
+}
+
+/**
+ * Calculate historical from date by going back specified business days
+ */
+async calculateHistoricalFromDate(startDateISO, businessDaysNeeded) {
+  const startDate = new Date(startDateISO);
+  let currentDate = new Date(startDate);
+  let businessDaysFound = 0;
+  let daysChecked = 0;
+  let fromDate = new Date(startDate);
+
+  while (businessDaysFound < businessDaysNeeded && daysChecked < 365) {
+    currentDate = this.addDays(currentDate, -1);
+    const isBusinessDay = await this.isBusinessDayIST(currentDate, process.env.UPSTOX_API_KEY);
+    
+    if (isBusinessDay) {
+      businessDaysFound++;
+      fromDate = currentDate;
+    }
+    daysChecked++;
+  }
+
+  return this.isoIST(fromDate);
 }
 
 /**

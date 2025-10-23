@@ -4,8 +4,7 @@ import mongoose from 'mongoose';
 const dailyJobStatusSchema = new mongoose.Schema({
     job_date: {
         type: Date,
-        required: true,
-        index: true
+        required: true
     },
     job_type: {
         type: String,
@@ -43,9 +42,9 @@ const dailyJobStatusSchema = new mongoose.Schema({
         timeframe: String,
         stocks_completed: Number,
         total_bars_fetched: Number,
-        errors: Number
+        error_count: Number
     }],
-    errors: [{
+    job_errors: [{
         timestamp: {
             type: Date,
             default: Date.now
@@ -109,7 +108,7 @@ dailyJobStatusSchema.index({ job_date: 1 }, { expireAfterSeconds: 90 * 24 * 60 *
 
 // Instance methods
 dailyJobStatusSchema.methods.addError = function(errorType, stockSymbol, timeframe, errorMessage, stackTrace = null) {
-    this.errors.push({
+    this.job_errors.push({
         timestamp: new Date(),
         error_type: errorType,
         stock_symbol: stockSymbol,
@@ -132,7 +131,7 @@ dailyJobStatusSchema.methods.updateProgress = function(stocksProcessed, timefram
                 timeframe: timeframe,
                 stocks_completed: 1,
                 total_bars_fetched: barsCount,
-                errors: 0
+                error_count: 0
             });
         }
     }
@@ -192,7 +191,7 @@ dailyJobStatusSchema.statics.getJobStats = function(days = 7) {
                 successful_jobs: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
                 avg_duration_ms: { $avg: '$duration_ms' },
                 total_stocks_processed: { $sum: '$stocks_processed' },
-                total_errors: { $sum: { $size: '$errors' } }
+                total_errors: { $sum: { $size: '$job_errors' } }
             }
         }
     ]);

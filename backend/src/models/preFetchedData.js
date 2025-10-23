@@ -18,8 +18,7 @@ const preFetchedDataSchema = new mongoose.Schema({
     },
     trading_date: {
         type: Date,
-        required: true,
-        index: true
+        required: true
     },
     candle_data: [{
         timestamp: {
