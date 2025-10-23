@@ -30,6 +30,7 @@ import { azureStorageService } from './services/storage/azureStorage.service.js'
 import { messagingService } from './services/messaging/messaging.service.js';
 import agendaDailyReminderService from './services/agendaDailyReminderService.js'; // Using Agenda instead of BullMQ
 import agendaMonitoringService from './services/agendaMonitoringService.js';
+import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // Using Agenda for data pre-fetching
 // Removed condition monitoring - direct order placement only
 
 import authRoutes from './routes/auth.js';
@@ -139,47 +140,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// Clean up old chart files every hour (both local and Azure)
-setInterval(async () => {
-  // Clean up local files
-  const chartDir = path.join(process.cwd(), 'temp', 'charts');
-  
-  try {
-    if (fs.existsSync(chartDir)) {
-      const files = fs.readdirSync(chartDir);
-      const now = Date.now();
-      const oneHour = 60 * 60 * 1000;
-      
-      files.forEach(file => {
-        const filePath = path.join(chartDir, file);
-        try {
-          const stats = fs.statSync(filePath);
-          
-          if (now - stats.mtime.getTime() > oneHour) {
-            if (fs.existsSync(filePath)) {
-              fs.unlinkSync(filePath);
-              console.log(`🗑️ Cleaned up old local chart: ${file}`);
-            }
-          }
-        } catch (fileError) {
-          // Ignore individual file errors
-          if (fileError.code !== 'ENOENT') {
-            console.warn(`⚠️ Could not clean up ${file}:`, fileError.message);
-          }
-        }
-      });
-    }
-  } catch (error) {
-    console.error('❌ Error cleaning up local charts:', error);
-  }
-
-  // Clean up Azure storage
-  try {
-    await azureStorageService.cleanupOldCharts(24); // Clean up files older than 24 hours
-  } catch (error) {
-    console.warn('⚠️ Error cleaning up Azure charts:', error);
-  }
-}, 60 * 60 * 1000); // Run every hour
+// Chart cleanup is now handled by Agenda service (agendaDataPrefetchService)
+// Runs every hour via scheduled job 'chart-cleanup'
 
 // Initialize Azure Storage
 async function initializeAzureStorage() {
@@ -237,6 +199,17 @@ async function initializeAgendaMonitoringService() {
   }
 }
 
+// Initialize Agenda data pre-fetch service
+async function initializeAgendaDataPrefetchService() {
+  try {
+    console.log('🔄 Initializing Agenda data pre-fetch service...');
+    await agendaDataPrefetchService.initialize();
+    console.log('✅ Agenda data pre-fetch service initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize Agenda data pre-fetch service:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -249,7 +222,59 @@ app.listen(PORT, async () => {
   await initializeMessagingService();
   await initializeAgendaDailyReminderService();
   await initializeAgendaMonitoringService();
+  await initializeAgendaDataPrefetchService();
   // BullMQ condition monitoring removed - now using Agenda
   
   console.log('🚀 All services initialized successfully');
-}); 
+});
+
+// Graceful shutdown handling
+process.on('SIGINT', async () => {
+  console.log('\n🛑 SIGINT received, shutting down gracefully...');
+  
+  try {
+    // Stop all Agenda services gracefully
+    console.log('🛑 Stopping Agenda services...');
+    await Promise.all([
+      agendaDataPrefetchService.stop(),
+      agendaDailyReminderService.agenda?.stop?.(),
+      agendaMonitoringService.agenda?.stop?.()
+    ]);
+    console.log('✅ All Agenda services stopped');
+    
+    // Close MongoDB connection
+    await mongoose.connection.close();
+    console.log('✅ MongoDB connection closed');
+    
+    console.log('✅ Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  }
+});
+
+process.on('SIGTERM', async () => {
+  console.log('\n🛑 SIGTERM received, shutting down gracefully...');
+  
+  try {
+    // Stop all Agenda services gracefully
+    console.log('🛑 Stopping Agenda services...');
+    await Promise.all([
+      agendaDataPrefetchService.stop(),
+      agendaDailyReminderService.agenda?.stop?.(),
+      agendaMonitoringService.agenda?.stop?.()
+    ]);
+    console.log('✅ All Agenda services stopped');
+    
+    // Close MongoDB connection
+    await mongoose.connection.close();
+    console.log('✅ MongoDB connection closed');
+    
+    console.log('✅ Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  }
+});

@@ -2,6 +2,7 @@ import express from 'express';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import agendaMonitoringService from '../services/agendaMonitoringService.js';
 import agendaDailyReminderService from '../services/agendaDailyReminderService.js';
+import agendaDataPrefetchService from '../services/agendaDataPrefetchService.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import triggerOrderService from '../services/triggerOrderService.js';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
@@ -698,5 +699,111 @@ router.get('/health', async (req, res) => {
         });
     }
 });
+
+/**
+ * @route POST /api/monitoring/data-prefetch/trigger
+ * @desc Manually trigger data pre-fetch job
+ * @access Private (Admin recommended)
+ */
+router.post('/data-prefetch/trigger', authenticateToken, async (req, res) => {
+    try {
+        const { targetDate, reason } = req.body;
+        
+        const result = await agendaDataPrefetchService.triggerJob('manual-data-prefetch', {
+            targetDate,
+            reason: reason || `Manual trigger by user ${req.user.id}`
+        });
+        
+        res.json({
+            success: true,
+            message: 'Data pre-fetch job triggered successfully',
+            data: result
+        });
+        
+    } catch (error) {
+        console.error('❌ Manual data pre-fetch trigger failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to trigger data pre-fetch job',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route GET /api/monitoring/data-prefetch/stats
+ * @desc Get data pre-fetch job statistics
+ * @access Private (Admin recommended)
+ */
+router.get('/data-prefetch/stats', authenticateToken, async (req, res) => {
+    try {
+        const jobStats = await agendaDataPrefetchService.getJobStats();
+        
+        res.json({
+            success: true,
+            data: {
+                job_statistics: jobStats,
+                note: "System health monitoring removed - use manual monitoring tools"
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Data pre-fetch stats failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get data pre-fetch statistics',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route POST /api/monitoring/data-prefetch/pause
+ * @desc Pause all data pre-fetch recurring jobs
+ * @access Private (Admin only)
+ */
+router.post('/data-prefetch/pause', authenticateToken, async (req, res) => {
+    try {
+        await agendaDataPrefetchService.pauseJobs();
+        
+        res.json({
+            success: true,
+            message: 'All data pre-fetch jobs paused successfully'
+        });
+        
+    } catch (error) {
+        console.error('❌ Pause data pre-fetch jobs failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to pause data pre-fetch jobs',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route POST /api/monitoring/data-prefetch/resume
+ * @desc Resume all data pre-fetch recurring jobs
+ * @access Private (Admin only)
+ */
+router.post('/data-prefetch/resume', authenticateToken, async (req, res) => {
+    try {
+        await agendaDataPrefetchService.resumeJobs();
+        
+        res.json({
+            success: true,
+            message: 'All data pre-fetch jobs resumed successfully'
+        });
+        
+    } catch (error) {
+        console.error('❌ Resume data pre-fetch jobs failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to resume data pre-fetch jobs',
+            message: error.message
+        });
+    }
+});
+
 
 export default router;

@@ -65,21 +65,7 @@ class AgendaMonitoringService {
             this.isInitialized = true;
             console.log('🚀 Agenda monitoring service initialized successfully');
 
-            // Clean up completed jobs older than 24 hours
-            setInterval(async () => {
-                try {
-                    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-                    await this.agenda.cancel({
-                        lastFinishedAt: { $lt: oneDayAgo },
-                        $or: [
-                            { nextRunAt: { $exists: false } },
-                            { nextRunAt: null }
-                        ]
-                    });
-                } catch (error) {
-                    console.warn('⚠️ Error cleaning up old monitoring jobs:', error);
-                }
-            }, 60 * 60 * 1000); // Run every hour
+            // Note: Job cleanup is now handled by MongoDB TTL indexes and Agenda's built-in cleanup mechanisms
 
         } catch (error) {
             console.error('❌ Failed to initialize Agenda monitoring service:', error);

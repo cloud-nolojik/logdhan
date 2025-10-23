@@ -15,7 +15,7 @@ function getBulkAnalysisMessage(reason) {
         before_session: "🕐 Bulk analysis starts at 4:00 PM after market close.",
         session_ended: "⏰ Today's analysis session has ended. Bulk analysis will be available again at 4:00 PM.",
         weekend_session: "📈 Weekend analysis session is active! Analyze multiple stocks to plan for Monday.",
-        holiday: "🏖️ Market is closed today. Bulk analysis will resume on the next trading day at 4:00 PM.",
+        holiday: "🏖️Bulk analysis will resume on the next trading day at 4:00 PM.",
         outside_window: "🚫 Bulk analysis is only available from 4:00 PM to 8:45 AM next trading day.",
         weekday_session: "✅ Evening analysis session is active! Plan your trades for tomorrow.",
         monday_morning: "🌅 Monday morning session - analyze stocks before market opens at 9:15 AM."
@@ -90,13 +90,20 @@ router.post('/analyze-all', auth, async (req, res) => {
             });
         }
         
-        // Delete all existing analyses for this user with the same analysis_type
+        // Only delete expired or failed analyses - keep valid ones that haven't expired
+        const now = new Date();
         const deleteResult = await StockAnalysis.deleteMany({
             user_id: userId,
-            analysis_type: analysis_type
+            analysis_type: analysis_type,
+            $or: [
+                { expires_at: { $lt: now } }, // Expired analyses
+                { status: 'failed' },         // Failed analyses
+                { status: 'in_progress' },    // ALL in_progress analyses
+                { status: 'pending' }         // ALL pending analyses
+            ]
         });
         
-        //console.log(`🗑️ [ANALYZE-ALL] Deleted ${deleteResult.deletedCount} existing analyses`);
+        console.log(`🗑️ [ANALYZE-ALL] Deleted ${deleteResult.deletedCount} expired/failed analyses, keeping valid ones`);
         
         // Create new session (always fresh)
         const session = await AnalysisSession.createSession(userId, watchlistStocks, analysis_type);
@@ -1120,14 +1127,16 @@ router.post('/reanalyze-stock', auth, async (req, res) => {
         
         ////console.log((`🔄 Reanalyzing stock ${stock_symbol} for user ${userId}`);
         
-        // Delete existing analysis for this stock
+        // Only delete existing analysis if it's expired, failed, or explicitly requested for reanalysis
+        // For reanalysis, we DO want to force fresh analysis even if current one is valid
         const deleteResult = await StockAnalysis.deleteMany({
             user_id: userId,
             instrument_key: instrument_key,
             analysis_type: analysis_type
+            // Note: For reanalysis endpoint, we delete ALL existing analyses to force fresh analysis
         });
         
-        ////console.log((`🗑️ Deleted ${deleteResult.deletedCount} existing analyses for ${stock_symbol}`);
+        console.log(`🗑️ [REANALYZE] Deleted ${deleteResult.deletedCount} existing analyses for ${stock_symbol} (forced reanalysis)`);
         
         // Get current price
         let currentPrice = null;

@@ -74,21 +74,7 @@ class AgendaDailyReminderService {
             this.isInitialized = true;
             console.log('🚀 Agenda daily reminder service initialized successfully');
 
-            // Clean up old completed reminder jobs every day
-            setInterval(async () => {
-                try {
-                    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-                    await this.agenda.cancel({
-                        lastFinishedAt: { $lt: oneDayAgo },
-                        $or: [
-                            { nextRunAt: { $exists: false } },
-                            { nextRunAt: null }
-                        ]
-                    });
-                } catch (error) {
-                    console.warn('⚠️ Error cleaning up old reminder jobs:', error);
-                }
-            }, 24 * 60 * 60 * 1000); // Run every 24 hours
+            // Note: Job cleanup is now handled by MongoDB TTL indexes and Agenda's built-in cleanup mechanisms
 
         } catch (error) {
             console.error('❌ Failed to initialize Agenda daily reminder service:', error);

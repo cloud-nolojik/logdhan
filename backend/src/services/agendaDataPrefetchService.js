@@ -1,0 +1,364 @@
+import Agenda from 'agenda';
+import dailyDataPrefetchService from './dailyDataPrefetch.service.js';
+import AIAnalysisCache from '../models/aiAnalysisCache.js';
+import DailyJobStatus from '../models/dailyJobStatus.js';
+import MarketTiming from '../models/marketTiming.js';
+
+/**
+ * Agenda-based Data Pre-fetch Service
+ * Handles daily data pre-fetching, cache cleanup, and system health monitoring
+ * Uses MongoDB for job persistence and scheduling
+ */
+class AgendaDataPrefetchService {
+    constructor() {
+        this.agenda = null;
+        this.isInitialized = false;
+        this.stats = {
+            dataPrefetchJobs: 0,
+            successfulJobs: 0,
+            failedJobs: 0
+        };
+    }
+
+    async initialize() {
+        if (this.isInitialized) {
+            console.log('⚠️ [AGENDA DATA] Service already initialized');
+            return;
+        }
+
+        try {
+            console.log('🚀 [AGENDA DATA] Initializing Agenda data pre-fetch service...');
+
+            // Use existing MongoDB connection
+            const mongoUrl = process.env.MONGODB_URI;
+            this.agenda = new Agenda({ 
+                db: { 
+                    address: mongoUrl,
+                    collection: 'data_prefetch_jobs',
+                    options: {
+                        useUnifiedTopology: true
+                    }
+                },
+                processEvery: '1 minute',
+                maxConcurrency: 5,
+                defaultConcurrency: 2
+            });
+
+            // Define all job types
+            this.defineJobs();
+
+            // Handle job events
+            this.setupEventHandlers();
+
+            // Start agenda
+            await this.agenda.start();
+
+            // Schedule recurring jobs
+            await this.scheduleRecurringJobs();
+
+            this.isInitialized = true;
+            console.log('✅ [AGENDA DATA] Service initialized successfully');
+
+        } catch (error) {
+            console.error('❌ [AGENDA DATA] Failed to initialize service:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Define all job types
+     */
+    defineJobs() {
+        // Daily data pre-fetch job
+        this.agenda.define('daily-data-prefetch', async (job) => {
+            console.log('🌅 [AGENDA DATA] Starting daily data pre-fetch job');
+            this.stats.dataPrefetchJobs++;
+            
+            try {
+                const result = await dailyDataPrefetchService.runDailyPrefetch();
+                
+                if (result.success) {
+                    console.log('✅ [AGENDA DATA] Daily data pre-fetch completed successfully');
+                    console.log(`📊 [AGENDA DATA] Job summary: ${result.job?.summary?.unique_stocks || 0} stocks, ${result.job?.summary?.total_bars_fetched || 0} bars`);
+                    this.stats.successfulJobs++;
+                } else {
+                    console.log(`⚠️ [AGENDA DATA] Daily data pre-fetch skipped: ${result.reason}`);
+                    this.stats.successfulJobs++;
+                }
+                
+            } catch (error) {
+                console.error('❌ [AGENDA DATA] Daily data pre-fetch failed:', error);
+                this.stats.failedJobs++;
+                
+                // Log error to job status for monitoring
+                try {
+                    const errorJob = DailyJobStatus.createJob(new Date(), 'data_prefetch', 0);
+                    errorJob.markFailed(`Agenda job error: ${error.message}`);
+                    await errorJob.save();
+                } catch (logError) {
+                    console.error('❌ [AGENDA DATA] Failed to log error to job status:', logError);
+                }
+                
+                throw error;
+            }
+        });
+
+        // Note: Cache cleanup removed - MongoDB TTL index handles this automatically and more efficiently
+
+        // Note: Job status cleanup removed - MongoDB TTL indexes handle this automatically
+        // Note: System health check removed - manual monitoring preferred
+
+        // Chart cleanup job (moved from setInterval in index.js)
+        this.agenda.define('chart-cleanup', async (job) => {
+            console.log('🗑️ [AGENDA DATA] Starting chart cleanup job');
+            
+            try {
+                const { azureStorageService } = await import('../storage/azureStorage.service.js');
+                const path = await import('path');
+                const fs = await import('fs');
+                
+                // Clean up local files
+                const chartDir = path.join(process.cwd(), 'temp', 'charts');
+                let localFilesDeleted = 0;
+                
+                if (fs.existsSync(chartDir)) {
+                    const files = fs.readdirSync(chartDir);
+                    const now = Date.now();
+                    const oneHour = 60 * 60 * 1000;
+                    
+                    files.forEach(file => {
+                        const filePath = path.join(chartDir, file);
+                        try {
+                            const stats = fs.statSync(filePath);
+                            
+                            if (now - stats.mtime.getTime() > oneHour) {
+                                if (fs.existsSync(filePath)) {
+                                    fs.unlinkSync(filePath);
+                                    localFilesDeleted++;
+                                    console.log(`🗑️ [AGENDA DATA] Cleaned up old local chart: ${file}`);
+                                }
+                            }
+                        } catch (fileError) {
+                            if (fileError.code !== 'ENOENT') {
+                                console.warn(`⚠️ [AGENDA DATA] Could not clean up ${file}:`, fileError.message);
+                            }
+                        }
+                    });
+                }
+                
+                // Clean up Azure storage
+                try {
+                    await azureStorageService.cleanupOldCharts(24);
+                    console.log('✅ [AGENDA DATA] Azure chart cleanup completed');
+                } catch (azureError) {
+                    console.warn('⚠️ [AGENDA DATA] Azure chart cleanup failed:', azureError.message);
+                }
+                
+                console.log(`✅ [AGENDA DATA] Chart cleanup completed: ${localFilesDeleted} local files deleted`);
+                this.stats.successfulJobs++;
+                
+            } catch (error) {
+                console.error('❌ [AGENDA DATA] Chart cleanup failed:', error);
+                this.stats.failedJobs++;
+                throw error;
+            }
+        });
+
+        // Manual trigger job (for testing and admin purposes)
+        this.agenda.define('manual-data-prefetch', async (job) => {
+            const { targetDate, reason } = job.attrs.data;
+            console.log(`🔄 [AGENDA DATA] Manual data pre-fetch triggered: ${reason || 'No reason provided'}`);
+            
+            try {
+                const result = await dailyDataPrefetchService.runDailyPrefetch(targetDate ? new Date(targetDate) : null);
+                console.log(`✅ [AGENDA DATA] Manual data pre-fetch completed: ${JSON.stringify(result)}`);
+                this.stats.successfulJobs++;
+                
+            } catch (error) {
+                console.error('❌ [AGENDA DATA] Manual data pre-fetch failed:', error);
+                this.stats.failedJobs++;
+                throw error;
+            }
+        });
+    }
+
+    /**
+     * Setup event handlers for monitoring
+     */
+    setupEventHandlers() {
+        this.agenda.on('ready', () => {
+            console.log('🎯 [AGENDA DATA] Agenda data pre-fetch service ready');
+        });
+
+        this.agenda.on('start', (job) => {
+            console.log(`🔄 [AGENDA DATA] Job started: ${job.attrs.name}`);
+        });
+
+        this.agenda.on('complete', (job) => {
+            console.log(`✅ [AGENDA DATA] Job completed: ${job.attrs.name}`);
+        });
+
+        this.agenda.on('fail', (err, job) => {
+            console.error(`❌ [AGENDA DATA] Job failed: ${job.attrs.name}`, err);
+        });
+
+        this.agenda.on('error', (err) => {
+            console.error('❌ [AGENDA DATA] Agenda error:', err);
+        });
+    }
+
+    /**
+     * Schedule all recurring jobs
+     */
+    async scheduleRecurringJobs() {
+        try {
+            // Cancel any existing recurring jobs to avoid duplicates
+            await this.agenda.cancel({
+                name: { $in: ['daily-data-prefetch', 'chart-cleanup'] }
+            });
+
+            // Daily data pre-fetch: 1:00 AM IST on weekdays
+            // Note: Agenda uses node-cron syntax
+            await this.agenda.every('0 1 * * 1-5', 'daily-data-prefetch', {}, {
+                timezone: 'Asia/Kolkata'
+            });
+            console.log('📅 [AGENDA DATA] Scheduled daily data pre-fetch for 1:00 AM IST (weekdays)');
+
+            // Chart cleanup: Every hour
+            await this.agenda.every('0 * * * *', 'chart-cleanup', {}, {
+                timezone: 'Asia/Kolkata'
+            });
+            console.log('📅 [AGENDA DATA] Scheduled chart cleanup for every hour');
+            
+            console.log('📝 [AGENDA DATA] Note: AI cache cleanup handled by MongoDB TTL index automatically');
+
+        } catch (error) {
+            console.error('❌ [AGENDA DATA] Failed to schedule recurring jobs:', error);
+            throw error;
+        }
+    }
+
+    // Note: getSystemHealthStats method removed - manual monitoring preferred
+
+    /**
+     * Manually trigger a job (for testing and admin purposes)
+     */
+    async triggerJob(jobName, data = {}) {
+        try {
+            console.log(`🔄 [AGENDA DATA] Manually triggering job: ${jobName}`);
+            
+            const job = await this.agenda.now(jobName, data);
+            console.log(`▶️ [AGENDA DATA] Job ${jobName} queued with ID: ${job.attrs._id}`);
+            
+            return {
+                success: true,
+                jobId: job.attrs._id,
+                jobName: jobName,
+                scheduledAt: job.attrs.nextRunAt
+            };
+            
+        } catch (error) {
+            console.error(`❌ [AGENDA DATA] Failed to trigger job ${jobName}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get job statistics
+     */
+    async getJobStats() {
+        try {
+            const jobs = await this.agenda.jobs({});
+            const jobsByName = {};
+            
+            jobs.forEach(job => {
+                const name = job.attrs.name;
+                if (!jobsByName[name]) {
+                    jobsByName[name] = {
+                        name: name,
+                        total: 0,
+                        scheduled: 0,
+                        running: 0,
+                        completed: 0,
+                        failed: 0
+                    };
+                }
+                
+                jobsByName[name].total++;
+                
+                if (job.attrs.nextRunAt && job.attrs.nextRunAt > new Date()) {
+                    jobsByName[name].scheduled++;
+                } else if (job.attrs.lastRunAt && !job.attrs.lastFinishedAt) {
+                    jobsByName[name].running++;
+                } else if (job.attrs.lastFinishedAt && !job.attrs.failedAt) {
+                    jobsByName[name].completed++;
+                } else if (job.attrs.failedAt) {
+                    jobsByName[name].failed++;
+                }
+            });
+            
+            return {
+                summary: this.stats,
+                jobs: Object.values(jobsByName),
+                totalJobs: jobs.length
+            };
+            
+        } catch (error) {
+            console.error('❌ [AGENDA DATA] Error getting job stats:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Stop the service gracefully
+     */
+    async stop() {
+        try {
+            console.log('🛑 [AGENDA DATA] Stopping service...');
+            
+            if (this.agenda) {
+                await this.agenda.stop();
+                console.log('✅ [AGENDA DATA] Service stopped successfully');
+            }
+            
+            this.isInitialized = false;
+            
+        } catch (error) {
+            console.error('❌ [AGENDA DATA] Error stopping service:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Pause all recurring jobs
+     */
+    async pauseJobs() {
+        try {
+            await this.agenda.cancel({
+                name: { $in: ['daily-data-prefetch', 'chart-cleanup'] }
+            });
+            console.log('⏸️ [AGENDA DATA] All recurring jobs paused');
+            
+        } catch (error) {
+            console.error('❌ [AGENDA DATA] Error pausing jobs:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Resume all recurring jobs
+     */
+    async resumeJobs() {
+        try {
+            await this.scheduleRecurringJobs();
+            console.log('▶️ [AGENDA DATA] All recurring jobs resumed');
+            
+        } catch (error) {
+            console.error('❌ [AGENDA DATA] Error resuming jobs:', error);
+            throw error;
+        }
+    }
+}
+
+const agendaDataPrefetchService = new AgendaDataPrefetchService();
+export default agendaDataPrefetchService;

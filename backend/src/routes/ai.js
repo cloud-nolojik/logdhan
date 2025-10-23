@@ -1,5 +1,7 @@
 import express from 'express';
 import aiReviewService from '../services/aiAnalyze.service.js';
+import CachedAiAnalysisService from '../services/cachedAiAnalysis.service.js';
+import AIAnalysisCache from '../models/aiAnalysisCache.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
@@ -8,6 +10,9 @@ import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js
 import { User } from '../models/user.js';
 
 const router = express.Router();
+
+// Initialize cached AI analysis service
+const cachedAiAnalysisService = new CachedAiAnalysisService(aiReviewService);
 
 // Rate limiting disabled for testing
 // const analysisRateLimit = rateLimit({
@@ -170,8 +175,8 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
 
         // TESTING: Skip rate limiting check
 
-        // Start AI analysis
-        const result = await aiReviewService.analyzeStock({
+        // Start AI analysis with caching
+        const result = await cachedAiAnalysisService.analyzeStockWithCache({
             instrument_key,
             stock_name,
             stock_symbol,
@@ -191,10 +196,19 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
                 analysis_id: result.data._id
             };
 
-            // Add cache info for debugging
-            if (result.cached) {
+            // Add enhanced cache info for debugging
+            if (result.cached && result.cache_info) {
                 responseData.cache_info = {
                     message: 'Analysis retrieved from cache',
+                    created_at: result.data.created_at,
+                    expires_at: result.cache_info.expires_at,
+                    usage_count: result.cache_info.usage_count,
+                    served_from: result.cache_info.served_from,
+                    generated_at: result.cache_info.generated_at
+                };
+            } else if (result.cached) {
+                responseData.cache_info = {
+                    message: 'Analysis retrieved from user-specific cache',
                     created_at: result.data.created_at
                 };
             }
@@ -413,6 +427,130 @@ router.get('/analysis/:analysisId/progress', authenticateToken, async (req, res)
 });
 
 /**
+ * @route GET /api/ai/cache/stats
+ * @desc Get AI analysis cache statistics
+ * @access Private (Admin only recommended)
+ */
+router.get('/cache/stats', authenticateToken, async (req, res) => {
+    try {
+        const tradingDate = req.query.date ? new Date(req.query.date) : null;
+        
+        const cacheStats = await cachedAiAnalysisService.getCacheStats(tradingDate);
+        
+        res.json({
+            success: true,
+            data: cacheStats
+        });
+
+    } catch (error) {
+        console.error('❌ Cache Stats API Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: 'Failed to fetch cache statistics'
+        });
+    }
+});
+
+/**
+ * @route POST /api/ai/cache/expire
+ * @desc Manually expire cache for a specific analysis (for testing)
+ * @access Private (Admin only recommended)
+ */
+router.post('/cache/expire', authenticateToken, async (req, res) => {
+    try {
+        const { instrument_key, analysis_type, trading_date } = req.body;
+        
+        if (!instrument_key || !analysis_type) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields',
+                message: 'instrument_key and analysis_type are required'
+            });
+        }
+
+        const date = trading_date ? new Date(trading_date) : await cachedAiAnalysisService.getCurrentTradingDate();
+        
+        const result = await cachedAiAnalysisService.expireCache(instrument_key, analysis_type, date);
+        
+        res.json({
+            success: true,
+            message: 'Cache expired successfully',
+            data: {
+                instrument_key,
+                analysis_type,
+                trading_date: date,
+                modified_count: result.modifiedCount
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Cache Expire API Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: 'Failed to expire cache'
+        });
+    }
+});
+
+/**
+ * @route GET /api/ai/cache/info/:instrument_key
+ * @desc Get cache information for a specific stock
+ * @access Private
+ */
+router.get('/cache/info/:instrument_key', authenticateToken, async (req, res) => {
+    try {
+        const { instrument_key } = req.params;
+        const { analysis_type = 'swing' } = req.query;
+        
+        const tradingDate = await cachedAiAnalysisService.getCurrentTradingDate();
+        
+        // Get cache entry if exists
+        const cacheKey = AIAnalysisCache.generateCacheKey(instrument_key, analysis_type, tradingDate);
+        const cached = await AIAnalysisCache.findOne({ cache_key: cacheKey });
+        
+        if (cached) {
+            const now = new Date();
+            const isExpired = cached.expires_at <= now;
+            const timeToExpiry = cached.expires_at.getTime() - now.getTime();
+            
+            res.json({
+                success: true,
+                data: {
+                    cached: true,
+                    expired: isExpired,
+                    expires_at: cached.expires_at,
+                    generated_at: cached.generated_at,
+                    usage_count: cached.usage_count,
+                    users_served_count: cached.users_served.length,
+                    time_to_expiry_ms: timeToExpiry,
+                    time_to_expiry_hours: Math.round(timeToExpiry / (1000 * 60 * 60) * 10) / 10,
+                    cache_stats: cached.cache_stats,
+                    current_price: cached.current_price
+                }
+            });
+        } else {
+            res.json({
+                success: true,
+                data: {
+                    cached: false,
+                    message: 'No cache entry found for this stock and analysis type'
+                }
+            });
+        }
+
+    } catch (error) {
+        console.error('❌ Cache Info API Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: 'Failed to fetch cache information'
+        });
+    }
+});
+
+/**
  * @route GET /api/ai/health
  * @desc Check AI service health
  * @access Public
@@ -422,7 +560,8 @@ router.get('/health', (req, res) => {
         success: true,
         message: 'AI service is running',
         timestamp: new Date().toISOString(),
-        openai_configured: !!process.env.OPENAI_API_KEY
+        openai_configured: !!process.env.OPENAI_API_KEY,
+        cache_enabled: true
     });
 });
 

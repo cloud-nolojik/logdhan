@@ -7,6 +7,8 @@ import { subscriptionService } from './subscription/subscriptionService.js';
 import { Plan } from '../models/plan.js';
 import { Subscription } from '../models/subscription.js';
 import { getSectorForStock, getSectorNewsKeywords, getTrailingStopSuggestions, getSectorCorrelationMessage } from '../utils/sectorMapping.js';
+import dailyDataPrefetchService from './dailyDataPrefetch.service.js';
+import PreFetchedData from '../models/preFetchedData.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -475,15 +477,18 @@ class AIAnalyzeService {
             const sectorInfo = getSectorForStock(stock_symbol, stock_name);
             // console.log(`🏭 Sector identified: ${sectorInfo.name} (${sectorInfo.code}) - Index: ${sectorInfo.index}`);
 
-            // Fetch real market data in parallel
+            // Fetch optimized market data (DB first, API fallback) in parallel
 //             console.log(`📰 Fetching news for: ${stock_name}`);
             const [candleData, newsData] = await Promise.all([
-                this.fetchRealMarketData(tradeData),
+                this.fetchOptimizedMarketData(tradeData),
                 this.fetchSectorEnhancedNews(stock_name, sectorInfo).catch(err => {
 //                     console.warn('⚠️ News fetch failed, continuing without news:', err.message);
                     return null;
                 })
             ]);
+
+            // Log data source for monitoring
+            console.log(`📊 [DATA SOURCE] ${stock_symbol}: ${candleData.source} (${candleData.fetchTime}ms)`);
 
 //             console.log(`📰 News data result: ${newsData ? `${newsData.length} articles found` : 'No news data'}`);
             if (newsData && newsData.length > 0) {
@@ -569,7 +574,319 @@ class AIAnalyzeService {
     }
 
     /**
-     * Fetch real market data from Upstox API
+     * Fetch optimized market data with smart gap-filling
+     * DB first, gap-fill insufficient data, full API fallback
+     */
+    async fetchOptimizedMarketData(tradeData) {
+        const startTime = Date.now();
+        
+        try {
+            // First, try to get pre-fetched data from database
+            console.log(`📦 [OPTIMIZED] Checking pre-fetched data for ${tradeData.instrument_key}`);
+            
+            const preFetchedResult = await dailyDataPrefetchService.constructor.getDataForAnalysis(
+                tradeData.instrument_key,
+                tradeData.term // 'short' for swing, 'intraday' for intraday
+            );
+            
+            if (preFetchedResult.success && preFetchedResult.data && preFetchedResult.data.length > 0) {
+                // Check data sufficiency and perform gap-filling if needed
+                const gapFilledResult = await this.handlePartialData(preFetchedResult.data, tradeData);
+                
+                if (gapFilledResult.success) {
+                    console.log(`✅ [OPTIMIZED] Using ${gapFilledResult.source} data: ${gapFilledResult.data.length} timeframes (${Date.now() - startTime}ms)`);
+                    
+                    // Convert data to the format expected by AI analysis
+                    const candleSets = this.convertPreFetchedToCandleSets(gapFilledResult.data);
+                    
+                    return {
+                        endpoints: [], // No API endpoints used for prefetched data
+                        candleSets: candleSets,
+                        source: gapFilledResult.source,
+                        fetchTime: Date.now() - startTime,
+                        gapFillInfo: gapFilledResult.gapFillInfo
+                    };
+                } else {
+                    console.log(`⚠️ [OPTIMIZED] Gap-filling failed: ${gapFilledResult.reason}, falling back to full API`);
+                }
+            } else {
+                console.log(`⚠️ [OPTIMIZED] Pre-fetched data not available: ${preFetchedResult.reason || 'unknown'}, falling back to API`);
+            }
+        } catch (error) {
+            console.warn(`⚠️ [OPTIMIZED] Pre-fetch check failed: ${error.message}, falling back to API`);
+        }
+        
+        // Fallback to live API data
+        console.log(`🔄 [OPTIMIZED] Fetching live data from Upstox API (${Date.now() - startTime}ms)`);
+        const result = await this.fetchRealMarketData(tradeData);
+        result.source = 'live_api';
+        result.fetchTime = Date.now() - startTime;
+        return result;
+    }
+
+    /**
+     * Handle partial data scenarios with smart gap-filling
+     * Check if pre-fetched data is sufficient, fill gaps if needed
+     */
+    async handlePartialData(preFetchedData, tradeData) {
+        const requiredBars = {
+            '5m': 200,   // ~16 hours of 5-min bars
+            '15m': 100,  // ~25 hours of 15-min bars  
+            '1h': 50,    // ~2 days of hourly bars
+            '1d': 30     // ~1 month of daily bars
+        };
+
+        const gapFillInfo = {
+            timeframesProcessed: 0,
+            gapFilledTimeframes: 0,
+            totalMissingBars: 0,
+            totalNewBars: 0,
+            gapFillRequests: 0
+        };
+
+        const processedData = [];
+        let hasInsufficientData = false;
+
+        try {
+            console.log(`🔍 [GAP-FILL] Analyzing data sufficiency for ${preFetchedData.length} timeframes`);
+
+            for (const timeframeData of preFetchedData) {
+                gapFillInfo.timeframesProcessed++;
+                const required = requiredBars[timeframeData.timeframe] || 100;
+                const available = timeframeData.candle_data.length;
+                const missing = Math.max(0, required - available);
+
+                console.log(`📊 [GAP-FILL] ${timeframeData.timeframe}: ${available}/${required} bars (${missing} missing)`);
+
+                if (missing > 0) {
+                    // Data is insufficient - try to gap-fill
+                    const threshold = Math.floor(required * 0.7); // Accept if we have at least 70% of required data
+                    
+                    if (available >= threshold) {
+                        // Attempt gap-filling for this timeframe
+                        console.log(`🔧 [GAP-FILL] Attempting to fill ${missing} missing bars for ${timeframeData.timeframe}`);
+                        
+                        const gapFilledData = await this.fillMissingBars(timeframeData, tradeData, missing);
+                        
+                        if (gapFilledData.success) {
+                            processedData.push(gapFilledData.data);
+                            gapFillInfo.gapFilledTimeframes++;
+                            gapFillInfo.totalMissingBars += missing;
+                            gapFillInfo.totalNewBars += gapFilledData.newBarsAdded;
+                            gapFillInfo.gapFillRequests++;
+                            
+                            console.log(`✅ [GAP-FILL] Successfully filled ${gapFilledData.newBarsAdded} bars for ${timeframeData.timeframe}`);
+                        } else {
+                            console.warn(`⚠️ [GAP-FILL] Failed to fill gaps for ${timeframeData.timeframe}: ${gapFilledData.reason}`);
+                            // Use original data even if insufficient
+                            processedData.push(timeframeData);
+                            hasInsufficientData = true;
+                        }
+                    } else {
+                        // Too much data missing (< 70% available), use original data
+                        console.warn(`⚠️ [GAP-FILL] ${timeframeData.timeframe} has only ${available}/${required} bars (${(available/required*100).toFixed(1)}%), below 70% threshold`);
+                        processedData.push(timeframeData);
+                        hasInsufficientData = true;
+                    }
+                } else {
+                    // Data is sufficient, use as-is
+                    processedData.push(timeframeData);
+                }
+            }
+
+            // Determine result based on gap-filling success
+            const sourceDescription = gapFillInfo.gapFilledTimeframes > 0 
+                ? `prefetched+gap-filled` 
+                : `prefetched`;
+
+            console.log(`📈 [GAP-FILL] Summary: ${gapFillInfo.gapFilledTimeframes}/${gapFillInfo.timeframesProcessed} timeframes gap-filled, ${gapFillInfo.totalNewBars} new bars added`);
+
+            return {
+                success: true,
+                data: processedData,
+                source: sourceDescription,
+                gapFillInfo: gapFillInfo,
+                hasInsufficientData: hasInsufficientData
+            };
+
+        } catch (error) {
+            console.error(`❌ [GAP-FILL] Error handling partial data:`, error);
+            return {
+                success: false,
+                reason: error.message,
+                gapFillInfo: gapFillInfo
+            };
+        }
+    }
+
+    /**
+     * Fill missing bars for a specific timeframe using API
+     */
+    async fillMissingBars(timeframeData, tradeData, missingCount) {
+        try {
+            // Get the latest timestamp from existing data
+            const existingCandles = timeframeData.candle_data || [];
+            if (existingCandles.length === 0) {
+                return { success: false, reason: 'No existing candles to gap-fill from' };
+            }
+
+            // Sort by timestamp to find the latest
+            const sortedCandles = existingCandles.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            const latestTimestamp = new Date(sortedCandles[sortedCandles.length - 1].timestamp);
+            
+            console.log(`🔍 [GAP-FILL] Latest data timestamp: ${latestTimestamp.toISOString()}`);
+
+            // Fetch fresh data from API to fill the gap
+            const tempTradeData = {
+                term: tradeData.term,
+                instrument_key: tradeData.instrument_key,
+                stock: tradeData.instrument_key
+            };
+
+            const { endpoints } = await this.buildCandleUrls(tempTradeData);
+            
+            // Find the endpoint for this timeframe
+            const targetEndpoint = endpoints.find(ep => 
+                ep.url.includes(`interval=${timeframeData.timeframe}`) || 
+                ep.timeframe === timeframeData.timeframe
+            );
+
+            if (!targetEndpoint) {
+                return { success: false, reason: `No endpoint found for timeframe ${timeframeData.timeframe}` };
+            }
+
+            // Fetch fresh candle data
+            const candleData = await this.fetchCandleData(targetEndpoint.url);
+            const freshCandles = candleData?.data?.candles || candleData?.candles || [];
+
+            if (!freshCandles || freshCandles.length === 0) {
+                return { success: false, reason: 'No fresh data received from API' };
+            }
+
+            // Convert fresh data to our format
+            const formattedFreshCandles = freshCandles.map(candle => ({
+                timestamp: new Date(Array.isArray(candle) ? candle[0] : candle.time),
+                open: Array.isArray(candle) ? candle[1] : candle.open,
+                high: Array.isArray(candle) ? candle[2] : candle.high,
+                low: Array.isArray(candle) ? candle[3] : candle.low,
+                close: Array.isArray(candle) ? candle[4] : candle.close,
+                volume: Array.isArray(candle) ? candle[5] : candle.volume
+            }));
+
+            // Filter for new candles only (after latest timestamp)
+            const newCandles = formattedFreshCandles.filter(candle => 
+                new Date(candle.timestamp) > latestTimestamp
+            );
+
+            if (newCandles.length === 0) {
+                return { success: false, reason: 'No new candles found in fresh data' };
+            }
+
+            // Merge existing and new candles, keep required amount
+            const requiredBars = {
+                '5m': 200, '15m': 100, '1h': 50, '1d': 30
+            };
+            const maxBars = requiredBars[timeframeData.timeframe] || 100;
+            
+            const mergedCandles = [...existingCandles, ...newCandles]
+                .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                .slice(-maxBars); // Keep only the latest required bars
+
+            // Update the data in database for future use
+            await this.updatePreFetchedDataWithGaps(timeframeData, mergedCandles);
+
+            // Return updated timeframe data
+            const updatedTimeframeData = {
+                ...timeframeData,
+                candle_data: mergedCandles,
+                bars_count: mergedCandles.length,
+                updated_at: new Date(),
+                gap_filled: true,
+                gap_fill_info: {
+                    filled_at: new Date(),
+                    new_bars_added: newCandles.length,
+                    total_bars_after_fill: mergedCandles.length
+                }
+            };
+
+            return {
+                success: true,
+                data: updatedTimeframeData,
+                newBarsAdded: newCandles.length
+            };
+
+        } catch (error) {
+            console.error(`❌ [GAP-FILL] Error filling missing bars:`, error);
+            return {
+                success: false,
+                reason: error.message
+            };
+        }
+    }
+
+    /**
+     * Update pre-fetched data in database with gap-filled candles
+     */
+    async updatePreFetchedDataWithGaps(timeframeData, mergedCandles) {
+        try {
+            const PreFetchedData = (await import('../models/preFetchedData.js')).default;
+            
+            await PreFetchedData.updateOne(
+                {
+                    instrument_key: timeframeData.instrument_key,
+                    timeframe: timeframeData.timeframe
+                },
+                {
+                    $set: {
+                        candle_data: mergedCandles,
+                        bars_count: mergedCandles.length,
+                        updated_at: new Date(),
+                        gap_filled: true,
+                        'data_quality.missing_bars': Math.max(0, (timeframeData.timeframe === '5m' ? 200 : 
+                                                              timeframeData.timeframe === '15m' ? 100 :
+                                                              timeframeData.timeframe === '1h' ? 50 : 30) - mergedCandles.length)
+                    }
+                }
+            );
+            
+            console.log(`💾 [GAP-FILL] Updated database with ${mergedCandles.length} bars for ${timeframeData.instrument_key}_${timeframeData.timeframe}`);
+            
+        } catch (error) {
+            console.error(`⚠️ [GAP-FILL] Failed to update database:`, error);
+            // Don't fail the gap-filling if database update fails
+        }
+    }
+
+    /**
+     * Convert pre-fetched data to the format expected by AI analysis
+     */
+    convertPreFetchedToCandleSets(preFetchedData) {
+        const candleSets = { byFrame: {} };
+        
+        // Map timeframes to the format expected by AI analysis
+        const timeframeMapping = {
+            '5m': '5minute',
+            '15m': '15minute', 
+            '1h': '1hour',
+            '1d': '1day'
+        };
+        
+        preFetchedData.forEach(data => {
+            const frameKey = timeframeMapping[data.timeframe] || data.timeframe;
+            
+            candleSets.byFrame[frameKey] = {
+                intraday: [data.candle_data], // Put candles in intraday array
+                historical: [] // Keep historical empty for pre-fetched data
+            };
+            
+            console.log(`📊 [CONVERT] ${data.timeframe} → ${frameKey}: ${data.candle_data.length} candles`);
+        });
+        
+        return candleSets;
+    }
+
+    /**
+     * Fetch real market data from Upstox API (fallback method)
      */
     async fetchRealMarketData(tradeData) {
         const { endpoints } = await this.aiReviewService.buildCandleUrls(tradeData);
