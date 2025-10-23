@@ -852,6 +852,39 @@ stockAnalysisSchema.statics.getAnalysisStats = function() {
     ]);
 };
 
+// Static method to clean up stale order processing locks
+stockAnalysisSchema.statics.cleanupStaleOrderProcessingLocks = async function() {
+    try {
+        const staleThreshold = new Date(Date.now() - 10 * 60 * 1000); // 10 minutes ago
+        
+        const result = await this.updateMany(
+            {
+                order_processing: true,
+                order_processing_started_at: { $lt: staleThreshold }
+            },
+            {
+                $unset: { 
+                    order_processing: 1,
+                    order_processing_started_at: 1
+                },
+                $set: {
+                    order_processing_completed_at: new Date(),
+                    last_order_processing_result: 'timeout_cleanup'
+                }
+            }
+        );
+        
+        if (result.modifiedCount > 0) {
+            console.log(`🧹 Cleaned up ${result.modifiedCount} stale order processing locks`);
+        }
+        
+        return result;
+    } catch (error) {
+        console.error('❌ Error cleaning up stale order processing locks:', error);
+        return null;
+    }
+};
+
 const StockAnalysis = mongoose.model('StockAnalysis', stockAnalysisSchema);
 
 export default StockAnalysis;

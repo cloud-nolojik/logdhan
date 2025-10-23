@@ -473,6 +473,72 @@ class UpstoxService {
     }
 
     /**
+     * Place multiple orders using Multi Order API
+     */
+    async placeMultiOrder(accessToken, orderArray) {
+        try {
+            // Validate input
+            if (!Array.isArray(orderArray) || orderArray.length === 0) {
+                throw new Error('orderArray must be a non-empty array');
+            }
+
+            if (orderArray.length > 25) {
+                throw new Error('Maximum 25 orders allowed in single request');
+            }
+
+            // Validate each order structure matches Upstox API requirements
+            orderArray.forEach((order, index) => {
+                const required = ['correlation_id', 'quantity', 'product', 'validity', 'price', 'instrument_token', 'order_type', 'transaction_type'];
+                const missing = required.filter(field => order[field] === undefined || order[field] === null);
+                
+                if (missing.length > 0) {
+                    throw new Error(`Order ${index}: Missing required fields: ${missing.join(', ')}`);
+                }
+
+                // Validate correlation_id length (max 20 characters)
+                if (order.correlation_id.length > 20) {
+                    throw new Error(`Order ${index}: correlation_id must not exceed 20 characters`);
+                }
+
+                // Validate tag length (max 40 characters)  
+                if (order.tag && order.tag.length > 40) {
+                    throw new Error(`Order ${index}: tag must not exceed 40 characters`);
+                }
+            });
+
+            console.log(`📋 Placing ${orderArray.length} orders using Multi Order API`);
+            console.log('📋 Multi Order payload:', JSON.stringify(orderArray, null, 2));
+
+            const response = await axios.post(
+                `${this.baseURL}/order/multi/place`,
+                orderArray,
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                }
+            );
+
+            console.log('✅ Upstox multi-order placed successfully:', response.data);
+
+            return {
+                success: true,
+                data: response.data
+            };
+        } catch (error) {
+            console.error('❌ Upstox multi-order placement error:', error.response?.data || error.message);
+            return {
+                success: false,
+                error: 'multi_order_placement_failed',
+                message: error.response?.data?.message || 'Failed to place multi orders',
+                details: error.response?.data
+            };
+        }
+    }
+
+    /**
      * Get order book - all orders for current day
      */
     async getOrderHistory(accessToken) {

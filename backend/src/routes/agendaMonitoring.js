@@ -805,5 +805,35 @@ router.post('/data-prefetch/resume', authenticateToken, async (req, res) => {
     }
 });
 
+/**
+ * @route POST /api/monitoring/cleanup-stale-locks
+ * @desc Manually trigger cleanup of stale order processing locks
+ * @access Private (Admin recommended)
+ */
+router.post('/cleanup-stale-locks', authenticateToken, async (req, res) => {
+    try {
+        console.log(`🧹 Manual stale lock cleanup triggered by user ${req.user.id}`);
+        
+        const result = await agendaMonitoringService.cleanupStaleOrderProcessingLocks();
+        
+        res.json({
+            success: true,
+            message: `Stale lock cleanup completed`,
+            data: {
+                cleaned_count: result?.modifiedCount || 0,
+                timestamp: new Date().toISOString()
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Manual stale lock cleanup failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to cleanup stale locks',
+            message: error.message
+        });
+    }
+});
+
 
 export default router;

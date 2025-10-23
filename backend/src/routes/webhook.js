@@ -1,20 +1,19 @@
 import express from 'express';
 import UpstoxUser from '../models/upstoxUser.js';
 import StockAnalysis from '../models/stockAnalysis.js';
+import PendingBracketOrder from '../models/pendingBracketOrder.js';
 import * as upstoxService from '../services/upstox.service.js';
-import { decrypt } from '../utils/encryption.js';
+import { decrypt, encrypt } from '../utils/encryption.js';
 
 const router = express.Router();
 
-// Store pending bracket orders (in production, use Redis or database)
-const pendingBracketOrders = new Map();
-
-// Helper function to place SL and target orders
-async function placeBracketOrders(orderUpdate, originalOrderData) {
+// Helper function to place SL and target orders using persistent data
+async function placeBracketOrders(orderUpdate, pendingBracketOrder) {
     try {
         console.log('📊 Placing bracket orders for executed order:', orderUpdate.order_id);
         
-        const { userId, accessToken, stopLoss, target, instrumentToken } = originalOrderData;
+        const accessToken = decrypt(pendingBracketOrder.encrypted_access_token);
+        const { user_id: userId, stop_loss: stopLoss, target, instrument_token: instrumentToken, analysis_type } = pendingBracketOrder;
         
         // Place stop-loss order
         if (stopLoss) {
@@ -38,7 +37,7 @@ async function placeBracketOrders(orderUpdate, originalOrderData) {
             // Update analysis with SL order
             const analysis = await StockAnalysis.findByInstrument(
                 instrumentToken,
-                originalOrderData.analysisType
+                analysis_type
             );
             
             if (analysis) {
@@ -72,7 +71,7 @@ async function placeBracketOrders(orderUpdate, originalOrderData) {
             // Update analysis with target order
             const analysis = await StockAnalysis.findByInstrument(
                 instrumentToken,
-                originalOrderData.analysisType
+                analysis_type
             );
             
             if (analysis) {
@@ -84,12 +83,27 @@ async function placeBracketOrders(orderUpdate, originalOrderData) {
             }
         }
         
-        // Remove from pending orders
-        pendingBracketOrders.delete(orderUpdate.order_id);
+        // Mark as processed in database and collect order IDs for tracking
+        const bracketOrderIds = {
+            stopLoss: slResult?.data?.order_id || null,
+            target: targetResult?.data?.order_id || null
+        };
+        
+        await PendingBracketOrder.markProcessed(orderUpdate.order_id, bracketOrderIds);
         
         return true;
     } catch (error) {
         console.error('❌ Error placing bracket orders:', error);
+        
+        // Mark as failed in database if we have the order ID
+        if (pendingBracketOrder && pendingBracketOrder.order_id) {
+            await PendingBracketOrder.markFailed(
+                pendingBracketOrder.order_id, 
+                error.message, 
+                { stack: error.stack, timestamp: new Date().toISOString() }
+            );
+        }
+        
         return false;
     }
 }
@@ -112,12 +126,17 @@ router.post('/upstox/orders', async (req, res) => {
             if (status === 'complete' && filled_quantity > 0 && tag && tag.startsWith('BRC_')) {
                 console.log(`✅ Primary order ${order_id} executed with tag ${tag}`);
                 
-                // Check if we have pending bracket orders for this order
-                const pendingData = pendingBracketOrders.get(order_id);
+                // Find pending bracket order in database
+                const pendingBracketOrder = await PendingBracketOrder.findAndMarkProcessing(order_id);
                 
-                if (pendingData) {
-                    console.log('📋 Found pending bracket orders for:', order_id);
-                    await placeBracketOrders(orderUpdate, pendingData);
+                if (pendingBracketOrder) {
+                    console.log('📋 Found persistent pending bracket orders for:', order_id);
+                    const success = await placeBracketOrders(orderUpdate, pendingBracketOrder);
+                    
+                    if (!success) {
+                        // Mark as failed if bracket order placement failed
+                        await PendingBracketOrder.markFailed(order_id, 'Failed to place bracket orders');
+                    }
                 } else {
                     // Try to find the order data from database
                     const upstoxUser = await UpstoxUser.findOne({ upstox_user_id: user_id });
@@ -134,16 +153,23 @@ router.post('/upstox/orders', async (req, res) => {
                             const orderData = analysis.placed_orders.find(o => o.order_id === order_id);
                             
                             if (orderData && orderData.stopLoss && orderData.target) {
-                                const accessToken = decrypt(upstoxUser.access_token);
-                                
-                                await placeBracketOrders(orderUpdate, {
-                                    userId: upstoxUser.user_id,
-                                    accessToken,
-                                    stopLoss: orderData.stopLoss,
+                                // Create a temporary pending bracket order for fallback processing
+                                const tempPendingOrder = {
+                                    order_id: order_id,
+                                    user_id: upstoxUser.user_id,
+                                    encrypted_access_token: upstoxUser.access_token, // Already encrypted
+                                    stop_loss: orderData.stopLoss,
                                     target: orderData.target,
-                                    instrumentToken: orderUpdate.instrument_token,
-                                    analysisType: analysis.analysis_type
-                                });
+                                    instrument_token: orderUpdate.instrument_token,
+                                    analysis_type: analysis.analysis_type,
+                                    stock_symbol: analysis.stock_symbol
+                                };
+                                
+                                const success = await placeBracketOrders(orderUpdate, tempPendingOrder);
+                                
+                                if (!success) {
+                                    console.error(`❌ Fallback bracket order placement failed for ${order_id}`);
+                                }
                             }
                         }
                     }
@@ -189,22 +215,90 @@ router.post('/upstox/orders', async (req, res) => {
 // Helper endpoint to register pending bracket orders
 router.post('/register-pending-bracket', async (req, res) => {
     try {
-        const { orderId, userId, accessToken, stopLoss, target, instrumentToken, analysisType } = req.body;
+        const { orderId, userId, accessToken, stopLoss, target, instrumentToken, analysisType, stockSymbol, strategyId, analysisId } = req.body;
         
-        pendingBracketOrders.set(orderId, {
-            userId,
-            accessToken,
-            stopLoss,
-            target,
-            instrumentToken,
-            analysisType
+        // Validate required fields
+        if (!orderId || !userId || !accessToken || !stopLoss || !target || !instrumentToken || !analysisType) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields',
+                required: ['orderId', 'userId', 'accessToken', 'stopLoss', 'target', 'instrumentToken', 'analysisType']
+            });
+        }
+        
+        // Create persistent pending bracket order
+        const pendingOrder = await PendingBracketOrder.createPendingOrder({
+            order_id: orderId,
+            user_id: userId,
+            analysis_id: analysisId,
+            strategy_id: strategyId,
+            stop_loss: parseFloat(stopLoss),
+            target: parseFloat(target),
+            instrument_token: instrumentToken,
+            analysis_type: analysisType,
+            stock_symbol: stockSymbol,
+            encrypted_access_token: encrypt(accessToken) // Encrypt the access token
         });
         
-        console.log(`📝 Registered pending bracket order for ${orderId}`);
+        console.log(`📝 Registered persistent pending bracket order for ${orderId}`);
         
-        res.json({ success: true, message: 'Pending bracket order registered' });
+        res.json({ 
+            success: true, 
+            message: 'Pending bracket order registered in database',
+            data: {
+                order_id: orderId,
+                expires_at: pendingOrder.expires_at,
+                status: pendingOrder.status
+            }
+        });
     } catch (error) {
         console.error('❌ Error registering pending bracket:', error);
+        
+        // Handle duplicate order ID error
+        if (error.code === 11000) {
+            return res.status(409).json({ 
+                success: false, 
+                error: 'Duplicate order ID - pending bracket order already exists' 
+            });
+        }
+        
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Admin endpoint to get pending bracket order statistics
+router.get('/pending-bracket-stats', async (req, res) => {
+    try {
+        const stats = await PendingBracketOrder.getStats();
+        
+        res.json({
+            success: true,
+            data: {
+                statistics: stats,
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('❌ Error getting pending bracket order stats:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Admin endpoint to manually clean up expired records
+router.post('/cleanup-expired-brackets', async (req, res) => {
+    try {
+        const result = await PendingBracketOrder.cleanupExpired();
+        
+        res.json({
+            success: true,
+            message: `Cleaned up ${result?.deletedCount || 0} expired records`,
+            data: {
+                deletedCount: result?.deletedCount || 0,
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('❌ Error cleaning up expired brackets:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

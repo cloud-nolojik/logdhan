@@ -38,6 +38,11 @@ class AgendaMonitoringService {
                 const { analysisId, strategyId, userId } = job.attrs.data;
                 await this.executeMonitoringCheck(analysisId, strategyId, userId);
             });
+            
+            // Define cleanup job for stale order processing locks
+            this.agenda.define('cleanup-stale-locks', async (job) => {
+                await this.cleanupStaleOrderProcessingLocks();
+            });
 
             // Handle job events
             this.agenda.on('ready', () => {
@@ -58,6 +63,12 @@ class AgendaMonitoringService {
 
             // Start agenda
             await this.agenda.start();
+            
+            // Schedule periodic cleanup of stale order processing locks (every 5 minutes)
+            await this.agenda.every('5 minutes', 'cleanup-stale-locks', {}, {
+                _id: 'stale-lock-cleanup',
+                timezone: 'Asia/Kolkata'
+            });
             
             // Migrate existing jobs to use Upstox API for market timing
             await this.migrateToUpstoxMarketTiming();
@@ -127,7 +138,7 @@ class AgendaMonitoringService {
                 return;
             }
 
-            // Check if orders are already placed
+            // Check if orders are already placed or being processed
             if (analysis.hasActiveOrders()) {
                 console.log(`📋 Orders already placed for analysis ${analysisId}, stopping monitoring`);
                 
@@ -139,6 +150,39 @@ class AgendaMonitoringService {
                 
                 await this.stopMonitoring(analysisId, strategyId);
                 return;
+            }
+            
+            // Check if another process is currently placing orders (race condition protection)
+            if (analysis.order_processing) {
+                const processingStarted = analysis.order_processing_started_at || new Date();
+                const timeSinceStart = Date.now() - processingStarted.getTime();
+                
+                // If processing has been running for more than 5 minutes, consider it stale
+                if (timeSinceStart > 5 * 60 * 1000) {
+                    console.log(`⚠️ Stale order processing lock detected for ${analysisId}, clearing lock`);
+                    
+                    // Clear stale lock
+                    const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+                    await StockAnalysis.findByIdAndUpdate(analysisId, {
+                        $unset: { 
+                            order_processing: 1,
+                            order_processing_started_at: 1
+                        }
+                    });
+                } else {
+                    console.log(`🔒 Order processing in progress for ${analysisId}, skipping this monitoring cycle`);
+                    
+                    historyEntry.status = 'order_processing';
+                    historyEntry.reason = 'Another process is placing orders';
+                    historyEntry.details.processing_info = {
+                        started_at: processingStarted,
+                        time_since_start_ms: timeSinceStart
+                    };
+                    historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                    await historyEntry.save();
+                    
+                    return; // Skip this monitoring cycle
+                }
             }
 
             // Get user's Upstox credentials
@@ -209,15 +253,14 @@ class AgendaMonitoringService {
                     );
                 }
                 
-                // Import order service dynamically to avoid circular dependency
-                const { default: orderService } = await import('./orderService.js');
+                // Import order execution service dynamically to avoid circular dependency
+                const { default: orderExecutionService } = await import('./orderExecutionService.js');
                 
                 try {
-                    const orderResult = await orderService.placeOrderFromTrigger(
+                    const orderResult = await orderExecutionService.executeFromMonitoring(
                         analysisId, 
                         strategyId, 
-                        userId, 
-                        accessToken
+                        userId
                     );
                     
                     if (orderResult.success) {
@@ -625,6 +668,27 @@ class AgendaMonitoringService {
         } catch (error) {
             console.error('❌ Error migrating to Upstox API market timing:', error);
             return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Clean up stale order processing locks
+     */
+    async cleanupStaleOrderProcessingLocks() {
+        try {
+            console.log('🧹 Running cleanup of stale order processing locks...');
+            
+            const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+            const result = await StockAnalysis.cleanupStaleOrderProcessingLocks();
+            
+            if (result && result.modifiedCount > 0) {
+                console.log(`✅ Cleaned up ${result.modifiedCount} stale order processing locks`);
+            }
+            
+            return result;
+        } catch (error) {
+            console.error('❌ Error in stale lock cleanup job:', error);
+            return null;
         }
     }
 

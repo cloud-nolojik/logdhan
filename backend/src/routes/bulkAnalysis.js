@@ -1360,4 +1360,171 @@ router.get('/timing-check', auth, async (req, res) => {
     }
 });
 
+// Route: Get analysis with order status and monitoring details
+router.get('/analysis-details/:analysisId', auth, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { analysisId } = req.params;
+
+        // Find the analysis document
+        const analysis = await StockAnalysis.findById(analysisId);
+        if (!analysis || analysis.user_id.toString() !== userId) {
+            return res.status(404).json({
+                success: false,
+                error: 'analysis_not_found',
+                message: 'Analysis not found or access denied'
+            });
+        }
+
+        // Get monitoring status for each strategy
+        const strategies = analysis.analysis_data?.strategies || [];
+        const strategyStatuses = {};
+        
+        for (const strategy of strategies) {
+            // Import monitoring service dynamically
+            const agendaMonitoringService = (await import('../services/agendaMonitoringService.js')).default;
+            const monitoringStatus = await agendaMonitoringService.getMonitoringStatus(analysisId, strategy.id);
+            strategyStatuses[strategy.id] = monitoringStatus;
+        }
+
+        // Check if orders are placed
+        const hasPlacedOrders = analysis.hasActiveOrders();
+        const placedOrders = analysis.placed_orders || [];
+
+        res.status(200).json({
+            success: true,
+            data: {
+                analysis: {
+                    id: analysis._id,
+                    stock_symbol: analysis.stock_symbol,
+                    instrument_key: analysis.instrument_key,
+                    analysis_type: analysis.analysis_type,
+                    created_at: analysis.created_at,
+                    expires_at: analysis.expires_at,
+                    current_price: analysis.current_price
+                },
+                strategies: strategies.map(strategy => ({
+                    ...strategy,
+                    monitoring: strategyStatuses[strategy.id] || { isMonitoring: false },
+                    hasOrders: placedOrders.some(order => order.strategy_id === strategy.id)
+                })),
+                orders: {
+                    hasPlacedOrders,
+                    totalOrders: placedOrders.length,
+                    placedOrders: placedOrders.map(order => ({
+                        order_id: order.order_id,
+                        strategy_id: order.strategy_id,
+                        status: order.status,
+                        quantity: order.quantity,
+                        price: order.price,
+                        transaction_type: order.transaction_type,
+                        tag: order.tag,
+                        placed_at: order.placed_at,
+                        hasAutomaticStopLossTarget: order.hasAutomaticStopLossTarget || false
+                    }))
+                },
+                monitoring: {
+                    anyActiveMonitoring: Object.values(strategyStatuses).some(s => s.isMonitoring),
+                    activeStrategiesCount: Object.values(strategyStatuses).filter(s => s.isMonitoring).length,
+                    totalStrategies: strategies.length
+                },
+                history: {
+                    totalOrdersPlaced: analysis.total_orders_placed || 0,
+                    lastOrderPlacedAt: analysis.last_order_placed_at,
+                    orderPlacementHistory: analysis.order_placement_history || []
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error getting analysis details:', error);
+        res.status(500).json({
+            success: false,
+            error: 'analysis_details_failed',
+            message: error.message
+        });
+    }
+});
+
+// Route: Record order placement success
+router.post('/record-order-placement', auth, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { 
+            analysisId, 
+            strategyId, 
+            orderData, 
+            orderResponse,
+            stockSymbol,
+            instrumentToken 
+        } = req.body;
+
+        // Validate required fields
+        if (!analysisId || !strategyId || !orderData || !orderResponse) {
+            return res.status(400).json({
+                success: false,
+                error: 'missing_required_fields',
+                message: 'analysisId, strategyId, orderData, and orderResponse are required'
+            });
+        }
+
+        // Find the analysis document
+        const analysis = await StockAnalysis.findById(analysisId);
+        if (!analysis || analysis.user_id.toString() !== userId) {
+            return res.status(404).json({
+                success: false,
+                error: 'analysis_not_found',
+                message: 'Analysis not found or access denied'
+            });
+        }
+
+        // Record the order placement
+        const orderRecord = {
+            recorded_at: new Date(),
+            strategy_id: strategyId,
+            order_details: {
+                ...orderData,
+                upstox_response: orderResponse,
+                placement_method: 'multi_order_api',
+                stock_symbol: stockSymbol || analysis.stock_symbol,
+                instrument_token: instrumentToken || analysis.instrument_key
+            }
+        };
+
+        // Add to analysis document
+        if (!analysis.order_placement_history) {
+            analysis.order_placement_history = [];
+        }
+        analysis.order_placement_history.push(orderRecord);
+        
+        // Update analysis status
+        analysis.last_order_placed_at = new Date();
+        analysis.total_orders_placed = (analysis.total_orders_placed || 0) + 1;
+
+        await analysis.save();
+
+        console.log(`📝 Recorded order placement for ${analysis.stock_symbol}, strategy ${strategyId}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'Order placement recorded successfully',
+            data: {
+                analysisId: analysisId,
+                strategyId: strategyId,
+                stockSymbol: analysis.stock_symbol,
+                recordedAt: orderRecord.recorded_at,
+                totalOrdersPlaced: analysis.total_orders_placed
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error recording order placement:', error);
+        res.status(500).json({
+            success: false,
+            error: 'record_order_failed',
+            message: error.message
+        });
+    }
+});
+
 export default router;

@@ -2,6 +2,7 @@ import * as upstoxService from './upstox.service.js';
 import triggerOrderService from './triggerOrderService.js';
 import UpstoxUser from '../models/upstoxUser.js';
 import { decrypt } from '../utils/encryption.js';
+import mongoose from 'mongoose';
 
 /**
  * Service to handle strategy validation and order execution
@@ -10,6 +11,170 @@ import { decrypt } from '../utils/encryption.js';
 
 class OrderExecutionService {
     /**
+     * Atomically check and place order using MongoDB transactions to prevent race conditions
+     * @param {Object} params - Parameters for atomic order execution
+     * @returns {Object} - Result of atomic order placement
+     */
+    async atomicOrderPlacement({
+        analysisId,
+        strategyId,
+        userId,
+        customQuantity = null,
+        bypassTriggers = false
+    }) {
+        const session = await mongoose.startSession();
+        
+        try {
+            let result = null;
+            
+            await session.withTransaction(async () => {
+                console.log(`🔒 Starting atomic order placement transaction for ${analysisId}_${strategyId}`);
+                
+                // Import StockAnalysis model within transaction
+                const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+                
+                // Find and lock the analysis document for update
+                const analysis = await StockAnalysis.findById(analysisId)
+                    .session(session)
+                    .exec();
+                
+                if (!analysis) {
+                    throw new Error('Analysis not found');
+                }
+                
+                if (analysis.user_id.toString() !== userId) {
+                    throw new Error('Access denied to analysis');
+                }
+                
+                // Atomic check: if orders already exist, fail immediately
+                if (analysis.hasActiveOrders()) {
+                    const activeOrderIds = analysis.getPlacedOrderIds();
+                    result = {
+                        success: false,
+                        error: 'orders_already_placed',
+                        message: `Orders already placed for this analysis. Active orders: ${activeOrderIds.join(', ')}`,
+                        data: {
+                            existing_orders: analysis.placed_orders,
+                            analysis_id: analysis._id
+                        }
+                    };
+                    return; // Exit transaction without placing order
+                }
+                
+                // Mark analysis as "order_processing" to prevent other processes from placing orders
+                analysis.order_processing = true;
+                analysis.order_processing_started_at = new Date();
+                await analysis.save({ session });
+                
+                console.log(`🔒 Analysis ${analysisId} locked for order processing`);
+                
+                // Continue with order execution outside of the initial lock
+                // (we'll handle the actual order placement in a separate method)
+                result = {
+                    success: true,
+                    action: 'proceed_with_order',
+                    analysis: analysis,
+                    locked: true
+                };
+            });
+            
+            // If we successfully locked the analysis, proceed with order placement
+            if (result && result.success && result.action === 'proceed_with_order') {
+                return await this.executeOrderWithLockedAnalysis({
+                    analysis: result.analysis,
+                    strategyId,
+                    userId,
+                    customQuantity,
+                    bypassTriggers
+                });
+            }
+            
+            return result;
+            
+        } catch (error) {
+            console.error(`❌ Atomic order placement transaction failed for ${analysisId}_${strategyId}:`, error);
+            return {
+                success: false,
+                error: 'atomic_placement_failed',
+                message: error.message
+            };
+        } finally {
+            await session.endSession();
+        }
+    }
+    
+    /**
+     * Execute order with a pre-locked analysis document
+     * @param {Object} params - Parameters for locked order execution
+     * @returns {Object} - Result of order execution
+     */
+    async executeOrderWithLockedAnalysis({
+        analysis,
+        strategyId,
+        userId,
+        customQuantity = null,
+        bypassTriggers = false
+    }) {
+        try {
+            console.log(`🎯 Executing order with locked analysis ${analysis._id}_${strategyId}`);
+            
+            // Execute the standard validation and order flow
+            const orderResult = await this.validateAndExecuteStrategy({
+                analysis,
+                strategyId,
+                userId,
+                customQuantity,
+                bypassTriggers,
+                skipOrderCheck: true // Skip order check since we already did it atomically
+            });
+            
+            // Always unlock the analysis after order attempt
+            await this.unlockAnalysis(analysis._id, orderResult.success);
+            
+            return orderResult;
+            
+        } catch (error) {
+            console.error(`❌ Locked order execution failed for ${analysis._id}_${strategyId}:`, error);
+            
+            // Always unlock on error
+            await this.unlockAnalysis(analysis._id, false);
+            
+            return {
+                success: false,
+                error: 'locked_execution_failed',
+                message: error.message
+            };
+        }
+    }
+    
+    /**
+     * Unlock analysis after order processing
+     * @param {string} analysisId - Analysis ID to unlock
+     * @param {boolean} success - Whether order placement was successful
+     */
+    async unlockAnalysis(analysisId, success) {
+        try {
+            const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+            
+            await StockAnalysis.findByIdAndUpdate(analysisId, {
+                $unset: { 
+                    order_processing: 1,
+                    order_processing_started_at: 1
+                },
+                $set: {
+                    order_processing_completed_at: new Date(),
+                    last_order_processing_result: success ? 'success' : 'failed'
+                }
+            });
+            
+            console.log(`🔓 Unlocked analysis ${analysisId}, result: ${success ? 'success' : 'failed'}`);
+            
+        } catch (error) {
+            console.error(`❌ Failed to unlock analysis ${analysisId}:`, error);
+        }
+    }
+
+    /**
      * Validate strategy conditions and place order if conditions are met
      * @param {Object} params - Parameters for order execution
      * @param {Object} params.analysis - The stock analysis document
@@ -17,6 +182,7 @@ class OrderExecutionService {
      * @param {string} params.userId - User ID placing the order
      * @param {number} params.customQuantity - Custom quantity override (optional)
      * @param {boolean} params.bypassTriggers - Skip trigger validation (for monitoring)
+     * @param {boolean} params.skipOrderCheck - Skip order existence check (for atomic operations)
      * @returns {Object} - Result of strategy validation and order placement
      */
     async validateAndExecuteStrategy({
@@ -24,7 +190,8 @@ class OrderExecutionService {
         strategyId,
         userId,
         customQuantity = null,
-        bypassTriggers = false
+        bypassTriggers = false,
+        skipOrderCheck = false
     }) {
         try {
             console.log(`🔍 Starting strategy validation for ${analysis.stock_symbol} (Strategy: ${strategyId})`);
@@ -41,30 +208,32 @@ class OrderExecutionService {
             
             const instrumentToken = analysis.instrument_key;
             const analysisType = analysis.analysis_type;
-            const useBracketOrder = strategy.stopLoss && strategy.target ? true : false;
             
             console.log(`📋 Strategy details:`, {
                 stockSymbol: analysis.stock_symbol,
                 strategyType: strategy.type,
                 entry: strategy.entry,
                 target: strategy.target,
-                stopLoss: strategy.stopLoss,
-                useBracketOrder
+                stopLoss: strategy.stopLoss
             });
             
-            // 2. Check if orders already placed
-            const hasActive = analysis.hasActiveOrders();
-            if (hasActive) {
-                const activeOrderIds = analysis.getPlacedOrderIds();
-                return {
-                    success: false,
-                    error: 'orders_already_placed',
-                    message: `Orders already placed for this analysis. Active orders: ${activeOrderIds.join(', ')}`,
-                    data: {
-                        existing_orders: analysis.placed_orders,
-                        analysis_id: analysis._id
-                    }
-                };
+            // 2. Check if orders already placed (skip if atomic operation already checked)
+            if (!skipOrderCheck) {
+                const hasActive = analysis.hasActiveOrders();
+                if (hasActive) {
+                    const activeOrderIds = analysis.getPlacedOrderIds();
+                    return {
+                        success: false,
+                        error: 'orders_already_placed',
+                        message: `Orders already placed for this analysis. Active orders: ${activeOrderIds.join(', ')}`,
+                        data: {
+                            existing_orders: analysis.placed_orders,
+                            analysis_id: analysis._id
+                        }
+                    };
+                }
+            } else {
+                console.log(`🔒 Skipping order check - already performed atomically`);
             }
             
             // 3. Validate trigger conditions (unless bypassed)
@@ -125,7 +294,8 @@ class OrderExecutionService {
                 instrumentToken,
                 analysisType,
                 customQuantity,
-                useBracketOrder
+                analysisId: analysis._id,
+                stockSymbol: analysis.stock_symbol
             });
             
             if (!orderResult.success) {
@@ -138,8 +308,7 @@ class OrderExecutionService {
             return {
                 success: true,
                 data: orderResult.data,
-                message: orderResult.message,
-                pendingBracket: orderResult.pendingBracket || false
+                message: orderResult.message
             };
             
         } catch (error) {
@@ -163,7 +332,8 @@ class OrderExecutionService {
         instrumentToken,
         analysisType,
         customQuantity,
-        useBracketOrder
+        analysisId,
+        stockSymbol
     }) {
         try {
             // 1. Get Upstox user data
@@ -191,19 +361,18 @@ class OrderExecutionService {
                 orderData.quantity = Math.max(1, parseInt(customQuantity));
             }
             
-            // 3. Handle different order types
-            if (useBracketOrder && orderData.orderType === 'LIMIT' && orderData.stopLoss && orderData.target) {
-                return await this.placeLimitOrderWithDeferredBracket(
-                    accessToken,
-                    orderData,
-                    userId,
-                    instrumentToken,
-                    analysisType,
-                    upstoxUser
-                );
-            } else {
-                return await this.placeStandardOrder(accessToken, orderData, upstoxUser);
-            }
+            // 3. Place order using Multi Order API with webhook support for stop-loss/target
+            return await this.placeMultiOrder(
+                accessToken, 
+                orderData, 
+                upstoxUser, 
+                strategy, 
+                userId, 
+                instrumentToken, 
+                analysisType,
+                analysisId,
+                stockSymbol
+            );
             
         } catch (error) {
             console.error(`❌ Order execution error:`, error);
@@ -216,101 +385,176 @@ class OrderExecutionService {
     }
     
     /**
-     * Place a limit order with deferred bracket orders (via webhook)
+     * Place order using Multi Order API with webhook-based stop-loss/target support
      */
-    async placeLimitOrderWithDeferredBracket(accessToken, orderData, userId, instrumentToken, analysisType, upstoxUser) {
-        console.log('📋 Placing LIMIT order with deferred bracket orders (via webhook)');
+    async placeMultiOrder(accessToken, orderData, upstoxUser, strategy = null, userId = null, instrumentToken = null, analysisType = null, analysisId = null, stockSymbol = null) {
+        console.log('📋 Placing order using Multi Order API with webhook-based stop-loss/target support');
         
-        const primaryOrderData = {
-            ...orderData,
-            tag: `BRC_${Date.now()}`
+        // Add special tag if stop-loss and target are provided
+        const hasStopLossAndTarget = strategy && strategy.stopLoss && strategy.target;
+        if (hasStopLossAndTarget) {
+            orderData.tag = `BRC_${Date.now()}`;
+            console.log(`📋 Added BRC tag for webhook processing: ${orderData.tag}`);
+        }
+        
+        // Build multi-order array with proper sequence (BUY first, then SELL)
+        const multiOrderPayload = [];
+        const timestamp = Date.now();
+        
+        // Main entry order
+        const mainOrder = {
+            correlation_id: `M${timestamp}`.slice(-20),
+            quantity: parseInt(orderData.quantity),
+            product: orderData.product,                              // D, I, MTF
+            validity: orderData.validity || "DAY",                   // DAY, IOC
+            price: orderData.orderType === 'MARKET' ? 0 : parseFloat(orderData.price || 0),
+            tag: orderData.tag || "string",
+            instrument_token: instrumentToken,
+            order_type: orderData.orderType,                         // MARKET, LIMIT, SL, SL-M
+            transaction_type: orderData.transactionType.toUpperCase(), // BUY, SELL
+            disclosed_quantity: parseInt(orderData.disclosed_quantity || 0),
+            trigger_price: parseFloat(orderData.trigger_price || 0),
+            is_amo: Boolean(orderData.is_amo || false),
+            slice: Boolean(orderData.slice || false)
         };
         
-        console.log('📋 Placing primary limit order:', primaryOrderData);
-        const orderResult = await upstoxService.placeOrder(accessToken, primaryOrderData);
+        multiOrderPayload.push(mainOrder);
+        
+        // Optional: Add immediate stop-loss and target orders if strategy has them
+        // and if we want to place them immediately instead of via webhook
+        if (strategy && strategy.stopLoss && strategy.target && orderData.placeImmediateBracket) {
+            const isLongPosition = orderData.transactionType.toUpperCase() === 'BUY';
+            
+            // Stop-loss order (opposite transaction type)
+            const stopLossOrder = {
+                correlation_id: `SL${timestamp}`.slice(-20),
+                quantity: parseInt(orderData.quantity),
+                product: orderData.product,
+                validity: "DAY",
+                price: 0, // Market order for stop-loss
+                tag: `SL_${orderData.tag}`.slice(0, 40),
+                instrument_token: instrumentToken,
+                order_type: "SL-M",                                 // Stop-Loss Market
+                transaction_type: isLongPosition ? "SELL" : "BUY",  // Opposite direction
+                disclosed_quantity: 0,
+                trigger_price: parseFloat(strategy.stopLoss),
+                is_amo: false,
+                slice: false
+            };
+            
+            // Target order (opposite transaction type)
+            const targetOrder = {
+                correlation_id: `TG${timestamp}`.slice(-20),
+                quantity: parseInt(orderData.quantity),
+                product: orderData.product,
+                validity: "DAY", 
+                price: parseFloat(strategy.target),
+                tag: `TGT_${orderData.tag}`.slice(0, 40),
+                instrument_token: instrumentToken,
+                order_type: "LIMIT",                                // Limit order for target
+                transaction_type: isLongPosition ? "SELL" : "BUY",  // Opposite direction
+                disclosed_quantity: 0,
+                trigger_price: 0,
+                is_amo: false,
+                slice: false
+            };
+            
+            // Add in correct sequence (BUY orders first, then SELL orders)
+            if (isLongPosition) {
+                // Long position: BUY entry already added, now add SELL stop-loss and target
+                multiOrderPayload.push(stopLossOrder, targetOrder);
+            } else {
+                // Short position: Need to reorder - BUY orders (SL/target) first, then SELL entry
+                const sellEntry = multiOrderPayload.pop(); // Remove SELL entry temporarily
+                multiOrderPayload.push(stopLossOrder, targetOrder); // Add BUY orders first
+                multiOrderPayload.push(sellEntry); // Add SELL entry back at end
+            }
+            
+            console.log(`📋 Added immediate bracket orders: SL@${strategy.stopLoss}, Target@${strategy.target}`);
+        }
+        
+        const orderResult = await upstoxService.placeMultiOrder(accessToken, multiOrderPayload);
+        
+        console.log('📋 Received multi-order result:', orderResult);
+        
+        await upstoxUser.updateOrderStats(orderResult.success);
         
         if (orderResult.success) {
-            const orderId = orderResult.data?.data?.order_id || orderResult.data?.order_id;
+            // Extract the main order (first order) from multi-order response
+            const orderResponse = orderResult.data?.data?.[0] || orderResult.data?.[0];
+            const orderId = orderResponse?.order_id;
+            const allOrders = orderResult.data?.data || orderResult.data || [];
             
-            // Register for webhook processing
-            if (orderId) {
+            console.log(`📋 Multi-order success: ${allOrders.length} orders placed`);
+            allOrders.forEach((order, index) => {
+                console.log(`   Order ${index + 1}: ${order.correlation_id} → ${order.order_id}`);
+            });
+            
+            // Register for webhook processing if using webhook mode (not immediate bracket mode)
+            if (hasStopLossAndTarget && !orderData.placeImmediateBracket && orderId && userId && instrumentToken && analysisType) {
                 try {
-                    const webhookRegistration = await fetch(`http://localhost:${process.env.PORT || 3000}/api/webhook/register-pending-bracket`, {
+                    const webhookRegistration = await fetch(`http://localhost:${process.env.PORT || 5650}/api/webhook/register-pending-bracket`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             orderId,
                             userId,
                             accessToken,
-                            stopLoss: orderData.stopLoss,
-                            target: orderData.target,
+                            stopLoss: strategy.stopLoss,
+                            target: strategy.target,
                             instrumentToken,
-                            analysisType
+                            analysisType,
+                            stockSymbol: stockSymbol || 'Unknown',
+                            strategyId: strategy.id,
+                            analysisId: analysisId
                         })
                     });
                     
                     if (webhookRegistration.ok) {
                         console.log('✅ Registered pending bracket orders for webhook processing');
+                    } else {
+                        console.error('⚠️ Failed to register webhook data:', await webhookRegistration.text());
                     }
                 } catch (webhookError) {
                     console.error('⚠️ Failed to register webhook data:', webhookError);
                 }
             }
             
-            await upstoxUser.updateOrderStats(true);
+            console.log('🔍 Raw Upstox multi-order result:', JSON.stringify(orderResult, null, 2));
+            
+            const totalOrders = allOrders.length;
+            let message = '';
+            
+            if (orderData.placeImmediateBracket && totalOrders > 1) {
+                message = `${totalOrders} orders placed successfully: Entry + Stop-loss + Target orders executed immediately.`;
+            } else if (hasStopLossAndTarget) {
+                message = 'Order placed successfully using Multi Order API. Stop-loss and target orders will be placed automatically after execution.';
+            } else {
+                message = orderResult.data.message || 'Order placed successfully on Upstox using Multi Order API';
+            }
             
             return {
                 success: true,
-                data: orderResult.data.data || orderResult.data,
-                message: 'Limit order placed. Stop-loss and target orders will be placed automatically after execution.',
-                pendingBracket: true,
-                orderDetails: {
-                    quantity: orderData.quantity,
-                    price: orderData.price,
-                    transaction_type: orderData.transactionType,
-                    product: orderData.product,
-                    tag: primaryOrderData.tag,
-                    stopLoss: orderData.stopLoss,
-                    target: orderData.target,
-                    pending_bracket: true
-                }
-            };
-        } else {
-            await upstoxUser.updateOrderStats(false);
-            return orderResult;
-        }
-    }
-    
-    /**
-     * Place a standard order (market or non-bracket)
-     */
-    async placeStandardOrder(accessToken, orderData, upstoxUser) {
-        console.log('📋 Using single order method');
-        const orderResult = await upstoxService.placeOrder(accessToken, orderData);
-        
-        console.log('📋 Received orderResult:', orderResult);
-        
-        await upstoxUser.updateOrderStats(orderResult.success);
-        
-        if (orderResult.success) {
-            console.log('🔍 Raw Upstox orderResult:', JSON.stringify(orderResult, null, 2));
-            
-            return {
-                success: true,
-                data: orderResult.data.data || orderResult.data,
-                message: orderResult.data.message || 'Order placed successfully on Upstox',
+                data: orderResponse,
+                message: message,
+                totalOrdersPlaced: totalOrders,
+                allOrderIds: allOrders.map(o => o.order_id),
+                hasAutomaticStopLossTarget: hasStopLossAndTarget,
+                hasImmediateBracket: orderData.placeImmediateBracket || false,
                 orderDetails: {
                     quantity: orderData.quantity,
                     price: orderData.price,
                     transaction_type: orderData.transactionType,
                     product: orderData.product,
                     tag: orderData.tag,
-                    stopLoss: orderData.stopLoss,
-                    target: orderData.target
+                    stopLoss: strategy?.stopLoss,
+                    target: strategy?.target,
+                    correlation_id: mainOrder.correlation_id,
+                    allOrders: allOrders
                 }
             };
         } else {
-            console.log('❌ Raw Upstox orderResult (failed):', JSON.stringify(orderResult, null, 2));
+            console.log('❌ Raw Upstox multi-order result (failed):', JSON.stringify(orderResult, null, 2));
             return orderResult;
         }
     }
@@ -332,7 +576,8 @@ class OrderExecutionService {
                 tag: orderDetails.tag,
                 stopLoss: orderDetails.stopLoss,
                 target: orderDetails.target,
-                pending_bracket: orderDetails.pending_bracket || false
+                hasAutomaticStopLossTarget: orderResult.hasAutomaticStopLossTarget || false,
+                correlation_id: orderDetails.correlation_id
             });
             
             console.log('✅ Order tracking updated in analysis');
@@ -343,7 +588,7 @@ class OrderExecutionService {
     }
     
     /**
-     * Execute strategy from monitoring job (simplified interface)
+     * Execute strategy from monitoring job using atomic operations (simplified interface)
      * @param {string} analysisId - Analysis document ID
      * @param {string} strategyId - Strategy ID to execute
      * @param {string} userId - User ID
@@ -351,22 +596,11 @@ class OrderExecutionService {
      */
     async executeFromMonitoring(analysisId, strategyId, userId) {
         try {
-            // Import StockAnalysis model
-            const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+            console.log(`🔄 Monitoring triggered atomic order execution for ${analysisId}_${strategyId}`);
             
-            // Find the analysis
-            const analysis = await StockAnalysis.findById(analysisId);
-            if (!analysis || analysis.user_id.toString() !== userId) {
-                return {
-                    success: false,
-                    error: 'analysis_not_found',
-                    message: 'Analysis not found or access denied'
-                };
-            }
-            
-            // Execute with bypassed triggers (monitoring already validated them)
-            return await this.validateAndExecuteStrategy({
-                analysis,
+            // Use atomic order placement to prevent race conditions
+            return await this.atomicOrderPlacement({
+                analysisId,
                 strategyId,
                 userId,
                 customQuantity: null,
@@ -378,6 +612,37 @@ class OrderExecutionService {
             return {
                 success: false,
                 error: 'monitoring_execution_failed',
+                message: error.message
+            };
+        }
+    }
+    
+    /**
+     * Execute strategy from API call using atomic operations (for manual order placement)
+     * @param {string} analysisId - Analysis document ID
+     * @param {string} strategyId - Strategy ID to execute
+     * @param {string} userId - User ID
+     * @param {number} customQuantity - Custom quantity override (optional)
+     * @returns {Object} - Execution result
+     */
+    async executeFromAPI(analysisId, strategyId, userId, customQuantity = null) {
+        try {
+            console.log(`📱 API triggered atomic order execution for ${analysisId}_${strategyId}`);
+            
+            // Use atomic order placement to prevent race conditions
+            return await this.atomicOrderPlacement({
+                analysisId,
+                strategyId,
+                userId,
+                customQuantity,
+                bypassTriggers: false // Validate triggers for manual API calls
+            });
+            
+        } catch (error) {
+            console.error(`❌ API execution error for analysis ${analysisId}:`, error);
+            return {
+                success: false,
+                error: 'api_execution_failed',
                 message: error.message
             };
         }
