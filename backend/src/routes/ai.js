@@ -136,10 +136,14 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
                 }
             }
             
-            // Fallback: use a default price if we can't fetch current price
+            // No fallback price - if we can't get current price, we can't proceed
             if (!current_price) {
-                console.warn('⚠️ Using fallback price of ₹100 for demo purposes');
-                current_price = 100;
+                console.error('❌ No current price available and no fallback allowed');
+                return res.status(400).json({
+                    success: false,
+                    error: 'Current price not available',
+                    message: 'Unable to fetch current market price. Please try again later.'
+                });
             }
             
         } catch (error) {
@@ -410,13 +414,53 @@ router.get('/analysis/:analysisId/progress', authenticateToken, async (req, res)
  */
 router.get('/cache/stats', authenticateToken, async (req, res) => {
     try {
-        const tradingDate = req.query.date ? new Date(req.query.date) : null;
+        // Get analysis statistics directly from StockAnalysis collection (no cache)
+        const tradingDate = req.query.date ? new Date(req.query.date) : new Date();
+        const startOfDay = new Date(tradingDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(tradingDate);
+        endOfDay.setHours(23, 59, 59, 999);
         
-        const cacheStats = await cachedAiAnalysisService.getCacheStats(tradingDate);
+        const stats = await StockAnalysis.aggregate([
+            {
+                $match: {
+                    created_at: { $gte: startOfDay, $lte: endOfDay }
+                }
+            },
+            {
+                $group: {
+                    _id: '$analysis_type',
+                    count: { $sum: 1 },
+                    active_orders: {
+                        $sum: {
+                            $cond: [
+                                { $gt: [{ $size: { $ifNull: ['$placed_orders', []] } }, 0] },
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    expired: {
+                        $sum: {
+                            $cond: [
+                                { $lt: ['$expires_at', new Date()] },
+                                1,
+                                0
+                            ]
+                        }
+                    }
+                }
+            }
+        ]);
         
         res.json({
             success: true,
-            data: cacheStats
+            data: {
+                date: tradingDate.toISOString().split('T')[0],
+                statistics: stats,
+                total_analyses: stats.reduce((sum, stat) => sum + stat.count, 0),
+                note: 'Direct analysis storage (no cache system)'
+            }
         });
 
     } catch (error) {
@@ -430,13 +474,13 @@ router.get('/cache/stats', authenticateToken, async (req, res) => {
 });
 
 /**
- * @route POST /api/ai/cache/expire
- * @desc Manually expire cache for a specific analysis (for testing)
+ * @route POST /api/ai/analysis/delete
+ * @desc Manually delete analysis for a specific stock (no longer using cache)
  * @access Private (Admin only recommended)
  */
-router.post('/cache/expire', authenticateToken, async (req, res) => {
+router.post('/analysis/delete', authenticateToken, async (req, res) => {
     try {
-        const { instrument_key, analysis_type, trading_date } = req.body;
+        const { instrument_key, analysis_type } = req.body;
         
         if (!instrument_key || !analysis_type) {
             return res.status(400).json({
@@ -446,27 +490,44 @@ router.post('/cache/expire', authenticateToken, async (req, res) => {
             });
         }
 
-        const date = trading_date ? new Date(trading_date) : await cachedAiAnalysisService.getCurrentTradingDate();
-        
-        const result = await cachedAiAnalysisService.expireCache(instrument_key, analysis_type, date);
-        
-        res.json({
-            success: true,
-            message: 'Cache expired successfully',
-            data: {
-                instrument_key,
-                analysis_type,
-                trading_date: date,
-                modified_count: result.modifiedCount
-            }
+        // Delete analysis directly from StockAnalysis collection
+        const result = await StockAnalysis.findOneAndDelete({
+            instrument_key,
+            analysis_type
         });
+        
+        if (result) {
+            res.json({
+                success: true,
+                message: 'Analysis deleted successfully',
+                data: {
+                    instrument_key,
+                    analysis_type,
+                    deleted_analysis: {
+                        id: result._id,
+                        stock_symbol: result.stock_symbol,
+                        created_at: result.created_at,
+                        expires_at: result.expires_at
+                    }
+                }
+            });
+        } else {
+            res.json({
+                success: false,
+                message: 'No analysis found to delete',
+                data: {
+                    instrument_key,
+                    analysis_type
+                }
+            });
+        }
 
     } catch (error) {
-        console.error('❌ Cache Expire API Error:', error);
+        console.error('❌ Analysis Delete API Error:', error);
         res.status(500).json({
             success: false,
             error: 'Internal server error',
-            message: 'Failed to expire cache'
+            message: 'Failed to delete analysis'
         });
     }
 });
@@ -481,38 +542,37 @@ router.get('/cache/info/:instrument_key', authenticateToken, async (req, res) =>
         const { instrument_key } = req.params;
         const { analysis_type = 'swing' } = req.query;
         
-        const tradingDate = await cachedAiAnalysisService.getCurrentTradingDate();
+        // Get existing analysis directly from StockAnalysis collection (no cache)
+        const analysis = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
         
-        // Get cache entry if exists
-        const cacheKey = AIAnalysisCache.generateCacheKey(instrument_key, analysis_type, tradingDate);
-        const cached = await AIAnalysisCache.findOne({ cache_key: cacheKey });
-        
-        if (cached) {
+        if (analysis) {
             const now = new Date();
-            const isExpired = cached.expires_at <= now;
-            const timeToExpiry = cached.expires_at.getTime() - now.getTime();
+            const isExpired = analysis.expires_at <= now;
+            const timeToExpiry = analysis.expires_at.getTime() - now.getTime();
             
             res.json({
                 success: true,
                 data: {
-                    cached: true,
+                    exists: true,
                     expired: isExpired,
-                    expires_at: cached.expires_at,
-                    generated_at: cached.generated_at,
-                    usage_count: cached.usage_count,
-                    users_served_count: cached.users_served.length,
+                    expires_at: analysis.expires_at,
+                    created_at: analysis.created_at,
+                    updated_at: analysis.updated_at,
                     time_to_expiry_ms: timeToExpiry,
                     time_to_expiry_hours: Math.round(timeToExpiry / (1000 * 60 * 60) * 10) / 10,
-                    cache_stats: cached.cache_stats,
-                    current_price: cached.current_price
+                    stock_symbol: analysis.stock_symbol,
+                    analysis_type: analysis.analysis_type,
+                    current_price: analysis.current_price,
+                    has_orders: analysis.hasActiveOrders(),
+                    total_strategies: analysis.analysis_data?.strategies?.length || 0
                 }
             });
         } else {
             res.json({
                 success: true,
                 data: {
-                    cached: false,
-                    message: 'No cache entry found for this stock and analysis type'
+                    exists: false,
+                    message: 'No analysis found for this stock and analysis type'
                 }
             });
         }

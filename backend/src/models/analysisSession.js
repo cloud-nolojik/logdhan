@@ -67,7 +67,7 @@ const analysisSessionSchema = new mongoose.Schema({
     },
     timeout_threshold: {
         type: Number,
-        default: 5 * 60 * 1000 // 5 minutes in milliseconds
+        default: 10 * 60 * 1000 // 10 minutes in milliseconds
     },
     session_timeout: {
         type: Number,

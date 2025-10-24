@@ -127,7 +127,20 @@ const stockAnalysisSchema = new mongoose.Schema({
     },
     current_price: {
         type: Number,
-        required: true
+        required: function() {
+            return this.status !== 'failed';
+        },
+        validate: {
+            validator: function(value) {
+                // If status is 'failed', current_price can be null/undefined
+                if (this.status === 'failed') {
+                    return true;
+                }
+                // Otherwise, must be a positive number
+                return value && !isNaN(value) && value > 0;
+            },
+            message: 'current_price must be a positive number for non-failed analyses'
+        }
     },
     analysis_data: {
         schema_version: {

@@ -67,15 +67,15 @@ router.post('/analyze-all', auth, async (req, res) => {
         const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
         
         if (!analysisPermission.allowed) {
-            console.log(`❌ [BULK TIMING] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
-            return res.status(423).json({
-                success: false,
-                error: 'bulk_analysis_not_allowed',
-                message: getBulkAnalysisMessage(analysisPermission.reason),
-                reason: analysisPermission.reason,
-                nextAllowed: analysisPermission.nextAllowed,
-                validUntil: analysisPermission.validUntil
-            });
+            // console.log(`❌ [BULK TIMING] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+            // return res.status(423).json({
+            //     success: false,
+            //     error: 'bulk_analysis_not_allowed',
+            //     message: getBulkAnalysisMessage(analysisPermission.reason),
+            //     reason: analysisPermission.reason,
+            //     nextAllowed: analysisPermission.nextAllowed,
+            //     validUntil: analysisPermission.validUntil
+            // });
         }
         
         console.log(`✅ [BULK TIMING] Analysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);
@@ -124,8 +124,8 @@ router.post('/analyze-all', auth, async (req, res) => {
         // Start background processing IMMEDIATELY after database save
         //console.log(`🚀 [BACKGROUND] Starting background processing for verified session: ${session.session_id}, status: ${session.status}`);
         
-        // Start processing after 30 seconds delay
-        setTimeout(async () => {
+        // Start processing immediately
+        setImmediate(async () => {
             try {
                 //console.log(`🔥 [BACKGROUND] Background processing starting for: ${session.session_id}`);
                 await processSessionBasedBulkAnalysis(session);
@@ -145,7 +145,7 @@ router.post('/analyze-all', auth, async (req, res) => {
                     console.error(`❌ [BACKGROUND] Failed to mark session as failed: ${saveError.message}`);
                 }
             }
-        }, 30000); // 30 seconds delay
+        });
         
         const responseData = {
             session_id: session.session_id,
@@ -246,7 +246,8 @@ router.get('/status', auth, async (req, res) => {
         // If session exists but is very old (more than 1 hour), consider it stale and don't show it
         if (activeSession) {
             const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-            if (activeSession.created_at < oneHourAgo && ['completed', 'cancelled', 'failed'].includes(activeSession.status)) {
+            const sessionDate = activeSession.created_at || activeSession.started_at;
+            if (sessionDate < oneHourAgo && ['completed', 'cancelled', 'failed'].includes(activeSession.status)) {
                 //console.log(`🗑️ [SESSION SEARCH] Session too old (${activeSession.status}), ignoring`);
                 activeSession = null;
             }
@@ -286,7 +287,47 @@ router.get('/status', auth, async (req, res) => {
             const stockDetails = await Promise.all(activeSession.metadata.watchlist_stocks.map(async (stock) => {
                 let stockStatus = 'pending';
                 if (stock.processed) {
-                    stockStatus = stock.error_reason ? 'failed' : 'completed';
+                    // Check session-level error first
+                    if (stock.error_reason) {
+                        stockStatus = 'failed';
+                    } else {
+                        // Check actual analysis document status for failures like insufficientData
+                        try {
+                            const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+                            
+                            // Use started_at if created_at is undefined
+                            let sessionDate;
+                            try {
+                                const rawDate = activeSession.created_at || activeSession.started_at;
+                                sessionDate = rawDate instanceof Date ? 
+                                    rawDate : 
+                                    new Date(rawDate);
+                                    
+                                // If date is invalid, use a fallback (1 hour ago)
+                                if (isNaN(sessionDate.getTime())) {
+                                    sessionDate = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+                                    console.warn(`⚠️ Invalid session date for ${stock.trading_symbol}, using fallback date`);
+                                }
+                            } catch (dateError) {
+                                sessionDate = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+                                console.warn(`⚠️ Date parsing error for ${stock.trading_symbol}, using fallback date:`, dateError.message);
+                            }
+                            
+                            const analysis = await StockAnalysis.findOne({
+                                stock_symbol: stock.trading_symbol,
+                                created_at: { $gte: sessionDate } // Only check analyses from this session
+                            }).sort({ created_at: -1 });
+
+                            if (analysis && (analysis.status === 'failed' || analysis.analysis_data?.insufficientData === true)) {
+                                stockStatus = 'failed';
+                            } else {
+                                stockStatus = 'completed';
+                            }
+                        } catch (analysisCheckError) {
+                            console.warn(`⚠️ Could not check analysis status for ${stock.trading_symbol}:`, analysisCheckError.message);
+                            stockStatus = 'completed'; // Default to completed if we can't check
+                        }
+                    }
                 } else if (activeSession.current_stock_key === stock.instrument_key) {
                     stockStatus = 'in_progress';
                 }
@@ -302,7 +343,7 @@ router.get('/status', auth, async (req, res) => {
                 };
 
                 // For completed stocks, fetch strategy data
-                if (stockStatus === 'completed' && !stock.error_reason) {
+                if (stockStatus === 'completed') {
                     try {
                         const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
                         const analysis = await StockAnalysis.findOne({
@@ -351,14 +392,20 @@ router.get('/status', auth, async (req, res) => {
                 return stockDetail;
             }));
             
+            // Calculate actual completed/failed counts based on real status
+            const actualCompletedCount = stockDetails.filter(s => s.status === 'completed').length;
+            const actualFailedCount = stockDetails.filter(s => s.status === 'failed').length;
+            const actualInProgressCount = stockDetails.filter(s => s.status === 'in_progress').length;
+            const actualPendingCount = stockDetails.filter(s => s.status === 'pending').length;
+            
             const sessionResponseData = {
                 session_id: activeSession.session_id,
                 target_count: activeSession.total_stocks,
                 total_analyses: activeSession.processed_stocks,
-                completed: activeSession.successful_stocks,
-                in_progress: activeSession.status === 'running' && !isComplete ? 1 : 0,
-                pending: Math.max(0, activeSession.total_stocks - activeSession.processed_stocks),
-                failed: activeSession.failed_stocks,
+                completed: actualCompletedCount,
+                in_progress: actualInProgressCount,
+                pending: actualPendingCount,
+                failed: actualFailedCount,
                 progress_percentage: activeSession.progress_percentage,
                 is_complete: isComplete,
                 analysis_type: analysis_type,
@@ -371,7 +418,7 @@ router.get('/status', auth, async (req, res) => {
                 stocks: stockDetails
             };
             
-            console.log(`📤 [STATUS API] Response: session=${sessionResponseData.session_id}, status=${sessionResponseData.status}, progress=${sessionResponseData.progress_percentage}%, processed=${sessionResponseData.completed}/${sessionResponseData.total_analyses}, stocks_with_strategies=${stockDetails.filter(s => s.strategy).length}`);
+            console.log(`📤 [STATUS API] Response: session=${sessionResponseData.session_id}, status=${sessionResponseData.status}, progress=${sessionResponseData.progress_percentage}%, completed=${actualCompletedCount}, failed=${actualFailedCount}, pending=${actualPendingCount}, in_progress=${actualInProgressCount}, stocks_with_strategies=${stockDetails.filter(s => s.strategy).length}`);
             //console.log("bulk analysis status response:", JSON.stringify({
             //     success: true,
             //     data: sessionResponseData
@@ -473,7 +520,7 @@ router.get('/strategies', auth, async (req, res) => {
                     instrument_key: analysis.instrument_key,
                     stock_name: analysis.stock_name,
                     stock_symbol: analysis.stock_symbol,
-                    current_price: analysis.current_price || 0.01,
+                    current_price: analysis.current_price || null,
                     created_at: analysis.created_at,
                     status: 'failed', // Mark as failed
                     strategy: {
@@ -653,7 +700,7 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                                 stock_name: stock.name,
                                 stock_symbol: stock.trading_symbol,
                                 analysis_type: analysisType,
-                                current_price: 0.01, // Use minimal valid price instead of 0
+                                // current_price: undefined (omitted for failed analysis)
                                 status: 'failed',
                                 expires_at: await StockAnalysis.getExpiryTime(),
                                 progress: {
@@ -708,7 +755,7 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                             stock_name: stock.name,
                             stock_symbol: stock.trading_symbol,
                             analysis_type: analysisType,
-                            current_price: 0.01, // Use minimal valid price for schema
+                            // current_price: undefined (omitted for failed analysis)
                             status: 'failed',
                             expires_at: await StockAnalysis.getExpiryTime(),
                             progress: {
@@ -774,7 +821,7 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                             stock_name: stock.name,
                             stock_symbol: stock.trading_symbol,
                             analysis_type: analysisType,
-                            current_price: 0.01, // Use minimal valid price for failed analysis
+                            // current_price: undefined (omitted for failed analysis)
                             status: 'failed',
                             expires_at: await StockAnalysis.getExpiryTime(),
                             progress: {
@@ -985,9 +1032,9 @@ async function processSessionBasedBulkAnalysis(session) {
                         forceFresh: true
                     });
                     
-                    // 5-minute timeout per stock
+                    // 10-minute timeout per stock
                     const timeoutPromise = new Promise((_, reject) => 
-                        setTimeout(() => reject(new Error('Stock analysis timeout after 5 minutes')), session.timeout_threshold)
+                        setTimeout(() => reject(new Error('Stock analysis timeout after 10 minutes')), session.timeout_threshold)
                     );
                     
                     const analysisResult = await Promise.race([analysisPromise, timeoutPromise]);
@@ -1065,7 +1112,7 @@ async function markStockAsFailed(session, stock, errorReason, retryCount = 0) {
                 stock_name: stock.stock_name,
                 stock_symbol: stock.trading_symbol,
                 analysis_type: session.analysis_type,
-                current_price: 0.01, // Use minimal valid price for failed analysis
+                // current_price: undefined (omitted for failed analysis)
                 status: 'failed',
                 expires_at: await StockAnalysis.getExpiryTime(),
                 progress: {

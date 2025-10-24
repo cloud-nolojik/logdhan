@@ -9,7 +9,7 @@ const dailyJobStatusSchema = new mongoose.Schema({
     job_type: {
         type: String,
         required: true,
-        enum: ['data_prefetch', 'cache_cleanup', 'analysis_prefetch'],
+        enum: ['data_prefetch', 'analysis_prefetch'],
         index: true
     },
     status: {

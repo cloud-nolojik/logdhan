@@ -84,7 +84,7 @@ class TriggerOrderService {
                     issues.push('Missing right side value or reference (what to compare against)');
                 }
                 if (!trigger.timeframe) {
-                    issues.push('Missing timeframe (1m, 5m, 15m, 1h, 1d)');
+                    issues.push('Missing timeframe (15m, 1h, 1d)');
                 }
                 
                 if (issues.length > 0) {

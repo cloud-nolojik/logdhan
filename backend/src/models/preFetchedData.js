@@ -14,7 +14,7 @@ const preFetchedDataSchema = new mongoose.Schema({
     timeframe: {
         type: String,
         required: true,
-        enum: ['5m', '15m', '1h', '1d', '1D']  // Allow both '1d' and '1D' for compatibility
+        enum: ['15m', '1h', '1d']  // Standardized to lowercase only
     },
     trading_date: {
         type: Date,
@@ -22,7 +22,7 @@ const preFetchedDataSchema = new mongoose.Schema({
     },
     candle_data: [{
         timestamp: {
-            type: Date,
+            type: String, // Store original IST timezone string: "2025-10-23T15:15:00+05:30"
             required: true
         },
         open: {

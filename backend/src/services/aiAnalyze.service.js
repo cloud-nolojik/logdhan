@@ -2,13 +2,12 @@ import axios from 'axios';
 import Parser from 'rss-parser';
 import crypto from 'crypto';
 import StockAnalysis from '../models/stockAnalysis.js';
-import PreFetchedData from '../models/preFetchedData.js';
 import { aiReviewService } from './ai/aiReview.service.js';
 import { subscriptionService } from './subscription/subscriptionService.js';
 import { Plan } from '../models/plan.js';
 import { Subscription } from '../models/subscription.js';
 import { getSectorForStock, getSectorNewsKeywords, getTrailingStopSuggestions, getSectorCorrelationMessage } from '../utils/sectorMapping.js';
-import dailyDataPrefetchService from './dailyDataPrefetch.service.js';
+import candleFetcherService from './candleFetcher.service.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -25,7 +24,7 @@ class AIAnalyzeService {
         // Use existing term-to-frames mapping from aiReview
         this.termToFrames = {
             'intraday': ['1m', '3m', '15m'],
-            'short': ['15m', '1h', '1D'], // for swing trading
+            'short': ['15m', '1h', '1d'], // for swing trading
         };
     }
 
@@ -327,30 +326,32 @@ class AIAnalyzeService {
                     analysis_type
                 },
                 {
-                    instrument_key,
-                    stock_name,
-                    stock_symbol,
-                    analysis_type,
-                    current_price: validPrice,
-                    status: 'in_progress',
-                    expires_at: await StockAnalysis.getExpiryTime(), // Market-aware expiry
-                    progress: {
-                        percentage: 0,
-                        current_step: 'Starting analysis...',
-                        steps_completed: 0,
-                        total_steps: 8,
-                        estimated_time_remaining: 90,
-                        last_updated: new Date()
-                    },
-                    analysis_data: {
-                        schema_version: '1.3',
-                        symbol: stock_symbol,
+                    $set: {
+                        instrument_key,
+                        stock_name,
+                        stock_symbol,
                         analysis_type,
-                        insufficientData: false,
-                        strategies: [],
-                        overall_sentiment: 'NEUTRAL'
-                    },
-                    created_at: new Date() // Update creation time for fresh analysis
+                        current_price: validPrice, // Ensure this is always updated
+                        status: 'in_progress',
+                        expires_at: await StockAnalysis.getExpiryTime(), // Market-aware expiry
+                        progress: {
+                            percentage: 0,
+                            current_step: 'Starting analysis...',
+                            steps_completed: 0,
+                            total_steps: 8,
+                            estimated_time_remaining: 90,
+                            last_updated: new Date()
+                        },
+                        analysis_data: {
+                            schema_version: '1.3',
+                            symbol: stock_symbol,
+                            analysis_type,
+                            insufficientData: false,
+                            strategies: [],
+                            overall_sentiment: 'NEUTRAL'
+                        },
+                        created_at: new Date() // Update creation time for fresh analysis
+                    }
                 },
                 {
                     upsert: true, // Create if doesn't exist, update if exists
@@ -508,15 +509,24 @@ class AIAnalyzeService {
 //                 console.log(`📰 Sample headlines:`, newsData.slice(0, 3).map(item => item.title));
             }
 
-            // Analyze news sentiment with sector context
-            const sentiment = newsData ? 
+            // Analyze news sentiment with sector context - now returns detailed analysis
+            const sentimentAnalysis = newsData ? 
                 await this.analyzeSectorSentiment(newsData, tradeData.term, sectorInfo) : 
-                'neutral';
+                {
+                    sentiment: 'neutral',
+                    confidence: 50,
+                    reasoning: 'No news data available',
+                    keyFactors: [],
+                    sectorSpecific: false
+                };
+            
+            // Extract simple sentiment for backward compatibility
+            const sentiment = typeof sentimentAnalysis === 'string' ? sentimentAnalysis : sentimentAnalysis.sentiment;
                 
-//             console.log(`📊 Sector-enhanced sentiment analysis result: ${sentiment}`);
+//             console.log(`📊 Enhanced sector sentiment analysis result:`, sentimentAnalysis);
 
-            // Route to appropriate agent to process data
-            const agentOut = await this.processMarketData(tradeData, candleData);
+            // Use aiReviewService's simplified routeToTradingAgent directly with candleFetcherService data
+            const agentOut = await this.aiReviewService.routeToTradingAgent(tradeData, candleData.candleSets, newsData);
             
             // Build market data payload using existing aiReview function
             let payload;
@@ -524,6 +534,44 @@ class AIAnalyzeService {
                 payload = this.aiReviewService.buildShortTermReviewPayload(agentOut, tradeData, sentiment);
             } else {
                 payload = this.aiReviewService.buildIntradayReviewPayload(agentOut, tradeData, sentiment);
+            }
+            
+            // Enhance payload with detailed sentiment analysis
+            if (typeof sentimentAnalysis === 'object' && payload) {
+                // Add enhanced sentiment context to payload
+                if (!payload.sentimentContext) {
+                    payload.sentimentContext = {};
+                }
+                
+                payload.sentimentContext = {
+                    basicSentiment: sentiment,
+                    confidence: sentimentAnalysis.confidence,
+                    reasoning: sentimentAnalysis.reasoning,
+                    keyFactors: sentimentAnalysis.keyFactors,
+                    sectorSpecific: sentimentAnalysis.sectorSpecific,
+                    positiveSignals: sentimentAnalysis.positiveSignals,
+                    negativeSignals: sentimentAnalysis.negativeSignals,
+                    marketAlignment: sentimentAnalysis.marketAlignment,
+                    sectorName: sentimentAnalysis.metadata?.sectorName,
+                    sectorCode: sentimentAnalysis.metadata?.sectorCode,
+                    newsAnalyzed: sentimentAnalysis.metadata?.newsCount,
+                    recentNewsCount: sentimentAnalysis.metadata?.recentNewsCount,
+                    sectorNewsWeight: sentimentAnalysis.metadata?.sectorNewsWeight
+                };
+                
+                // Add sentiment strength indicator based on confidence
+                const strengthMap = {
+                    high: sentimentAnalysis.confidence >= 80,
+                    medium: sentimentAnalysis.confidence >= 60,
+                    low: sentimentAnalysis.confidence < 60
+                };
+                
+                payload.sentimentContext.strength = Object.keys(strengthMap).find(key => strengthMap[key]) || 'low';
+                
+                // Add trading implications based on sentiment analysis
+                payload.sentimentContext.tradingImplications = this.generateTradingImplications(sentimentAnalysis, analysis_type);
+                
+//                 console.log(`📊 Enhanced payload with detailed sentiment context:`, payload.sentimentContext);
             }
             
             // // Log critical market data being sent to AI
@@ -547,16 +595,35 @@ class AIAnalyzeService {
             // Clean payload for stock analysis - remove user plan sections
             payload = this.cleanPayloadForStockAnalysis(payload);
             
-            // Override newsLite with our sentiment analysis results
+            // Override newsLite with our enhanced sentiment analysis results
             if (payload.newsLite) {
                 const sentimentMap = { 'positive': 1, 'neutral': 0, 'negative': -1 };
+                
+                // Build enhanced notes with detailed analysis
+                let enhancedNotes = newsData && newsData.length > 0 
+                    ? `${newsData.length} news articles analyzed. Overall sentiment: ${sentiment}`
+                    : "No recent news found";
+                
+                // Add detailed analysis if available
+                if (typeof sentimentAnalysis === 'object' && sentimentAnalysis.reasoning) {
+                    enhancedNotes += `\n\nAnalysis: ${sentimentAnalysis.reasoning}`;
+                    
+                    if (sentimentAnalysis.keyFactors && sentimentAnalysis.keyFactors.length > 0) {
+                        enhancedNotes += `\nKey factors: ${sentimentAnalysis.keyFactors.join(', ')}`;
+                    }
+                    
+                    if (sentimentAnalysis.confidence) {
+                        enhancedNotes += `\nConfidence: ${sentimentAnalysis.confidence}%`;
+                    }
+                }
+                
                 payload.newsLite = {
                     sentimentScore: sentimentMap[sentiment] || 0,
-                    notes: newsData && newsData.length > 0 
-                        ? `${newsData.length} news articles analyzed. Overall sentiment: ${sentiment}`
-                        : "No recent news found"
+                    notes: enhancedNotes,
+                    // Add detailed analysis for API consumers
+                    detailedAnalysis: typeof sentimentAnalysis === 'object' ? sentimentAnalysis : null
                 };
-//                 console.log(`📰 Updated newsLite with our analysis:`, payload.newsLite);
+//                 console.log(`📰 Updated newsLite with enhanced analysis:`, payload.newsLite);
             }
 
 //             console.log(`📊 Generated clean payload for stock analysis of ${stock_symbol}`);
@@ -587,458 +654,38 @@ class AIAnalyzeService {
     }
 
     /**
-     * Fetch optimized market data with smart gap-filling
-     * DB first, gap-fill insufficient data, full API fallback
+     * Get market data for analysis (simplified - uses dedicated candle fetcher service)
      */
     async fetchOptimizedMarketData(tradeData) {
         const startTime = Date.now();
         
         try {
-            // First, try to get pre-fetched data from database
-            console.log(`📦 [OPTIMIZED] Checking pre-fetched data for ${tradeData.instrument_key}`);
-            
-            const preFetchedResult = await dailyDataPrefetchService.constructor.getDataForAnalysis(
+            // Use dedicated candle fetcher service (handles DB first, API fallback, storage)
+            const candleResult = await candleFetcherService.getCandleDataForAnalysis(
                 tradeData.instrument_key,
-                tradeData.term // 'short' for swing, 'intraday' for intraday
+                tradeData.term
             );
             
-            if (preFetchedResult.success && preFetchedResult.data && preFetchedResult.data.length > 0) {
-                // Check data sufficiency and perform gap-filling if needed
-                const gapFilledResult = await this.handlePartialData(preFetchedResult.data, tradeData);
+            if (candleResult.success) {
+                console.log(`✅ [MARKET DATA] Got data from ${candleResult.source}: ${Object.keys(candleResult.data).length} timeframes`);
                 
-                if (gapFilledResult.success) {
-                    console.log(`✅ [OPTIMIZED] Using ${gapFilledResult.source} data: ${gapFilledResult.data.length} timeframes (${Date.now() - startTime}ms)`);
-                    
-                    // Convert data to the format expected by AI analysis
-                    const candleSets = this.convertPreFetchedToCandleSets(gapFilledResult.data);
-                    
-                    return {
-                        endpoints: [], // No API endpoints used for prefetched data
-                        candleSets: candleSets,
-                        source: gapFilledResult.source,
-                        fetchTime: Date.now() - startTime,
-                        gapFillInfo: gapFilledResult.gapFillInfo
-                    };
-                } else {
-                    console.log(`⚠️ [OPTIMIZED] Gap-filling failed: ${gapFilledResult.reason}, falling back to full API`);
-                }
+                // Pass clean data directly to AI analysis - no conversions needed
+                return {
+                    candleSets: candleResult.data, // Clean: { '15m': [candles], '1h': [candles], '1d': [candles] }
+                    source: candleResult.source,
+                    fetchTime: Date.now() - startTime
+                };
             } else {
-                console.log(`⚠️ [OPTIMIZED] Pre-fetched data not available: ${preFetchedResult.reason || 'unknown'}, falling back to API`);
+                throw new Error('Failed to get candle data');
             }
-        } catch (error) {
-            console.warn(`⚠️ [OPTIMIZED] Pre-fetch check failed: ${error.message}, falling back to API`);
-        }
-        
-        // Fallback to live API data
-        console.log(`🔄 [OPTIMIZED] Fetching live data from Upstox API (${Date.now() - startTime}ms)`);
-        const result = await this.fetchRealMarketData(tradeData);
-        result.source = 'live_api';
-        result.fetchTime = Date.now() - startTime;
-        
-        // Store the fetched data for future use (cache for other users)
-        console.log(`🔄 [CACHE STORE] Attempting to store fetched data for ${tradeData.stockSymbol}`);
-        await this.storeFetchedDataInCache(tradeData, result);
-        
-        return result;
-    }
-
-    /**
-     * Handle partial data scenarios with smart gap-filling
-     * Check if pre-fetched data is sufficient, fill gaps if needed
-     */
-    async handlePartialData(preFetchedData, tradeData) {
-        const requiredBars = {
-            '5m': 200,   // ~16 hours of 5-min bars
-            '15m': 100,  // ~25 hours of 15-min bars  
-            '1h': 50,    // ~2 days of hourly bars
-            '1d': 30     // ~1 month of daily bars
-        };
-
-        const gapFillInfo = {
-            timeframesProcessed: 0,
-            gapFilledTimeframes: 0,
-            totalMissingBars: 0,
-            totalNewBars: 0,
-            gapFillRequests: 0
-        };
-
-        const processedData = [];
-        let hasInsufficientData = false;
-
-        try {
-            console.log(`🔍 [GAP-FILL] Analyzing data sufficiency for ${preFetchedData.length} timeframes`);
-
-            for (const timeframeData of preFetchedData) {
-                gapFillInfo.timeframesProcessed++;
-                const required = requiredBars[timeframeData.timeframe] || 100;
-                const available = timeframeData.candle_data.length;
-                const missing = Math.max(0, required - available);
-
-                console.log(`📊 [GAP-FILL] ${timeframeData.timeframe}: ${available}/${required} bars (${missing} missing)`);
-
-                if (missing > 0) {
-                    // Data is insufficient - try to gap-fill
-                    const threshold = Math.floor(required * 0.7); // Accept if we have at least 70% of required data
-                    
-                    if (available >= threshold) {
-                        // Attempt gap-filling for this timeframe
-                        console.log(`🔧 [GAP-FILL] Attempting to fill ${missing} missing bars for ${timeframeData.timeframe}`);
-                        
-                        const gapFilledData = await this.fillMissingBars(timeframeData, tradeData, missing);
-                        
-                        if (gapFilledData.success) {
-                            processedData.push(gapFilledData.data);
-                            gapFillInfo.gapFilledTimeframes++;
-                            gapFillInfo.totalMissingBars += missing;
-                            gapFillInfo.totalNewBars += gapFilledData.newBarsAdded;
-                            gapFillInfo.gapFillRequests++;
-                            
-                            console.log(`✅ [GAP-FILL] Successfully filled ${gapFilledData.newBarsAdded} bars for ${timeframeData.timeframe}`);
-                        } else {
-                            console.warn(`⚠️ [GAP-FILL] Failed to fill gaps for ${timeframeData.timeframe}: ${gapFilledData.reason}`);
-                            // Use original data even if insufficient
-                            processedData.push(timeframeData);
-                            hasInsufficientData = true;
-                        }
-                    } else {
-                        // Too much data missing (< 70% available), use original data
-                        console.warn(`⚠️ [GAP-FILL] ${timeframeData.timeframe} has only ${available}/${required} bars (${(available/required*100).toFixed(1)}%), below 70% threshold`);
-                        processedData.push(timeframeData);
-                        hasInsufficientData = true;
-                    }
-                } else {
-                    // Data is sufficient, use as-is
-                    processedData.push(timeframeData);
-                }
-            }
-
-            // Determine result based on gap-filling success
-            const sourceDescription = gapFillInfo.gapFilledTimeframes > 0 
-                ? `prefetched+gap-filled` 
-                : `prefetched`;
-
-            console.log(`📈 [GAP-FILL] Summary: ${gapFillInfo.gapFilledTimeframes}/${gapFillInfo.timeframesProcessed} timeframes gap-filled, ${gapFillInfo.totalNewBars} new bars added`);
-
-            return {
-                success: true,
-                data: processedData,
-                source: sourceDescription,
-                gapFillInfo: gapFillInfo,
-                hasInsufficientData: hasInsufficientData
-            };
-
-        } catch (error) {
-            console.error(`❌ [GAP-FILL] Error handling partial data:`, error);
-            return {
-                success: false,
-                reason: error.message,
-                gapFillInfo: gapFillInfo
-            };
-        }
-    }
-
-    /**
-     * Fill missing bars for a specific timeframe using API
-     */
-    async fillMissingBars(timeframeData, tradeData, missingCount) {
-        try {
-            // Get the latest timestamp from existing data
-            const existingCandles = timeframeData.candle_data || [];
-            if (existingCandles.length === 0) {
-                return { success: false, reason: 'No existing candles to gap-fill from' };
-            }
-
-            // Sort by timestamp to find the latest
-            const sortedCandles = existingCandles.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-            const latestTimestamp = new Date(sortedCandles[sortedCandles.length - 1].timestamp);
-            
-            console.log(`🔍 [GAP-FILL] Latest data timestamp: ${latestTimestamp.toISOString()}`);
-
-            // Fetch fresh data from API to fill the gap
-            const tempTradeData = {
-                term: tradeData.term,
-                instrument_key: tradeData.instrument_key,
-                stock: tradeData.instrument_key
-            };
-
-            const { endpoints } = await this.buildCandleUrls(tempTradeData);
-            
-            // Find the endpoint for this timeframe
-            const targetEndpoint = endpoints.find(ep => 
-                ep.url.includes(`interval=${timeframeData.timeframe}`) || 
-                ep.timeframe === timeframeData.timeframe
-            );
-
-            if (!targetEndpoint) {
-                return { success: false, reason: `No endpoint found for timeframe ${timeframeData.timeframe}` };
-            }
-
-            // Fetch fresh candle data
-            const candleData = await this.fetchCandleData(targetEndpoint.url);
-            const freshCandles = candleData?.data?.candles || candleData?.candles || [];
-
-            if (!freshCandles || freshCandles.length === 0) {
-                return { success: false, reason: 'No fresh data received from API' };
-            }
-
-            // Convert fresh data to our format
-            const formattedFreshCandles = freshCandles.map(candle => ({
-                timestamp: new Date(Array.isArray(candle) ? candle[0] : candle.time),
-                open: Array.isArray(candle) ? candle[1] : candle.open,
-                high: Array.isArray(candle) ? candle[2] : candle.high,
-                low: Array.isArray(candle) ? candle[3] : candle.low,
-                close: Array.isArray(candle) ? candle[4] : candle.close,
-                volume: Array.isArray(candle) ? candle[5] : candle.volume
-            }));
-
-            // Filter for new candles only (after latest timestamp)
-            const newCandles = formattedFreshCandles.filter(candle => 
-                new Date(candle.timestamp) > latestTimestamp
-            );
-
-            if (newCandles.length === 0) {
-                return { success: false, reason: 'No new candles found in fresh data' };
-            }
-
-            // Merge existing and new candles, keep required amount
-            const requiredBars = {
-                '5m': 200, '15m': 100, '1h': 50, '1d': 30
-            };
-            const maxBars = requiredBars[timeframeData.timeframe] || 100;
-            
-            const mergedCandles = [...existingCandles, ...newCandles]
-                .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-                .slice(-maxBars); // Keep only the latest required bars
-
-            // Update the data in database for future use
-            await this.updatePreFetchedDataWithGaps(timeframeData, mergedCandles);
-
-            // Return updated timeframe data
-            const updatedTimeframeData = {
-                ...timeframeData,
-                candle_data: mergedCandles,
-                bars_count: mergedCandles.length,
-                updated_at: new Date(),
-                gap_filled: true,
-                gap_fill_info: {
-                    filled_at: new Date(),
-                    new_bars_added: newCandles.length,
-                    total_bars_after_fill: mergedCandles.length
-                }
-            };
-
-            return {
-                success: true,
-                data: updatedTimeframeData,
-                newBarsAdded: newCandles.length
-            };
-
-        } catch (error) {
-            console.error(`❌ [GAP-FILL] Error filling missing bars:`, error);
-            return {
-                success: false,
-                reason: error.message
-            };
-        }
-    }
-
-    /**
-     * Update pre-fetched data in database with gap-filled candles
-     */
-    async updatePreFetchedDataWithGaps(timeframeData, mergedCandles) {
-        try {
-            const PreFetchedData = (await import('../models/preFetchedData.js')).default;
-            
-            await PreFetchedData.updateOne(
-                {
-                    instrument_key: timeframeData.instrument_key,
-                    timeframe: timeframeData.timeframe
-                },
-                {
-                    $set: {
-                        candle_data: mergedCandles,
-                        bars_count: mergedCandles.length,
-                        updated_at: new Date(),
-                        gap_filled: true,
-                        'data_quality.missing_bars': Math.max(0, (timeframeData.timeframe === '5m' ? 200 : 
-                                                              timeframeData.timeframe === '15m' ? 100 :
-                                                              timeframeData.timeframe === '1h' ? 50 : 30) - mergedCandles.length)
-                    }
-                }
-            );
-            
-            console.log(`💾 [GAP-FILL] Updated database with ${mergedCandles.length} bars for ${timeframeData.instrument_key}_${timeframeData.timeframe}`);
             
         } catch (error) {
-            console.error(`⚠️ [GAP-FILL] Failed to update database:`, error);
-            // Don't fail the gap-filling if database update fails
-        }
-    }
-
-    /**
-     * Convert pre-fetched data to the format expected by AI analysis
-     */
-    convertPreFetchedToCandleSets(preFetchedData) {
-        console.log(`🔄 [CONVERT DEBUG] Starting conversion of ${preFetchedData.length} timeframe datasets`);
-        const candleSets = { byFrame: {} };
-        
-        // Map timeframes to the format expected by AI analysis
-        const timeframeMapping = {
-            '5m': '5minute',
-            '15m': '15minute', 
-            '1h': '1hour',
-            '1d': '1day',
-            '1D': '1day'  // Handle both lowercase and uppercase 1D
-        };
-        
-        preFetchedData.forEach((data, index) => {
-            console.log(`🔄 [CONVERT DEBUG] Processing dataset ${index + 1}/${preFetchedData.length}:`);
-            console.log(`   - Timeframe: ${data.timeframe}`);
-            console.log(`   - Candle data type: ${typeof data.candle_data}`);
-            console.log(`   - Candle data length: ${data.candle_data?.length || 'undefined'}`);
-            console.log(`   - First candle structure:`, data.candle_data?.[0] ? Object.keys(data.candle_data[0]) : 'none');
-            
-            const frameKey = timeframeMapping[data.timeframe] || data.timeframe;
-            console.log(`   - Mapped to frameKey: ${frameKey}`);
-            
-            // Convert object format to array format expected by AI agents
-            // Pre-fetched: {timestamp, open, high, low, close, volume}
-            // AI expects: [timestamp, open, high, low, close, volume]
-            const convertedCandles = data.candle_data.map((candle, candleIndex) => {
-                if (candleIndex < 2) { // Log first 2 candles for debugging
-                    console.log(`   - Candle ${candleIndex} before conversion:`, {
-                        timestamp: candle.timestamp,
-                        open: candle.open,
-                        high: candle.high,
-                        low: candle.low,
-                        close: candle.close,
-                        volume: candle.volume
-                    });
-                }
-                
-                const converted = [
-                    candle.timestamp.toISOString(), // Convert Date object to ISO string like API format
-                    candle.open,
-                    candle.high,
-                    candle.low,
-                    candle.close,
-                    candle.volume
-                ];
-                
-                if (candleIndex < 2) { // Log first 2 converted candles
-                    console.log(`   - Candle ${candleIndex} after conversion:`, converted);
-                }
-                
-                return converted;
-            });
-            
-            console.log(`   - Converted ${convertedCandles.length} candles to array format`);
-            console.log(`   - Sample converted structure: [${typeof convertedCandles[0]?.[0]}, ${typeof convertedCandles[0]?.[1]}, ...]`);
-            
-            candleSets.byFrame[frameKey] = {
-                intraday: convertedCandles, // Use converted candles directly
-                historical: [] // Keep historical empty for pre-fetched data
-            };
-            
-            console.log(`   - Final candleSets.byFrame[${frameKey}].intraday type: ${typeof candleSets.byFrame[frameKey].intraday}`);
-            console.log(`   - Final candleSets.byFrame[${frameKey}].intraday length: ${candleSets.byFrame[frameKey].intraday.length}`);
-            console.log(`   - Final candleSets.byFrame[${frameKey}].intraday[0] type: ${typeof candleSets.byFrame[frameKey].intraday[0]}`);
-            console.log(`📊 [CONVERT] ${data.timeframe} → ${frameKey}: ${data.candle_data.length} candles (object→array)`);
-        });
-        
-        console.log(`🔄 [CONVERT DEBUG] Final candleSets structure:`);
-        console.log(`   - Total frames: ${Object.keys(candleSets.byFrame).length}`);
-        Object.keys(candleSets.byFrame).forEach(frame => {
-            const frameData = candleSets.byFrame[frame];
-            console.log(`   - Frame "${frame}": intraday=${frameData.intraday.length} candles, historical=${frameData.historical.length} candles`);
-        });
-        
-        return candleSets;
-    }
-
-    /**
-     * Fetch real market data from Upstox API (fallback method)
-     */
-    async fetchRealMarketData(tradeData) {
-        const { endpoints } = await this.aiReviewService.buildCandleUrls(tradeData);
-        
-//         console.log(`📡 Fetching ${endpoints.length} candle endpoints`);
-        
-        // Fetch endpoints one by one (synchronous)
-        const candleResults = [];
-        
-        for (const ep of endpoints) {
-            try {
-                const res = await this.fetchCandleData(ep.url);
-                candleResults.push({
-                    status: 'fulfilled',
-                    frame: ep.frame,
-                    kind: ep.kind,
-                    candles: res?.data?.candles || res?.candles || [],
-                    raw: res
-                });
-            } catch (err) {
-                candleResults.push({
-                    status: 'rejected',
-                    frame: ep.frame,
-                    kind: ep.kind,
-                    error: err?.message || String(err)
-                });
-            }
-        }
-        
-        // Organize results by frame
-        const candleSets = candleResults.reduce((acc, r) => {
-            if (r.status === 'fulfilled') {
-                acc.byFrame ??= {};
-                acc.byFrame[r.frame] ??= { intraday: [], historical: [] };
-                
-                if (r.kind === 'intraday') {
-                    acc.byFrame[r.frame].intraday.push(r.candles);
-                } else {
-                    acc.byFrame[r.frame].historical.push(r.candles);
-                }
-            } else {
-                acc.errors ??= [];
-                acc.errors.push({ frame: r.frame, kind: r.kind, error: r.error });
-            }
-            return acc;
-        }, {});
-
-        return { endpoints, candleSets };
-    }
-
-
-
-    /**
-     * Fetch candle data from Upstox API
-     */
-    async fetchCandleData(url) {
-        try {
-            // console.log(`Fetching data candle data from URL: ${url}`);
-            
-            // Try encoding the URL properly
-            const encodedUrl = url.replace(/\|/g, '%7C');
-            
-            const response = await axios.get(encodedUrl, {
-                headers: {
-                    'Accept': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                },
-                timeout: 10000,
-                validateStatus: function (status) {
-                    return status < 500; // Accept any status code less than 500
-                }
-            });
-            
-            // console.log(`Response status: ${response.status}`);
-            // console.log(`Fetching data ${JSON.stringify(response.data)}`);
-            return response.data;
-        } catch (error) {
-            console.error(`❌ Candle fetch error:`, error.message);
+            console.error(`❌ [MARKET DATA] Failed to get data: ${error.message}`);
             throw error;
         }
     }
+
+    // All data fetching logic moved to candleFetcher.service.js
 
     /**
      * Fetch news data from Google News RSS
@@ -1181,47 +828,106 @@ class AIAnalyzeService {
     async analyzeSectorSentiment(newsItems, term, sectorInfo) {
         if (!newsItems || newsItems.length === 0) {
 //             console.log('📊 No news items for sector sentiment analysis, returning neutral');
-            return 'neutral';
+            return {
+                sentiment: 'neutral',
+                confidence: 50,
+                reasoning: 'No news items available for analysis',
+                keyFactors: [],
+                sectorSpecific: false,
+                positiveSignals: [],
+                negativeSignals: [],
+                marketAlignment: 'neutral',
+                metadata: {
+                    sectorName: sectorInfo?.name || 'General Market',
+                    sectorCode: sectorInfo?.code,
+                    newsCount: 0,
+                    analysisTimestamp: new Date().toISOString()
+                }
+            };
         }
         
-        const titles = newsItems.slice(0, 8).map(item => item.title).join('\n'); // More items for sector analysis
+        // Enhanced preprocessing - prioritize recent news
+        const recentNews = newsItems
+            .filter(item => {
+                const itemDate = new Date(item.timestamp || item.publishedAt || Date.now());
+                const hoursSincePublished = (Date.now() - itemDate.getTime()) / (1000 * 60 * 60);
+                return hoursSincePublished <= 24; // Prioritize last 24h
+            })
+            .slice(0, 5);
+        
+        const allNewsForAnalysis = recentNews.length > 0 ? recentNews : newsItems.slice(0, 8);
+        const titles = allNewsForAnalysis.map(item => item.title).join('\n');
+        
         const sectorKeywords = sectorInfo ? getSectorNewsKeywords(sectorInfo.code) : [];
         const sectorName = sectorInfo?.name || 'General Market';
         
+        // Identify sector-specific news
+        const sectorNews = allNewsForAnalysis.filter(item => 
+            sectorKeywords.some(keyword => 
+                item.title.toLowerCase().includes(keyword.toLowerCase())
+            )
+        );
+        const sectorWeight = sectorNews.length / allNewsForAnalysis.length;
+        
+        // Get market context if available
+        const marketTrend = this.getMarketTrend(); // You can implement this based on your market data
+      //  const sectorVsMarket = this.getSectorVsMarketPerformance(sectorInfo); // You can implement this
+        
         const prompt = `
             You are a financial news sentiment classifier with sector expertise.
-
+            
             TASK
-            Classify the overall ${term}-term sentiment for ${sectorName} sector stocks, considering both company-specific and sector-wide factors.
-            Return exactly one lowercase label: positive | neutral | negative
-
+            Analyze ${term}-term sentiment for ${sectorName} sector and return a detailed JSON response.
+            
             SECTOR CONTEXT
             - Sector: ${sectorName} (${sectorInfo?.code || 'OTHER'})
             - Key Sector Keywords: ${sectorKeywords.slice(0, 8).join(', ')}
             - Sector Index: ${sectorInfo?.index || 'NIFTY 50'}
-
+            - Sector News Weight: ${(sectorWeight * 100).toFixed(1)}% of analyzed news
+            - Market Context: ${marketTrend || 'Unknown'}
+            - Recent News Count: ${recentNews.length} in last 24h, ${allNewsForAnalysis.length} total
+            
             INPUT
             Headlines (mix of company-specific and sector news):
             ${titles}
-
-            ENHANCED RULES
-            1) Weight sector-wide positive/negative trends heavily as they affect all sector stocks
-            2) Look for sector-specific themes: ${sectorKeywords.slice(0, 5).join(', ')}
-            3) Consider regulatory/policy changes affecting the entire sector
-            4) Polarity cues enhanced for ${sectorName}:
-            • Positive: expansion, approval, policy support, demand growth, price increases, new orders
-            • Negative: regulation, restrictions, demand decline, input cost inflation, policy headwinds
-            5) Sector correlation: Strong sector trends override individual stock noise
-            6) Decision logic (enhanced for sector context):
-            • If sector-wide positives dominate OR individual positives + sector support → positive
-            • If sector-wide negatives dominate OR individual negatives + sector headwinds → negative  
-            • Otherwise → neutral
-            7) Weight recent regulatory/policy news highly for ${sectorName} sector
-            8) OUTPUT MUST BE ONLY one of: positive, neutral, negative. No quotes, no punctuation.
+            
+            ENHANCED ANALYSIS WEIGHTS
+            - Sector-wide news: 70%
+            - Company-specific news: 30%
+            - Recent vs older news: Prioritize last 24h
+            - Regulatory/policy news: High weight for ${sectorName}
+            
+            POLARITY CUES FOR ${sectorName}
+            • Positive: expansion, approval, policy support, demand growth, price increases, new orders, capacity additions, export growth
+            • Negative: regulation, restrictions, demand decline, input cost inflation, policy headwinds, production cuts, import competition
+            • Neutral: routine updates, mixed signals, balanced reports
+            
+            DECISION LOGIC
+            1) If sector-wide positives dominate OR individual positives + sector support → positive
+            2) If sector-wide negatives dominate OR individual negatives + sector headwinds → negative  
+            3) Otherwise → neutral
+            
+            RESPONSE FORMAT (JSON only):
+            {
+                "sentiment": "positive|neutral|negative",
+                "confidence": <0-100 integer>,
+                "reasoning": "<2-3 sentences explaining the decision with specific examples>",
+                "keyFactors": ["<factor1>", "<factor2>", "<factor3>"],
+                "sectorSpecific": <true if sector themes dominate, false if company-specific>,
+                "positiveSignals": ["<signal1>", "<signal2>"],
+                "negativeSignals": ["<signal1>", "<signal2>"],
+                "marketAlignment": "<aligned|contrary|neutral> compared to broader market"
+            }
+            
+            REQUIREMENTS
+            - confidence: Higher if multiple consistent signals, lower if mixed/unclear
+            - reasoning: Cite specific headlines or themes, mention sector impact
+            - keyFactors: 2-4 most important drivers of sentiment
+            - Include both positiveSignals and negativeSignals even if one sentiment dominates
+            - marketAlignment: How this sector sentiment relates to broader market trends
             `;
         
-//         console.log(`📊 Analyzing sector sentiment for ${newsItems.length} news items (${sectorName}) using ${this.sentimentalModel}`);
-//         console.log(`📊 Sample titles for sector sentiment:`, newsItems.slice(0, 3).map(item => item.title));
+//         console.log(`📊 Analyzing sector sentiment for ${allNewsForAnalysis.length} news items (${sectorName}, ${(sectorWeight*100).toFixed(1)}% sector-specific)`);
         
         try {
             const formattedMessages = this.formatMessagesForModel(this.sentimentalModel, prompt);
@@ -1230,7 +936,7 @@ class AIAnalyzeService {
                 this.buildRequestPayload(
                     this.sentimentalModel,
                     formattedMessages,
-                    false // Sentiment analysis doesn't require JSON format
+                    true // Request JSON format for detailed response
                 ), 
                 {
                     headers: {
@@ -1240,16 +946,176 @@ class AIAnalyzeService {
                 }
             );
             
-            const sentiment = response.data.choices[0].message.content.toLowerCase().trim();
-            const validSentiment = ['positive', 'negative', 'neutral'].includes(sentiment) ? sentiment : 'neutral';
+            const responseContent = response.data.choices[0].message.content;
+            let analysisResult;
             
-//             console.log(`📊 Sector sentiment analysis result: "${sentiment}" -> "${validSentiment}" for ${sectorName}`);
-            return validSentiment;
+            try {
+                analysisResult = JSON.parse(responseContent);
+                
+                // Validate and sanitize the response
+                const validSentiment = ['positive', 'negative', 'neutral'].includes(analysisResult.sentiment) 
+                    ? analysisResult.sentiment : 'neutral';
+                
+                const enhancedResult = {
+                    sentiment: validSentiment,
+                    confidence: Math.min(100, Math.max(0, parseInt(analysisResult.confidence) || 50)),
+                    reasoning: analysisResult.reasoning || 'Analysis completed but no specific reasoning provided',
+                    keyFactors: Array.isArray(analysisResult.keyFactors) ? analysisResult.keyFactors.slice(0, 5) : [],
+                    sectorSpecific: Boolean(analysisResult.sectorSpecific),
+                    positiveSignals: Array.isArray(analysisResult.positiveSignals) ? analysisResult.positiveSignals.slice(0, 3) : [],
+                    negativeSignals: Array.isArray(analysisResult.negativeSignals) ? analysisResult.negativeSignals.slice(0, 3) : [],
+                    marketAlignment: ['aligned', 'contrary', 'neutral'].includes(analysisResult.marketAlignment) 
+                        ? analysisResult.marketAlignment : 'neutral',
+                    metadata: {
+                        sectorName,
+                        sectorCode: sectorInfo?.code,
+                        newsCount: allNewsForAnalysis.length,
+                        recentNewsCount: recentNews.length,
+                        sectorNewsWeight: sectorWeight,
+                        analysisTimestamp: new Date().toISOString()
+                    }
+                };
+                
+//                 console.log(`📊 Enhanced sector sentiment analysis completed:`, enhancedResult);
+                return enhancedResult;
+                
+            } catch (parseError) {
+//                 console.warn('⚠️ Failed to parse detailed sentiment response, extracting basic sentiment');
+                // Fallback: extract basic sentiment from response
+                const basicSentiment = responseContent.toLowerCase().match(/(positive|negative|neutral)/)?.[1] || 'neutral';
+                return {
+                    sentiment: basicSentiment,
+                    confidence: 60,
+                    reasoning: 'Basic sentiment extracted due to parsing error',
+                    keyFactors: ['Analysis parsing error'],
+                    sectorSpecific: false,
+                    positiveSignals: [],
+                    negativeSignals: [],
+                    marketAlignment: 'neutral',
+                    metadata: {
+                        sectorName,
+                        sectorCode: sectorInfo?.code,
+                        newsCount: allNewsForAnalysis.length,
+                        parseError: true,
+                        analysisTimestamp: new Date().toISOString()
+                    }
+                };
+            }
+            
         } catch (error) {
-//             console.error('❌ Sector sentiment analysis failed:', error.message);
-            // Fallback to regular sentiment analysis
-            return await this.analyzeSentiment(newsItems, term);
+//             console.error('❌ Enhanced sector sentiment analysis failed:', error.message);
+            // Fallback to basic analysis
+            const basicResult = await this.analyzeSentiment(newsItems, term);
+            return {
+                sentiment: typeof basicResult === 'string' ? basicResult : 'neutral',
+                confidence: 40,
+                reasoning: 'Fallback analysis due to API error',
+                keyFactors: ['API error fallback'],
+                sectorSpecific: false,
+                positiveSignals: [],
+                negativeSignals: [],
+                marketAlignment: 'neutral',
+                metadata: {
+                    sectorName,
+                    fallback: true,
+                    error: error.message,
+                    analysisTimestamp: new Date().toISOString()
+                }
+            };
         }
+    }
+    
+    /**
+     * Helper method to get market trend (implement based on your market data)
+     */
+    getMarketTrend() {
+        // TODO: Implement based on your market data (NIFTY movement, VIX, etc.)
+        return 'neutral'; // placeholder
+    }
+    
+    /**
+     * Helper method to get sector vs market performance (implement based on your data)
+     */
+    getSectorVsMarketPerformance(sectorInfo) {
+        // TODO: Implement based on sector index vs NIFTY performance
+        return 'neutral'; // placeholder
+    }
+    
+    /**
+     * Generate trading implications based on detailed sentiment analysis
+     */
+    generateTradingImplications(sentimentAnalysis, analysisType) {
+        const implications = {
+            bias: 'neutral',
+            riskLevel: 'medium',
+            positionSizing: 'standard',
+            entryStrategy: 'cautious',
+            recommendations: []
+        };
+        
+        const { sentiment, confidence, sectorSpecific, marketAlignment, positiveSignals, negativeSignals } = sentimentAnalysis;
+        
+        // Determine bias based on sentiment and confidence
+        if (sentiment === 'positive' && confidence >= 70) {
+            implications.bias = 'bullish';
+            implications.entryStrategy = confidence >= 85 ? 'aggressive' : 'moderate';
+        } else if (sentiment === 'negative' && confidence >= 70) {
+            implications.bias = 'bearish';
+            implications.entryStrategy = confidence >= 85 ? 'aggressive' : 'moderate';
+        } else {
+            implications.bias = 'neutral';
+            implications.entryStrategy = 'cautious';
+        }
+        
+        // Adjust risk level based on confidence and market alignment
+        if (confidence >= 80 && marketAlignment === 'aligned') {
+            implications.riskLevel = 'low';
+            implications.positionSizing = 'increased';
+        } else if (confidence < 60 || marketAlignment === 'contrary') {
+            implications.riskLevel = 'high';
+            implications.positionSizing = 'reduced';
+        }
+        
+        // Generate specific recommendations
+        if (sentiment === 'positive') {
+            if (sectorSpecific) {
+                implications.recommendations.push('Sector-wide positive sentiment supports long positions');
+            }
+            if (confidence >= 80) {
+                implications.recommendations.push('High confidence suggests strong conviction trades');
+            }
+            if (positiveSignals.length > negativeSignals.length) {
+                implications.recommendations.push('Multiple positive catalysts support upward momentum');
+            }
+        } else if (sentiment === 'negative') {
+            if (sectorSpecific) {
+                implications.recommendations.push('Sector headwinds suggest defensive positioning');
+            }
+            if (confidence >= 80) {
+                implications.recommendations.push('High confidence in negative sentiment - consider short bias');
+            }
+            if (negativeSignals.length > positiveSignals.length) {
+                implications.recommendations.push('Multiple negative factors suggest downward pressure');
+            }
+        } else {
+            implications.recommendations.push('Mixed sentiment suggests range-bound trading');
+            if (analysisType === 'intraday') {
+                implications.recommendations.push('Focus on technical levels for intraday opportunities');
+            }
+        }
+        
+        // Analysis type specific recommendations
+        if (analysisType === 'swing') {
+            if (sentiment !== 'neutral' && confidence >= 70) {
+                implications.recommendations.push('Strong sentiment supports swing position holds');
+            }
+        } else if (analysisType === 'intraday') {
+            if (confidence < 60) {
+                implications.recommendations.push('Low sentiment confidence - prefer quick scalps over position trades');
+            }
+        }
+        
+        return implications;
     }
 
     /**
@@ -1526,158 +1392,6 @@ class AIAnalyzeService {
     }
 
     /**
-     * Process market data through appropriate agent
-     */
-    async processMarketData(tradeData, candleData) {
-        const { endpoints, candleSets } = candleData;
-        console.log(`🔍 [PROCESS DEBUG] Processing market data for ${tradeData.stockSymbol}`);
-        console.log(`   - Has endpoints: ${!!endpoints && endpoints.length > 0}`);
-        console.log(`   - Has candleSets: ${!!candleSets}`);
-        console.log(`   - CandleSets byFrame keys:`, Object.keys(candleSets?.byFrame || {}));
-        
-        // Label data for agent processing - handle both API endpoints and pre-fetched data
-        let labeledData = [];
-        
-        if (endpoints && endpoints.length > 0) {
-            console.log(`🔍 [PROCESS DEBUG] Using API endpoint data (${endpoints.length} endpoints)`);
-            // API endpoint data: map endpoints to their corresponding candle data
-            labeledData = endpoints.map((endpoint, index) => {
-                console.log(`🔍 [PROCESS DEBUG] Processing endpoint ${index + 1}/${endpoints.length}:`);
-                console.log(`   - Frame: ${endpoint.frame}`);
-                console.log(`   - Kind: ${endpoint.kind}`);
-                
-                const frameData = candleSets.byFrame?.[endpoint.frame];
-                console.log(`   - FrameData exists: ${!!frameData}`);
-                
-                let candles = [];
-                
-                if (frameData) {
-                    console.log(`   - FrameData.intraday type: ${typeof frameData.intraday}`);
-                    console.log(`   - FrameData.intraday length: ${frameData.intraday?.length || 'undefined'}`);
-                    console.log(`   - FrameData.historical length: ${frameData.historical?.length || 'undefined'}`);
-                    
-                    if (endpoint.kind === 'intraday' && frameData.intraday?.length > 0) {
-                        // Fixed: Check if intraday is array of arrays or direct array of candles
-                        // If first element is array AND its first element is also array, it's nested
-                        // Otherwise, if first element is array with 6 elements (candle), it's direct array
-                        if (Array.isArray(frameData.intraday[0]) && Array.isArray(frameData.intraday[0][0])) {
-                            console.log(`   - Using intraday[0] (array of arrays format)`);
-                            candles = frameData.intraday[0] || [];
-                        } else if (Array.isArray(frameData.intraday[0]) && frameData.intraday[0].length === 6) {
-                            console.log(`   - Using intraday directly (array of candles format)`);
-                            candles = frameData.intraday || [];
-                        } else {
-                            console.log(`   - Using intraday directly (fallback format)`);
-                            candles = frameData.intraday || [];
-                        }
-                    } else if (endpoint.kind === 'historical' && frameData.historical?.length > 0) {
-                        console.log(`   - Using historical data (flattened)`);
-                        candles = frameData.historical.flat();
-                    }
-                }
-                
-                console.log(`   - Final candles count: ${candles.length}`);
-                console.log(`   - Sample candle structure:`, candles[0] ? typeof candles[0] : 'none');
-                
-                return {
-                    frame: endpoint.frame,  // Changed from 'label' to 'frame'
-                    kind: endpoint.kind,     // Added 'kind' property
-                    data: { candles },       // Wrap candles in data object
-                    candles: candles         // Also include direct candles for compatibility
-                };
-            });
-        } else if (candleSets?.byFrame) {
-            console.log(`🔍 [PROCESS DEBUG] Using pre-fetched data`);
-            // Pre-fetched data: extract directly from candleSets.byFrame
-            labeledData = Object.entries(candleSets.byFrame).map(([frameKey, frameData], index) => {
-                console.log(`🔍 [PROCESS DEBUG] Processing pre-fetched frame ${index + 1}/${Object.keys(candleSets.byFrame).length}:`);
-                console.log(`   - FrameKey: ${frameKey}`);
-                console.log(`   - FrameData.intraday type: ${typeof frameData.intraday}`);
-                console.log(`   - FrameData.intraday length: ${frameData.intraday?.length || 'undefined'}`);
-                console.log(`   - FrameData.intraday[0] type:`, frameData.intraday?.[0] ? typeof frameData.intraday[0] : 'none');
-                console.log(`   - FrameData.historical length: ${frameData.historical?.length || 'undefined'}`);
-                
-                let candles = [];
-                let kind = 'prefetched';
-                
-                // Get candles from intraday first, then historical
-                if (frameData.intraday?.length > 0) {
-                    // Fixed: Check if intraday is array of arrays or direct array of candles
-                    // If first element is array AND its first element is also array, it's nested
-                    // Otherwise, if first element is array with 6 elements (candle), it's direct array
-                    if (Array.isArray(frameData.intraday[0]) && Array.isArray(frameData.intraday[0][0])) {
-                        console.log(`   - Using intraday[0] (array of arrays format)`);
-                        candles = frameData.intraday[0] || [];
-                    } else if (Array.isArray(frameData.intraday[0]) && frameData.intraday[0].length === 6) {
-                        console.log(`   - Using intraday directly (array of candles format)`);
-                        candles = frameData.intraday || [];
-                    } else {
-                        console.log(`   - Using intraday directly (fallback format)`);
-                        candles = frameData.intraday || [];
-                    }
-                    kind = 'intraday';
-                } else if (frameData.historical?.length > 0) {
-                    console.log(`   - Using historical data (flattened)`);
-                    candles = frameData.historical.flat();
-                    kind = 'historical';
-                }
-                
-                console.log(`   - Final candles count: ${candles.length}`);
-                console.log(`   - Sample candle structure:`, candles[0] ? typeof candles[0] : 'none');
-                
-                return {
-                    frame: frameKey,         // Use the frame key from byFrame
-                    kind: kind,              // Set kind based on data source
-                    data: { candles },       // Wrap candles in data object
-                    candles: candles         // Also include direct candles for compatibility
-                };
-            });
-        }
-
-        // Debug: Log AI request data structure for comparison
-        console.log(`🔍 [AI REQUEST DEBUG] ${tradeData.stockSymbol} - Data structure for AI:`);
-        console.log(`   - Data source: ${endpoints?.length > 0 ? 'API endpoints' : 'Pre-fetched data'}`);
-        console.log(`   - Total timeframes: ${labeledData.length}`);
-        labeledData.forEach((item, index) => {
-            console.log(`   - [${index}] Frame: ${item.frame}, Kind: ${item.kind}, Candles: ${item.candles?.length || 0}`);
-            if (item.candles?.length > 0) {
-                const firstCandle = item.candles[0];
-                const lastCandle = item.candles[item.candles.length - 1];
-                
-                // Debug: Check candle structure
-                console.log(`     First candle structure:`, typeof firstCandle, Array.isArray(firstCandle));
-                if (Array.isArray(firstCandle)) {
-                    console.log(`     First: ${firstCandle[0]}, Last: ${lastCandle[0]}`);
-                } else if (firstCandle && typeof firstCandle === 'object') {
-                    console.log(`     First: ${firstCandle.timestamp || firstCandle.time || 'no timestamp'}, Last: ${lastCandle.timestamp || lastCandle.time || 'no timestamp'}`);
-                } else {
-                    console.log(`     First: ${JSON.stringify(firstCandle).substring(0, 100)}...`);
-                }
-            }
-        });
-        
-        // Final debug: Log the exact structure being sent to AI
-        console.log(`🚀 [FINAL DEBUG] Sending to AI agent - ${tradeData.term} analysis:`);
-        console.log(`   - LabeledData length: ${labeledData.length}`);
-        labeledData.forEach((item, index) => {
-            console.log(`   - Item ${index}: frame=${item.frame}, kind=${item.kind}`);
-            console.log(`     - data.candles length: ${item.data?.candles?.length || 'undefined'}`);
-            console.log(`     - candles length: ${item.candles?.length || 'undefined'}`);
-            console.log(`     - First 2 candles:`, item.candles?.slice(0, 2) || 'none');
-        });
-        
-        // Route to appropriate agent based on term
-        let agentResult;
-        if (tradeData.term === 'intraday') {
-            agentResult = await this.aiReviewService.runIntradayAgent(labeledData, tradeData);
-        } else {
-            agentResult = await this.aiReviewService.runShortTermAgent(labeledData, tradeData);
-        }
-        
-        return agentResult;
-    }
-
-    /**
      * Helper functions for data processing
      */
     clampEnum(s, allowed, fallback) {
@@ -1812,6 +1526,10 @@ class AIAnalyzeService {
         const timeframe = analysis_type === 'swing' ? '3-7 days' : '1-4 hours';
         const sentimentText = sentiment || 'neutral';
         
+        // Extract enhanced sentiment context from payload
+        const sentimentContext = marketPayload?.sentimentContext || null;
+        const newsLiteDetails = marketPayload?.newsLite?.detailedAnalysis || null;
+        
         // Get sector-specific enhancements
         const trailingStops = sectorInfo ? getTrailingStopSuggestions(sectorInfo.code, analysis_type) : null;
         const sectorCorrelation = sectorInfo ? getSectorCorrelationMessage(sectorInfo.code) : null;
@@ -1839,6 +1557,30 @@ CONTEXT:
 - Sector Index: ${sectorInfo?.index || 'NIFTY 50'}
 - Sector Correlation: ${sectorCorrelation || 'Monitor broader market trends'}${trailingStops ? `
 - Sector Trailing Stops: Conservative: ${trailingStops.conservative}x ATR, Moderate: ${trailingStops.moderate}x ATR, Aggressive: ${trailingStops.aggressive}x ATR` : ''}
+
+ENHANCED SENTIMENT ANALYSIS:${sentimentContext ? `
+- Sentiment Confidence: ${sentimentContext.confidence}% (${sentimentContext.strength} strength)
+- Reasoning: ${sentimentContext.reasoning}
+- Key Factors: ${sentimentContext.keyFactors?.join(', ') || 'None specified'}
+- Sector Specific: ${sentimentContext.sectorSpecific ? 'Yes' : 'No'}
+- Market Alignment: ${sentimentContext.marketAlignment || 'neutral'}
+- Positive Signals: ${sentimentContext.positiveSignals?.join(', ') || 'None'}
+- Negative Signals: ${sentimentContext.negativeSignals?.join(', ') || 'None'}
+- News Analyzed: ${sentimentContext.newsAnalyzed || 0} articles (${sentimentContext.recentNewsCount || 0} recent)
+- Sector News Weight: ${((sentimentContext.sectorNewsWeight || 0) * 100).toFixed(1)}%
+
+TRADING IMPLICATIONS:
+- Bias: ${sentimentContext.tradingImplications?.bias || 'neutral'}
+- Risk Level: ${sentimentContext.tradingImplications?.riskLevel || 'medium'}
+- Position Sizing: ${sentimentContext.tradingImplications?.positionSizing || 'standard'}
+- Entry Strategy: ${sentimentContext.tradingImplications?.entryStrategy || 'cautious'}
+- Recommendations: ${sentimentContext.tradingImplications?.recommendations?.join('; ') || 'None'}` : `
+- Sentiment Confidence: Not available
+- Enhanced Analysis: No detailed sentiment data available`}
+
+NEWS CONTEXT:${marketPayload?.newsLite?.notes ? `
+${marketPayload.newsLite.notes}` : `
+No recent news analysis available`}
 
 EXECUTION CONTRACT (MANDATORY):
 - You MUST compute a top-level "runtime" and "order_gate" object for code-actionable gating.
@@ -1868,6 +1610,14 @@ RULES (SWING ONLY):
 13) Triggers/invalidations MUST use ONLY fields/timeframes present in MARKET DATA. If a referenced field is absent, you MUST NOT include that trigger/invalid.
 14) "runtime.triggers_evaluated" MUST list each trigger with evaluated values and pass/fail booleans. If any trigger cannot be evaluated from MARKET DATA, mark insufficientData=true.
 15) Post-entry exits MUST be expressed via "invalidations" with scope="post_entry" and an action (e.g., close_position or move_stop_to).
+16) ENHANCED SENTIMENT INTEGRATION:
+   • If sentiment confidence ≥ 80% AND sector-specific: Increase target multiplier by 0.2 (within bounds)
+   • If sentiment confidence < 60% OR market alignment = "contrary": Reduce target multiplier by 0.2, tighter stops
+   • If trading implications suggest "aggressive" entry: Use market orders when all triggers pass
+   • If trading implications suggest "cautious" entry: Use stop-limit orders with buffer
+   • Consider positive/negative signals from sentiment analysis when setting invalidation triggers
+   • If sector news weight > 70%: Weight sector sentiment heavily in overall bias determination
+   • Risk Level from trading implications should influence position sizing recommendation in reasoning
 
 VALIDITY (SWING):
 - Entry validity: type="GTD" with trading_sessions_soft=5, trading_sessions_hard=8, bars_limit=0, expire_calendar_cap_days=10.
@@ -1888,11 +1638,26 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     "volume": "ABOVE_AVERAGE"|"AVERAGE"|"BELOW_AVERAGE"|"UNKNOWN"
   },
   "overall_sentiment": "BULLISH"|"BEARISH"|"NEUTRAL",
+  "sentiment_analysis": {
+    "confidence": <number 0..100>,
+    "strength": "high"|"medium"|"low",
+    "reasoning": "<string from enhanced analysis>",
+    "key_factors": ["<factor1>", "<factor2>"],
+    "sector_specific": true|false,
+    "market_alignment": "aligned"|"contrary"|"neutral",
+    "trading_bias": "bullish"|"bearish"|"neutral",
+    "risk_level": "low"|"medium"|"high",
+    "position_sizing": "increased"|"standard"|"reduced",
+    "entry_strategy": "aggressive"|"moderate"|"cautious",
+    "news_count": <number>,
+    "recent_news_count": <number>,
+    "sector_news_weight": <number 0..1>
+  },
   "runtime": {
     "triggers_evaluated": [
       {
         "id": "T1",
-        "timeframe": "15m|1h|1D",
+        "timeframe": "15m|1h|1d",
         "left_ref": "close|high|low|price|rsi14_1h|ema20_1D|sma200_1D",
         "left_value": <number|null>,
         "op": "<|<=|>|>=|crosses_above|crosses_below",
@@ -1946,7 +1711,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
           "text": "<short caution>",
           "applies_when": [
             {
-              "timeframe": "1D"|"1h"|"15m",
+              "timeframe": "1d"|"1h"|"15m",
               "left": {"ref": "rsi14_1h|ema20_1D|price"},
               "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
               "right": {"ref": "value|ema50_1D|entry|stopLoss", "value": 70, "offset": 0.00}
@@ -1959,7 +1724,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         {
           "id": "T1",
           "scope": "entry",
-          "timeframe": "15m|1h|1D",
+          "timeframe": "15m|1h|1d",
           "left": {"ref": "close|high|low|price|rsi14_1h|ema20_1D"},
           "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
           "right": {"ref": "value|ema50_1D|sma200_1D|entry", "value": <number>, "offset": <number>},
@@ -1973,7 +1738,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         "window_bars": 8,
         "conditions": [
           {
-            "timeframe": "1h"|"15m"|"1D",
+            "timeframe": "1h"|"15m"|"1d",
             "left": {"ref": "rsi14_1h|close"},
             "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
             "right": {"ref": "value|entry", "value": <number>}
@@ -1983,7 +1748,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
       "invalidations": [
         {
           "scope": "pre_entry",
-          "timeframe": "1h"|"15m"|"1D",
+          "timeframe": "1h"|"15m"|"1d",
           "left": {"ref": "close|low|price"},
           "op": "<"|"<="|">"|">=",
           "right": {"ref": "entry|value", "value": <number>},
@@ -1993,7 +1758,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         },
         {
           "scope": "post_entry",
-          "timeframe": "1h"|"1D",
+          "timeframe": "1h"|"1d",
           "left": {"ref": "close|low|price"},
           "op": "<"|"<=",
           "right": {"ref": "stopLoss"},
@@ -2163,301 +1928,6 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
             // Return fallback analysis instead of throwing
             return this.generateFallbackAnalysis(current_price, analysis_type);
         }
-
-        // ---- SIMPLIFIED: Trust GPT-5 Response ----
-        // GPT-5 returns perfect schema-compliant responses, so we can minimize processing
-        
-        // // 1. Use pre-calculated volume if AI didn't get it
-        // const last = marketPayload?.priceContext?.last ?? null;
-        // const dataAsOf = marketPayload?.trendMomentum?.ema20_1D?.time || 
-        //                 marketPayload?.snapshots?.lastBars1h?.at?.(-1)?.[0];
-        // const authoritativeLast = last ?? current_price;
-        // const priceGap = last ? Math.abs((current_price - last) / last) : 0;
-        // const stalePrice = priceGap > 0.01; // >1%
-        
-        // console.log(`📊 Price reconciliation: current=${current_price}, last=${last}, gap=${(priceGap*100).toFixed(1)}%, stale=${stalePrice}`);
-        
-        // const ma = {
-        //     ema20_1D: marketPayload?.trendMomentum?.ema20_1D?.ema20,
-        //     ema50_1D: marketPayload?.trendMomentum?.ema50_1D?.ema50,
-        //     sma200_1D: marketPayload?.trendMomentum?.sma200_1D?.sma200,
-        // };
-        // const metrics = {
-        //     atr14_1D: marketPayload?.trendMomentum?.atr14_1D,
-        //     atr14_1h: marketPayload?.trendMomentum?.atr14_1h,
-        // };
-        
-        // // Add metadata with proper IST timestamps
-        // parsed.meta = parsed.meta || {};
-        
-        // // Use most recent bar timestamp instead of daily bar midnight
-        // const recentBarTime = marketPayload?.snapshots?.lastBars1h?.slice(-1)?.[0]?.[0] ||
-        //                       marketPayload?.snapshots?.lastBars15m?.slice(-1)?.[0]?.[0] ||
-        //                       dataAsOf;
-        // parsed.meta.data_as_of_ist = recentBarTime || null;
-        // parsed.meta.stalePrice = stalePrice;
-        
-        // // Keep only IST timestamp at root level
-        // const now = new Date();
-        // const istOffset = 5.5 * 60; // IST is UTC+5:30
-        // const istTime = new Date(now.getTime() + (istOffset * 60 * 1000));
-        // parsed.generated_at_ist = istTime.toISOString().replace('Z', '+05:30');
-
-        // // Fix enum casing and validate
-        // parsed.overall_sentiment = this.clampEnum(
-        //     String(parsed.overall_sentiment || '').toUpperCase(),
-        //     ['BULLISH', 'BEARISH', 'NEUTRAL'],
-        //     'NEUTRAL'
-        // );
-        
-        // if (parsed.market_summary?.trend) {
-        //     parsed.market_summary.trend = this.clampEnum(
-        //         String(parsed.market_summary.trend).toUpperCase(),
-        //         ['BULLISH', 'BEARISH', 'NEUTRAL'],
-        //         'NEUTRAL'
-        //     );
-        // }
-        
-        // if (parsed.market_summary?.volatility) {
-        //     parsed.market_summary.volatility = this.clampEnum(
-        //         String(parsed.market_summary.volatility).toUpperCase(),
-        //         ['HIGH', 'MEDIUM', 'LOW'],
-        //         'MEDIUM'
-        //     );
-        // }
-        
-        // if (parsed.market_summary?.volume) {
-        //     parsed.market_summary.volume = this.clampEnum(
-        //         String(parsed.market_summary.volume).toUpperCase(),
-        //         ['ABOVE_AVERAGE', 'AVERAGE', 'BELOW_AVERAGE', 'UNKNOWN'],
-        //         'UNKNOWN'
-        //     );
-        // }
-        
-        // const ctx = {
-        //     analysisType: analysis_type,
-        //     market_summary: parsed.market_summary || { last: authoritativeLast },
-        //     overall_sentiment: parsed.overall_sentiment,
-        //     dataHealth: marketPayload?.meta?.dataHealth,
-        //     ma,
-        //     metrics
-        // };
-
-        // // Price adjustment for stale data
-        // if (stalePrice && parsed.strategies?.length > 0) {
-        //     console.log('📈 Adjusting strategy prices due to stale data');
-        //     const priceDiff = current_price - authoritativeLast;
-            
-        //     for (const s of parsed.strategies) {
-        //         if (s.entry && s.target && s.stopLoss) {
-        //             s.entry = +(s.entry + priceDiff).toFixed(2);
-        //             s.target = +(s.target + priceDiff).toFixed(2);
-        //             s.stopLoss = +(s.stopLoss + priceDiff).toFixed(2);
-        //         }
-        //     }
-        // }
-        
-        // // Validate parsed response structure
-        // if (!parsed || typeof parsed !== 'object') {
-        //     console.error('❌ Invalid parsed response structure:', typeof parsed);
-        //     return this.generateFallbackAnalysis(current_price, analysis_type);
-        // }
-        
-        // if (!Array.isArray(parsed.strategies)) {
-        //     console.warn('⚠️ No valid strategies array found, creating empty array');
-        //     parsed.strategies = [];
-        // }
-
-        // // guardrails + scoring
-        // if (parsed.insufficientData) return parsed;
-
-        // const clean = [];
-        // for (const s of parsed.strategies || []) {
-        //     // Safety check: ensure strategy is an object
-        //     if (!s || typeof s !== 'object' || typeof s === 'string') {
-        //         console.warn('⚠️ Skipping invalid strategy:', typeof s, s);
-        //         continue;
-        //     }
-            
-        //     // Ensure required fields exist
-        //     if (!s.entry || !s.target || !s.stopLoss) {
-        //         console.warn('⚠️ Skipping strategy with missing price fields:', s.id || 'unknown');
-        //         continue;
-        //     }
-            
-        //     // Ensure prices are numbers and round to 2 decimals
-        //     s.entry = +(+s.entry).toFixed(2);
-        //     s.target = +(+s.target).toFixed(2);
-        //     s.stopLoss = +(+s.stopLoss).toFixed(2);
-        //     s.confidence = Number(s.confidence || 0);
-            
-        //     // Validate bounds
-        //     if (s.type === 'BUY' && !(s.stopLoss < s.entry && s.entry < s.target)) continue;
-        //     if (s.type === 'SELL' && !(s.target < s.entry && s.entry < s.stopLoss)) continue;
-            
-        //     // Calculate and validate risk-reward
-        //     const rr = Math.abs(s.target - s.entry) / Math.abs(s.entry - s.stopLoss);
-        //     if (rr < 1.5 && !['HOLD', 'NO_TRADE'].includes(s.type)) continue;
-        //     s.riskReward = Number(rr.toFixed(2));
-
-        //     const scored = this.scoreStrategy(s, ctx);
-        //     // Use computed score as confidence for consistency
-        //     s.confidence = scored.score;
-        //     // Preserve AI's rich risk_meter structure, only set fallback if missing
-        //     if (!s.risk_meter || typeof s.risk_meter === 'string') {
-        //         s.risk_meter = scored.riskMeter; // Use computed risk meter from scoring as fallback
-        //     }
-            
-        //     // Preserve AI's rich suggested_qty structure, only set fallback if missing
-        //     if (!s.suggested_qty || typeof s.suggested_qty === 'number') {
-        //         const riskPerShare = Math.abs(s.entry - s.stopLoss);
-        //         s.suggested_qty = riskPerShare > 0 ? Math.floor(1000 / riskPerShare) : 10;
-        //     }
-            
-        //     clean.push({ ...s, score: scored.score, score_band: scored.band, score_components: scored.components });
-        // }
-
-        // clean.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-        
-        // // Add NO_TRADE fallback if all scores are low (< 0.6)
-        // const hasDecentScore = clean.some(s => (s.score ?? 0) >= 0.6);
-        // if (!hasDecentScore && clean.length > 0) {
-        //     const authoritativeEntry = clean[0]?.entry || authoritativeLast;
-        //     clean.push({
-        //         id: 'no_trade_fallback',
-        //         type: 'NO_TRADE',
-        //         alignment: 'neutral',
-        //         title: 'No Trade - Reward Too Small',
-        //         confidence: 0,
-        //         entryType: 'market',
-        //         entry: +(+authoritativeEntry).toFixed(2),
-        //         entryRange: null,
-        //         target: +(+authoritativeEntry).toFixed(2),
-        //         stopLoss: +(+authoritativeEntry).toFixed(2),
-        //         riskReward: 0,
-        //         timeframe: analysis_type === 'swing' ? '3-7 days' : '1-4 hours',
-        //         indicators: [],
-        //         reasoning: ['Reward too small for the risk'], // Keep simple for fallback
-        //         warnings: ['Wait for clearer setup'],
-        //         beginner_summary: 'No trade: risk vs reward not attractive right now.',
-        //         why_in_plain_words: ['Reward too small for the risk', 'Better opportunities may emerge'],
-        //         what_could_go_wrong: 'Forcing trades in poor setups leads to losses',
-        //         money_example: { qty: 10, max_loss: 0, potential_profit: 0 },
-        //         risk_meter: 'High',
-        //         actionability: 'No trade',
-        //         glossary: { entry: '', target: '', stopLoss: '' },
-        //         score: 0,
-        //         score_band: 'Low',
-        //         isTopPick: false
-        //     });
-        // }
-        
-        // // Ensure minimum 2 strategies
-        // if (clean.length < 2) {
-        //     const authoritativeEntry = clean[0]?.entry || authoritativeLast;
-        //     clean.push({
-        //         id: 'no_trade_minimum',
-        //         type: 'NO_TRADE',
-        //         alignment: 'neutral',
-        //         title: 'No Alternative Trade',
-        //         confidence: 0,
-        //         entryType: 'market',
-        //         entry: +(+authoritativeEntry).toFixed(2),
-        //         entryRange: null,
-        //         target: +(+authoritativeEntry).toFixed(2),
-        //         stopLoss: +(+authoritativeEntry).toFixed(2),
-        //         riskReward: 0,
-        //         timeframe: analysis_type === 'swing' ? '3-7 days' : '1-4 hours',
-        //         indicators: [],
-        //         reasoning: [{ because: 'Insufficient valid setups found' }],
-        //         warnings: ['Monitor for better opportunities'],
-        //         beginner_summary: 'No trade: insufficient valid setups found.',
-        //         why_in_plain_words: ['Only one valid setup identified', 'Wait for more opportunities'],
-        //         what_could_go_wrong: 'Limited options in current market conditions',
-        //         money_example: { qty: 10, max_loss: 0, potential_profit: 0 },
-        //         risk_meter: 'High',
-        //         actionability: 'No trade',
-        //         glossary: { entry: '', target: '', stopLoss: '' },
-        //         score: 0,
-        //         score_band: 'Low',
-        //         isTopPick: false
-        //     });
-        // }
-        
-        // // Add top pick badge to highest scoring strategy
-        // if (clean.length > 0) {
-        //     clean[0].isTopPick = true;
-        // }
-        
-    //    parsed.strategies = clean.slice(0, 3); // Keep top 3 strategies
-        
-        // // Ensure all strategies have required fields
-        // for (const s of parsed.strategies) {
-        //     // Ensure entryType is valid
-        //     if (!['market', 'limit', 'range', 'stop', 'stop-limit'].includes(s.entryType)) {
-        //         s.entryType = s.type === 'BUY' && s.entry > authoritativeLast ? 'stop' : 'limit';
-        //     }
-            
-        //     // Ensure isTopPick is set
-        //     if (s.isTopPick === undefined) {
-        //         s.isTopPick = false;
-        //     }
-        // }
-
-        // // Default beginner fallbacks if model missed them
-        // for (const s of parsed.strategies) {
-        //     // Always enforce beginner summary format with stop loss
-        //     const verb = s.type === 'BUY' ? 'Buy' : s.type === 'SELL' ? 'Sell' : 'No trade';
-        //     s.beginner_summary = s.type === 'NO_TRADE'
-        //         ? 'No trade: setup not attractive.'
-        //         : `${verb} ~₹${s.entry} → Take profit ₹${s.target} → Exit ₹${s.stopLoss} (${analysis_type === 'swing' ? '3-7 days' : '1-4 hours'})`;
-        //     if (!s.why_in_plain_words) {
-        //         s.why_in_plain_words = [
-        //             `Stock shows ${s.type === 'BUY' ? 'upward' : s.type === 'SELL' ? 'downward' : 'neutral'} momentum`,
-        //             `Risk-reward ratio is ${s.riskReward}:1`
-        //         ];
-        //     }
-        //     if (!s.what_could_go_wrong) {
-        //         s.what_could_go_wrong = s.type === 'BUY' ? 
-        //             'Price could fall below stop loss causing a loss' : 
-        //             s.type === 'SELL' ? 'Price could rise above stop loss causing a loss' : 
-        //             'Market conditions may change';
-        //     }
-        //     if (!s.money_example) {
-        //         const qty = 10;
-        //         s.money_example = {
-        //             qty,
-        //             max_loss: +(Math.abs(s.entry - s.stopLoss) * qty).toFixed(2),
-        //             potential_profit: +(Math.abs(s.target - s.entry) * qty).toFixed(2)
-        //         };
-        //     }
-        //     // Risk meter should already be set from scoring, but ensure it exists
-        //     if (!s.risk_meter) {
-        //         s.risk_meter = (s.score >= 0.75 ? 'Low' : s.score >= 0.60 ? 'Medium' : 'High');
-        //     }
-            
-        //     // Ensure suggested_qty exists
-        //     if (!s.suggested_qty) {
-        //         const riskPerShare = Math.abs(s.entry - s.stopLoss);
-        //         s.suggested_qty = riskPerShare > 0 ? Math.floor(1000 / riskPerShare) : 10;
-        //     }
-        //     if (!s.actionability) {
-        //         s.actionability = s.type === 'BUY' ? 'Buy idea' : s.type === 'SELL' ? 'Sell idea' : 'No trade';
-        //     }
-        //     if (!s.glossary) {
-        //         s.glossary = {
-        //             entry: "The price at which you should buy/sell the stock",
-        //             target: "The price at which you should take profit",
-        //             stopLoss: "The price at which you should exit to limit losses"
-        //         };
-        //     }
-        // }
-
-        // if (parsed.market_summary && (!parsed.market_summary.volume || parsed.market_summary.volume === 'UNKNOWN')) {
-        //     const preCalculatedVolume = marketPayload?.volumeContext?.classification || 'UNKNOWN';
-        //     parsed.market_summary.volume = preCalculatedVolume;
-        //     console.log(`📊 Added pre-calculated volume: ${parsed.market_summary.volume}`);
-        // }
         
         // 2. Add metadata for debugging (store what was sent to API)
         if (!parsed.meta) {
@@ -2657,9 +2127,9 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                         continue;
                     }
 
-                    // Transform candles to our schema format
+                    // Transform candles to our schema format, preserving original IST timezone
                     const transformedCandles = allCandles.map(candle => ({
-                        timestamp: new Date(candle[0]), // Upstox format: [timestamp, open, high, low, close, volume]
+                        timestamp: candle[0], // Keep original IST string from Upstox: "2025-10-23T15:15:00+05:30"
                         open: parseFloat(candle[1]),
                         high: parseFloat(candle[2]),
                         low: parseFloat(candle[3]),
@@ -2677,7 +2147,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                     await PreFetchedData.findOneAndUpdate(
                         {
                             instrument_key: instrument_key,
-                            timeframe: timeframe
+                            timeframe: timeframe.toLowerCase() // Normalize to lowercase
                         },
                         {
                             $set: {
@@ -2694,7 +2164,8 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                                 upstox_payload: {
                                     source: 'user_request',
                                     fetched_at: new Date(),
-                                    original_data: data
+                                    total_bars_received: data?.historical?.length || 0,
+                                    request_timeframe: timeframe
                                 }
                             },
                             $setOnInsert: {

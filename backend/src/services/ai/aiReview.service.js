@@ -15,6 +15,7 @@ import { aiCostTracker } from './aiCostTracker.js';
 import { subscriptionService } from '../subscription/subscriptionService.js';
   import { Plan }  from '../../models/plan.js';
 import { Subscription } from '../../models/subscription.js';
+import candleFetcherService from '../candleFetcher.service.js';
 
 
 
@@ -92,7 +93,7 @@ class AIReviewService {
       },
       medium: {
         objective: 'Capture 5-15% trend legs aligned with sector rotation',
-        timeframes: ['1h', '4h', '1D'],
+        timeframes: ['1h', '4h', '1d'],
         rrMin: 2.0,
         riskPct: 0.015, // 1.5% account risk
         targetPct: 10.0, // 5-15% target range
@@ -100,7 +101,7 @@ class AIReviewService {
       },
       long: {
         objective: 'Hold for 10-25%+ appreciation driven by fundamentals',
-        timeframes: ['1D', '1W'],
+        timeframes: ['1d', '1W'],
         rrMin: 2.0,
         riskPct: 0.02, // 2% account risk
         targetPct: 20.0, // 10-25%+ target
@@ -619,48 +620,17 @@ class AIReviewService {
   
     const userExperience = userId ? await this.getUserExperience(userId) : 'intermediate';
 
-    const {endpoints} = await this.buildCandleUrls(tradeData);
+    // Use candleFetcherService as single source of truth for data fetching
+    const [candleResult, newsData] = await Promise.all([
+      candleFetcherService.getCandleDataForAnalysis(tradeData.instrument_key, tradeData.term),
+      this.fetchNewsData(tradeData.stock).catch(e => ({ error: e?.message || String(e) }))
+    ]);
 
-    // 1) Fetch all candle endpoints in parallel (each endpoint has {frame, kind, url})
-const candleFetches = endpoints.map(ep =>
-  this.fetchCandleData(ep.url)
-    .then(res => ({
-      status: 'fulfilled',
-      frame: ep.frame,
-      kind: ep.kind,
-      candles: res?.data?.candles || res?.candles || [], // normalize
-      raw: res
-    }))
-    .catch(err => ({
-      status: 'rejected',
-      frame: ep.frame,
-      kind: ep.kind,
-      error: err?.message || String(err)
-    }))
-);
-
-// 2) Run candles + news together
-const [candleResults, newsData] = await Promise.all([
-  Promise.all(candleFetches),
-  this.fetchNewsData(tradeData.stock).catch(e => ({ error: e?.message || String(e) }))
-]);
-
-// 3) Normalize candle results into a structure you can feed forward
-//    -> { byFrame: { '1m': { intraday:[[]...], historical:[[]...] }, ... }, errors: [...] }
-const candleSets = candleResults.reduce((acc, r) => {
-  if (r.status === 'fulfilled') {
-    acc.byFrame ??= {};
-    acc.byFrame[r.frame] ??= { intraday: [], historical: [] };
-    acc.byFrame[r.frame][r.kind]?.push(r.candles);
-  } else {
-    acc.errors ??= [];
-    acc.errors.push({ frame: r.frame, kind: r.kind, error: r.error });
-  }
-  return acc;
-}, { byFrame: {}, errors: [] });
+    // Extract clean candle data from candleFetcherService result
+    const candleSets = candleResult.success ? candleResult.data : {};
 
 
-    const agentOut = await this.routeToTradingAgent(tradeData, endpoints, candleSets, newsData);      
+    const agentOut = await this.routeToTradingAgent(tradeData, candleSets, newsData);      
      const sentiment = await this.analyzeSentiment(newsData, tradeData.term, tradeData.logId);
 
     let rawAiReview = {};
@@ -675,10 +645,9 @@ const candleSets = candleResults.reduce((acc, r) => {
         
         // Save debug info for troubleshooting
         const candleSummary = {
-          endpoints: endpoints.length,
-          candleSets: Object.keys(candleSets.byFrame || {}),
-          errors: candleSets.errors || [],
-          lastPrices: {
+          dataSource: candleResult?.source || 'unknown',
+          candleSets: Object.keys(candleSets || {}),
+           lastPrices: {
             last1m: this.getLatestCandle(agentOut?.frames?.['1m']?.candles)?.close,
             finalUsed: payload?.priceContext?.last
           }
@@ -706,13 +675,12 @@ const candleSets = candleResults.reduce((acc, r) => {
        
        // Save debug info for troubleshooting
        const candleSummary = {
-         endpoints: endpoints.length,
-         candleSets: Object.keys(candleSets.byFrame || {}),
-         errors: candleSets.errors || [],
+         dataSource: candleResult?.source || 'unknown',
+         candleSets: Object.keys(candleSets || {}),
          lastPrices: {
            last15m: this.getLatestCandle(agentOut?.frames?.['15m']?.candles)?.close,
            last1h: this.getLatestCandle(agentOut?.frames?.['1h']?.candles)?.close,
-           last1D: this.getLatestCandle(agentOut?.frames?.['1D']?.candles)?.close,
+           last1D: this.getLatestCandle(agentOut?.frames?.['1d']?.candles)?.close,
            finalUsed: payload?.priceContext?.last
          }
        };
@@ -735,10 +703,9 @@ const candleSets = candleResults.reduce((acc, r) => {
       // Save debug info for troubleshooting
       const candleSummary = {
         term: 'medium',
-        errors: candleSets.errors || [],
         lastPrices: {
           last1h: this.getLatestCandle(agentOut?.frames?.['1h']?.candles)?.close,
-          last1D: this.getLatestCandle(agentOut?.frames?.['1D']?.candles)?.close,
+          last1D: this.getLatestCandle(agentOut?.frames?.['1d']?.candles)?.close,
           last1W: this.getLatestCandle(agentOut?.frames?.['1W']?.candles)?.close,
           finalUsed: payload?.priceContext?.last
         }
@@ -1023,10 +990,11 @@ buildIntradayReviewPayload(agentOut, tradeData, newsSentiment) {
 }
 
 buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
-  // ----- latest prices (prefer 1h, then 15m, then 1D) -----
+  
+  // ----- latest prices (prefer 1h, then 15m, then 1d) -----
   const c1h = agentOut?.frames?.['1h']?.candles || [];
   const c15 = agentOut?.frames?.['15m']?.candles || [];
-  const c1D = agentOut?.frames?.['1D']?.candles  || [];
+  const c1D = agentOut?.frames?.['1d']?.candles  || [];
 
   // Use consistent helper to get latest candle regardless of API order
   const latest1h = this.getLatestCandle(c1h);
@@ -1043,12 +1011,12 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
   // ----- indicators snapshot -----
   const ind15  = agentOut?.frames?.['15m']?.indicators || {};
   const ind1h  = agentOut?.frames?.['1h']?.indicators || {};
-  const ind1D  = agentOut?.frames?.['1D'] ?.indicators || {};
+  const ind1D  = agentOut?.frames?.['1d'] ?.indicators || {};
   
   console.log(`🔍 [PAYLOAD DEBUG] Building payload with indicators:`);
   console.log(`   - 15m indicators: ${Object.keys(ind15).join(', ') || 'none'}`);
   console.log(`   - 1h indicators: ${Object.keys(ind1h).join(', ') || 'none'}`);
-  console.log(`   - 1D indicators: ${Object.keys(ind1D).join(', ') || 'none'}`);
+  console.log(`   - 1d indicators: ${Object.keys(ind1D).join(', ') || 'none'}`);
 
   const vwap15 = Array.isArray(ind15.vwap) ? ind15.vwap.at(-1) : null;
 
@@ -1069,8 +1037,8 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
   console.log(`   - atr14_1h: ${atr14_1h}`);
   console.log(`   - atr14_1D: ${atr14_1D}`);
 
-  // trend bias from 1D (if your short indicators set it)
-  const trendBias = agentOut?.frames?.['1D']?.indicators?.trendBias
+  // trend bias from 1d (if your short indicators set it)
+  const trendBias = agentOut?.frames?.['1d']?.indicators?.trendBias
     ?? agentOut?.meta?.bias?.trend
     ?? (() => {
          if (ema20_1D != null && ema50_1D != null && last1D != null) {
@@ -1085,8 +1053,8 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
   const pivots = ind1D?.pivotClassic || null;
 
   // prev-session / weekly range & gap (from your short agent)
-  const prevSession = agentOut?.frames?.['1D']?.prevSession || null;
-  const weeklyRange = agentOut?.frames?.['1D']?.weeklyRange || null;
+  const prevSession = agentOut?.frames?.['1d']?.prevSession || null;
+  const weeklyRange = agentOut?.frames?.['1d']?.weeklyRange || null;
   const gapMeta = agentOut?.meta?.gap || null;
 
   // ----- plan diagnostics - extract correct field names from tradeData -----
@@ -1100,7 +1068,7 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
     : null;
   
   // DEBUG: Clean short-term summary
-  const priceSource = c1h?.length ? '1h' : (c1D?.length ? '1D' : 'NO_DATA');
+  const priceSource = c1h?.length ? '1h' : (c1D?.length ? '1d' : 'NO_DATA');
 //   console.log(`💰 SHORT DEVIATION: Entry=${entry} | Last=${last}(${priceSource}) | Dev=${distanceFromLastPct?.toFixed(2)}% | Log=${tradeData?.logId}`);
 
   const rr = (entry != null && stop != null && target != null)
@@ -1232,9 +1200,9 @@ buildShortTermReviewPayload(agentOut, tradeData, newsSentiment) {
 
 
 buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
-  // ----- latest prices (prefer 1D, then 1h, then 1W) -----
+  // ----- latest prices (prefer 1d, then 1h, then 1W) -----
   const c1h = agentOut?.frames?.['1h']?.candles || [];
-  const c1D = agentOut?.frames?.['1D']?.candles || [];
+  const c1D = agentOut?.frames?.['1d']?.candles || [];
   const c1W = agentOut?.frames?.['1W']?.candles || [];
 
   const last1D = c1D.length ? c1D[c1D.length - 1].close : null;
@@ -1244,7 +1212,7 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
 
   // ----- indicators snapshot -----
   const ind1h = agentOut?.frames?.['1h']?.indicators || {};
-  const ind1D = agentOut?.frames?.['1D']?.indicators || {};
+  const ind1D = agentOut?.frames?.['1d']?.indicators || {};
   const ind1W = agentOut?.frames?.['1W']?.indicators || {};
 
   // Daily
@@ -1288,11 +1256,11 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
 
   // swing levels (prefer weekly swings; fallback to daily)
   const swingWeekly = agentOut?.frames?.['1W']?.swing4W || null; // {high, low}
-  const swingDaily  = agentOut?.frames?.['1D']?.weeklyRange || null; // {high, low}
+  const swingDaily  = agentOut?.frames?.['1d']?.weeklyRange || null; // {high, low}
   const swingLevels = swingWeekly || swingDaily || null;
 
   // prev period context
-  const prevSession = agentOut?.frames?.['1D']?.prevSession || null;
+  const prevSession = agentOut?.frames?.['1d']?.prevSession || null;
   const prevWeek    = agentOut?.frames?.['1W']?.prevWeek || null;
 
   // ----- plan fields (support both camelCase & lowercase variants) -----
@@ -1307,7 +1275,7 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
     : null;
 
   // DEBUG: Clean medium-term summary  
-  const priceSource = c1h?.length ? '1h' : (c1D?.length ? '1D' : 'NO_DATA');
+  const priceSource = c1h?.length ? '1h' : (c1D?.length ? '1d' : 'NO_DATA');
 //   console.log(`💰 MEDIUM DEVIATION: Entry=${entry} | Last=${last}(${priceSource}) | Dev=${distanceFromLastPct?.toFixed(2)}% | Log=${tradeData?.logId}`);
 
   const rr = (entry != null && stop != null && target != null)
@@ -1409,7 +1377,7 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
     },
 
     swingContext: {
-      prevSession,         // from 1D
+      prevSession,         // from 1d
       prevWeek,            // from 1W
       swingLevels,         // weekly 4W range or daily weeklyRange
       pivotsDaily: ind1D?.pivotClassic || null
@@ -1477,8 +1445,8 @@ buildMediumTermReviewPayload(agentOut, tradeData, newsSentiment) {
   // Map of term → preferred frames
 termToFrames = {
   intraday: ['1m', '3m', '15m'],  // For active day traders
-  short:    ['15m', '1h', '1D'],  // Swing trades lasting days - now includes 1D
-  medium:   ['1h', '1D','1W']     // Multi-week to monthly trades
+  short:    ['15m', '1h', '1d'],  // Swing trades lasting days - now includes 1d
+  medium:   ['1h', '1d','1W']     // Multi-week to monthly trades
 };
 
 // Market holidays cache - fetched from Upstox API by year
@@ -1587,7 +1555,7 @@ async fetchMarketHolidays(year, upstoxToken = null) {
 }
 
 /**
- * Parse a timeframe string like: '1m','3m','15m','1h','4h','1D','1W','1Mo'
+ * Parse a timeframe string like: '1m','3m','15m','1h','4h','1d','1W','1Mo'
  * Returns:
  *  { raw, n, u, unit } 
  *  - raw: original input (trimmed)
@@ -1648,7 +1616,7 @@ parseFrame(frame) {
   const raw = frame.trim();
 
   // Capture number + unit; allow case-insensitive, and "Mo" or "M" for months
-  // Examples matched: 1m, 3M, 15m, 1h, 4H, 1d, 1D, 1w, 1W, 1Mo, 3mo
+  // Examples matched: 1m, 3M, 15m, 1h, 4H, 1d, 1d, 1w, 1W, 1Mo, 3mo
   const match = raw.match(/^(\d+)\s*([a-zA-Z]+)$/);
   if (!match) {
     throw new Error(`parseFrame: could not parse "${raw}"`);
@@ -1733,9 +1701,9 @@ async buildCandleUrls(tradeData) {
   // ---------- SWING/SHORT (Smart endpoint selection based on timing) ----------
   if (t === 'short' || t === 'shortterm' || t === 'swing') {
     // Targets for swing trading
-    const TARGETS = { '15m': 200, '1h': 160, '1D': 260 };
+    const TARGETS = { '15m': 200, '1h': 160, '1d': 260 };
     // Bars a typical trading day contributes for each frame
-    const PER_DAY = { '15m': 25, '1h': 6, '1D': 1 };
+    const PER_DAY = { '15m': 25, '1h': 6, '1d': 1 };
 
     for (const f of frames) {
       const { n, u } = this.parseFrame(f);
@@ -1804,13 +1772,13 @@ async buildCandleUrls(tradeData) {
     };
   }
 
-  // ---------- MEDIUM (target-based: 1D/1W, optional 1h for timing) ----------
+  // ---------- MEDIUM (target-based: 1d/1W, optional 1h for timing) ----------
 if (t === 'medium' || t === 'mediumterm') {
   // Targets for a robust medium-term review
-  // 1D ≈ one trading year, 1W ≈ ~2+ years, 1h ≈ recent timing window
-  const TARGETS = { '1D': 260, '1W': 120, '1h': 160 };
+  // 1d ≈ one trading year, 1W ≈ ~2+ years, 1h ≈ recent timing window
+  const TARGETS = { '1d': 260, '1W': 120, '1h': 160 };
   // Bars contributed per active day/week
-  const PER_DAY  = { '1h': 6, '1D': 1 };
+  const PER_DAY  = { '1h': 6, '1d': 1 };
   const PER_WEEK = { '1W': 1 };
 
   const minutesSoFar = this.getTradingMinutesElapsedIST(); // 0..375
@@ -1875,7 +1843,7 @@ if (t === 'medium' || t === 'mediumterm') {
         const deltaToFriday = (weekday >= 5) ? (weekday - 5) : (weekday + 2); 
         startDate = this.addDays(anchor, -deltaToFriday);
       } else {
-        // For 1D and 1h, use previous day
+        // For 1d and 1h, use previous day
         startDate = previousDay;
       }
 
@@ -2107,39 +2075,26 @@ getTradingMinutesElapsedIST() {
   }
 
 
-  routeToTradingAgent(tradeData, endpoints, candleSets, newsData) {
+  routeToTradingAgent(tradeData, candleSets, newsData) {
     const t = (tradeData.term || '').toLowerCase();
   
-    // Extract byFrame data from candleSets structure
-    const byFrame = candleSets?.byFrame || {};
+    // candleSets is now clean: { '15m': [candles], '1h': [candles], '1d': [candles] }
+    console.log(`🔍 [ROUTE DEBUG] candleSets type: ${typeof candleSets}, value:`, candleSets);
+    const timeframeData = candleSets || {};
+    console.log(`🔍 [ROUTE DEBUG] timeframeData keys: ${Object.keys(timeframeData)}`);
     
-    // Label each endpoint with its corresponding candle data by matching frame names
-    const labeledData = endpoints.map((endpoint) => {
-      const frameData = byFrame[endpoint.frame];
-      
-      // Get the appropriate data based on endpoint kind
-      let data = { candles: [], status: 'error', message: 'No data found' };
-      
-      if (frameData) {
-        if (endpoint.kind === 'intraday' && frameData.intraday?.length > 0) {
-          // Take the first intraday dataset for this frame
-          data = frameData.intraday[0] || data;
-        } else if (endpoint.kind === 'historical' && frameData.historical?.length > 0) {
-          // Merge all historical datasets for this frame
-          const allHistoricalCandles = frameData.historical.flatMap(dataset => 
-            dataset|| []
-          );
-          data = {
-            candles: allHistoricalCandles,
-            status: 'success',
-            message: `Merged ${frameData.historical.length} historical datasets`
-          };
-        }
-      }
+    // Create labeled data from our clean timeframe structure
+    const labeledData = Object.keys(timeframeData).map((timeframe) => {
+      const candles = timeframeData[timeframe] || [];
       
       return {
-        ...endpoint,
-        data: data
+        frame: timeframe,
+        candles: candles,  // Direct candle array
+        data: {
+          candles: candles,
+          status: candles.length > 0 ? 'success' : 'error',
+          message: candles.length > 0 ? `${candles.length} candles loaded` : 'No data'
+        }
       };
     });
 
@@ -2188,10 +2143,6 @@ getTradingMinutesElapsedIST() {
  */
 async runIntradayAgent(labeledData, tradeData = {}, newsData = null) {
   // ---------- helpers ----------
-  const mapRaw = (arr = []) =>
-    arr.map(a => ({
-      time: a[0], open:+a[1], high:+a[2], low:+a[3], close:+a[4], volume:+a[5]
-    }));
 
   const sortByTime = (a,b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
 
@@ -2215,39 +2166,39 @@ async runIntradayAgent(labeledData, tradeData = {}, newsData = null) {
     '15m': ['ema9','ema20','sma50','vwap','rsi14','atr14'],      // bias + levels
   };
 
-  // ---------- build byFrame = { '1m': {intraday: [chunks], historical:[chunks]}, ... } ----------
-  // IMPORTANT: historical can have multiple slices; keep each as its own array.
-  const byFrame = labeledData.reduce((acc, x) => {
+  // ---------- build byFrame = { '1m': [candles], '3m': [candles], ... } ----------
+  // Simplified structure with direct candle arrays per timeframe
+  const byFrame = (labeledData && Array.isArray(labeledData)) ? labeledData.reduce((acc, x) => {
     const frame = x.frame; // '1m'|'3m'|'15m'
     if (!frame) return acc;
 
-    acc[frame] ??= { intraday: [], historical: [] };
-
     const arr = Array.isArray(x.data?.candles) ? x.data.candles : x.candles;
     if (Array.isArray(arr)) {
-      if (x.kind === 'intraday') acc[frame].intraday.push(arr);
-      else if (x.kind === 'historical') acc[frame].historical.push(arr);
+      acc[frame] = arr; // Direct assignment - no intraday/historical complexity
     }
     return acc;
-  }, {});
+  }, {}) : {};
 
   const out = { term: 'intraday', frames: {}, overlays: {}, news: newsData, meta: {} };
 
-  // generic builder for a frame
+  // simplified builder for a frame
   const buildFrame = (frame) => {
-    const chunksIntra = (byFrame[frame]?.intraday || []).map(mapRaw);
-    const chunksHist  = (byFrame[frame]?.historical || []).map(mapRaw);
+    const candles = byFrame[frame] || [];
+    
+    if (!candles.length) return null;
 
-    if (!chunksIntra.length && !chunksHist.length) return null;
-
-    // merge historical slices first, then intraday (intraday wins on same timestamps)
-    const merged = mergeCandles(
-      ...chunksHist.flat(),
-      ...chunksIntra.flat()
-    );
-
+    // Convert to our standard format and sort (standardize timestamp -> time)
+    const rawCandles = candles.map(candle => ({
+      time: candle.timestamp || candle.time,
+      open: +candle.open,
+      high: +candle.high,
+      low: +candle.low,
+      close: +candle.close,
+      volume: +candle.volume
+    }));
+    
     // trim to limit + buffer, then compute indicators on trimmed
-    const trimmed = take(merged, frame);
+    const trimmed = take(rawCandles, frame);
     const indicators = this._computeIntradaySelectedIndicators(trimmed, INDSET[frame]);
 
     return { candles: trimmed, indicators };
@@ -2299,28 +2250,6 @@ async runIntradayAgent(labeledData, tradeData = {}, newsData = null) {
 
 async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
   // ---------- helpers ----------
-  const mapRaw = (arr = []) => {
-    console.log(`🔍 [MAP DEBUG] Converting ${arr.length} candles from array to object format`);
-    if (arr.length > 0) {
-      console.log(`   - Sample input candle:`, arr[0]);
-      console.log(`   - Sample input types: [${typeof arr[0]?.[0]}, ${typeof arr[0]?.[1]}, ${typeof arr[0]?.[2]}, ${typeof arr[0]?.[3]}, ${typeof arr[0]?.[4]}, ${typeof arr[0]?.[5]}]`);
-    }
-    
-    const mapped = arr.map((a, index) => {
-      const converted = {
-        time: a[0], open:+a[1], high:+a[2], low:+a[3], close:+a[4], volume:+a[5]
-      };
-      
-      if (index < 2) { // Log first 2 for debugging
-        console.log(`   - Candle ${index} converted:`, converted);
-      }
-      
-      return converted;
-    });
-    
-    console.log(`   - Mapped to ${mapped.length} objects`);
-    return mapped;
-  };
 
   const sortByTime = (a,b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
 
@@ -2332,7 +2261,7 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
   };
 
   // frame → limit we want to SHOW (add buffer for indicator warm-up)
-  const LIMITS = { '15m': 200, '1h': 160, '1D': 260 }; // ~2-12 months depending on frame
+  const LIMITS = { '15m': 200, '1h': 160, '1d': 260 }; // ~2-12 months depending on frame
   const BUF = 50;
   const take = (arr, frame) => arr.slice(-(LIMITS[frame] + BUF));
 
@@ -2340,41 +2269,43 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
   const INDSET = {
     '15m': ['ema9','ema20','sma50','vwap','rsi14','atr14','volumeSpike'], // entry timing
     '1h': ['ema20','ema50','sma200','rsi14','atr14'],                    // structure + momentum
-    '1D' : ['ema20','ema50','sma200','rsi14','atr14','pivotClassic']      // bias + big levels
+    '1d' : ['ema20','ema50','sma200','rsi14','atr14','pivotClassic']      // bias + big levels
   };
 
-  // ---------- build byFrame = { '15m': {intraday:[...], historical:[...]}, ... } ----------
-  const byFrame = labeledData.reduce((acc, x) => {
-    const frame = x.frame; // '15m'|'1h'|'1D'
+  // ---------- build byFrame = { '15m': [candles], '1h': [candles], ... } ----------
+  // Simplified structure with direct candle arrays per timeframe  
+  const byFrame = (labeledData && Array.isArray(labeledData)) ? labeledData.reduce((acc, x) => {
+    const frame = x.frame; // '15m'|'1h'|'1d'
     if (!frame) return acc;
-
-    acc[frame] ??= { intraday: [], historical: [] };
 
     const arr = Array.isArray(x.data?.candles) ? x.data.candles : x.candles;
     if (Array.isArray(arr)) {
-      if (x.kind === 'intraday') acc[frame].intraday.push(arr);
-      else if (x.kind === 'historical') acc[frame].historical.push(arr);
+      acc[frame] = arr; // Direct assignment - no intraday/historical complexity
     }
     return acc;
-  }, {});
+  }, {}) : {};
 
   const out = { term: 'short', frames: {}, overlays: {}, news: newsData, meta: {} };
 
-  // generic builder for a frame
+  // simplified builder for a frame
   const buildFrame = (frame) => {
-    const chunksIntra = (byFrame[frame]?.intraday || []).map(mapRaw);
-    const chunksHist  = (byFrame[frame]?.historical || []).map(mapRaw);
+    const candles = byFrame[frame] || [];
+    
+    if (!candles.length) return null;
 
-    if (!chunksIntra.length && !chunksHist.length) return null;
-
-    // merge historical slices first, then intraday (intraday wins on same timestamps)
-    const merged = mergeCandles(
-      ...chunksHist.flat(),
-      ...chunksIntra.flat()
-    );
-
+    // Convert to our standard format and sort (standardize timestamp -> time)
+    const rawCandles = candles.map(candle => ({
+      time: candle.timestamp || candle.time,
+      open: +candle.open,
+      high: +candle.high,
+      low: +candle.low,
+      close: +candle.close,
+      volume: +candle.volume
+    }));
+   
+    
     // trim to limit + buffer, then compute indicators on trimmed
-    const trimmed = take(merged, frame);
+    const trimmed = take(rawCandles, frame);
     const indicators = this._computeShortSelectedIndicators(trimmed, INDSET[frame]);
     
     console.log(`📊 [INDICATOR DEBUG] Frame ${frame}: calculated ${Object.keys(indicators || {}).length} indicators`);
@@ -2384,59 +2315,26 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
     
     return { candles: trimmed, indicators };
   };
-
-  // Build each requested frame if present - map to correct frame names
-  const frameMapping = {
-    '15m': '15minute',
-    '1h': '1hour', 
-    '1D': '1day'
-  };
   
-  // Modified buildFrame to accept both fullName and shortName for indicator selection
-  const buildFrameWithMapping = (fullName, shortName) => {
-    const chunksIntra = (byFrame[fullName]?.intraday || []).map(mapRaw);
-    const chunksHist  = (byFrame[fullName]?.historical || []).map(mapRaw);
-
-    if (!chunksIntra.length && !chunksHist.length) return null;
-
-    // merge historical slices first, then intraday (intraday wins on same timestamps)
-    const merged = mergeCandles(
-      ...chunksHist.flat(),
-      ...chunksIntra.flat()
-    );
-
-    // trim to limit + buffer, then compute indicators on trimmed using SHORT name for INDSET
-    const trimmed = take(merged, shortName); // Use shortName for LIMITS
-    const indicators = this._computeShortSelectedIndicators(trimmed, INDSET[shortName]); // Use shortName for INDSET
-    
-    console.log(`📊 [INDICATOR DEBUG] Frame ${fullName} (${shortName}): calculated ${Object.keys(indicators || {}).length} indicators`);
-    if (indicators?.error) {
-      console.error(`❌ [INDICATOR ERROR] Frame ${fullName} (${shortName}): ${indicators.error}`);
-    }
-    
-    return { candles: trimmed, indicators };
-  };
-  
-  ['15m','1h','1D'].forEach(shortName => {
-    const fullName = frameMapping[shortName];
-    const built = buildFrameWithMapping(fullName, shortName);
+  ['15m','1h','1d'].forEach(timeframe => {
+    const built = buildFrame(timeframe);
     if (built) {
-      out.frames[shortName] = built; // Use short name for output
-      console.log(`📊 [FRAME MAPPED] ${fullName} → ${shortName}: ${built.candles?.length || 0} candles, ${Object.keys(built.indicators || {}).length} indicators`);
+      out.frames[timeframe] = built;
+      console.log(`📊 [FRAME BUILT] ${timeframe}: ${built.candles?.length || 0} candles, ${Object.keys(built.indicators || {}).length} indicators`);
     } else {
-      console.log(`⚠️ [FRAME MISSING] No data for ${fullName} (${shortName})`);
+      console.log(`⚠️ [FRAME MISSING] No data for ${timeframe}`);
     }
   });
 
   // ---------- Swing context (prev day / weekly / gaps) ----------
-  const daily = out.frames['1D']?.candles || [];
+  const daily = out.frames['1d']?.candles || [];
   if (daily.length) {
     // Previous day high/low/close
     const last = daily[daily.length - 1];
     const prev = daily[daily.length - 2];
 
-    if (prev) {
-      out.frames['1D'].prevSession = {
+    if (prev && out.frames['1d']) {
+      out.frames['1d'].prevSession = {
         high: prev.high, low: prev.low, close: prev.close, date: prev.time
       };
     }
@@ -2446,7 +2344,9 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
     if (week.length) {
       const wh = Math.max(...week.map(c => c.high));
       const wl = Math.min(...week.map(c => c.low));
-      out.frames['1D'].weeklyRange = { high: wh, low: wl };
+      if (out.frames['1d']) {
+        out.frames['1d'].weeklyRange = { high: wh, low: wl };
+      }
     }
   }
 
@@ -2464,9 +2364,9 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
     }
   }
 
-  // Optional: higher-timeframe bias from 1D EMAs
-  if (out.frames['1D']?.indicators) {
-    const indD = out.frames['1D'].indicators;
+  // Optional: higher-timeframe bias from 1d EMAs
+  if (out.frames['1d']?.indicators) {
+    const indD = out.frames['1d'].indicators;
     const lastClose = daily[daily.length - 1]?.close;
     const ema20 = indD.ema20?.[indD.ema20.length - 1];
     const ema50 = indD.ema50?.[indD.ema50.length - 1];
@@ -2496,12 +2396,12 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
     counts: {
       '15m': out.frames['15m']?.candles?.length || 0,
       '1h': out.frames['1h']?.candles?.length || 0,
-      '1D' : out.frames['1D']?.candles?.length || 0,
+      '1d' : out.frames['1d']?.candles?.length || 0,
     },
     has15m: have('15m'),
     has1h: have('1h'),
-    has1D:  have('1D'),
-    missing: ['15m','1h','1D'].filter(f => !have(f)),
+    has1d:  have('1d'),
+    missing: ['15m','1h','1d'].filter(f => !have(f)),
   };
 
   return out;
@@ -2510,10 +2410,6 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
 
 async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
   // ---------- helpers ----------
-  const mapRaw = (arr = []) =>
-    arr.map(a => ({
-      time: a[0], open:+a[1], high:+a[2], low:+a[3], close:+a[4], volume:+a[5]
-    }));
 
   const sortByTime = (a,b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
 
@@ -2525,7 +2421,7 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
   };
 
   // frame → limit we want to SHOW (add buffer for indicator warm-up)
-  const LIMITS = { '15m': 200, '1h': 160, '1D': 260 }; // swing trading timeframes
+  const LIMITS = { '15m': 200, '1h': 160, '1d': 260 }; // swing trading timeframes
   const BUF = 50;
   const take = (arr, frame) => arr.slice(-(LIMITS[frame] + BUF));
 
@@ -2533,61 +2429,62 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
   const INDSET = {
     '15m': ['ema20','ema50','rsi14','atr14','vwap'],              // intraday timing
     '1h': ['ema20','ema50','rsi14','atr14'],                      // timing within swing
-    '1D': ['ema20','ema50','sma200','rsi14','atr14','pivotClassic'], // primary bias + levels
+    '1d': ['ema20','ema50','sma200','rsi14','atr14','pivotClassic'], // primary bias + levels
   };
 
   // ---------- structure incoming data -> byFrame ----------
-  const byFrame = labeledData.reduce((acc, x) => {
-    const frame = x.frame; // '15m'|'1h'|'1D'
+  // Simplified: direct timeframe to candles mapping
+  const byFrame = (labeledData && Array.isArray(labeledData)) ? labeledData.reduce((acc, x) => {
+    const frame = x.frame; // '15m'|'1h'|'1d'
     if (!frame) return acc;
-
-    acc[frame] ??= { intraday: [], historical: [] };
 
     const arr = Array.isArray(x.data?.candles) ? x.data.candles : x.candles;
     if (Array.isArray(arr)) {
-      if (x.kind === 'intraday') acc[frame].intraday.push(arr);
-      else if (x.kind === 'historical') acc[frame].historical.push(arr);
+      acc[frame] = arr; // Direct assignment - no intraday/historical complexity
     }
     return acc;
-  }, {});
+  }, {}) : {};
 
   const out = { term: 'medium', frames: {}, overlays: {}, news: newsData, meta: {} };
 
-  // generic builder for a frame
+  // simplified builder for a frame
   const buildFrame = (frame) => {
-    const chunksIntra = (byFrame[frame]?.intraday || []).map(mapRaw);
-    const chunksHist  = (byFrame[frame]?.historical || []).map(mapRaw);
+    const candles = byFrame[frame] || [];
+    
+    if (!candles.length) return null;
 
-    if (!chunksIntra.length && !chunksHist.length) return null;
-
-    // merge historical slices first, then intraday (intraday wins on same timestamps)
-    const merged = mergeCandles(
-      ...chunksHist.flat(),
-      ...chunksIntra.flat()
-    );
-
+    // Convert to our standard format and sort (standardize timestamp -> time)
+    const rawCandles = candles.map(candle => ({
+      time: candle.timestamp || candle.time,
+      open: +candle.open,
+      high: +candle.high,
+      low: +candle.low,
+      close: +candle.close,
+      volume: +candle.volume
+    }));
+    
     // trim to limit + buffer, then compute indicators on trimmed
-    const trimmed = take(merged, frame);
+    const trimmed = take(rawCandles, frame);
     const compute = (this._computeMediumSelectedIndicators || this._computeShortSelectedIndicators).bind(this);
     const indicators = compute(trimmed, INDSET[frame]);
     return { candles: trimmed, indicators };
   };
 
   // Build each requested frame if present - changed to support swing trading
-  ['15m','1h','1D'].forEach(f => {
+  ['15m','1h','1d'].forEach(f => {
     const built = buildFrame(f);
     if (built) out.frames[f] = built;
   });
 
   // ---------- Context layers ----------
-  const daily  = out.frames['1D']?.candles || [];
+  const daily  = out.frames['1d']?.candles || [];
   const hourly = out.frames['1h']?.candles || [];
 
   // Previous day / week context
   if (daily.length) {
     const prevD = daily[daily.length - 2];
     if (prevD) {
-      out.frames['1D'].prevSession = {
+      out.frames['1d'].prevSession = {
         high: prevD.high, low: prevD.low, close: prevD.close, date: prevD.time
       };
     }
@@ -2596,7 +2493,9 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
     if (weekSlice.length) {
       const wh = Math.max(...weekSlice.map(c => c.high));
       const wl = Math.min(...weekSlice.map(c => c.low));
-      out.frames['1D'].weeklyRange = { high: wh, low: wl };
+      if (out.frames['1d']) {
+        out.frames['1d'].weeklyRange = { high: wh, low: wl };
+      }
     }
   }
 
@@ -2618,7 +2517,7 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
     }
   }
 
-  // Bias from 1D and 1W EMAs
+  // Bias from 1d and 1W EMAs
   const biasFrom = (frameKey) => {
     const fr = out.frames[frameKey];
     if (!fr?.indicators || !fr?.candles?.length) return null;
@@ -2633,7 +2532,7 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
   };
 
   out.meta.bias = {
-    d1: biasFrom('1D') || 'unknown',
+    d1: biasFrom('1d') || 'unknown',
     w1: biasFrom('1W') || 'unknown'
   };
 
@@ -2649,7 +2548,7 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
 
   // ---------- Quick R/R & ATR-multiple check (daily ATR) ----------
   if ([entryPrice, stopLoss, targetPrice].every(v => Number.isFinite(+v)) && daily.length) {
-    const indD = out.frames['1D']?.indicators || {};
+    const indD = out.frames['1d']?.indicators || {};
     const atrD = indD.atr14?.[indD.atr14.length - 1];
     const rr   = (targetPrice - entryPrice) / (entryPrice - stopLoss);
     let riskATR = null, rewardATR = null;
@@ -2672,13 +2571,13 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
   out.meta.dataHealth = {
     counts: {
       '1h': out.frames['1h']?.candles?.length || 0,
-      '1D': out.frames['1D']?.candles?.length || 0,
+      '1d': out.frames['1d']?.candles?.length || 0,
       '1W': out.frames['1W']?.candles?.length || 0,
     },
     has1h: have('1h'),
-    has1D: have('1D'),
+    has1D: have('1d'),
     has1W: have('1W'),
-    missing: ['1h','1D','1W'].filter(f => !have(f)),
+    missing: ['1h','1d','1W'].filter(f => !have(f)),
   };
 
   return out;
@@ -3685,7 +3584,7 @@ async  getShortTermAITradingReview(tradeData, payload, userExperience) {
 
   // ---- merge user's proposed trade into payload ----
   const mergedPayload = {
-    ...payload, // expected from buildShortTermReviewPayload
+    ...payload, 
     userTrade: {
       direction: tradeData.direction,
       entry:     tradeData.entryPrice ?? tradeData.entryprice ?? tradeData.entry ?? null,
@@ -3704,15 +3603,15 @@ You are a veteran Indian **short-term swing** stock trader and mentor.
 
 Operate ONLY on the provided JSON payload. Do not browse. Do not infer missing fields.
 When numeric MA comparisons are provided, ignore entryVsDailyMA.* text flags.
-Market: NSE cash. Holding window: ~2–10 trading days. Timeframes: **15m (trigger)**, **1h (momentum)**, **1D (bias)**.
+Market: NSE cash. Holding window: ~2–10 trading days. Timeframes: **15m (trigger)**, **1h (momentum)**, **1d (bias)**.
 
 Behavior:
 - Be practical and decisive. The top-level output must be skimmable in 3–10 seconds.
 - The concise UI "card" MUST be beginner-friendly regardless of userExperience.
 - The detailed "analysis" may adapt tone/complexity to userExperience.
-- **Alignment rule (swing):** Prefer longs when 1D bias is bullish AND 1h momentum is improving; prefer shorts when 1D bias is bearish AND 1h momentum is weakening. Use 15m only for precise trigger timing (break/retest).
-- **VWAP usage:** Use 15m VWAP for timing. It's NOT mandatory to be above VWAP for a swing long if 1D/1h align, but it improves timing quality. If VWAP is missing, mark "unknown".
-- **Risk model:** Stops at swing low/high or ATR(1D) × (1.0–1.5). Targets at ~1.5R and 2R baseline; stretch only if structure allows.
+- **Alignment rule (swing):** Prefer longs when 1d bias is bullish AND 1h momentum is improving; prefer shorts when 1d bias is bearish AND 1h momentum is weakening. Use 15m only for precise trigger timing (break/retest).
+- **VWAP usage:** Use 15m VWAP for timing. It's NOT mandatory to be above VWAP for a swing long if 1d/1h align, but it improves timing quality. If VWAP is missing, mark "unknown".
+- **Risk model:** Stops at swing low/high or ATR(1d) × (1.0–1.5). Targets at ~1.5R and 2R baseline; stretch only if structure allows.
 - **Session rules:** Planning can occur after hours. No intraday forced exit times for swing.
 
 Language style: ${lang.tone}. ${lang.complexity}.
@@ -3872,7 +3771,7 @@ ${JSON.stringify(mergedPayload)}
   -> If ANY minimum is not met: set guards.needsData=true and analysis.isValid=false (still provide guidance and a correctedPlan if possible).
 
 - Optional context warning (soft note only):
-  • If bars are sufficient for indicators but below ideal context (15m<150 or 1h<120 or 1D<200), allow validation but add a note like "Context data is limited" in plan.notes.
+  • If bars are sufficient for indicators but below ideal context (15m<150 or 1h<120 or 1d<200), allow validation but add a note like "Context data is limited" in plan.notes.
 
 - User numeric validity:
   • BUY: stop < entry < target ; SELL: target < entry < stop
@@ -4001,13 +3900,13 @@ You are a veteran Indian medium-term swing/position stock trader and mentor.
 
 Operate ONLY on the provided JSON payload. Do not browse. Do not infer missing fields.
 When numeric MA comparisons are provided, ignore entryVsDailyMA.* text flags.
-Market: NSE cash. Holding window: ~3–12 weeks. Timeframes: 1W (structure), 1D (primary bias), 1h (timing aid only).
+Market: NSE cash. Holding window: ~3–12 weeks. Timeframes: 1W (structure), 1d (primary bias), 1h (timing aid only).
 
 Behavior:
 - Be practical and decisive. The top-level output must be skimmable in 3–10 seconds.
 - The concise UI "card" MUST be beginner-friendly regardless of userExperience.
 - The detailed "analysis" may adapt tone/complexity to userExperience.
-- Alignment rule: Prefer LONGS when 1W AND 1D are bullish; prefer SHORTS when 1W AND 1D are bearish. 1h is for timing only (optional).
+- Alignment rule: Prefer LONGS when 1W AND 1d are bullish; prefer SHORTS when 1W AND 1d are bearish. 1h is for timing only (optional).
 
 Language style: ${lang.tone}. ${lang.complexity}.
 If userExperience=="beginner":
@@ -4023,7 +3922,7 @@ If userExperience=="advanced":
   - You may use technical terms in analysis; keep UI beginner-simple but expand analysis depth and structure commentary.
 
 Risk model:
-- Stops at weekly/daily swing low/high or ATR(1D) × (1.5–2.0).
+- Stops at weekly/daily swing low/high or ATR(1d) × (1.5–2.0).
 - Baseline targets: T1 ≈ 1.8R, T2 ≈ 2.5R; stretch only if weekly structure allows.
 
 Session rules:
@@ -4055,8 +3954,8 @@ Before returning, self-check:
 
 HARD CONSTRAINTS:
 - Strict medium-term invalidation ONLY (no intraday rules):
-  • LONG: "1D close ≤ <stop>" AND "Weekly swing low break (<weekly swing low>)"
-  • SHORT: "1D close ≥ <stop>" AND "Weekly swing high reclaim (<weekly swing high>)"
+  • LONG: "1d close ≤ <stop>" AND "Weekly swing low break (<weekly swing low>)"
+  • SHORT: "1d close ≥ <stop>" AND "Weekly swing high reclaim (<weekly swing high>)"
   • DO NOT emit any 1h or 15m/VWAP-based invalidation lines.
 
 - Trigger–Entry coherence:
@@ -4153,7 +4052,7 @@ ${JSON.stringify(mergedPayload)}
       "needsData": boolean,
       "marketOpenRequired": false,
       "invalidateIf": [
-        "1D close ≤ <stop> (for longs) / ≥ <stop> (for shorts)",
+        "1d close ≤ <stop> (for longs) / ≥ <stop> (for shorts)",
         "Weekly swing invalidation (break of swing low/high)"
       ]
     },
@@ -4189,7 +4088,7 @@ ${JSON.stringify(mergedPayload)}
 - Triggers: explicit numeric; ensure trigger ≈ entry (≤1% diff) — else snap/revise and explain.
 - Target upgrades: if T1 < 1.8R, lift to ≥ 1.8R (or ≥ _preHints.minT1) unless blocked by resistance; keep "caution" if blocked.
 - actionHint: from plan if side!="none"; else from correctedPlan.
-- Invalidation: Long "1D close ≤ <stop>" & weekly swing LOW break; Short "1D close ≥ <stop>" & weekly swing HIGH reclaim.
+- Invalidation: Long "1d close ≤ <stop>" & weekly swing LOW break; Short "1d close ≥ <stop>" & weekly swing HIGH reclaim.
 
 Return ONLY the JSON object described above.
 `.trim();
@@ -4290,7 +4189,7 @@ async fixMediumReview(review, opts = {}) {
     if (!Number.isFinite(+lvl)) return null;
     const n = Number(lvl);
     const dirWord = (s === 'short') ? 'below' : 'above';
-    return `Enter after one 1D close ${dirWord} ${n} AND weekly holds ${dirWord} ${n}`;
+    return `Enter after one 1d close ${dirWord} ${n} AND weekly holds ${dirWord} ${n}`;
   };
   const coerceTrigger = (obj) => {
     if (!obj || obj.side === 'none') return;
@@ -4330,13 +4229,13 @@ async fixMediumReview(review, opts = {}) {
 
     let invalidateIf = [];
     if (side === 'short') {
-      if (Number.isFinite(stop)) invalidateIf.push(`1D close ≥ ${Number(stop)}`);
+      if (Number.isFinite(stop)) invalidateIf.push(`1d close ≥ ${Number(stop)}`);
       invalidateIf.push(
         weeklySwingHigh ? `Weekly swing high reclaim (above ${Number(weeklySwingHigh)})`
                         : `Weekly swing high reclaim`
       );
     } else if (side === 'long') {
-      if (Number.isFinite(stop)) invalidateIf.push(`1D close ≤ ${Number(stop)}`);
+      if (Number.isFinite(stop)) invalidateIf.push(`1d close ≤ ${Number(stop)}`);
       invalidateIf.push(
         weeklySwingLow ? `Weekly swing low break (below ${Number(weeklySwingLow)})`
                        : `Weekly swing low break`
@@ -4428,8 +4327,8 @@ async validateMediumResponse(r) {
     const side = r?.analysis?.plan?.side || r?.analysis?.userReview?.correctedPlan?.side;
     const stop = r?.analysis?.plan?.stop ?? r?.analysis?.userReview?.correctedPlan?.stop;
     const repl = (side === 'short')
-      ? [`1D close ≥ ${stop}`, `Weekly swing high reclaim`]
-      : [`1D close ≤ ${stop}`, `Weekly swing low break`];
+      ? [`1d close ≥ ${stop}`, `Weekly swing high reclaim`]
+      : [`1d close ≤ ${stop}`, `Weekly swing low break`];
     if (r.analysis.guards) r.analysis.guards.invalidateIf = repl;
   }
 

@@ -588,7 +588,7 @@ async function uploadBufferViaService(buffer, fileName) {
 // ====== PUBLIC API ======
 /**
  * @param {Object} args
- * @param {Object} args.payload - exact analysis payload (with snapshots.lastBars15m/1h/1D)
+ * @param {Object} args.payload - exact analysis payload (with snapshots.lastBars15m/1h/1d)
  * @param {Array}  args.reviewResult - reviewResult array containing ui/analysis
  * @param {String} args.tag - symbol/name for file names (optional)
  * @returns {{microUrl:string, fullUrl:string, range:{high:number|null,low:number|null}, levels:Object|null}}
