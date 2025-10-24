@@ -118,16 +118,15 @@ router.post('/upstox/orders', async (req, res) => {
         received: true, 
         message: 'Upstox webhooks disabled - using WhatsApp notifications instead' 
     });
-    return;
     
-    // ORIGINAL UPSTOX WEBHOOK CODE COMMENTED OUT BELOW:
-    // try {
-    //     console.log('🔔 Webhook received:', JSON.stringify(req.body, null, 2));
-    //     
-    //     const orderUpdate = req.body;
-    //     
-    //     // Immediately respond to Upstox
-    //     res.status(200).json({ received: true });
+    /* ORIGINAL UPSTOX WEBHOOK CODE COMMENTED OUT BELOW:
+    try {
+        console.log('🔔 Webhook received:', JSON.stringify(req.body, null, 2));
+        
+        const orderUpdate = req.body;
+        
+        // Immediately respond to Upstox
+        res.status(200).json({ received: true });
         
         // Process the order update asynchronously
         if (orderUpdate.update_type === 'order') {
@@ -221,6 +220,7 @@ router.post('/upstox/orders', async (req, res) => {
             res.status(200).json({ received: true, error: true });
         }
     }
+    */
 });
 
 // Helper endpoint to register pending bracket orders
