@@ -8,6 +8,8 @@ import { Plan } from '../models/plan.js';
 import { Subscription } from '../models/subscription.js';
 import { getSectorForStock, getSectorNewsKeywords, getTrailingStopSuggestions, getSectorCorrelationMessage } from '../utils/sectorMapping.js';
 import candleFetcherService from './candleFetcher.service.js';
+import { messagingService } from './messaging/messaging.service.js';
+import { User } from '../models/user.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -384,6 +386,9 @@ class AIAnalyzeService {
                 } else {
                     console.log(`✅ [ANALYSIS STATUS] Marking ${stock_symbol} as completed with valid analysis`);
                     await pendingAnalysis.markCompleted();
+                    
+                    // Send WhatsApp notification for analysis completion
+                    await this.sendAnalysisCompleteNotification(userId, pendingAnalysis);
                 }
 
                 // console.log(`✅ AI analysis completed and saved for ${stock_symbol}`);
@@ -2193,6 +2198,43 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         } catch (error) {
             console.error(`❌ [CACHE STORE] Failed to store fetched data for ${tradeData.stockSymbol}:`, error.message);
             // Don't throw error - storage failure shouldn't break analysis
+        }
+    }
+
+    /**
+     * Send WhatsApp notification when analysis is complete
+     */
+    async sendAnalysisCompleteNotification(userId, analysisRecord) {
+        try {
+            // Get user details for WhatsApp notification
+            const user = await User.findById(userId);
+            if (!user || !user.mobile_number) {
+                console.log(`⚠️ User ${userId} not found or missing mobile number for analysis complete notification`);
+                return;
+            }
+
+            // Count strategies found in the analysis
+            const strategiesCount = analysisRecord.analysis_data?.strategies?.length || 0;
+
+            // Prepare WhatsApp analysis complete data
+            const analysisData = {
+                stock_name: analysisRecord.stock_name || analysisRecord.stock_symbol,
+                strategies_count: strategiesCount.toString(),
+                analysis_type: analysisRecord.analysis_type || 'swing'
+            };
+
+            // Send WhatsApp notification
+            const whatsappResult = await messagingService.sendAnalysisComplete(
+                user.mobile_number,
+                analysisData
+            );
+
+            console.log(`📱 WhatsApp analysis complete notification sent for ${analysisRecord.stock_symbol}`);
+            return whatsappResult;
+
+        } catch (error) {
+            console.error(`❌ Error sending analysis complete WhatsApp notification:`, error);
+            // Don't throw error - notification failure shouldn't break analysis
         }
     }
 }

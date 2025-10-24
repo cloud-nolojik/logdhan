@@ -1,5 +1,6 @@
 import axios from 'axios';
-import * as upstoxService from './upstox.service.js';
+// COMMENTED OUT: Upstox service import - using WhatsApp notifications instead
+// import * as upstoxService from './upstox.service.js';
 import { decrypt } from '../utils/encryption.js';
 import { getCurrentPrice } from '../utils/stock.js';
 import { getMarketDataForTriggers } from '../utils/candleData.js';

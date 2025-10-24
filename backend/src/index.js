@@ -47,7 +47,8 @@ import referralRoutes from './routes/referrals.js';
 import creditsRoutes from './routes/credits.js';
 import marketRoutes from './routes/market.js';
 import aiRoutes from './routes/ai.js';
-import upstoxRoutes from './routes/upstox.js';
+// COMMENTED OUT: Upstox routes - using WhatsApp notifications instead
+// import upstoxRoutes from './routes/upstox.js';
 import bulkAnalysisRoutes from './routes/bulkAnalysis.js';
 import webhookRoutes from './routes/webhook.js';
 import monitoringRoutes from './routes/agendaMonitoring.js'; // Using Agenda instead of BullMQ
@@ -130,7 +131,8 @@ app.use('/api/v1/referrals', referralRoutes);
 app.use('/api/credits', creditsRoutes);
 app.use('/api/v1/market', marketRoutes);
 app.use('/api/v1/ai', aiRoutes);
-app.use('/api/v1/upstox', upstoxRoutes);
+// COMMENTED OUT: Upstox API routes - using WhatsApp notifications instead
+// app.use('/api/v1/upstox', upstoxRoutes);
 app.use('/api/v1/bulk-analysis', bulkAnalysisRoutes);
 app.use('/api/v1/webhook', webhookRoutes);
 app.use('/api/v1/monitoring', monitoringRoutes);

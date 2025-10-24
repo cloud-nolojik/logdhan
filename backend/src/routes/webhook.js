@@ -1,8 +1,10 @@
 import express from 'express';
-import UpstoxUser from '../models/upstoxUser.js';
+// COMMENTED OUT: Upstox user model - using WhatsApp notifications instead
+// import UpstoxUser from '../models/upstoxUser.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import PendingBracketOrder from '../models/pendingBracketOrder.js';
-import * as upstoxService from '../services/upstox.service.js';
+// COMMENTED OUT: Upstox service - using WhatsApp notifications instead
+// import * as upstoxService from '../services/upstox.service.js';
 import { decrypt, encrypt } from '../utils/encryption.js';
 
 const router = express.Router();
@@ -108,15 +110,24 @@ async function placeBracketOrders(orderUpdate, pendingBracketOrder) {
     }
 }
 
+// COMMENTED OUT: Upstox webhook endpoint - using WhatsApp notifications instead
 // Webhook endpoint for Upstox order updates
 router.post('/upstox/orders', async (req, res) => {
-    try {
-        console.log('🔔 Webhook received:', JSON.stringify(req.body, null, 2));
-        
-        const orderUpdate = req.body;
-        
-        // Immediately respond to Upstox
-        res.status(200).json({ received: true });
+    // COMMENTED OUT: Upstox webhook processing - using WhatsApp notifications instead
+    res.status(200).json({ 
+        received: true, 
+        message: 'Upstox webhooks disabled - using WhatsApp notifications instead' 
+    });
+    return;
+    
+    // ORIGINAL UPSTOX WEBHOOK CODE COMMENTED OUT BELOW:
+    // try {
+    //     console.log('🔔 Webhook received:', JSON.stringify(req.body, null, 2));
+    //     
+    //     const orderUpdate = req.body;
+    //     
+    //     // Immediately respond to Upstox
+    //     res.status(200).json({ received: true });
         
         // Process the order update asynchronously
         if (orderUpdate.update_type === 'order') {

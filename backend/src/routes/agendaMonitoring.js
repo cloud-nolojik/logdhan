@@ -6,7 +6,8 @@ import agendaDataPrefetchService from '../services/agendaDataPrefetchService.js'
 import StockAnalysis from '../models/stockAnalysis.js';
 import triggerOrderService from '../services/triggerOrderService.js';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
-import UpstoxUser from '../models/upstoxUser.js';
+// COMMENTED OUT: Upstox user model - using WhatsApp notifications instead
+// import UpstoxUser from '../models/upstoxUser.js';
 import { decrypt } from '../utils/encryption.js';
 
 const router = express.Router();
@@ -158,7 +159,8 @@ router.post('/start', authenticateToken, async (req, res) => {
                     triggers_met: true,
                     current_price: triggerCheck.data.current_price,
                     triggers: triggerCheck.data.triggers,
-                    suggestion: 'Use /api/upstox/place-order to place order immediately'
+                    // COMMENTED OUT: Upstox order placement suggestion - using WhatsApp notifications instead
+                    suggestion: 'You will receive WhatsApp notification with strategy details for manual order placement'
                 }
             });
         }
@@ -547,19 +549,20 @@ router.post('/resume', authenticateToken, async (req, res) => {
             });
         }
         
+        // COMMENTED OUT: Upstox session validation - using WhatsApp notifications instead
         // Check if user has valid Upstox session
-        const upstoxUser = await UpstoxUser.findByUserId(userId);
-        if (!upstoxUser || !upstoxUser.isTokenValid()) {
-            return res.status(401).json({
-                success: false,
-                error: 'upstox_session_required',
-                message: 'Please login to Upstox first to resume monitoring',
-                data: {
-                    action_required: 'Upstox re-authentication needed',
-                    reason: 'Session expired or not found'
-                }
-            });
-        }
+        // const upstoxUser = await UpstoxUser.findByUserId(userId);
+        // if (!upstoxUser || !upstoxUser.isTokenValid()) {
+        //     return res.status(401).json({
+        //         success: false,
+        //         error: 'upstox_session_required',
+        //         message: 'Please login to Upstox first to resume monitoring',
+        //         data: {
+        //             action_required: 'Upstox re-authentication needed',
+        //             reason: 'Session expired or not found'
+        //         }
+        //     });
+        // }
         
         // Resume monitoring
         const result = await agendaMonitoringService.resumeMonitoring(analysisId, strategyId, userId);

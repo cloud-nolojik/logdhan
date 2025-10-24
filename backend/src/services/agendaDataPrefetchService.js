@@ -214,6 +214,68 @@ class AgendaDataPrefetchService {
                 throw error;
             }
         });
+
+        // NEW: AI Analysis trigger job (runs at 4:30 PM after data is ready)
+        this.agenda.define('trigger-analysis', async (job) => {
+            console.log('🧠 [AGENDA DATA] Starting AI analysis trigger job at 4:30 PM');
+            
+            try {
+                // Import the analysis service dynamically to avoid circular dependency
+                const { default: aiAnalyzeService } = await import('./aiAnalyze.service.js');
+                
+                // Get list of recently analyzed stocks for re-analysis
+                const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+                
+                // Find analyses from the last 7 days to refresh with new EOD data
+                const recentAnalyses = await StockAnalysis.find({
+                    created_at: { 
+                        $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // Last 7 days
+                    },
+                    status: 'completed'
+                }).distinct('instrument_key');
+                
+                console.log(`🔄 [AGENDA DATA] Found ${recentAnalyses.length} stocks for re-analysis with fresh EOD data`);
+                
+                // Trigger fresh analysis for each stock (this will use the latest data from 4:00-4:05 PM fetch)
+                let successCount = 0;
+                let errorCount = 0;
+                
+                for (const instrumentKey of recentAnalyses.slice(0, 20)) { // Limit to 20 stocks to avoid overload
+                    try {
+                        // This will create fresh analysis with the updated EOD data
+                        console.log(`📊 [AGENDA DATA] Triggering fresh analysis for ${instrumentKey}`);
+                        
+                        // Note: We're not waiting for completion to avoid timeouts
+                        // The analysis will run in background and send WhatsApp when complete
+                        aiAnalyzeService.generateStockAnalysisWithPayload({
+                            instrument_key: instrumentKey,
+                            analysis_type: 'swing',
+                            force_fresh: true // Force fresh analysis with new EOD data
+                        }).catch(error => {
+                            console.error(`❌ [AGENDA DATA] Analysis failed for ${instrumentKey}:`, error.message);
+                        });
+                        
+                        successCount++;
+                        
+                        // Small delay to avoid overwhelming the system
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        
+                    } catch (error) {
+                        console.error(`❌ [AGENDA DATA] Failed to trigger analysis for ${instrumentKey}:`, error.message);
+                        errorCount++;
+                    }
+                }
+                
+                console.log(`✅ [AGENDA DATA] AI analysis trigger completed: ${successCount} triggered, ${errorCount} errors`);
+                console.log(`📱 [AGENDA DATA] Users will receive WhatsApp notifications as analyses complete`);
+                this.stats.successfulJobs++;
+                
+            } catch (error) {
+                console.error('❌ [AGENDA DATA] AI analysis trigger failed:', error);
+                this.stats.failedJobs++;
+                throw error;
+            }
+        });
     }
 
     /**
@@ -248,21 +310,27 @@ class AgendaDataPrefetchService {
         try {
             // Cancel any existing recurring jobs to avoid duplicates
             await this.agenda.cancel({
-                name: { $in: ['daily-data-prefetch', 'chart-cleanup', 'current-day-prefetch'] }
+                name: { $in: ['daily-data-prefetch', 'chart-cleanup', 'current-day-prefetch', 'trigger-analysis'] }
             });
 
-            // Daily data pre-fetch: 1:00 AM IST on weekdays (historical data)
-            // Note: Agenda uses node-cron syntax
-            await this.agenda.every('0 1 * * 1-5', 'daily-data-prefetch', {}, {
+            // UPDATED: Daily data pre-fetch: 4:00 PM IST on weekdays (right at market close)
+            // Better timing: get fresh EOD data immediately after market close
+            await this.agenda.every('0 16 * * 1-5', 'daily-data-prefetch', {}, {
                 timezone: 'Asia/Kolkata'
             });
-            console.log('📅 [AGENDA DATA] Scheduled daily data pre-fetch for 1:00 AM IST (weekdays)');
+            console.log('📅 [AGENDA DATA] Scheduled daily data pre-fetch for 4:00 PM IST (market close)');
 
             // Current day data pre-fetch: 4:05 PM IST on weekdays (after market close)
             await this.agenda.every('5 16 * * 1-5', 'current-day-prefetch', {}, {
                 timezone: 'Asia/Kolkata'
             });
-            console.log('📅 [AGENDA DATA] Scheduled current day data pre-fetch for 4:05 PM IST (weekdays)');
+            console.log('📅 [AGENDA DATA] Scheduled current day data pre-fetch for 4:05 PM IST (append intraday data)');
+
+            // NEW: AI Analysis trigger: 4:30 PM IST on weekdays (start analysis with fresh data)
+            await this.agenda.every('30 16 * * 1-5', 'trigger-analysis', {}, {
+                timezone: 'Asia/Kolkata'
+            });
+            console.log('📅 [AGENDA DATA] Scheduled AI analysis trigger for 4:30 PM IST (post-market analysis)');
 
             // Chart cleanup: Every hour
             await this.agenda.every('0 * * * *', 'chart-cleanup', {}, {

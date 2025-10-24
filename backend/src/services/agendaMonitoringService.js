@@ -6,6 +6,8 @@ import UpstoxUser from '../models/upstoxUser.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import MonitoringHistory from '../models/monitoringHistory.js';
 import { decrypt } from '../utils/encryption.js';
+import { messagingService } from './messaging/messaging.service.js';
+import { User } from '../models/user.js';
 
 class AgendaMonitoringService {
     constructor() {
@@ -185,22 +187,25 @@ class AgendaMonitoringService {
                 }
             }
 
-            // Get user's Upstox credentials
-            const upstoxUser = await UpstoxUser.findByUserId(userId);
-            if (!upstoxUser || !upstoxUser.isTokenValid()) {
-                console.log(`🔑 Upstox token invalid for user ${userId}, pausing monitoring`);
-                
-                historyEntry.status = 'error';
-                historyEntry.reason = 'Upstox token invalid';
-                historyEntry.details.error_message = 'User needs to re-authenticate with Upstox';
-                historyEntry.monitoring_duration_ms = Date.now() - startTime;
-                await historyEntry.save();
-                
-                await this.pauseMonitoring(analysisId, strategyId, 'upstox_token_invalid');
-                return;
-            }
+            // COMMENTED OUT: Upstox token validation - using WhatsApp notifications instead of order placement
+            // const upstoxUser = await UpstoxUser.findByUserId(userId);
+            // if (!upstoxUser || !upstoxUser.isTokenValid()) {
+            //     console.log(`🔑 Upstox token invalid for user ${userId}, pausing monitoring`);
+            //     
+            //     historyEntry.status = 'error';
+            //     historyEntry.reason = 'Upstox token invalid';
+            //     historyEntry.details.error_message = 'User needs to re-authenticate with Upstox';
+            //     historyEntry.monitoring_duration_ms = Date.now() - startTime;
+            //     await historyEntry.save();
+            //     
+            //     await this.pauseMonitoring(analysisId, strategyId, 'upstox_token_invalid');
+            //     return;
+            // }
 
-            const accessToken = decrypt(upstoxUser.access_token);
+            // const accessToken = decrypt(upstoxUser.access_token);
+            
+            // For market timing, we'll use a dummy token or skip Upstox-specific validation
+            const accessToken = 'dummy_token_for_market_timing';
             const today = new Date().toISOString().split('T')[0];
 
             // Check if market is open (optimized - uses database cache first)
@@ -253,42 +258,75 @@ class AgendaMonitoringService {
                     );
                 }
                 
-                // Import order execution service dynamically to avoid circular dependency
-                const { default: orderExecutionService } = await import('./orderExecutionService.js');
-                
+                // Send WhatsApp notification instead of placing order
                 try {
-                    const orderResult = await orderExecutionService.executeFromMonitoring(
-                        analysisId, 
-                        strategyId, 
-                        userId
-                    );
-                    
-                    if (orderResult.success) {
-                        console.log(`✅ Order placed successfully for ${analysisId}_${strategyId}, stopping monitoring`);
-                        
-                        historyEntry.status = 'order_placed';
-                        historyEntry.reason = 'Order placed successfully';
-                        historyEntry.addOrderResult(orderResult);
-                        historyEntry.monitoring_duration_ms = Date.now() - startTime;
-                        await historyEntry.save();
-                        
-                        await this.stopMonitoring(analysisId, strategyId);
-                    } else {
-                        console.log(`❌ Order placement failed for ${analysisId}_${strategyId}: ${orderResult.message}`);
+                    // Get user details for WhatsApp notification
+                    const user = await User.findById(userId);
+                    if (!user || !user.mobile_number) {
+                        console.log(`❌ User ${userId} not found or missing mobile number for WhatsApp notification`);
                         
                         historyEntry.status = 'error';
-                        historyEntry.reason = 'Order placement failed';
-                        historyEntry.details.error_message = orderResult.message;
-                        historyEntry.addOrderResult(orderResult);
+                        historyEntry.reason = 'User mobile number not found';
+                        historyEntry.details.error_message = 'Cannot send WhatsApp notification - user mobile number missing';
                         historyEntry.monitoring_duration_ms = Date.now() - startTime;
                         await historyEntry.save();
+                        return;
                     }
-                } catch (orderError) {
-                    console.error(`❌ Error placing order for ${analysisId}_${strategyId}:`, orderError);
+
+                    // Format trigger conditions that were satisfied
+                    const triggersSatisfied = triggerResult.data?.triggers 
+                        ? triggerResult.data.triggers.map(t => `${t.name}: ${t.status}`).join(', ')
+                        : 'All trigger conditions met';
+
+                    // Get strategy details from analysis
+                    const strategy = analysis.strategies?.find(s => s.id === strategyId);
+                    if (!strategy) {
+                        console.log(`❌ Strategy ${strategyId} not found in analysis ${analysisId}`);
+                        
+                        historyEntry.status = 'error';
+                        historyEntry.reason = 'Strategy not found';
+                        historyEntry.details.error_message = 'Strategy details not found for WhatsApp notification';
+                        historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                        await historyEntry.save();
+                        return;
+                    }
+
+                    // Prepare WhatsApp strategy alert data
+                    const strategyData = {
+                        stock_name: analysis.stock_name || analysis.stock_symbol,
+                        entry_price: strategy.entry_price || 0,
+                        target_price: strategy.target || 0,
+                        stop_loss: strategy.stop_loss || 0,
+                        strategy_type: strategy.direction || 'BUY',
+                        current_price: triggerResult.data?.current_price || analysis.current_price || 0,
+                        triggers_satisfied: triggersSatisfied,
+                        next_action: 'Open LogDhan app to review and place order manually'
+                    };
+
+                    // Send WhatsApp notification
+                    const whatsappResult = await messagingService.sendStrategyAlert(
+                        user.mobile_number,
+                        strategyData
+                    );
+
+                    console.log(`📱 WhatsApp strategy alert sent for ${analysisId}_${strategyId}, continuing monitoring`);
+                    
+                    historyEntry.status = 'whatsapp_sent';
+                    historyEntry.reason = 'WhatsApp strategy alert sent successfully';
+                    historyEntry.details.whatsapp_result = whatsappResult;
+                    historyEntry.details.strategy_data = strategyData;
+                    historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                    await historyEntry.save();
+                    
+                    // Continue monitoring (don't stop like we did with order placement)
+                    console.log(`🔄 Monitoring continues for ${analysisId}_${strategyId} after WhatsApp notification`);
+                    
+                } catch (whatsappError) {
+                    console.error(`❌ Error sending WhatsApp notification for ${analysisId}_${strategyId}:`, whatsappError);
                     
                     historyEntry.status = 'error';
-                    historyEntry.reason = 'Order placement error';
-                    historyEntry.details.error_message = orderError.message;
+                    historyEntry.reason = 'WhatsApp notification failed';
+                    historyEntry.details.error_message = whatsappError.message;
                     historyEntry.monitoring_duration_ms = Date.now() - startTime;
                     await historyEntry.save();
                 }
@@ -346,6 +384,7 @@ class AgendaMonitoringService {
             const jobId = `monitor_${analysisId}_${strategyId}`;
             
             console.log(`🚀 Starting monitoring for ${jobId} with ${frequency.seconds}s frequency`);
+            console.log(`📅 OPTIMAL: Start monitoring after 4:30 PM when fresh analysis with EOD data is available`);
 
             // Cancel any existing job first
             await this.agenda.cancel({ name: 'check-triggers', 'data.analysisId': analysisId, 'data.strategyId': strategyId });

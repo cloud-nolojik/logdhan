@@ -250,7 +250,9 @@ class DailyDataPrefetchService {
 
 
     /**
-     * Run current day data pre-fetch using candleFetcherService (simplified)
+     * Run current day data pre-fetch using candleFetcherService
+     * ENHANCED: Uses intraday API to get today's candlestick data and append to existing historical data
+     * Perfect timing: runs at 4:05 PM after market close to get complete EOD data
      */
     async runCurrentDayPrefetch() {
         const now = new Date();
@@ -275,6 +277,7 @@ class DailyDataPrefetchService {
         }
 
         console.log(`🚀 [CURRENT DAY PREFETCH] Starting current day data pre-fetch using candleFetcherService`);
+        console.log(`📈 [CURRENT DAY PREFETCH] Focus: Appending today's intraday EOD data to existing historical data`);
 
         // Get unique stocks from all user watchlists
         const uniqueStocks = await this.getUniqueWatchlistStocks();
