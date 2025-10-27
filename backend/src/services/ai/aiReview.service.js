@@ -16,6 +16,7 @@ import { subscriptionService } from '../subscription/subscriptionService.js';
   import { Plan }  from '../../models/plan.js';
 import { Subscription } from '../../models/subscription.js';
 import candleFetcherService from '../candleFetcher.service.js';
+import modelSelectorService from './modelSelector.service.js';
 
 
 
@@ -381,145 +382,7 @@ class AIReviewService {
 
 
 
-  /**
-   * Determine which AI model to use based on user's plan, credits, and ad status
-   * @param {String} userId - User ID
-   * @param {Boolean} isFromRewardedAd - Whether this is from a rewarded ad
-   * @param {String} creditType - Type of credit (regular, bonus, paid)
-   * @returns {Object} - Model configuration and status
-   */
-  async determineAIModel(userId, isFromRewardedAd = false, creditType = 'regular') {
-    try {
-//       console.log(`\n🔍 Determining AI model for user: ${userId}`);
-//       console.log(`   isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
-      
-      // Import required services
-      const { Subscription } = await import('../../models/subscription.js');
-      const { Plan } = await import('../../models/plan.js');
-      const { subscriptionService } = await import('../subscription/subscriptionService.js');
-      
-      // Check if user can use credits
-      const canUse = await subscriptionService.canUserUseCredits(userId, 1, isFromRewardedAd);
-      
-      if (!canUse.canUse) {
-        // Credits exhausted - determine appropriate message
-        const subscription = await Subscription.findActiveForUser(userId);
-        const plan = subscription ? await Plan.getPlanById(subscription.planId) : null;
-        
-        let errorMessage = '';
-        let errorCode = 'CREDITS_EXHAUSTED';
-        
-        if (plan && plan.analysisLevel === 'advanced') {
-          // Paid plan with exhausted credits
-          if (isFromRewardedAd) {
-            // User watched ad but still can't use (maybe ad limit reached)
-            errorMessage = canUse.reason || 'Daily ad limit reached. Please try again tomorrow.';
-            errorCode = 'AD_LIMIT_REACHED';
-          } else {
-            // Suggest watching ad for paid users
-            errorMessage = 'Your monthly credits are exhausted. Watch an ad to get this trade reviewed with AI, or wait for next month\'s credits.';
-            errorCode = 'PAID_CREDITS_EXHAUSTED';
-          }
-        } else {
-          // Basic/free plan with exhausted credits
-          if (isFromRewardedAd) {
-            errorMessage = canUse.reason || 'Daily limit reached. Please try again tomorrow.';
-            errorCode = 'DAILY_LIMIT_REACHED';
-          } else {
-            errorMessage = 'Daily free credits exhausted. Watch an ad to get this trade reviewed with AI.';
-            errorCode = 'FREE_CREDITS_EXHAUSTED';
-          }
-        }
-        
-        return {
-          canProceed: false,
-          error: errorMessage,
-          errorCode: errorCode,
-          suggestAd: !isFromRewardedAd, // Suggest ad only if not already from ad
-          models: null
-        };
-      }
-      
-      // User can proceed - determine models
-      const subscription = await Subscription.findActiveForUser(userId);
-      const plan = subscription ? await Plan.getPlanById(subscription.planId) : null;
-      
-      let analysisModel = 'o4-mini'; // Default basic model
-      let sentimentModel = 'gpt-4o-mini'; // Default basic model
-      let modelTier = 'basic';
-      
-      // Priority 1: Check if using bonus credits (advanced analysis)
-      if (creditType === 'bonus') {
-        // Bonus credits get advanced model for premium analysis
-        analysisModel = 'gpt-5';
-        sentimentModel = 'gpt-4o-mini';
-        modelTier = 'advanced';
-//         console.log(`🎁 Bonus credits - using advanced analysis model (o4-mini)`);
-      }
-      // Priority 1.5: Check if this is from rewarded ad (basic model for sustainability) 
-      else if (isFromRewardedAd) {
-        // Rewarded ad users get basic model (sustainable for ad revenue)
-        analysisModel = 'o4-mini';
-        sentimentModel = 'gpt-4o-mini';
-        modelTier = 'ad-supported';
-//         console.log(`🎁 Ad-supported review - using basic models (o4-mini) for sustainability`);
-      }
-      // Priority 2: Check plan type for paying users
-      else if (plan && plan.analysisLevel === 'advanced') {
-        // Check if paid user has credits remaining
-        const totalCredits = (subscription.credits.remaining || 0) + 
-                           (subscription.credits.rollover || 0) + 
-                           (subscription.credits.earnedCredits || 0);
-        
-        if (totalCredits > 0) {
-          // Paid user has credits - use advanced model
-          analysisModel = 'gpt-5';
-          sentimentModel = 'gpt-4o-mini';
-          modelTier = 'advanced';
-//           console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models (gpt-5)`);
-        } else {
-          // Paid user exhausted credits - fallback to basic model
-          analysisModel = 'o4-mini';
-          sentimentModel = 'gpt-4o-mini';
-          modelTier = 'basic-fallback';
-//           console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models (o4-mini)`);
-        }
-      }
-      // Priority 3: Basic/free plan users
-      else {
-        // Basic plan users get basic model
-        analysisModel = 'o4-mini';
-        sentimentModel = 'gpt-4o-mini';
-        modelTier = 'basic';
-//         console.log(`📱 Basic/free plan - using basic models (o4-mini)`);
-      }
-      
-      return {
-        canProceed: true,
-        models: {
-          analysis: analysisModel,
-          sentiment: sentimentModel,
-          tier: modelTier
-        },
-        creditType: isFromRewardedAd ? 'bonus' : creditType,
-        subscription: {
-          planId: plan?.planId || 'free',
-          analysisLevel: plan?.analysisLevel || 'basic',
-          creditsRemaining: subscription?.credits?.regular || 0,
-          bonusCreditsRemaining: subscription?.credits?.bonusCredits || 0
-        }
-      };
-      
-    } catch (error) {
-//       console.error('Error determining AI model:', error);
-      return {
-        canProceed: false,
-        error: 'Failed to determine AI model configuration. Please try again.',
-        errorCode: 'MODEL_DETERMINATION_ERROR',
-        models: null
-      };
-    }
-  }
+  // determineAIModel method moved to common modelSelectorService
 
   /**
    * Main entry point - replaces n8n workflow
@@ -533,7 +396,7 @@ class AIReviewService {
     
     // Use the new centralized model determination function
     if (userId) {
-      const modelConfig = await this.determineAIModel(
+      const modelConfig = await modelSelectorService.determineAIModel(
         userId, 
         tradeData.isFromRewardedAd || false,
         tradeData.creditType || 'regular'

@@ -11,7 +11,7 @@ const indicatorSignalSchema = new mongoose.Schema({
     },
     signal: {
         type: String,
-        enum: ['STRONG_BUY', 'BUY', 'NEUTRAL', 'SELL', 'STRONG_SELL'],
+        enum: ['STRONG_BUY', 'BUY', 'NEUTRAL', 'SELL', 'STRONG_SELL', 'neutral'],
         required: true
     }
 });
@@ -43,31 +43,44 @@ const strategySchema = new mongoose.Schema({
     },
     entryType: {
         type: String,
-        enum: ['market', 'limit', 'range', 'stop', 'stop-limit'],
+        enum: ['market', 'limit', 'range', 'stop', 'stop-limit', 'none'],
         default: 'limit'
     },
     entry: {
         type: Number,
-        required: true
+        required: function() {
+            return this.type !== 'NO_TRADE';
+        },
+        default: 0
     },
     entryRange: [{
         type: Number
     }],
     target: {
         type: Number,
-        required: true
+        required: function() {
+            return this.type !== 'NO_TRADE';
+        },
+        default: 0
     },
     stopLoss: {
         type: Number,
-        required: true
+        required: function() {
+            return this.type !== 'NO_TRADE';
+        },
+        default: 0
     },
     riskReward: {
         type: Number,
-        required: true
+        required: function() {
+            return this.type !== 'NO_TRADE';
+        },
+        default: 0
     },
     timeframe: {
         type: String,
-        required: true
+        required: true,
+        default: '3-7 days'  // Default for swing analysis
     },
     indicators: [indicatorSignalSchema],
     reasoning: [mongoose.Schema.Types.Mixed], // Accept objects or strings
@@ -640,26 +653,28 @@ stockAnalysisSchema.statics.isAnalysisAllowed = function() {
 // Method to check if bulk analysis is allowed (4 PM to next trading day 8:45 AM)
 stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
     const now = new Date();
-    const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
-    const currentDay = istTime.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-    const currentTime = istTime.getHours() * 60 + istTime.getMinutes(); // Total minutes
+    
+    // FIXED: Proper IST timezone handling
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000)); // Add 5.5 hours for IST
+    const currentDay = istTime.getUTCDay(); // Use UTC methods on IST-adjusted time
+    const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes(); // Total minutes
     
     // Import MarketTiming for holiday checking
     const MarketTiming = (await import('./marketTiming.js')).default;
     
     // Helper function to check if a date is a trading day
     const isTradingDay = async (date) => {
-        // Fix: Use IST date components to avoid timezone conversion issues
-        const istDate = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
-        const year = istDate.getFullYear();
-        const month = String(istDate.getMonth() + 1).padStart(2, '0');
-        const day = String(istDate.getDate()).padStart(2, '0');
+        // FIXED: Proper IST timezone handling
+        const istDate = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+        const year = istDate.getUTCFullYear();
+        const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(istDate.getUTCDate()).padStart(2, '0');
         const dateStr = `${year}-${month}-${day}`; // YYYY-MM-DD format
         const marketTiming = await MarketTiming.findOne({ date: dateStr });
         
         // If no record exists, assume it's a trading day if it's a weekday
         if (!marketTiming) {
-            const dayOfWeek = istDate.getDay();
+            const dayOfWeek = istDate.getUTCDay();
             return dayOfWeek >= 1 && dayOfWeek <= 5; // Monday to Friday
         }
         
@@ -669,20 +684,20 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
     // Helper function to find next trading day
     const findNextTradingDay = async (fromDate) => {
         let checkDate = new Date(fromDate);
-        checkDate.setDate(checkDate.getDate() + 1); // Start from next day
+        checkDate.setUTCDate(checkDate.getUTCDate() + 1); // Start from next day
         
         let maxDays = 10; // Prevent infinite loop
         while (maxDays > 0) {
             if (await isTradingDay(checkDate)) {
                 return checkDate;
             }
-            checkDate.setDate(checkDate.getDate() + 1);
+            checkDate.setUTCDate(checkDate.getUTCDate() + 1);
             maxDays--;
         }
         
         // Fallback: return next Monday if can't find trading day
         const nextMonday = new Date(fromDate);
-        nextMonday.setDate(nextMonday.getDate() + ((1 + 7 - nextMonday.getDay()) % 7 || 7));
+        nextMonday.setUTCDate(nextMonday.getUTCDate() + ((1 + 7 - nextMonday.getUTCDay()) % 7 || 7));
         return nextMonday;
     };
     
@@ -692,14 +707,14 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
     
     // Current date for checking if it's a trading day
     const currentDate = new Date(istTime);
-    currentDate.setHours(0, 0, 0, 0);
+    currentDate.setUTCHours(0, 0, 0, 0);
     
     // IMPORTANT: Handle early morning hours (12 AM - 8:45 AM) first
     // These are continuation of previous day's session
     if (currentTime < bulkEndTime) {
         // This is early morning - check if we're in continuation of yesterday's session
         const yesterdayDate = new Date(currentDate);
-        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        yesterdayDate.setUTCDate(yesterdayDate.getUTCDate() - 1);
         
         const yesterdayWasTradingDay = await isTradingDay(yesterdayDate);
         
@@ -723,11 +738,15 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
         }
         
         // Neither yesterday nor today is trading day - weekend/holiday
+        // FIXED: Weekends and holidays should ALLOW analysis anytime
         const nextTradingDay = await findNextTradingDay(currentDate);
+        const nextTradingDayEnd = new Date(nextTradingDay);
+        nextTradingDayEnd.setUTCHours(8, 45, 0, 0);
+        
         return { 
-            allowed: false, 
-            reason: "holiday", 
-            nextAllowed: `${nextTradingDay.toLocaleDateString('en-IN', {timeZone: 'Asia/Kolkata'})} 4:00 PM`
+            allowed: true, 
+            reason: "weekend_session", 
+            validUntil: nextTradingDayEnd.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})
         };
     }
     
@@ -739,7 +758,7 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
         // Find next trading day after current date
         const nextTradingDay = await findNextTradingDay(currentDate);
         const nextTradingDayEnd = new Date(nextTradingDay);
-        nextTradingDayEnd.setHours(8, 45, 0, 0);
+        nextTradingDayEnd.setUTCHours(8, 45, 0, 0);
         
         return { 
             allowed: true, 
@@ -764,7 +783,7 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
             // After 4 PM: Allowed until next trading day 8:45 AM
             const nextTradingDay = await findNextTradingDay(currentDate);
             const nextTradingDayEnd = new Date(nextTradingDay);
-            nextTradingDayEnd.setHours(8, 45, 0, 0);
+            nextTradingDayEnd.setUTCHours(8, 45, 0, 0);
             
             return { 
                 allowed: true, 
@@ -801,17 +820,17 @@ stockAnalysisSchema.statics.getExpiryTime = async function() {
     
     // Helper function to check if a date is a trading day
     const isTradingDay = async (date) => {
-        // Fix: Use IST date components to avoid timezone conversion issues
-        const istDate = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
-        const year = istDate.getFullYear();
-        const month = String(istDate.getMonth() + 1).padStart(2, '0');
-        const day = String(istDate.getDate()).padStart(2, '0');
+        // FIXED: Proper IST timezone handling
+        const istDate = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+        const year = istDate.getUTCFullYear();
+        const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(istDate.getUTCDate()).padStart(2, '0');
         const dateStr = `${year}-${month}-${day}`; // YYYY-MM-DD format
         const marketTiming = await MarketTiming.findOne({ date: dateStr });
         
         // If no record exists, assume it's a trading day if it's a weekday
         if (!marketTiming) {
-            const dayOfWeek = istDate.getDay();
+            const dayOfWeek = istDate.getUTCDay();
             return dayOfWeek >= 1 && dayOfWeek <= 5; // Monday to Friday
         }
         
@@ -821,26 +840,26 @@ stockAnalysisSchema.statics.getExpiryTime = async function() {
     // Helper function to find next trading day
     const findNextTradingDay = async (fromDate) => {
         let checkDate = new Date(fromDate);
-        checkDate.setDate(checkDate.getDate() + 1); // Start from next day
+        checkDate.setUTCDate(checkDate.getUTCDate() + 1); // Start from next day
         
         let maxDays = 10; // Prevent infinite loop
         while (maxDays > 0) {
             if (await isTradingDay(checkDate)) {
                 return checkDate;
             }
-            checkDate.setDate(checkDate.getDate() + 1);
+            checkDate.setUTCDate(checkDate.getUTCDate() + 1);
             maxDays--;
         }
         
         // Fallback: return next Monday if can't find trading day
         const nextMonday = new Date(fromDate);
-        nextMonday.setDate(nextMonday.getDate() + ((1 + 7 - nextMonday.getDay()) % 7 || 7));
+        nextMonday.setUTCDate(nextMonday.getUTCDate() + ((1 + 7 - nextMonday.getUTCDay()) % 7 || 7));
         return nextMonday;
     };
     
     // Current date for checking if it's a trading day
     const currentDate = new Date(istTime);
-    currentDate.setHours(0, 0, 0, 0);
+    currentDate.setUTCHours(0, 0, 0, 0);
     
     // Find next trading day and set expiry to 8:45 AM
     const nextTradingDay = await findNextTradingDay(currentDate);

@@ -2,6 +2,7 @@ import React from 'react';
 import { Routes, Route } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
+import SEBIDisclaimerBanner from './components/SEBIDisclaimerBanner';
 import Home from './pages/Home';
 import HowItWorks from './pages/HowItWorks';
 import Pricing from './pages/Pricing';
@@ -19,10 +20,11 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-main-gradient">
       <head>
-        <title>LogDhan – AI for Smarter Trades</title>
-        <meta name="description" content="LogDhan is a credit-based AI trading assistant for smarter investing and better decisions. Powered by Nolojik Innovations." />
+        <title>LogDhan – Educational Stock Analysis Learning Platform</title>
+        <meta name="description" content="LogDhan is an educational stock analysis platform for learning investment concepts. Educational tools for understanding market analysis. Powered by Nolojik Innovations." />
         <link rel="icon" href="/logo.svg" />
       </head>
+      <SEBIDisclaimerBanner />
       <Navbar />
       <main className="flex-1">
         <Routes>

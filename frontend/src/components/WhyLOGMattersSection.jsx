@@ -10,7 +10,7 @@ const testimonials = [
   {
     name: 'Priya R.',
     avatar: '👩🏽',
-    quote: 'The L.O.G. method helped me optimize my decisions and grow my portfolio with confidence.',
+    quote: 'The Locate • Optimise • Generate method helped me optimize my decisions and grow my portfolio with confidence.',
     color: 'border-gold-light',
   },
   {
@@ -24,7 +24,7 @@ const testimonials = [
 function WhyLOGMattersSection() {
   return (
     <section className="py-16 px-4 max-w-5xl mx-auto text-center">
-      <h2 className="text-2xl md:text-3xl font-bold text-white mb-8">Why L.O.G. Matters?</h2>
+      <h2 className="text-2xl md:text-3xl font-bold text-white mb-8">Why Locate • Optimise • Generate Matters?</h2>
       <div className="flex flex-col md:flex-row gap-8 justify-center items-stretch">
         {testimonials.map((t, i) => (
           <div key={i} className={`flex-1 bg-white/10 rounded-xl p-6 flex flex-col items-center shadow-lg border-2 ${t.color}`}>

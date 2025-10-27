@@ -24,10 +24,16 @@ const planSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
-  credits: {
+  // credits: { // COMMENTED OUT - No credits concept
+  //   type: Number,
+  //   required: true,
+  //   min: 0
+  // },
+  stockLimit: {
     type: Number,
     required: true,
-    min: 0
+    min: 1,
+    default: 3
   },
   features: [{
     type: String
@@ -63,56 +69,64 @@ const planSchema = new mongoose.Schema({
     enum: ['BASIC', 'FULL'],
     default: 'FULL'
   },
-  showAds: {
-    type: Boolean,
-    default: false
-  },
+  // showAds: { // COMMENTED OUT - No ads concept
+  //   type: Boolean,
+  //   default: false
+  // },
   analysisLevel: {
     type: String,
     enum: ['basic', 'advanced'],
     required: true
   },
-  creditRollover: {
-    enabled: {
-      type: Boolean,
-      default: false
-    },
-    maxPercentage: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: 100
-    }
-  },
+  // creditRollover: { // COMMENTED OUT - No credits concept
+  //   enabled: {
+  //     type: Boolean,
+  //     default: false
+  //   },
+  //   maxPercentage: {
+  //     type: Number,
+  //     default: 0,
+  //     min: 0,
+  //     max: 100
+  //   }
+  // },
   restrictions: {
-    dailyCredits: {
+    stockLimit: {
+      type: Number,
+      default: 3
+    },
+    trialDurationDays: {
       type: Number,
       default: null
-    },
-    firstWeekCap: {
-      type: Number,
-      default: null
-    },
-    expiryDays: {
-      type: Number,
-      default: null
-    },
-    dailyReviewLimit: {
-      type: Number,
-      default: null
-    },
-    rewardedAdLimit: {
-      type: Number,
-      default: null
-    },
-    weeklyReviewLimit: {
-      type: Number,
-      default: null
-    },
-    rateLimited: {
-      type: Boolean,
-      default: false
     }
+    // dailyCredits: { // COMMENTED OUT - No credits concept
+    //   type: Number,
+    //   default: null
+    // },
+    // firstWeekCap: { // COMMENTED OUT - No credits concept
+    //   type: Number,
+    //   default: null
+    // },
+    // expiryDays: { // COMMENTED OUT - No credits concept
+    //   type: Number,
+    //   default: null
+    // },
+    // dailyReviewLimit: { // COMMENTED OUT - No credits concept
+    //   type: Number,
+    //   default: null
+    // },
+    // rewardedAdLimit: { // COMMENTED OUT - No ads concept
+    //   type: Number,
+    //   default: null
+    // },
+    // weeklyReviewLimit: { // COMMENTED OUT - No credits concept
+    //   type: Number,
+    //   default: null
+    // },
+    // rateLimited: { // COMMENTED OUT - No credits concept
+    //   type: Boolean,
+    //   default: false
+    // }
   },
   isActive: {
     type: Boolean,
@@ -140,9 +154,9 @@ planSchema.statics.getPlanById = function(planId) {
   return this.findOne({ planId, isActive: true });
 };
 
-// Method to calculate credits per rupee
-planSchema.methods.getCreditsPerRupee = function() {
-  return this.price > 0 ? this.credits / this.price : 0;
+// Method to calculate stocks per rupee (replaces credits per rupee)
+planSchema.methods.getStocksPerRupee = function() {
+  return this.price > 0 ? this.stockLimit / this.price : 0;
 };
 
 export const Plan = mongoose.model('Plan', planSchema);

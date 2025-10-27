@@ -115,18 +115,18 @@ router.post('/verify-otp', async (req, res) => {
     
     if (!existingSubscription) {
       try {
-        console.log(`🆕 Creating basic ads subscription for new user ${mobileNumber}`);
+        console.log(`🆕 Creating trial subscription for new user ${mobileNumber}`);
         
-        // Create basic ads subscription for new users (lifetime free with ads)
+        // Create trial subscription for new users (30-day free trial with 3 stocks)
         await subscriptionService.createSubscription(
           user._id,
-          'basic_ads',
+          'trial_3_stocks',
           {
             source: 'new_user_login'
           }
         );
         
-        console.log(`✅ Created basic ads subscription for new user ${mobileNumber}`);
+        console.log(`✅ Created trial subscription for new user ${mobileNumber}`);
         
       } catch (subscriptionError) {
         console.error(`Subscription creation failed for ${mobileNumber}:`, subscriptionError);
@@ -150,7 +150,8 @@ router.post('/verify-otp', async (req, res) => {
         isOnboarded: user.isOnboarded,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
-      }
+      },
+      hasConsented: user.hasConsented || false
     });
   } catch (error) {
     console.error('Error verifying OTP:', error);
@@ -423,6 +424,73 @@ router.post('/complete-assessment', auth, async (req, res) => {
     });
   }
 });
+
+// POST /auth/submit-consent - Submit user's SEBI consent
+router.post('/submit-consent', auth, async (req, res) => {
+  try {
+    const { consentAcceptance } = req.body;
+    
+    if (!consentAcceptance) {
+      return res.status(400).json({
+        success: false,
+        error: 'Consent data is required'
+      });
+    }
+
+    // Validate required fields
+    const { checkboxes, hashOfTextShown, consentText } = consentAcceptance;
+    
+    if (!checkboxes || !hashOfTextShown) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required consent data'
+      });
+    }
+
+    // Validate mandatory checkboxes (removed communication preferences)
+    if (!checkboxes.notAdvice || !checkboxes.acceptTermsPrivacy || !checkboxes.age18Plus || !checkboxes.whatsappCommunication) {
+      return res.status(400).json({
+        success: false,
+        error: 'All mandatory checkboxes must be accepted (investment advice, terms/privacy, age 18+, WhatsApp notifications)'
+      });
+    }
+
+    // Update user consent
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Update consent fields
+    user.hasConsented = true;
+    user.consentedAt = new Date();
+    user.consentTextHash = hashOfTextShown;
+    user.consentText = consentText || null; // Store the actual consent text for audit
+    user.consentVersion = '1.0';
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Consent submitted successfully',
+      data: {
+        hasConsented: true,
+        consentedAt: user.consentedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Error submitting consent:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to submit consent'
+    });
+  }
+});
+
 
 // POST /auth/complete-deep-diagnostic - Complete deep diagnostic assessment and award additional credits
 router.post('/complete-deep-diagnostic', auth, async (req, res) => {

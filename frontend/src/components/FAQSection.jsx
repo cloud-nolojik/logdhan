@@ -3,28 +3,32 @@ import { motion } from 'framer-motion';
 
 const faqs = [
   {
-    q: 'What is LogDhan?',
-    a: 'LogDhan is an AI-powered trade planning and review app that helps you plan trades before execution, get AI insights, and maintain detailed logs for disciplined investing.'
+    q: '⚠️ Is LogDhan providing investment advice?',
+    a: 'NO. LogDhan is strictly an educational platform. We provide learning tools for stock analysis education, not investment recommendations or advice. We are not registered with SEBI as an Investment Adviser or Research Analyst. All content is for educational purposes only.'
   },
   {
-    q: 'How does the free plan work?',
-    a: 'Our Basic Free plan gives you unlimited AI trade reviews by watching short ads. It\'s completely free forever with small banner ads and rewarded videos for each review.'
+    q: 'How do the AI swing setups work?',
+    a: 'Our AI analyzes thousands of NSE/BSE stocks daily using technical patterns, volume, and market sentiment. It generates educational swing setups showing entry price, stop-loss, target, risk-reward ratio, and confidence score - all for learning swing trading concepts and market analysis.'
   },
   {
-    q: 'What are the differences between free and Pro plans?',
-    a: 'Basic Free: Unlimited reviews with ads. Pro Monthly: 150 credits/month, no ads. Pro Annual: 2000 credits/year, no ads, best value. Pro plans offer unlimited reviews and ad-free experience.'
+    q: 'How do WhatsApp alerts work?',
+    a: 'You receive educational WhatsApp notifications when: 1) AI creates a new swing setup, 2) Entry conditions are met. All alerts are for educational learning about market timing and trade management.'
   },
   {
-    q: 'Are ads intrusive or annoying?',
-    a: 'No! We use small banner ads and rewarded videos for each review. No pop-ups or interruptions during your trading analysis. Simply watch a short ad to get your AI review.'
+    q: 'Can I use LogDhan with any broker?',
+    a: 'Yes! LogDhan doesn\'t integrate with any broker platforms. We send educational WhatsApp alerts when AI detects trigger conditions. You then manually place trades on your preferred broker platform (Zerodha, Upstox, ICICI, etc.) based on the educational insights.'
   },
   {
-    q: 'Is my data secure and private?',
-    a: 'Absolutely. Your data is encrypted and never shared with third parties. See our Privacy Policy for details.'
+    q: 'What stocks does the AI cover?',
+    a: 'AI analyzes 1000+ stocks from NSE and BSE, including NIFTY 50, NIFTY 500, and popular mid/small cap stocks like RELIANCE, INFY, TCS, HDFC Bank, and many more for comprehensive educational swing trading analysis.'
   },
   {
-    q: 'Can I upgrade or cancel anytime?',
-    a: 'Yes! Upgrade from Basic Free to Pro anytime for ad-free experience. Pro subscriptions can be cancelled anytime with no penalties.'
+    q: 'What are the plan differences?',
+    a: 'Free Trial: 1-month with 3 stocks + WhatsApp alerts for learning. Paid Plans: ₹999 (10 stocks), ₹1999 (20 stocks), ₹2999 (30 stocks) per month. All include AI confidence scoring and real-time educational alerts - no investment advice.'
+  },
+  {
+    q: 'Is my educational data secure and private?',
+    a: 'Absolutely. Your learning data is encrypted and never shared with third parties. We maintain strict privacy standards for all educational content interactions and never share your watchlist or trading preferences. See our Privacy Policy for details.'
   },
 ];
 
@@ -43,7 +47,7 @@ export default function FAQSection() {
         <h2 className="text-4xl md:text-5xl font-black text-white mb-4">
           Frequently Asked <span className="text-transparent bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text">Questions</span>
         </h2>
-        <p className="text-xl text-slate-400">Everything you need to know about LogDhan</p>
+        <p className="text-xl text-slate-400">Everything you need to know about AI swing trading education</p>
       </motion.div>
       
       <div className="space-y-4">

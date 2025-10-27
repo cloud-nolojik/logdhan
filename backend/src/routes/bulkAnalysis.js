@@ -4,6 +4,7 @@ import StockAnalysis from '../models/stockAnalysis.js';
 import AnalysisSession from '../models/analysisSession.js';
 import aiAnalyzeService from '../services/aiAnalyze.service.js';
 import { User } from '../models/user.js';
+import { Subscription } from '../models/subscription.js';
 import { getCurrentPrice } from '../utils/stock.js';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
 
@@ -79,6 +80,34 @@ router.post('/analyze-all', auth, async (req, res) => {
         }
         
         console.log(`✅ [BULK TIMING] Analysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);
+        
+        // Check if user can analyze stocks (trial expiry check)
+        try {
+            const analysisPermissionCheck = await Subscription.canUserAnalyzeStock(userId);
+            
+            if (!analysisPermissionCheck.canAnalyze) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'analysis_not_allowed',
+                    message: analysisPermissionCheck.isTrialExpired 
+                        ? 'Your free trial has expired. Please subscribe to continue analyzing stocks.'
+                        : 'You need an active subscription to analyze stocks.',
+                    data: {
+                        planId: analysisPermissionCheck.planId,
+                        isTrialExpired: analysisPermissionCheck.isTrialExpired,
+                        trialExpiryDate: analysisPermissionCheck.trialExpiryDate,
+                        needsUpgrade: true
+                    }
+                });
+            }
+        } catch (subscriptionError) {
+            console.error('Error checking analysis permission:', subscriptionError);
+            return res.status(400).json({
+                success: false,
+                error: 'subscription_check_failed',
+                message: subscriptionError.message
+            });
+        }
         
         // Get user's watchlist
         const watchlistStocks = await getUserWatchlist(userId);
@@ -210,9 +239,11 @@ router.post('/cancel', auth, async (req, res) => {
             message: 'Analysis cancelled successfully',
             data: {
                 session_id: session.session_id,
+                total_stocks: session.total_stocks,
+                analysis_type: analysis_type,
+                estimated_time_minutes: 0, // No time remaining since cancelled
                 status: session.status,
                 processed_stocks: session.processed_stocks,
-                total_stocks: session.total_stocks,
                 cancelled_at: session.cancelled_at
             }
         });
@@ -242,26 +273,8 @@ router.get('/status', auth, async (req, res) => {
         }).sort({ created_at: -1 });
         
         //console.log(`📋 [SESSION SEARCH] Single session found: ${activeSession ? `${activeSession.session_id} (${activeSession.status})` : 'null'}`);
-        
-        // If session exists but is very old (more than 1 hour), consider it stale and don't show it
-        if (activeSession) {
-            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-            const sessionDate = activeSession.created_at || activeSession.started_at;
-            if (sessionDate < oneHourAgo && ['completed', 'cancelled', 'failed'].includes(activeSession.status)) {
-                //console.log(`🗑️ [SESSION SEARCH] Session too old (${activeSession.status}), ignoring`);
-                activeSession = null;
-            }
-        }
-        
-        // Debug: Check if any sessions exist for this user
-        const allUserSessions = await AnalysisSession.find({ user_id: userId, analysis_type: analysis_type }).sort({ created_at: -1 }).limit(3);
-        // //console.log(`📋 [SESSION DEBUG] Found ${allUserSessions.length} total sessions for user:`, allUserSessions.map(s => ({ 
-        //      id: s.session_id, 
-        //      status: s.status, 
-        //      processed: s.processed_stocks, 
-        //      total: s.total_stocks,
-        //      created: s.created_at 
-        // })));
+
+    
         
         // If there's an active or resumable session, use session-based status
         if (activeSession) {
@@ -329,7 +342,16 @@ router.get('/status', auth, async (req, res) => {
                         }
                     }
                 } else if (activeSession.current_stock_key === stock.instrument_key) {
-                    stockStatus = 'in_progress';
+                    // Only show as in_progress if session is actually running
+                    if (activeSession.status === 'in_progress' || activeSession.status === 'running') {
+                        stockStatus = 'in_progress';
+                    } else if (activeSession.status === 'cancelled') {
+                        // If session was cancelled while processing this stock, show as pending
+                        stockStatus = 'pending';
+                    } else {
+                        // For other states (failed, completed), show as pending
+                        stockStatus = 'pending';
+                    }
                 }
                 
                 const stockDetail = {
@@ -401,17 +423,17 @@ router.get('/status', auth, async (req, res) => {
             const sessionResponseData = {
                 session_id: activeSession.session_id,
                 target_count: activeSession.total_stocks,
-                total_analyses: activeSession.processed_stocks,
+                total_analyses: stockDetails.length, // Count actual current analyses, not processed_stocks
                 completed: actualCompletedCount,
                 in_progress: actualInProgressCount,
                 pending: actualPendingCount,
                 failed: actualFailedCount,
-                progress_percentage: activeSession.progress_percentage,
+                progress_percentage: Math.round((actualCompletedCount / stockDetails.length) * 100), // Calculate based on actual analyses
                 is_complete: isComplete,
                 analysis_type: analysis_type,
                 status: activeSession.status === 'completed' ? 'completed' : (isComplete ? 'completed' : activeSession.status),
                 current_stock: activeSession.current_stock_key,
-                session_status: activeSession.status,
+                session_status: activeSession.status === 'completed' ? 'completed' : (isComplete ? 'completed' : activeSession.status),
                 started_at: activeSession.started_at,
                 last_updated: activeSession.last_updated,
                 estimated_completion: activeSession.metadata?.estimated_completion_time,
@@ -799,7 +821,6 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                     current_price: numericPrice, // Use validated numeric price
                     analysis_type: analysisType,
                     user_id: userId,
-                    forceFresh: true // Always force fresh analysis
                 });
                 
                 completed++;
@@ -1028,7 +1049,7 @@ async function processSessionBasedBulkAnalysis(session) {
                         stock_name: stock.stock_name,
                         current_price: numericPrice,
                         analysis_type: session.analysis_type,
-                        user_id: session.user_id,
+                        // user_id: removed for bulk analysis to make results shareable across users
                         forceFresh: true
                     });
                     
@@ -1291,7 +1312,7 @@ router.post('/reanalyze-stock', auth, async (req, res) => {
                 stock_name: stock_name,
                 current_price: parseFloat(currentPrice),
                 analysis_type: analysis_type,
-                user_id: userId,
+                // user_id: removed for bulk analysis to make results shareable across users
                 forceFresh: true
             });
             

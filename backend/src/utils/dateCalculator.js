@@ -109,29 +109,71 @@ class DateCalculator {
         let currentToDate = new Date(toDate);
         let currentFromDate = new Date(fromDate);
         
-        console.log(`📅 [CHUNK SPLIT] ${timeframe}: ${this.formatDateISO(fromDate)} to ${this.formatDateISO(toDate)}`);
+        // Calculate total days in the range
+        const totalDays = Math.ceil((toDate - fromDate) / (1000 * 60 * 60 * 24));
         
+        console.log(`🔍 [CHUNK DEBUG] ================================`);
+        console.log(`🔍 [CHUNK DEBUG] Timeframe: ${timeframe}`);
+        console.log(`🔍 [CHUNK DEBUG] Total range: ${this.formatDateISO(fromDate)} to ${this.formatDateISO(toDate)}`);
+        console.log(`🔍 [CHUNK DEBUG] Total days: ${totalDays}`);
+        console.log(`🔍 [CHUNK DEBUG] Upstox limit for ${timeframe}: ${limits.maxCalendarDays} days`);
+        console.log(`🔍 [CHUNK DEBUG] Needs chunking: ${totalDays > limits.maxCalendarDays ? 'YES' : 'NO'}`);
+        
+        if (totalDays <= limits.maxCalendarDays) {
+            console.log(`✅ [CHUNK DEBUG] Range fits in single call, no chunking needed`);
+            return [{
+                fromDate: new Date(fromDate),
+                toDate: new Date(toDate)
+            }];
+        }
+        
+        console.log(`⚠️ [CHUNK DEBUG] Range exceeds limit, splitting into chunks...`);
+        
+        let chunkCount = 0;
         while (currentFromDate < currentToDate) {
+            chunkCount++;
+            console.log(`🔍 [CHUNK DEBUG] --- Processing chunk ${chunkCount} ---`);
+            console.log(`🔍 [CHUNK DEBUG] Current iteration: fromDate=${this.formatDateISO(currentFromDate)}, toDate=${this.formatDateISO(currentToDate)}`);
+            
             // Calculate max allowed from date for this chunk
             const chunkFromDate = new Date(currentToDate);
             chunkFromDate.setDate(chunkFromDate.getDate() - limits.maxCalendarDays);
+            console.log(`🔍 [CHUNK DEBUG] Calculated chunkFromDate (toDate - ${limits.maxCalendarDays} days): ${this.formatDateISO(chunkFromDate)}`);
             
             // Use the later of calculated chunk start or actual start date
             const actualFromDate = chunkFromDate > currentFromDate ? chunkFromDate : currentFromDate;
+            console.log(`🔍 [CHUNK DEBUG] ActualFromDate (max of chunk vs current): ${this.formatDateISO(actualFromDate)}`);
+            
+            const chunkDays = Math.ceil((currentToDate - actualFromDate) / (1000 * 60 * 60 * 24));
+            console.log(`🔍 [CHUNK DEBUG] Chunk days: ${chunkDays}`);
             
             chunks.push({
                 fromDate: new Date(actualFromDate),
                 toDate: new Date(currentToDate)
             });
             
-            console.log(`📦 [CHUNK] ${timeframe}: ${this.formatDateISO(actualFromDate)} to ${this.formatDateISO(currentToDate)} (${Math.ceil((currentToDate - actualFromDate) / (1000 * 60 * 60 * 24))} days)`);
+            console.log(`📦 [CHUNK ${chunkCount}] ${timeframe}: ${this.formatDateISO(actualFromDate)} to ${this.formatDateISO(currentToDate)} (${chunkDays} days)`);
             
             // Move to next chunk (subtract 1 day to avoid overlap)
             currentToDate = new Date(actualFromDate);
             currentToDate.setDate(currentToDate.getDate() - 1);
+            console.log(`🔍 [CHUNK DEBUG] Next iteration toDate: ${this.formatDateISO(currentToDate)}`);
+            
+            // Safety check to prevent infinite loop
+            if (chunkCount > 20) {
+                console.error(`❌ [CHUNK DEBUG] Too many chunks (${chunkCount}), breaking to prevent infinite loop`);
+                break;
+            }
         }
         
         console.log(`📊 [CHUNKS] Split ${timeframe} into ${chunks.length} API calls`);
+        console.log(`🔍 [CHUNK DEBUG] Final chunks:`);
+        chunks.forEach((chunk, index) => {
+            const days = Math.ceil((chunk.toDate - chunk.fromDate) / (1000 * 60 * 60 * 24));
+            console.log(`🔍 [CHUNK DEBUG]   ${index + 1}. ${this.formatDateISO(chunk.fromDate)} to ${this.formatDateISO(chunk.toDate)} (${days} days)`);
+        });
+        console.log(`🔍 [CHUNK DEBUG] ================================`);
+        
         return chunks.reverse(); // Return chronological order (oldest first)
     }
 

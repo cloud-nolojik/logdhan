@@ -1,7 +1,9 @@
 import express from 'express';
 import aiReviewService from '../services/aiAnalyze.service.js';
+import candleFetcherService from '../services/candleFetcher.service.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
+import { Subscription } from '../models/subscription.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import rateLimit from 'express-rate-limit';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
@@ -86,54 +88,74 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
         const stock_symbol = stockInfo.trading_symbol;
 
 
-        // Get current price from latest candle data
+        // Get current price from latest candle data using modern candleFetcher service
         let current_price = null;
         try {
-            // Create temporary trade data to fetch latest price
-            const tempTradeData = {
-                term: analysis_type === 'swing' ? 'short' : 'intraday',
-                instrument_key,
-                stock: stock_name
-            };
+            console.log(`📊 [PRICE FETCH] Getting current price for ${stock_symbol} (${instrument_key})`);
             
-            // Use aiReviewService to get latest candle data
-            const { endpoints } = await aiReviewService.aiReviewService.buildCandleUrls(tempTradeData);
+            // Use candleFetcherService to get candle data (DB first, API fallback)
+            const term = analysis_type === 'swing' ? 'short' : 'intraday';
+            const candleResult = await candleFetcherService.getCandleDataForAnalysis(instrument_key, term);
             
-            // Try to fetch latest price from the first endpoint
-            if (endpoints.length > 0) {
-                const latestEndpoint = endpoints[0]; // Get first endpoint for current price
-                try {
-                    const candleData = await aiReviewService.fetchCandleData(latestEndpoint.url);
-                    const candles = candleData?.data?.candles || candleData?.candles || [];
-                    
-                    if (candles.length > 0) {
-                        // Find the candle with the most recent timestamp
-                        let latestCandle = null;
-                        let latestTimestamp = null;
+            if (candleResult.success && candleResult.data) {
+                console.log(`✅ [PRICE FETCH] Got data from ${candleResult.source}: ${Object.keys(candleResult.data).length} timeframes`);
+                
+                // Try to get current price from any available timeframe (prefer shorter timeframes for latest price)
+                const timeframes = ['15m', '1h', '1d'];
+                let latestCandle = null;
+                let latestTimestamp = null;
+                
+                for (const timeframe of timeframes) {
+                    const candles = candleResult.data[timeframe];
+                    if (candles && candles.length > 0) {
+                        console.log(`📊 [PRICE FETCH] Checking ${timeframe}: ${candles.length} candles`);
                         
+                        // Get the most recent candle from this timeframe
+                        const lastCandle = candles[candles.length - 1];
+                        const timestamp = Array.isArray(lastCandle) ? lastCandle[0] : lastCandle.timestamp;
                         
-                        for (const candle of candles) {
-                            const timestamp = Array.isArray(candle) ? candle[0] : candle.time;
-                            const candleTime = new Date(timestamp).getTime();
-                            
-                            if (!latestTimestamp || candleTime > latestTimestamp) {
-                                latestTimestamp = candleTime;
-                                latestCandle = candle;
+                        // Validate timestamp before using it
+                        if (!timestamp) {
+                            console.warn(`⚠️ [PRICE FETCH] Invalid timestamp (null/undefined) in ${timeframe} candle`);
+                            continue;
+                        }
+                        
+                        const candleTime = new Date(timestamp).getTime();
+                        
+                        // Check if the timestamp is valid
+                        if (isNaN(candleTime)) {
+                            console.warn(`⚠️ [PRICE FETCH] Invalid timestamp "${timestamp}" in ${timeframe} candle`);
+                            continue;
+                        }
+                        
+                        if (!latestTimestamp || candleTime > latestTimestamp) {
+                            latestTimestamp = candleTime;
+                            latestCandle = lastCandle;
+                            try {
+                                const timestampStr = new Date(timestamp).toISOString();
+                                console.log(`🎯 [PRICE FETCH] Found newer candle in ${timeframe}: ${timestampStr}`);
+                            } catch (e) {
+                                console.log(`🎯 [PRICE FETCH] Found newer candle in ${timeframe}: ${timestamp} (raw)`);
                             }
                         }
-                        
-                        if (latestCandle) {
-                            const newPrice = Array.isArray(latestCandle) ? latestCandle[4] : latestCandle.close;
-                            const candleTime = Array.isArray(latestCandle) ? latestCandle[0] : latestCandle.time;
-                            
-                            current_price = newPrice;
-                        } else {
-                            console.warn(`⚠️ No valid candle found in ${candles.length} candles`);
-                        }
                     }
-                } catch (priceError) {
-                    console.warn(`⚠️ Could not fetch current price: ${priceError.message}`);
                 }
+                
+                if (latestCandle) {
+                    current_price = Array.isArray(latestCandle) ? latestCandle[4] : latestCandle.close;
+                    const candleTime = Array.isArray(latestCandle) ? latestCandle[0] : latestCandle.timestamp;
+                    
+                    try {
+                        const candleTimeStr = new Date(candleTime).toISOString();
+                        console.log(`✅ [PRICE FETCH] Current price: ₹${current_price} (from ${candleTimeStr})`);
+                    } catch (e) {
+                        console.log(`✅ [PRICE FETCH] Current price: ₹${current_price} (from ${candleTime} - raw timestamp)`);
+                    }
+                } else {
+                    console.warn(`⚠️ [PRICE FETCH] No valid candles found in any timeframe`);
+                }
+            } else {
+                console.warn(`⚠️ [PRICE FETCH] Failed to get candle data: ${candleResult.error || 'Unknown error'}`);
             }
             
             // No fallback price - if we can't get current price, we can't proceed
@@ -174,17 +196,42 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
             });
         }
 
-        // TESTING: Skip rate limiting check
+        // Check if user can analyze stocks (trial expiry check)
+        try {
+            const analysisPermissionCheck = await Subscription.canUserAnalyzeStock(userId);
+            
+            if (!analysisPermissionCheck.canAnalyze) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'analysis_not_allowed',
+                    message: analysisPermissionCheck.isTrialExpired 
+                        ? 'Your free trial has expired. Please subscribe to continue analyzing stocks.'
+                        : 'You need an active subscription to analyze stocks.',
+                    data: {
+                        planId: analysisPermissionCheck.planId,
+                        isTrialExpired: analysisPermissionCheck.isTrialExpired,
+                        trialExpiryDate: analysisPermissionCheck.trialExpiryDate,
+                        needsUpgrade: true
+                    }
+                });
+            }
+        } catch (subscriptionError) {
+            console.error('Error checking analysis permission:', subscriptionError);
+            return res.status(400).json({
+                success: false,
+                error: 'subscription_check_failed',
+                message: subscriptionError.message
+            });
+        }
 
         // Start AI analysis directly
-        const result = await aiReviewService.analyzeStock(
+        const result = await aiReviewService.analyzeStock({
             instrument_key,
             stock_name,
             stock_symbol,
-            price,
+            current_price,
             analysis_type,
-            userId
-        );
+            userId});
 
         if (result.success) {
             const responseData = {
@@ -275,6 +322,182 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
             success: false,
             error: 'Internal server error',
             message: 'Failed to fetch analysis'
+        });
+    }
+});
+
+/**
+ * @route GET /api/ai/analysis/by-instrument/:instrumentKey
+ * @desc Get analysis by instrument key
+ * @access Private
+ */
+router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (req, res) => {
+    try {
+        const { instrumentKey } = req.params;
+        const { analysis_type = 'swing' } = req.query;
+        const userId = req.user.id;
+
+        console.log(`🔍 [ANALYSIS BY INSTRUMENT] Fetching analysis for instrument: ${instrumentKey}, type: ${analysis_type}, user: ${userId}`);
+
+        // First check for any analysis (completed or in progress)
+        const anyAnalysis = await StockAnalysis.findOne({
+            instrument_key: instrumentKey,
+            analysis_type: analysis_type,
+            expires_at: { $gt: new Date() } // Only return non-expired analyses
+        }).sort({ created_at: -1 }); // Get most recent analysis
+
+        // Auto-fail analyses stuck for more than 10 minutes
+        if (anyAnalysis && anyAnalysis.status === 'in_progress') {
+            const now = new Date();
+            const analysisAge = now - anyAnalysis.created_at;
+            const maxAge = 10 * 60 * 1000; // 10 minutes
+            
+            if (analysisAge > maxAge) {
+                console.log(`⏰ [ANALYSIS TIMEOUT] Auto-failing stuck analysis: ${anyAnalysis._id}, age: ${Math.round(analysisAge/1000/60)}min`);
+                anyAnalysis.status = 'failed';
+                anyAnalysis.progress.current_step = 'Analysis timed out';
+                anyAnalysis.progress.percentage = 100;
+                await anyAnalysis.save();
+            }
+        }
+
+        if (!anyAnalysis) {
+            console.log(`❌ [ANALYSIS BY INSTRUMENT] No analysis found for instrument: ${instrumentKey}`);
+            return res.status(404).json({
+                success: false,
+                error: 'Analysis not found',
+                message: 'No analysis found for this instrument'
+            });
+        }
+
+        // If analysis is not completed, return in_progress status (unless failed)
+        if (anyAnalysis.status !== 'completed') {
+            // If analysis failed, return 404 to stop polling
+            if (anyAnalysis.status === 'failed') {
+                console.log(`💀 [ANALYSIS BY INSTRUMENT] Analysis failed for instrument: ${instrumentKey}`);
+                return res.status(404).json({
+                    success: false,
+                    error: 'Analysis failed',
+                    message: 'Analysis failed or timed out'
+                });
+            }
+            console.log(`🔄 [ANALYSIS BY INSTRUMENT] Analysis in progress for instrument: ${instrumentKey}, status: ${anyAnalysis.status}`);
+            
+            // Create minimal analysis_data structure with required fields
+            const defaultAnalysisData = {
+                ...anyAnalysis.analysis_data,
+                generated_at_ist: new Date().toISOString(), // Required field
+                market_summary: {
+                    last: anyAnalysis.current_price || 0,
+                    trend: "NEUTRAL",
+                    volatility: "MEDIUM", 
+                    volume: "AVERAGE"
+                },
+                overall_sentiment: "NEUTRAL",
+                strategies: [],
+                disclaimer: "Analysis in progress..."
+            };
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    _id: anyAnalysis._id,
+                    instrument_key: anyAnalysis.instrument_key,
+                    stock_name: anyAnalysis.stock_name,
+                    stock_symbol: anyAnalysis.stock_symbol,
+                    analysis_type: anyAnalysis.analysis_type,
+                    current_price: anyAnalysis.current_price || 0,
+                    analysis_data: defaultAnalysisData,
+                    status: anyAnalysis.status,
+                    progress: anyAnalysis.progress,
+                    created_at: anyAnalysis.created_at,
+                    expires_at: anyAnalysis.expires_at
+                },
+                cached: false,
+                analysis_id: anyAnalysis._id.toString(),
+                error: null,
+                message: 'Analysis in progress'
+            });
+        }
+
+        // Validate required fields exist for completed analysis
+        if (!anyAnalysis.analysis_data?.market_summary?.last || 
+            !anyAnalysis.analysis_data?.market_summary?.trend || 
+            !anyAnalysis.analysis_data?.market_summary?.volatility || 
+            !anyAnalysis.analysis_data?.market_summary?.volume) {
+            console.log(`❌ [ANALYSIS BY INSTRUMENT] Incomplete analysis data for instrument: ${instrumentKey}`);
+            
+            // Create minimal analysis_data structure with required fields for incomplete analysis
+            const defaultAnalysisData = {
+                ...anyAnalysis.analysis_data,
+                generated_at_ist: new Date().toISOString(), // Required field
+                market_summary: {
+                    last: anyAnalysis.current_price || 0,
+                    trend: "NEUTRAL",
+                    volatility: "MEDIUM", 
+                    volume: "AVERAGE"
+                },
+                overall_sentiment: "NEUTRAL",
+                strategies: [],
+                disclaimer: "Analysis data incomplete - still processing..."
+            };
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    _id: anyAnalysis._id,
+                    instrument_key: anyAnalysis.instrument_key,
+                    stock_name: anyAnalysis.stock_name,
+                    stock_symbol: anyAnalysis.stock_symbol,
+                    analysis_type: anyAnalysis.analysis_type,
+                    current_price: anyAnalysis.current_price || 0,
+                    analysis_data: defaultAnalysisData,
+                    status: 'in_progress', // Treat incomplete as in_progress
+                    progress: anyAnalysis.progress,
+                    created_at: anyAnalysis.created_at,
+                    expires_at: anyAnalysis.expires_at
+                },
+                cached: false,
+                analysis_id: anyAnalysis._id.toString(),
+                error: null,
+                message: 'Analysis data incomplete - still processing'
+            });
+        }
+
+        const analysis = anyAnalysis; // Use the found analysis
+
+        console.log(`✅ [ANALYSIS BY INSTRUMENT] Found complete analysis: ${analysis._id}, status: ${analysis.status}`);
+
+        // Format response to match AnalysisApiResponse structure
+        const formattedResponse = {
+            _id: analysis._id,
+            instrument_key: analysis.instrument_key,
+            stock_name: analysis.stock_name,
+            stock_symbol: analysis.stock_symbol,
+            analysis_type: analysis.analysis_type,
+            current_price: analysis.current_price,
+            analysis_data: analysis.analysis_data,
+            status: analysis.status,
+            created_at: analysis.created_at,
+            expires_at: analysis.expires_at
+            // user_id removed - not needed in frontend
+        };
+
+        res.json({
+            success: true,
+            data: formattedResponse,
+            cached: true, // This is from DB, so it's cached
+            analysis_id: analysis._id.toString(),
+            error: null,
+            message: null
+        });
+
+    } catch (error) {
+        console.error('❌ Get Analysis by Instrument API Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: 'Failed to fetch analysis by instrument'
         });
     }
 });

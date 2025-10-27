@@ -3,44 +3,44 @@ import { motion } from 'framer-motion';
 
 const features = [
   {
-    title: 'Smart Trade Logging',
+    title: 'AI Swing Setups',
     icon: (
-      <svg className="w-8 h-8 text-accent-cyan" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>
+      <svg className="w-8 h-8 text-accent-cyan" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
     ),
     color: 'text-accent-cyan',
   },
   {
-    title: 'AI-Powered Insights',
+    title: 'WhatsApp Alerts',
     icon: (
-      <svg className="w-8 h-8 text-accent-purple" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><path d="M8 15s1.5-2 4-2 4 2 4 2" /></svg>
+      <svg className="w-8 h-8 text-accent-purple" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></svg>
     ),
     color: 'text-accent-purple',
   },
   {
-    title: 'Export Trading Journal',
+    title: 'Risk-First Approach',
     icon: (
-      <svg className="w-8 h-8 text-accent-pink" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" /></svg>
+      <svg className="w-8 h-8 text-accent-pink" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4" /><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3 4-3 9-3 9 1.34 9 3" /><path d="M21 5c0 1.66-4 3-9 3S3 6.66 3 5s4-3 9-3 9 1.34 9 3" /></svg>
     ),
     color: 'text-accent-pink',
   },
   {
-    title: 'Mobile App Experience',
+    title: 'Cash Market Focus',
     icon: (
-      <svg className="w-8 h-8 text-secondary" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+      <svg className="w-8 h-8 text-secondary" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
     ),
     color: 'text-secondary',
   },
   {
-    title: 'TradingView Integration',
+    title: 'AI Confidence Scoring',
     icon: (
-      <svg className="w-8 h-8 text-chartgreen" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M8 16l3-3 2 2 3-5" /></svg>
+      <svg className="w-8 h-8 text-chartgreen" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M9 19c-5 0-8-3-8-8s3-8 8-8 8 3 8 8-3 8-8 8" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" y1="9" x2="9.01" y2="9" /><line x1="15" y1="9" x2="15.01" y2="9" /></svg>
     ),
     color: 'text-chartgreen',
   },
   {
-    title: 'Ad-Supported Free Plan',
+    title: 'Time-Boxed Expiry',
     icon: (
-      <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" /><circle cx="12" cy="12" r="10" /></svg>
+      <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><polyline points="12,6 12,12 16,14" /></svg>
     ),
     color: 'text-green-400',
   },
@@ -57,9 +57,9 @@ export default function FeatureSection() {
       >
         <div className="text-center mb-16">
           <h2 className="text-4xl md:text-5xl font-black text-white mb-4">
-            Powerful <span className="text-transparent bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text">Features</span>
+            Swing Trading <span className="text-transparent bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text">Features</span>
           </h2>
-          <p className="text-xl text-slate-400 max-w-2xl mx-auto">Everything you need to become a disciplined, profitable trader</p>
+          <p className="text-xl text-slate-400 max-w-2xl mx-auto">AI-generated swing setups with WhatsApp alerts for your trading platform</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
           {features.map((f, i) => (

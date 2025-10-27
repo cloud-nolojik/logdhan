@@ -16,20 +16,32 @@ export default function WhatIsLogDhanSection() {
               <span className="text-blue-400 text-sm font-semibold">🚀 WHAT IS LOGDHAN?</span>
             </div>
             <h2 className="text-4xl md:text-5xl font-black text-white mb-6 leading-tight">
-              Your <span className="text-transparent bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text">AI Trading Mentor</span>
+              Your <span className="text-transparent bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text">AI Swing Strategy Generator</span>
             </h2>
             <p className="text-xl text-slate-300 mb-8 leading-relaxed">
-              Transform impulsive trading into disciplined wealth creation. LogDhan uses the L.O.G philosophy—<span className="text-orange-400 font-bold">Log</span> every trade, <span className="text-blue-400 font-bold">Optimise</span> with AI insights, <span className="text-emerald-400 font-bold">Generate</span> consistent profits.
+              Focus: short-term swing trading (cash market). Get precise setups with entries, stops, targets, AI confidence, and time-boxed expiry. WhatsApp alerts at key moments—setup, confirmation, manage, expiry. Use the setups with any broker you choose.
             </p>
+            
+            {/* Educational Disclaimer */}
+            <div className="bg-amber-900/20 border border-amber-500/30 rounded-xl p-4 mb-6">
+              <div className="flex items-center gap-2 text-amber-400 text-sm font-semibold mb-2">
+                <span>⚠️</span>
+                <span>NOT SEBI-REGISTERED • EDUCATIONAL ONLY</span>
+              </div>
+              <p className="text-amber-200/80 text-sm">
+                LogDhan provides model-generated strategies for learning purposes. We do not provide investment advice. 
+                Trading involves risk; past performance does not guarantee future results. You are solely responsible for your trades.
+              </p>
+            </div>
           </div>
           
           <div className="space-y-4">
             {[
-              { icon: '♾️', title: 'Forever FREE', desc: 'Unlimited AI reviews by watching short ads', color: 'text-emerald-400' },
-              { icon: '🧠', title: 'AI-Powered Analysis', desc: 'Get instant feedback on every trade decision', color: 'text-blue-400' },
-              { icon: '📈', title: 'Build Your Playbook', desc: 'Learn from mistakes and repeat successes', color: 'text-purple-400' },
-              { icon: '🎯', title: 'Disciplined Trading', desc: 'No more FOMO or revenge trading', color: 'text-pink-400' },
-              { icon: '💎', title: 'Pro Plans Available', desc: 'Ad-free experience with monthly credits', color: 'text-yellow-400' }
+              { icon: '📊', title: 'AI Swing Setups Only', desc: 'No noise. Clear entries, stops, targets, and invalidation', color: 'text-emerald-400' },
+              { icon: '🤖', title: 'AI Confidence + Reasoning', desc: 'See why a setup exists (trend, volatility regime, breadth)', color: 'text-blue-400' },
+              { icon: '⚡', title: 'Risk-First Defaults', desc: 'R:R shown upfront, ATR-aligned SL, time-boxed expiry', color: 'text-purple-400' },
+              { icon: '📱', title: 'WhatsApp at Right Time', desc: 'Setup → Confirmation → Manage → Expiry alerts', color: 'text-pink-400' },
+              { icon: '🎯', title: 'Your Choice of Broker', desc: 'Use setups with any broker platform you prefer', color: 'text-yellow-400' }
             ].map((item, i) => (
               <motion.div
                 key={i}
@@ -68,8 +80,8 @@ export default function WhatIsLogDhanSection() {
                 </div>
                 <div className="space-y-3">
                   <div className="bg-white/10 rounded-lg p-3 flex items-center justify-between">
-                    <span className="text-white text-sm">AI Reviews</span>
-                    <span className="bg-emerald-500 text-white text-xs px-2 py-1 rounded-full font-bold">∞ UNLIMITED</span>
+                    <span className="text-white text-sm">AI Strategies</span>
+                    <span className="bg-emerald-500 text-white text-xs px-2 py-1 rounded-full font-bold">FREE TRIAL</span>
                   </div>
                   <div className="bg-white/10 rounded-lg p-3 flex items-center justify-between">
                     <span className="text-white text-sm">Status</span>
@@ -77,7 +89,7 @@ export default function WhatIsLogDhanSection() {
                   </div>
                   <div className="bg-white/10 rounded-lg p-3 flex items-center justify-between">
                     <span className="text-white text-sm">Plan</span>
-                    <span className="text-blue-300 text-sm font-bold">Basic Free</span>
+                    <span className="text-blue-300 text-sm font-bold">Trial Plan</span>
                   </div>
                 </div>
               </div>

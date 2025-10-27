@@ -21,81 +21,19 @@ class SubscriptionService {
    */
   async initializeDefaultPlans() {
     const defaultPlans = [
-      
       {
-        planId: 'pro_monthly',
-        cashfreePlanId:  'pro_monthly',
-        name: 'Pro Monthly',
-        description: 'Monthly subscription with full features',
-        type: 'MONTHLY',
-        price: 99,
-        credits: 125,
-        features: [
-          '125 credits per month',
-          'Advanced Analysis',
-          'Up to 50% credits roll over',
-          'Priority support'
-        ],
-        recurringType: 'PERIODIC',
-        billingCycle: 'MONTHLY',
-        maxAmount: 99,
-        recurringAmount: 99,
-        costCap: 61.5,
-        grossMargin: 37.5,
-        pipelineAccess: 'FULL',
-        showAds: false,
-        analysisLevel: 'advanced',
-        creditRollover: { enabled: true, maxPercentage: 50 },
-        restrictions: {
-          dailyReviewLimit: 0,   // 0 means unlimited daily usage - use monthly pool
-          weeklyReviewLimit: 0   // 0 means unlimited weekly usage
-        },
-        sortOrder: 2
-      },
-      {
-        planId: 'pro_yearly1',
-        name: 'Pro Yearly',
-        cashfreePlanId:  'pro_yearly1',
-        description: 'Annual subscription with best value',
-        type: 'ANNUAL',
-        price: 999,
-        credits: 2000,
-        features: [
-          '2000 credits per year',
-           'Advanced Analysis',
-          '100% credits roll over',
-          'Priority support',
-          'Best value - Save ₹189!'
-        ],
-        recurringType: 'PERIODIC',
-        billingCycle: 'YEARLY',
-        maxAmount: 999,
-        recurringAmount: 999,
-        costCap: 824,
-        grossMargin: 175,
-        pipelineAccess: 'FULL',
-        showAds: false,
-        analysisLevel: 'advanced',
-        creditRollover: { enabled: true, maxPercentage: 100 },
-        restrictions: {
-          dailyReviewLimit: 0,    // 0 means unlimited daily usage - use yearly pool
-          weeklyReviewLimit: 0    // 0 means unlimited weekly usage
-        },
-        sortOrder: 3
-      },
-      {
-        planId: 'basic_ads',
-        name: 'Basic Free',
-        description: 'Lifetime free plan with ads',
-        type: 'FREE_LIFETIME', // Custom type for lifetime free
+        planId: 'trial_free',
+        name: '1 Month Free Trial',
+        description: '30-day free trial with up to 3 stocks',
+        type: 'TRIAL',
         price: 0,
-        credits: 999999, // Unlimited credits for basic plan (stored as large number for DB compatibility)
+        stockLimit: 3,
         features: [
-          'Unlimited AI reviews with ads',
-          'Unlimited from watching ads',
-          'Smart trade analysis',
-          'Basic charts & insights', 
-          'Earn bonus credits from assessments'
+          '30-day free trial',
+          'Add up to 3 stocks to watchlist',
+          'AI stock analysis',
+          'Basic insights and recommendations',
+          'WhatsApp alerts'
         ],
         recurringType: 'ONE_TIME',
         billingCycle: 'ONE_TIME',
@@ -103,18 +41,116 @@ class SubscriptionService {
         recurringAmount: 0,
         costCap: 0,
         grossMargin: 0,
-        pipelineAccess: 'BASIC',
-        showAds: true,
-        analysisLevel: 'basic',
-        creditRollover: { enabled: false },
+        pipelineAccess: 'FULL',
+        // showAds: false, // COMMENTED OUT - No ads concept
+        analysisLevel: 'advanced',
+        // creditRollover: { enabled: false }, // COMMENTED OUT - No credits concept
         restrictions: {
-          dailyReviewLimit: 0,    // 0 means unlimited
-          dailyFreeReviews: 0,    // 0 means unlimited - no free review limit, users can watch ads anytime
-          rewardedAdLimit: 0,     // 0 means unlimited ads per day
-          weeklyReviewLimit: 0,   // 0 means unlimited
-          rateLimited: false      // No rate limiting for basic plan with ads
+          stockLimit: 3,
+          trialDurationDays: 30
+          // dailyReviewLimit: 0,    // COMMENTED OUT - No credits concept
+          // weeklyReviewLimit: 0    // COMMENTED OUT - No credits concept
         },
-        sortOrder: 0 // Show first as free option
+        sortOrder: 0
+      },
+      {
+        planId: 'basic_monthly',
+        cashfreePlanId: 'basic_monthly',
+        name: 'Basic Plan',
+        description: '30-day plan for up to 10 stocks',
+        type: 'MONTHLY',
+        price: 999,
+        stockLimit: 10,
+        features: [
+          'Add up to 10 stocks to watchlist',
+          'Advanced AI analysis',
+          'Real-time WhatsApp alerts',
+          'Priority support',
+          'Unlimited stock analysis'
+        ],
+        recurringType: 'PERIODIC',
+        billingCycle: 'MONTHLY',
+        maxAmount: 999,
+        recurringAmount: 999,
+        costCap: 699,
+        grossMargin: 300,
+        pipelineAccess: 'FULL',
+        // showAds: false, // COMMENTED OUT - No ads concept
+        analysisLevel: 'advanced',
+        // creditRollover: { enabled: false }, // COMMENTED OUT - No credits concept
+        restrictions: {
+          stockLimit: 10
+          // dailyReviewLimit: 0,   // COMMENTED OUT - No credits concept
+          // weeklyReviewLimit: 0   // COMMENTED OUT - No credits concept
+        },
+        sortOrder: 1
+      },
+      {
+        planId: 'pro_monthly',
+        cashfreePlanId: 'pro_monthly',
+        name: 'Pro Plan',
+        description: '30-day plan for up to 20 stocks',
+        type: 'MONTHLY',
+        price: 1999,
+        stockLimit: 20,
+        features: [
+          'Add up to 20 stocks to watchlist',
+          'Advanced AI analysis',
+          'Real-time WhatsApp alerts',
+          'Priority support',
+          'Unlimited stock analysis',
+          'Portfolio insights'
+        ],
+        recurringType: 'PERIODIC',
+        billingCycle: 'MONTHLY',
+        maxAmount: 1999,
+        recurringAmount: 1999,
+        costCap: 1399,
+        grossMargin: 600,
+        pipelineAccess: 'FULL',
+        // showAds: false, // COMMENTED OUT - No ads concept
+        analysisLevel: 'advanced',
+        // creditRollover: { enabled: false }, // COMMENTED OUT - No credits concept
+        restrictions: {
+          stockLimit: 20
+          // dailyReviewLimit: 0,    // COMMENTED OUT - No credits concept
+          // weeklyReviewLimit: 0    // COMMENTED OUT - No credits concept
+        },
+        sortOrder: 2
+      },
+      {
+        planId: 'premium_monthly',
+        cashfreePlanId: 'premium_monthly',
+        name: 'Premium Plan',
+        description: '30-day plan for up to 30 stocks',
+        type: 'MONTHLY',
+        price: 2999,
+        stockLimit: 30,
+        features: [
+          'Add up to 30 stocks to watchlist',
+          'Advanced AI analysis',
+          'Real-time WhatsApp alerts',
+          'Priority support',
+          'Unlimited stock analysis',
+          'Portfolio insights',
+          'Custom alerts and strategies'
+        ],
+        recurringType: 'PERIODIC',
+        billingCycle: 'MONTHLY',
+        maxAmount: 2999,
+        recurringAmount: 2999,
+        costCap: 2099,
+        grossMargin: 900,
+        pipelineAccess: 'FULL',
+        // showAds: false, // COMMENTED OUT - No ads concept
+        analysisLevel: 'advanced',
+        // creditRollover: { enabled: false }, // COMMENTED OUT - No credits concept
+        restrictions: {
+          stockLimit: 30
+          // dailyReviewLimit: 0,    // COMMENTED OUT - No credits concept
+          // weeklyReviewLimit: 0    // COMMENTED OUT - No credits concept
+        },
+        sortOrder: 3
       }
     ];
 
@@ -226,20 +262,21 @@ class SubscriptionService {
         planId: plan.planId, // Required field
         planName: plan.name, // Required field
         nextResetAt: endDate, // Required field - when credits reset next
-        planCredits: plan.credits, // Required field - base monthly credits
+        planCredits: 0, // Legacy field - not used in stockLimit-based model
         status: 'ACTIVE', // Free plans start active
         pricing: {
           amount: plan.price,
-          credits: plan.credits,
+          stockLimit: plan.stockLimit,
           billingCycle: plan.billingCycle
         },
+        stockLimit: plan.stockLimit,
         // Cashfree fields are now optional and null for free plans
         cashfreeSubscriptionId: null,
         cashfreeSessionId: null,
         credits: {
-          total: plan.credits,
+          total: 0, // Legacy field - using stockLimit instead
           used: 0,
-          remaining: plan.credits,
+          remaining: 0,
           rollover: 0,
           earnedCredits: 0,
           bonusCredits: 0,
@@ -1780,6 +1817,30 @@ class SubscriptionService {
     } catch (error) {
       console.error('Error processing subscription status:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Check if user can add stock to watchlist
+   */
+  async canUserAddStock(userId, currentStockCount) {
+    try {
+      return await Subscription.canUserAddStock(userId, currentStockCount);
+    } catch (error) {
+      console.error('Error checking user stock limit:', error);
+      throw new Error('Failed to check stock limit. Please try again.');
+    }
+  }
+
+  /**
+   * Check if user can analyze stocks
+   */
+  async canUserAnalyzeStock(userId) {
+    try {
+      return await Subscription.canUserAnalyzeStock(userId);
+    } catch (error) {
+      console.error('Error checking user analysis permission:', error);
+      throw new Error('Failed to check analysis permission. Please try again.');
     }
   }
 }

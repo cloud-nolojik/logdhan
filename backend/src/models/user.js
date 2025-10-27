@@ -214,6 +214,26 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  hasConsented: {
+    type: Boolean,
+    default: false
+  },
+  consentedAt: {
+    type: Date,
+    default: null
+  },
+  consentTextHash: {
+    type: String,
+    default: null
+  },
+  consentText: {
+    type: String,
+    default: null
+  },
+  consentVersion: {
+    type: String,
+    default: null
+  },
   verificationToken: String,
   resetPasswordToken: String,
   resetPasswordExpires: Date,

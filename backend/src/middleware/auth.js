@@ -8,6 +8,7 @@ export const auth = async (req, res, next) => {
     if (!token) {
       return res.status(401).json({ error: 'Authentication required' });
     }
+    console.log('Auth token:', token);
 
     // Check if token is blacklisted
     const isBlacklisted = await TokenBlacklist.isTokenBlacklisted(token);

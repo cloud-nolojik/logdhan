@@ -29,8 +29,8 @@ export default function Home() {
           <div className="text-6xl mb-6">📱</div>
           <h3 className="text-xl font-bold text-white mb-4">Download the LogDhan App</h3>
           <p className="text-white/90 mb-6 max-w-md mx-auto">
-            Experience AI-powered trading insights on your mobile device. 
-            Start with unlimited free AI reviews or upgrade to Pro for ad-free experience.
+            Get AI swing setups with WhatsApp alerts on your mobile device. 
+            Start with 1-month free trial (3 stocks) or upgrade for more watchlist capacity.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
             <Link to="/download" className="group">
@@ -41,9 +41,9 @@ export default function Home() {
           </div>
           <div className="mt-6 text-white/70 text-sm">
             <p><span className="text-gold-light font-semibold">
-              Free Plan: Unlimited AI reviews with ads
+              Trial: 1-month free with 3 stocks + WhatsApp alerts
             </span></p>
-            <p>Pro Plans: Monthly/Yearly credits • Ad-free experience • Available on all devices</p>
+            <p>Paid Plans: ₹999/₹1999/₹2999 for 10/20/30 stocks • Same AI features • Available on all devices</p>
           </div>
         </div>
       </section>

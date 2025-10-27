@@ -20,20 +20,19 @@ const router = express.Router();
 router.post('/start', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
-        const { analysisId, strategyId, frequencySeconds = 60 } = req.body;
+        const { analysisId, frequencySeconds = 60 } = req.body;
         
         console.log(`🚀 [AGENDA] Start monitoring request from user ${userId}:`, {
             analysisId,
-            strategyId,
             frequencySeconds
         });
         
         // Validate input
-        if (!analysisId || !strategyId) {
+        if (!analysisId) {
             return res.status(400).json({
                 success: false,
                 error: 'invalid_request',
-                message: 'Analysis ID and Strategy ID are required'
+                message: 'Analysis ID is required'
             });
         }
         
@@ -57,13 +56,7 @@ router.post('/start', authenticateToken, async (req, res) => {
             });
         }
         
-        if (analysis.user_id.toString() !== userId) {
-            return res.status(403).json({
-                success: false,
-                error: 'access_denied',
-                message: 'You do not have access to this analysis'
-            });
-        }
+        // Note: Analysis user validation removed - monitoring is user-linked, not analysis-linked
         
         // Check if analysis has expired
         if (analysis.expires_at && new Date(analysis.expires_at) < new Date()) {
@@ -83,13 +76,27 @@ router.post('/start', authenticateToken, async (req, res) => {
             });
         }
         
-        // Verify strategy exists
-        const strategy = analysis.analysis_data.strategies.find(s => s.id === strategyId);
+        // Get first strategy (top strategy) automatically
+        const strategies = analysis.analysis_data?.strategies || [];
+        if (strategies.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'no_strategies',
+                message: 'No strategies found in analysis'
+            });
+        }
+        
+        const strategy = strategies[0]; // Always use first strategy
+        const strategyId = strategy.id;
+        
+        console.log(`🎯 [AGENDA] Using first strategy: ${strategy.type} (ID: ${strategyId})`);
+        
+        // Verify first strategy exists (redundant but safe)
         if (!strategy) {
             return res.status(404).json({
                 success: false,
                 error: 'strategy_not_found',
-                message: 'Strategy not found in analysis. Please ensure the strategy ID matches one from your analysis.',
+                message: 'No valid strategy found in analysis',
                 data: {
                     provided_strategy_id: strategyId,
                     available_strategies: analysis.analysis_data.strategies.map(s => s.id),
@@ -254,13 +261,15 @@ router.post('/stop', authenticateToken, async (req, res) => {
         // Verify analysis belongs to user
         const analysis = await StockAnalysis.findById(analysisId);
         
-        if (!analysis || analysis.user_id.toString() !== userId) {
-            return res.status(403).json({
+        if (!analysis) {
+            return res.status(404).json({
                 success: false,
-                error: 'access_denied',
-                message: 'You do not have access to this analysis'
+                error: 'analysis_not_found',
+                message: 'Analysis not found'
             });
         }
+        
+        // Note: Analysis user validation removed - monitoring is user-linked, not analysis-linked
         
         // Stop monitoring with Agenda
         console.log(`🔄 Calling agendaMonitoringService.stopMonitoring...`);
@@ -305,13 +314,14 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
         // Verify analysis belongs to user
         const analysis = await StockAnalysis.findById(analysisId);
         
-        if (!analysis || analysis.user_id.toString() !== userId) {
-            return res.status(403).json({
+        if (!analysis) {
+            return res.status(404).json({
                 success: false,
-                error: 'access_denied',
-                message: 'You do not have access to this analysis'
+                error: 'analysis_not_found',
+                message: 'Analysis not found'
             });
         }
+        
         
         
         // Get monitoring status for each strategy in the analysis
@@ -320,29 +330,24 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
         let hasAnyActiveMonitoring = false;
         
         
-        // Check monitoring status for each strategy
-        for (const strategy of strategies) {
-            const strategyStatus = await agendaMonitoringService.getMonitoringStatus(analysisId, strategy.id);
-            strategyStatuses[strategy.id] = strategyStatus;
+        // Check monitoring status for only the first strategy (top strategy)
+        if (strategies.length > 0) {
+            const topStrategy = strategies[0]; // Consider only the first/top strategy
+            const strategyStatus = await agendaMonitoringService.getMonitoringStatus(analysisId, topStrategy.id, userId);
+            strategyStatuses[topStrategy.id] = strategyStatus;
             
             if (strategyStatus.isMonitoring) {
                 hasAnyActiveMonitoring = true;
             }
         }
-        
-        // Also get analysis-level status for backward compatibility
-        const analysisStatus = await agendaMonitoringService.getMonitoringStatus(analysisId);
-        
+         
         res.json({
             success: true,
             data: {
-                // Legacy analysis-level status (for backward compatibility)
-                ...analysisStatus,
-                isMonitoring: hasAnyActiveMonitoring, // True if any strategy is being monitored
-                
+        
+                isMonitoring: hasAnyActiveMonitoring, // True if any strategy is being monitored        
                 // New strategy-level statuses
                 strategies: strategyStatuses,
-                
                 // Additional info
                 stock_symbol: analysis.stock_symbol,
                 analysis_type: analysis.analysis_type,
@@ -436,13 +441,15 @@ router.post('/pause', authenticateToken, async (req, res) => {
         // Verify analysis belongs to user
         const analysis = await StockAnalysis.findById(analysisId);
         
-        if (!analysis || analysis.user_id.toString() !== userId) {
-            return res.status(403).json({
+        if (!analysis) {
+            return res.status(404).json({
                 success: false,
-                error: 'access_denied',
-                message: 'You do not have access to this analysis'
+                error: 'analysis_not_found',
+                message: 'Analysis not found'
             });
         }
+        
+        // Note: Analysis user validation removed - monitoring is user-linked, not analysis-linked
         
         // Pause monitoring
         const result = await agendaMonitoringService.pauseMonitoring(analysisId, strategyId, reason);
@@ -513,13 +520,7 @@ router.post('/resume', authenticateToken, async (req, res) => {
             });
         }
         
-        if (analysis.user_id.toString() !== userId) {
-            return res.status(403).json({
-                success: false,
-                error: 'access_denied',
-                message: 'You do not have access to this analysis'
-            });
-        }
+        // Note: Analysis user validation removed - monitoring is user-linked, not analysis-linked
         
         // Check if analysis has expired
         if (analysis.expires_at && new Date(analysis.expires_at) < new Date()) {

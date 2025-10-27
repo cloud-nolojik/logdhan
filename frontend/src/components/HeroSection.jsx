@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 
 export default function HeroSection() {
   return (
-    <section className="relative overflow-hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 via-white to-gray-100">
+    <section aria-label="Hero section" className="relative overflow-hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 via-white to-gray-100">
       {/* Modern startup background */}
       <div className="absolute inset-0">
         {/* Main gradient overlay */}
@@ -57,35 +57,42 @@ export default function HeroSection() {
           className="max-w-4xl mx-auto"
         >
           {/* Main headline */}
-          <motion.h2 
+          <motion.h1 
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4, duration: 0.8 }}
             className="text-3xl md:text-5xl lg:text-6xl font-extrabold mb-6 leading-tight"
+            aria-label="LogDhan: Educational stock analysis platform"
           >
-            <div className="mb-4">
-              <span className="text-sm md:text-base uppercase tracking-wider text-gray-500 font-medium">The L.O.G Philosophy</span>
+            <div className="mb-6">
+              <span className="inline-block text-xs md:text-sm uppercase tracking-[0.3em] text-gray-500 font-semibold bg-gray-100 px-4 py-2 rounded-full border border-gray-200">Locate • Optimize • Generate</span>
             </div>
-            <span className="block text-4xl md:text-5xl lg:text-6xl font-black">
-              <span className="bg-gradient-to-r from-orange-600 to-orange-500 bg-clip-text text-transparent">Log</span>
-              <span className="text-gray-700"> • </span>
-              <span className="bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent">Optimise</span>
-              <span className="text-gray-700"> • </span>
-              <span className="bg-gradient-to-r from-emerald-600 to-emerald-500 bg-clip-text text-transparent">Generate</span>
-            </span>
-            <span className="block text-2xl md:text-3xl mt-4 text-gray-600">
-              Your Path to Disciplined Trading
-            </span>
-          </motion.h2>
+            <div className="space-y-2 md:space-y-3">
+              <div className="text-2xl sm:text-3xl md:text-5xl lg:text-6xl font-black leading-tight">
+                <span className="bg-gradient-to-r from-orange-500 via-orange-600 to-red-500 bg-clip-text text-transparent drop-shadow-sm">Locate opportunities</span>
+              </div>
+              <div className="text-2xl sm:text-3xl md:text-5xl lg:text-6xl font-black leading-tight">
+                <span className="bg-gradient-to-r from-blue-500 via-blue-600 to-indigo-600 bg-clip-text text-transparent drop-shadow-sm">Optimize timing</span>
+              </div>
+              <div className="text-2xl sm:text-3xl md:text-5xl lg:text-6xl font-black leading-tight">
+                <span className="bg-gradient-to-r from-emerald-500 via-green-600 to-teal-600 bg-clip-text text-transparent drop-shadow-sm">Generate profits</span>
+              </div>
+            </div>
+            <div className="mt-6 md:mt-8 mb-2">
+              <h2 className="text-xl sm:text-2xl md:text-4xl font-bold text-gray-700 leading-tight">
+                AI Swing Strategies with <span className="text-green-600">WhatsApp Alerts</span>
+              </h2>
+            </div>
+          </motion.h1>
 
           {/* Subtitle */}
           <motion.p 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.6, duration: 0.8 }}
-            className="text-lg md:text-xl text-gray-600 mb-8 font-light max-w-3xl mx-auto leading-relaxed"
+            className="text-base sm:text-lg md:text-xl text-gray-600 mb-6 md:mb-8 font-light max-w-3xl mx-auto leading-relaxed px-4 sm:px-0"
           >
-            <span className="font-bold">Log</span> every trade with reason • <span className="font-bold">Optimise</span> with AI insights • <span className="font-bold">Generate</span> consistent profits. Transform impulsive trading into disciplined wealth creation.
+            AI finds trading opportunities daily. Get AI-generated short-term swing setups with clear entry points, stop-losses, targets, risk-reward ratios, expiry windows, and AI confidence scores. Receive real-time WhatsApp alerts when confirmation hits, then place orders on your preferred broker platform.
           </motion.p>
 
           {/* Free plan highlight */}
@@ -95,14 +102,14 @@ export default function HeroSection() {
             transition={{ delay: 0.8, duration: 0.6, type: "spring" }}
             className="relative inline-flex items-center mb-8 mx-auto"
           >
-            <div className="bg-gradient-to-r from-violet-500/10 via-blue-500/10 to-emerald-500/10 backdrop-blur-sm rounded-2xl px-6 py-4 border border-violet-200">
-              <div className="flex items-center space-x-3">
-                <div className="bg-gradient-to-r from-violet-500 to-blue-500 rounded-lg p-2">
-                  <span className="text-xl">🚀</span>
+            <div className="bg-gradient-to-r from-violet-50 via-blue-50 to-emerald-50 backdrop-blur-sm rounded-3xl px-8 py-6 border-2 border-violet-100 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105">
+              <div className="flex items-center space-x-4">
+                <div className="bg-gradient-to-r from-violet-500 to-blue-500 rounded-2xl p-3 shadow-lg">
+                  <span className="text-2xl">🚀</span>
                 </div>
                 <div className="text-left">
-                  <div className="bg-gradient-to-r from-violet-600 to-emerald-600 bg-clip-text text-transparent font-bold text-lg">Forever FREE Plan</div>
-                  <div className="text-gray-600 text-sm">Unlimited AI reviews by watching short ads</div>
+                  <div className="bg-gradient-to-r from-violet-600 via-purple-600 to-emerald-600 bg-clip-text text-transparent font-black text-xl">1-Month FREE Trial</div>
+                  <div className="text-gray-700 text-base font-medium">Try AI swing setups with 3 stocks + WhatsApp alerts</div>
                 </div>
               </div>
             </div>
@@ -113,17 +120,17 @@ export default function HeroSection() {
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 1.0, duration: 0.8 }}
-            className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-12"
+            className="flex flex-col sm:flex-row gap-4 md:gap-6 justify-center items-center mb-8 md:mb-12 px-4 sm:px-0"
           >
-            <Link to="/download" className="group">
-              <div className="bg-gradient-to-r from-violet-600 via-blue-600 to-emerald-600 hover:from-violet-700 hover:via-blue-700 hover:to-emerald-700 text-white font-bold px-8 py-4 rounded-xl shadow-lg transition-all duration-300 transform group-hover:scale-105 flex items-center gap-3 text-lg">
-                <span className="text-2xl">📱</span>
+            <Link to="/download" className="group" aria-label="Download LogDhan mobile application">
+              <div className="bg-gradient-to-r from-violet-600 via-purple-600 to-blue-600 hover:from-violet-700 hover:via-purple-700 hover:to-blue-700 text-white font-bold px-10 py-5 rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 transform group-hover:scale-110 group-hover:-translate-y-1 flex items-center gap-4 text-xl border-2 border-white/20">
+                <span className="text-3xl group-hover:rotate-12 transition-transform duration-300">📱</span>
                 <span>Download App</span>
               </div>
             </Link>
-            <Link to="/how-it-works" className="group">
-              <div className="bg-white/90 backdrop-blur-sm border-2 border-gray-200 text-gray-800 hover:bg-white hover:border-violet-300 font-bold px-8 py-4 rounded-xl shadow-lg transition-all duration-300 transform group-hover:scale-105 flex items-center gap-3 text-lg">
-                <span className="text-2xl">⚡</span>
+            <Link to="/how-it-works" className="group" aria-label="Learn how LogDhan educational platform works">
+              <div className="bg-white/95 backdrop-blur-sm border-2 border-gray-300 text-gray-800 hover:bg-white hover:border-violet-400 hover:text-violet-700 font-bold px-10 py-5 rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 transform group-hover:scale-110 group-hover:-translate-y-1 flex items-center gap-4 text-xl">
+                <span className="text-3xl group-hover:scale-125 transition-transform duration-300">⚡</span>
                 <span>How It Works</span>
               </div>
             </Link>
@@ -137,16 +144,19 @@ export default function HeroSection() {
         animate={{ y: [0, -20, 0], rotate: [0, 5, 0] }}
         transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
         className="absolute top-1/4 left-10 text-slate-400/30 text-6xl"
+        aria-hidden="true"
       >📊</motion.div>
       <motion.div 
         animate={{ y: [0, 15, 0], rotate: [0, -3, 0] }}
         transition={{ duration: 8, repeat: Infinity, ease: "easeInOut", delay: 2 }}
         className="absolute top-1/2 right-10 text-slate-400/30 text-4xl"
+        aria-hidden="true"
       >💰</motion.div>
       <motion.div 
         animate={{ y: [0, -10, 0], rotate: [0, 2, 0] }}
         transition={{ duration: 7, repeat: Infinity, ease: "easeInOut", delay: 4 }}
         className="absolute bottom-1/4 left-1/4 text-slate-400/30 text-5xl"
+        aria-hidden="true"
       >📈</motion.div>
     </section>
   );

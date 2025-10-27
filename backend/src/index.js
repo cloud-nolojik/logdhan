@@ -52,6 +52,8 @@ import aiRoutes from './routes/ai.js';
 import bulkAnalysisRoutes from './routes/bulkAnalysis.js';
 import webhookRoutes from './routes/webhook.js';
 import monitoringRoutes from './routes/agendaMonitoring.js'; // Using Agenda instead of BullMQ
+import publicRoutes from './routes/public.js';
+import consentRoutes from './routes/consent.js';
 
 
 const app = express();
@@ -136,6 +138,8 @@ app.use('/api/v1/ai', aiRoutes);
 app.use('/api/v1/bulk-analysis', bulkAnalysisRoutes);
 app.use('/api/v1/webhook', webhookRoutes);
 app.use('/api/v1/monitoring', monitoringRoutes);
+app.use('/api/public', publicRoutes);
+app.use('/api/v1/consent', consentRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -220,7 +224,7 @@ app.listen(PORT, async () => {
   
   // Initialize all services
   await initializeAzureStorage();
-  await initializeSubscriptionSystem();
+  // await initializeSubscriptionSystem();
   await initializeMessagingService();
   await initializeAgendaDailyReminderService();
   await initializeAgendaMonitoringService();

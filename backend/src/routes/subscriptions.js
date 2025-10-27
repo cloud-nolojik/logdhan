@@ -24,14 +24,14 @@ router.get('/plans', async (req, res) => {
       description: plan.description,
       type: plan.type,
       price: plan.price,
-      credits: plan.credits,
+      stockLimit: plan.stockLimit,
       features: plan.features,
       billingCycle: plan.billingCycle,
-      creditsPerRupee: plan.getCreditsPerRupee(),
-      savings: plan.type === 'ANNUAL' ? 
-        Math.round(((12 * 99) - plan.price) / (12 * 99) * 100) : 0,
+      stocksPerRupee: plan.getStocksPerRupee(),
+      savings: plan.type === 'MONTHLY' && plan.price > 999 ? 
+        Math.round(((plan.price * 0.2)) / plan.price * 100) : 0, // Rough savings calculation
       isPopular: plan.planId === 'pro_monthly',
-      isBestValue: plan.planId === 'pro_annual',
+      isBestValue: plan.planId === 'premium_monthly',
       restrictions: plan.restrictions,
       pipelineAccess: plan.pipelineAccess
     }));
@@ -66,16 +66,24 @@ router.get('/current', auth, async (req, res) => {
     }
 
     const plan = await subscriptionService.getPlanById(subscription.planId);
-    const daysRemaining = Math.ceil((subscription.billing.endDate - new Date()) / (1000 * 60 * 60 * 24));
-    const isExpired = daysRemaining <= 0;
-    const isExpiringSoon = daysRemaining <= 7 && daysRemaining > 0;
     
-    // Basic ads plan never expires, others check expiry
-    let subscriptionStatus = subscription.status;
-    if (subscription.planId === 'basic_ads') {
-      subscriptionStatus = 'ACTIVE'; // Always active for basic ads
-    } else if (isExpired) {
-      subscriptionStatus = 'EXPIRED';
+    // Handle trial and paid plan expiry logic
+    let daysRemaining, isExpired, isExpiringSoon, subscriptionStatus;
+    
+    if (subscription.planId === 'trial_free') {
+      // For trial plans, check trial expiry
+      const trialDaysRemaining = subscription.trialExpiryDate ? 
+        Math.ceil((subscription.trialExpiryDate - new Date()) / (1000 * 60 * 60 * 24)) : 0;
+      daysRemaining = Math.max(0, trialDaysRemaining);
+      isExpired = daysRemaining <= 0 || subscription.isTrialExpired;
+      isExpiringSoon = daysRemaining <= 3 && daysRemaining > 0;
+      subscriptionStatus = isExpired ? 'EXPIRED' : 'ACTIVE';
+    } else {
+      // For paid plans, check billing end date
+      daysRemaining = Math.ceil((subscription.billing.endDate - new Date()) / (1000 * 60 * 60 * 24));
+      isExpired = daysRemaining <= 0;
+      isExpiringSoon = daysRemaining <= 7 && daysRemaining > 0;
+      subscriptionStatus = isExpired ? 'EXPIRED' : subscription.status;
     }
     
     res.json({
@@ -86,31 +94,36 @@ router.get('/current', auth, async (req, res) => {
         planName: subscription.planName,
         status: subscriptionStatus,
         pricing: subscription.pricing,
-        credits: {
-          total: subscription.credits.total,
-          used: subscription.credits.used,
-          remaining: subscription.credits.remaining,
-          rollover: subscription.credits.rollover,
-          earnedCredits: subscription.credits.earnedCredits || 0,
-          bonusCredits: subscription.credits.bonusCredits || 0,
-          bonusCreditsExpiry: subscription.credits.bonusCreditsExpiry,
-          rewardedCredits: subscription.credits.rewardedCredits || 0,
-          available: subscription.getTotalAvailableCredits(),
-          usagePercentage: subscription.creditUsagePercentage
-        },
+        stockLimit: subscription.stockLimit,
+        // COMMENTED OUT - No credits concept
+        // credits: {
+        //   total: subscription.credits.total,
+        //   used: subscription.credits.used,
+        //   remaining: subscription.credits.remaining,
+        //   rollover: subscription.credits.rollover,
+        //   earnedCredits: subscription.credits.earnedCredits || 0,
+        //   bonusCredits: subscription.credits.bonusCredits || 0,
+        //   bonusCreditsExpiry: subscription.credits.bonusCreditsExpiry,
+        //   rewardedCredits: subscription.credits.rewardedCredits || 0,
+        //   available: subscription.getTotalAvailableCredits(),
+        //   usagePercentage: subscription.creditUsagePercentage
+        // },
         billing: {
           startDate: subscription.billing.startDate,
           endDate: subscription.billing.endDate,
           nextBillingDate: subscription.billing.nextBillingDate,
           daysRemaining: Math.max(0, daysRemaining)
         },
+        // Trial specific fields
+        trialExpiryDate: subscription.trialExpiryDate,
+        isTrialExpired: subscription.isTrialExpired,
         restrictions: subscription.restrictions,
         features: plan?.features || [],
-        canUpgrade: subscription.planId !== 'pro_annual',
-        canDowngrade: subscription.planId === 'pro_annual',
+        canUpgrade: subscription.planId !== 'premium_monthly',
+        canDowngrade: false, // No downgrade concept in new model
         isExpired: isExpired,
         isExpiringSoon: isExpiringSoon,
-        needsUpgrade: subscription.planId === 'basic_ads' // Always suggest upgrade for basic ads users
+        needsUpgrade: subscription.planId === 'trial_free' && isExpired // Suggest upgrade for expired trial users
       }
     });
   } catch (error) {
@@ -130,11 +143,36 @@ router.post('/generate-payment-url', auth, async (req, res) => {
   try {
     const { planId, customerDetails } = req.body;
 
-    if (!planId) {
+    // Enhanced validation
+    if (!planId || typeof planId !== 'string' || planId.trim().length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Plan ID is required'
+        message: 'Valid Plan ID is required'
       });
+    }
+
+    // Validate planId format (basic security check)
+    if (!/^[a-zA-Z0-9_]+$/.test(planId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Plan ID format'
+      });
+    }
+
+    // Validate customer details if provided
+    if (customerDetails) {
+      if (customerDetails.email && !/\S+@\S+\.\S+/.test(customerDetails.email)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid email format'
+        });
+      }
+      if (customerDetails.phone && !/^\+?[\d\s-()]+$/.test(customerDetails.phone)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid phone format'
+        });
+      }
     }
 
     // Track payment URL generation attempt
@@ -282,28 +320,74 @@ router.post('/topup', auth, async (req, res) => {
 });
 
 /**
- * Check if user can use credits
- * GET /api/v1/subscriptions/can-use-credits
+ * Check if user can add more stocks to watchlist
+ * GET /api/v1/subscriptions/can-add-stock
  */
-router.get('/can-use-credits', auth, async (req, res) => {
+router.get('/can-add-stock', auth, async (req, res) => {
   try {
-    const { credits = 1 } = req.query;
-    const creditsNeeded = parseInt(credits);
+    const { currentCount = 0 } = req.query;
+    const currentStockCount = parseInt(currentCount);
 
-    const result = await subscriptionService.canUserUseCredits(req.user.id, creditsNeeded);
+    const result = await subscriptionService.canUserAddStock(req.user.id, currentStockCount);
     
     res.json({
       success: true,
       data: result
     });
   } catch (error) {
-    console.error('Error checking credit usage:', error);
+    console.error('Error checking stock addition:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to check credit availability'
+      message: 'Failed to check stock limit availability'
     });
   }
 });
+
+/**
+ * Check if user can analyze stocks (trial expiry check)
+ * GET /api/v1/subscriptions/can-analyze
+ */
+router.get('/can-analyze', auth, async (req, res) => {
+  try {
+    const result = await subscriptionService.canUserAnalyzeStock(req.user.id);
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error checking analysis permission:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check analysis permission'
+    });
+  }
+});
+
+// COMMENTED OUT - No credits concept
+/**
+ * Check if user can use credits
+ * GET /api/v1/subscriptions/can-use-credits
+ */
+// router.get('/can-use-credits', auth, async (req, res) => {
+//   try {
+//     const { credits = 1 } = req.query;
+//     const creditsNeeded = parseInt(credits);
+
+//     const result = await subscriptionService.canUserUseCredits(req.user.id, creditsNeeded);
+    
+//     res.json({
+//       success: true,
+//       data: result
+//     });
+//   } catch (error) {
+//     console.error('Error checking credit usage:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to check credit availability'
+//     });
+//   }
+// });
 
 /**
  * Get subscription usage analytics
@@ -393,7 +477,7 @@ router.get('/analytics', auth, async (req, res) => {
  * Process subscription status from Cashfree return URL
  * POST /api/v1/subscriptions/process-status
  */
-router.post('/process-status', async (req, res) => {
+router.post('/process-status', auth, async (req, res) => {
   try {
     const { cf_subscription_id } = req.body;
     
@@ -408,34 +492,28 @@ router.post('/process-status', async (req, res) => {
       });
     }
 
-    // Extract userId from cf_subscription_id format: logdhan_sub_{userId}_{timestamp}
-    let userId = null;
-    if (cf_subscription_id && cf_subscription_id.startsWith('logdhan_sub_')) {
-      const parts = cf_subscription_id.split('_');
-      if (parts.length >= 3) {
-        userId = parts[2];
-        console.log('✅ Extracted userId from subscription ID:', userId);
-      }
-    }
+    // Use authenticated user ID for security
+    const userId = req.user.id;
+    console.log('✅ Using authenticated userId:', userId);
 
-    if (!userId) {
-      console.log('❌ Could not extract userId from cf_subscription_id:', cf_subscription_id);
-      return res.status(400).json({
+    // Validate that the cf_subscription_id belongs to the authenticated user
+    const existingSubscription = await Subscription.findOne({
+      userId: userId,
+      $or: [
+        { cashfreeSubscriptionId: cf_subscription_id },
+        { subscriptionId: cf_subscription_id }
+      ]
+    });
+
+    if (!existingSubscription) {
+      console.log('❌ Subscription not found or access denied for user:', userId);
+      return res.status(403).json({
         success: false,
-        message: 'Invalid cf_subscription_id format - could not extract userId'
+        message: 'Subscription not found or access denied'
       });
     }
 
-    // Validate userId is a valid ObjectId
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      console.log('❌ Extracted userId is not a valid ObjectId:', userId);
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid userId format extracted from subscription ID'
-      });
-    }
-
-    console.log('✅ Valid userId extracted:', userId);
+    console.log('✅ Subscription ownership validated for user:', userId);
 
     // Process the subscription status
     const result = await subscriptionService.processSubscriptionStatus({
@@ -694,96 +772,97 @@ router.post('/reactivate', auth, async (req, res) => {
   }
 });
 
+// COMMENTED OUT - No ads concept
 /**
  * POST /api/v1/subscriptions/watch-ad
  * Award credits for watching a rewarded ad
  */
-router.post('/watch-ad', auth, async (req, res) => {
-  try {
-    const { adProvider, adUnitId, adReward } = req.body;
+// router.post('/watch-ad', auth, async (req, res) => {
+//   try {
+//     const { adProvider, adUnitId, adReward } = req.body;
     
-    const result = await subscriptionService.processRewardedAd(req.user.id, {
-      adProvider,
-      adUnitId,
-      adReward
-    });
+//     const result = await subscriptionService.processRewardedAd(req.user.id, {
+//       adProvider,
+//       adUnitId,
+//       adReward
+//     });
     
-    res.json({
-      success: true,
-      data: result,
-      message: `Earned ${result.creditsAwarded} credits! Watch ${result.adsRemainingToday} more ads today.`
-    });
-  } catch (error) {
-    console.error('Error processing rewarded ad:', error);
-    res.status(400).json({
-      success: false,
-      message: error.message || 'Failed to process ad reward'
-    });
-  }
-});
+//     res.json({
+//       success: true,
+//       data: result,
+//       message: `Earned ${result.creditsAwarded} credits! Watch ${result.adsRemainingToday} more ads today.`
+//     });
+//   } catch (error) {
+//     console.error('Error processing rewarded ad:', error);
+//     res.status(400).json({
+//       success: false,
+//       message: error.message || 'Failed to process ad reward'
+//     });
+//   }
+// });
 
 /**
  * GET /api/v1/subscriptions/ad-status
  * Get user's ad watching status and limits
  */
-router.get('/ad-status', auth, async (req, res) => {
-  try {
-    const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
+// router.get('/ad-status', auth, async (req, res) => {
+//   try {
+//     const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
     
-    if (!subscription) {
-      return res.status(404).json({
-        success: false,
-        message: 'No active subscription found'
-      });
-    }
+//     if (!subscription) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'No active subscription found'
+//       });
+//     }
 
-    // Clean up expired rewarded credits
-    subscription.cleanupExpiredCredits();
+//     // Clean up expired rewarded credits
+//     subscription.cleanupExpiredCredits();
     
-    const now = new Date();
-    const isToday = subscription.credits.lastRewardedDate && 
-                   subscription.credits.lastRewardedDate.toDateString() === now.toDateString();
+//     const now = new Date();
+//     const isToday = subscription.credits.lastRewardedDate && 
+//                    subscription.credits.lastRewardedDate.toDateString() === now.toDateString();
     
-    // Get ad limit from plan restrictions
-    const plan = await subscriptionService.getPlanById(subscription.planId);
-    // console.log(`🔍 Ad Status Debug - planId: ${subscription.planId}`);
-    // console.log(`🔍 Ad Status Debug - plan found: ${plan ? 'yes' : 'no'}`);
-    // console.log(`🔍 Ad Status Debug - plan.restrictions:`, plan?.restrictions);
-    // console.log(`🔍 Ad Status Debug - plan.restrictions.rewardedAdLimit:`, plan?.restrictions?.rewardedAdLimit);
+//     // Get ad limit from plan restrictions
+//     const plan = await subscriptionService.getPlanById(subscription.planId);
+//     // console.log(`🔍 Ad Status Debug - planId: ${subscription.planId}`);
+//     // console.log(`🔍 Ad Status Debug - plan found: ${plan ? 'yes' : 'no'}`);
+//     // console.log(`🔍 Ad Status Debug - plan.restrictions:`, plan?.restrictions);
+//     // console.log(`🔍 Ad Status Debug - plan.restrictions.rewardedAdLimit:`, plan?.restrictions?.rewardedAdLimit);
     
-    const dailyLimit = plan?.restrictions?.rewardedAdLimit || 0; // Default 0 for non-ad plans (0 means unlimited)
-    const adsWatchedToday = isToday ? subscription.credits.dailyRewardedCount : 0;
-    // If dailyLimit is 0 (unlimited), return 999 for UI, otherwise calculate remaining
-    const adsRemainingToday = dailyLimit === 0 ? 999 : Math.max(0, dailyLimit - adsWatchedToday);
-    const creditsPerAd = 1;
+//     const dailyLimit = plan?.restrictions?.rewardedAdLimit || 0; // Default 0 for non-ad plans (0 means unlimited)
+//     const adsWatchedToday = isToday ? subscription.credits.dailyRewardedCount : 0;
+//     // If dailyLimit is 0 (unlimited), return 999 for UI, otherwise calculate remaining
+//     const adsRemainingToday = dailyLimit === 0 ? 999 : Math.max(0, dailyLimit - adsWatchedToday);
+//     const creditsPerAd = 1;
     
-    console.log(`🔍 Ad Status Debug - dailyLimit: ${dailyLimit}, adsWatchedToday: ${adsWatchedToday}, adsRemainingToday: ${adsRemainingToday}`);
-    console.log(`🔍 Ad Status Debug - isToday: ${isToday}, subscription.credits.dailyRewardedCount: ${subscription.credits.dailyRewardedCount}`);
+//     console.log(`🔍 Ad Status Debug - dailyLimit: ${dailyLimit}, adsWatchedToday: ${adsWatchedToday}, adsRemainingToday: ${adsRemainingToday}`);
+//     console.log(`🔍 Ad Status Debug - isToday: ${isToday}, subscription.credits.dailyRewardedCount: ${subscription.credits.dailyRewardedCount}`);
     
-    res.json({
-      success: true,
-      data: {
-        canWatchAd: dailyLimit === 0 ? true : adsRemainingToday > 0,
-        adsWatchedToday,
-        adsRemainingToday,
-        dailyLimit,
-        creditsPerAd,
-        currentRewardedCredits: subscription.credits.rewardedCredits,
-        rewardedCreditsExpiry: subscription.credits.lastRewardedDate ? 
-          new Date(subscription.credits.lastRewardedDate.getFullYear(), 
-                   subscription.credits.lastRewardedDate.getMonth(), 
-                   subscription.credits.lastRewardedDate.getDate() + 1, 0, 0, 0, 0) : null,
-        showAds: true // All users can watch ads now - free users get them always, paid users when credits exhausted
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching ad status:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch ad status'
-    });
-  }
-});
+//     res.json({
+//       success: true,
+//       data: {
+//         canWatchAd: dailyLimit === 0 ? true : adsRemainingToday > 0,
+//         adsWatchedToday,
+//         adsRemainingToday,
+//         dailyLimit,
+//         creditsPerAd,
+//         currentRewardedCredits: subscription.credits.rewardedCredits,
+//         rewardedCreditsExpiry: subscription.credits.lastRewardedDate ? 
+//           new Date(subscription.credits.lastRewardedDate.getFullYear(), 
+//                    subscription.credits.lastRewardedDate.getMonth(), 
+//                    subscription.credits.lastRewardedDate.getDate() + 1, 0, 0, 0, 0) : null,
+//         showAds: true // All users can watch ads now - free users get them always, paid users when credits exhausted
+//       }
+//     });
+//   } catch (error) {
+//     console.error('Error fetching ad status:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to fetch ad status'
+//     });
+//   }
+// });
 
 /**
  * Create test notification (for debugging)

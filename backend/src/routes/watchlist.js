@@ -1,6 +1,7 @@
 import express from 'express';
 import { auth } from '../middleware/auth.js';
 import { User } from '../models/user.js';
+import { Subscription } from '../models/subscription.js';
 // Use database version instead of JSON file version
 import { getExactStock, getCurrentPrice } from '../utils/stockDb.js';
 import pLimit from 'p-limit'; 
@@ -29,6 +30,32 @@ router.post('/', auth, async (req, res) => {
 
     if (isInWatchlist) {
       return res.status(200).json({ message: 'Stock already in watchlist' });
+    }
+
+    // Check stock limit based on subscription
+    const currentStockCount = user.watchlist.length;
+    
+    try {
+      const stockLimitCheck = await Subscription.canUserAddStock(req.user.id, currentStockCount);
+      
+      if (!stockLimitCheck.canAdd) {
+        return res.status(403).json({
+          error: 'Stock limit reached',
+          message: `You can add maximum ${stockLimitCheck.stockLimit} stocks to your watchlist. Current: ${stockLimitCheck.currentCount}`,
+          data: {
+            stockLimit: stockLimitCheck.stockLimit,
+            currentCount: stockLimitCheck.currentCount,
+            canAdd: false,
+            needsUpgrade: true
+          }
+        });
+      }
+    } catch (subscriptionError) {
+      console.error('Error checking subscription limits:', subscriptionError);
+      return res.status(400).json({
+        error: 'Subscription check failed', 
+        message: subscriptionError.message
+      });
     }
 
     // Add to watchlist
@@ -101,7 +128,28 @@ router.get('/', auth, async (req, res) => {
     const endTime = Date.now();
     console.log(`Watchlist pricing completed in ${endTime - startTime}ms`);
 
-    res.json({ data: watchlistWithPrices, success: true, message: "Watchlist fetched successfully" });
+    // Get subscription info for stock limits
+    let stockLimitInfo = null;
+    try {
+      const subscription = await Subscription.findActiveForUser(req.user.id);
+      if (subscription) {
+        stockLimitInfo = {
+          stockLimit: subscription.stockLimit,
+          currentCount: watchlist.length,
+          remaining: Math.max(0, subscription.stockLimit - watchlist.length),
+          canAddMore: subscription.stockLimit > watchlist.length
+        };
+      }
+    } catch (error) {
+      console.warn('Error fetching subscription for stock limits:', error);
+    }
+
+    res.json({ 
+      data: watchlistWithPrices, 
+      stockLimitInfo,
+      success: true, 
+      message: "Watchlist fetched successfully" 
+    });
 
   } catch (error) {
     console.error('Error fetching watchlist:', error);

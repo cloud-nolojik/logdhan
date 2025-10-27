@@ -10,6 +10,8 @@ import { getSectorForStock, getSectorNewsKeywords, getTrailingStopSuggestions, g
 import candleFetcherService from './candleFetcher.service.js';
 import { messagingService } from './messaging/messaging.service.js';
 import { User } from '../models/user.js';
+import modelSelectorService from './ai/modelSelector.service.js';
+import AnalysisSession from '../models/analysisSession.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -96,125 +98,7 @@ class AIAnalyzeService {
      * @param {String} creditType - Type of credit (regular, bonus, paid)
      * @returns {Object} - Model configuration and status
      */
-    async determineAIModel(userId, isFromRewardedAd = false, creditType = 'regular') {
-        try {
-            // console.log(`\n🔍 Determining AI model for user: ${userId}`);
-            // console.log(`   isFromRewardedAd: ${isFromRewardedAd}, creditType: ${creditType}`);
-            
-            // Check if user can use credits
-            const canUse = await subscriptionService.canUserUseCredits(userId, 1, isFromRewardedAd);
-            
-            if (!canUse.canUse) {
-                // Credits exhausted - determine appropriate message
-                const subscription = await Subscription.findActiveForUser(userId);
-                const plan = subscription ? await Plan.getPlanById(subscription.planId) : null;
-                
-                let errorMessage = '';
-                let errorCode = 'CREDITS_EXHAUSTED';
-                
-                if (plan && plan.analysisLevel === 'advanced') {
-                    // Paid plan with exhausted credits
-                    if (isFromRewardedAd) {
-                        // User watched ad but still can't use (maybe ad limit reached)
-                        errorMessage = canUse.reason || 'Daily ad limit reached. Please try again tomorrow.';
-                        errorCode = 'AD_LIMIT_REACHED';
-                    } else {
-                        // Suggest watching ad for paid users
-                        errorMessage = 'Your monthly credits are exhausted. Watch an ad to get this analysis with AI, or wait for next month\'s credits.';
-                        errorCode = 'PAID_CREDITS_EXHAUSTED';
-                    }
-                } else {
-                    // Basic/free plan
-                    if (isFromRewardedAd) {
-                        errorMessage = canUse.reason || 'Daily ad limit reached. Please try again tomorrow.';
-                        errorCode = 'AD_LIMIT_REACHED';
-                    } else {
-                        errorMessage = 'Watch an ad to get this analysis with AI, or upgrade to Pro for unlimited analysis.';
-                        errorCode = 'FREE_CREDITS_EXHAUSTED';
-                    }
-                }
-                
-                return {
-                    canProceed: false,
-                    error: errorMessage,
-                    errorCode,
-                    suggestAd: !isFromRewardedAd && errorCode !== 'AD_LIMIT_REACHED',
-                    models: null,
-                    subscription: null
-                };
-            }
-            
-            // User can proceed - determine models
-            const subscription = await Subscription.findActiveForUser(userId);
-            const plan = subscription ? await Plan.getPlanById(subscription.planId) : null;
-            
-            // Determine tier based on user plan/credits
-            let modelTier = 'basic'; // Default
-            
-            // Priority 1: Check if using bonus credits (advanced analysis)
-            if (creditType === 'bonus') {
-                modelTier = 'advanced';
-                // console.log(`🎁 Bonus credits - using advanced analysis model`);
-            }
-            // Priority 1.5: Check if this is from rewarded ad (basic model for sustainability) 
-            else if (isFromRewardedAd) {
-                modelTier = 'ad-supported';
-                // console.log(`🎁 Ad-supported analysis - using basic models for sustainability`);
-            }
-            // Priority 2: Check plan type for paying users
-            else if (plan && plan.analysisLevel === 'advanced') {
-                // Check if they have credits remaining
-                const totalCredits = (subscription.credits.monthly || 0) + 
-                                   (subscription.credits.rollover || 0) + 
-                                   (subscription.credits.earnedCredits || 0);
-                
-                if (totalCredits > 0) {
-                    modelTier = 'advanced';
-                    // console.log(`💎 Paid plan (${plan.planId}) with credits - using advanced models`);
-                } else {
-                    modelTier = 'basic-fallback';
-                    // console.log(`💸 Paid plan (${plan.planId}) no credits - using basic models`);
-                }
-            }
-            // Priority 3: Basic/free plan users
-            else {
-                modelTier = 'basic';
-                // console.log(`📱 Basic/free plan - using basic models`);
-            }
-            
-            // Get models from simplified configuration
-            const analysisModel = modelTier === 'advanced' ? this.advancedModel : this.basicModel;
-            const sentimentModel = this.analysisModel; // Use main analysis model for sentiment
-            
-            // console.log(`🤖 Selected models: Analysis=${analysisModel}, Sentiment=${sentimentModel}, Tier=${modelTier}`);
-            
-            return {
-                canProceed: true,
-                models: {
-                    analysis: analysisModel,
-                    sentiment: sentimentModel,
-                    tier: modelTier
-                },
-                creditType: isFromRewardedAd ? 'bonus' : creditType,
-                subscription: {
-                    plan: plan?.planId || 'free',
-                    creditsRemaining: (subscription?.credits?.monthly || 0) + 
-                                    (subscription?.credits?.rollover || 0) + 
-                                    (subscription?.credits?.earnedCredits || 0)
-                }
-            };
-            
-        } catch (error) {
-            // console.error('❌ Model determination failed:', error);
-            return {
-                canProceed: true,
-                models: {
-                    analysis: this.basicModel,
-                    tier: 'basic'
-                }
-            };
-        }
-    }
+
 
     /**
      * Analyze stock for trading strategies
@@ -234,77 +118,29 @@ class AIAnalyzeService {
         current_price,
         analysis_type = 'swing',
         user_id,
-        isFromRewardedAd = false,
-        creditType = 'regular',
-        forceFresh = false
     }) {
-        // Store original models
-        const originalSentimentModel = this.sentimentalModel;
-        const originalAnalysisModel = this.analysisModel;
+
         
         try {
-            // console.log(`🔍 Starting AI analysis for ${stock_symbol} (${analysis_type})`);
-
-            // Determine AI models based on user subscription
-            if (user_id) {
-                const modelConfig = await this.determineAIModel(
-                    user_id, 
-                    isFromRewardedAd,
-                    creditType
-                );
+            
+            const modelConfig = await modelSelectorService.determineAIModel();
                 
-                if (!modelConfig.canProceed) {
-                    // Cannot proceed with analysis - return error
-                    // console.error(`❌ Cannot proceed with AI analysis: ${modelConfig.error}`);
-                    
-                    return {
-                        success: false,
-                        error: modelConfig.error,
-                        errorCode: modelConfig.errorCode,
-                        suggestAd: modelConfig.suggestAd
-                    };
-                }
-                
-                // Set the determined models
+               // Set the determined models
                 this.analysisModel = modelConfig.models.analysis;
                 this.sentimentalModel = modelConfig.models.sentiment;
-                
-                // console.log(`✅ Model selection complete:`);
-                // console.log(`   Analysis: ${this.analysisModel}`);
-                // console.log(`   Sentiment: ${this.sentimentalModel}`);
-                // console.log(`   Tier: ${modelConfig.models.tier}`);
-                // console.log(`   Credits remaining: ${modelConfig.subscription?.creditsRemaining || 0}`);
-            }
+            
 
-            // Check for existing analysis (cached completed or in-progress) unless forceFresh is true
-            if (!forceFresh) {
-                // console.log(`🔍 Checking for existing analysis...`);
-                const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
-                
-                if (existing) {
-                    if (existing.status === 'completed') {
-                        // console.log(`✅ Found cached completed analysis from ${existing.created_at}`);
-                        return {
-                            success: true,
-                            data: existing,
-                            cached: true
-                        };
-                    } else if (existing.status === 'in_progress') {
-                        // console.log(`⏳ Analysis already in progress, returning progress status`);
-                        return {
-                            success: true,
-                            data: existing,
-                            inProgress: true
-                        };
-                    }
-                }
-            } else {
-                // console.log(`🔄 Force fresh analysis requested - skipping cache check`);
-                // If there's an existing in-progress analysis, we should still wait for it to complete
-                // to avoid duplicate analysis requests
-                const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
-                if (existing && existing.status === 'in_progress') {
-                    // console.log(`⏳ Fresh analysis requested but analysis already in progress, returning progress status`);
+            // Check for existing analysis (completed or in-progress)
+            const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
+            
+            if (existing) {
+                if (existing.status === 'completed') {
+                    return {
+                        success: true,
+                        data: existing,
+                        cached: true
+                    };
+                } else if (existing.status === 'in_progress') {
                     return {
                         success: true,
                         data: existing,
@@ -312,10 +148,6 @@ class AIAnalyzeService {
                     };
                 }
             }
-
-            // console.log(`🚀 Proceeding with fresh analysis for ${stock_symbol}`);
-
-            // Validate current_price before creating analysis
             const validPrice = parseFloat(current_price);
             if (!validPrice || isNaN(validPrice) || validPrice <= 0) {
                 throw new Error(`Invalid current price: ${current_price}. Cannot proceed with analysis.`);
@@ -383,27 +215,25 @@ class AIAnalyzeService {
                 if (analysisResult.insufficientData === true) {
                     console.log(`❌ [ANALYSIS STATUS] Marking ${stock_symbol} as failed due to insufficient data`);
                     await pendingAnalysis.markFailed('Insufficient market data for analysis');
+                    
+                    // Update bulk session if this analysis is part of one
+                    await this.updateBulkSessionProgress(instrument_key, analysis_type, 'failed');
                 } else {
                     console.log(`✅ [ANALYSIS STATUS] Marking ${stock_symbol} as completed with valid analysis`);
                     await pendingAnalysis.markCompleted();
                     
-                    // Send WhatsApp notification for analysis completion
-                    await this.sendAnalysisCompleteNotification(userId, pendingAnalysis);
+                    // Update bulk session if this analysis is part of one
+                   // await this.updateBulkSessionProgress(instrument_key, analysis_type, 'completed');
+                    
+                    // Send WhatsApp notification for analysis completion (only for individual user analysis)
+                    if (user_id) {
+                        await this.sendAnalysisCompleteNotification(user_id, pendingAnalysis);
+                    }
                 }
 
                 // console.log(`✅ AI analysis completed and saved for ${stock_symbol}`);
 
-                // Deduct credits only after successful analysis (not for insufficient data)
-                if (user_id && analysisResult.insufficientData !== true) {
-                    try {
-                        await subscriptionService.deductCredits(user_id, 1, isFromRewardedAd);
-                        console.log(`💳 Credits deducted for user ${user_id} - successful analysis`);
-                    } catch (creditError) {
-                        console.warn('⚠️ Credit deduction failed:', creditError.message);
-                    }
-                } else if (user_id && analysisResult.insufficientData === true) {
-                    console.log(`💰 No credits deducted for ${stock_symbol} - insufficient data failure`);
-                }
+                // Note: Credit deduction removed - bulk analysis is free for all users
 
                 return {
                     success: true,
@@ -419,19 +249,13 @@ class AIAnalyzeService {
                 throw analysisError;
             }
 
-        } catch (error) {
-            // console.error('❌ AI Analysis Error:', error);
-            
+        } catch (error) {    
             return {
                 success: false,
                 error: 'Failed to generate AI analysis',
                 message: error.message
             };
-        } finally {
-            // Restore original models
-            this.sentimentalModel = originalSentimentModel;
-            this.analysisModel = originalAnalysisModel;
-        }
+        } 
     }
 
     /**
@@ -2235,6 +2059,81 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         } catch (error) {
             console.error(`❌ Error sending analysis complete WhatsApp notification:`, error);
             // Don't throw error - notification failure shouldn't break analysis
+        }
+    }
+
+    /**
+     * Update bulk session progress when individual stock analysis completes
+     */
+    async updateBulkSessionProgress(instrument_key, analysis_type, status) {
+        try {
+            // Find active bulk session that contains this stock
+            const activeSession = await AnalysisSession.findOne({
+                status: { $in: ['running', 'in_progress'] },
+                analysis_type: analysis_type,
+                'metadata.watchlist_stocks.instrument_key': instrument_key
+            });
+
+            if (!activeSession) {
+                // No active bulk session found - this is probably an individual analysis
+                console.log(`📊 [SESSION UPDATE] No active bulk session found for ${instrument_key} - skipping session update`);
+                return;
+            }
+
+            // Update the specific stock in the watchlist
+            const stockIndex = activeSession.metadata.watchlist_stocks.findIndex(
+                stock => stock.instrument_key === instrument_key
+            );
+
+            if (stockIndex === -1) {
+                console.log(`⚠️ [SESSION UPDATE] Stock ${instrument_key} not found in session watchlist`);
+                return;
+            }
+
+            const stock = activeSession.metadata.watchlist_stocks[stockIndex];
+            const now = new Date();
+
+            // Update stock status based on analysis result
+            if (status === 'completed') {
+                stock.processed = true;
+                stock.processing_completed_at = now;
+                stock.error_reason = null;
+                
+                activeSession.successful_stocks += 1;
+                console.log(`✅ [SESSION UPDATE] Marked ${stock.trading_symbol} as completed in bulk session`);
+            } else if (status === 'failed') {
+                stock.processed = true;
+                stock.processing_completed_at = now;
+                stock.error_reason = 'Analysis failed or insufficient data';
+                
+                activeSession.failed_stocks += 1;
+                console.log(`❌ [SESSION UPDATE] Marked ${stock.trading_symbol} as failed in bulk session`);
+            }
+
+            // Update session counters
+            activeSession.processed_stocks = activeSession.successful_stocks + activeSession.failed_stocks;
+            activeSession.last_updated = now;
+
+            // Check if all stocks are completed
+            const totalProcessed = activeSession.processed_stocks;
+            const totalStocks = activeSession.total_stocks;
+
+            if (totalProcessed >= totalStocks) {
+                // All stocks completed - mark session as completed
+                activeSession.status = 'completed';
+                activeSession.completed_at = now;
+                activeSession.current_stock_key = null;
+                activeSession.current_stock_index = totalStocks;
+                
+                console.log(`🎉 [SESSION UPDATE] Bulk session completed! ${totalProcessed}/${totalStocks} stocks processed`);
+            }
+
+            await activeSession.save();
+            console.log(`📊 [SESSION UPDATE] Updated bulk session progress: ${totalProcessed}/${totalStocks} complete`);
+
+        } catch (error) {
+            console.error(`❌ [SESSION UPDATE] Failed to update bulk session progress:`, error.message);
+            // Don't throw error - session update failure shouldn't break analysis
         }
     }
 }

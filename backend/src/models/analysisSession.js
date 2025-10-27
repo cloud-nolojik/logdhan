@@ -90,6 +90,11 @@ const analysisSessionSchema = new mongoose.Schema({
         batch_size: { type: Number, default: 3 },
         estimated_completion_time: Date,
         actual_start_time: Date
+    },
+    expires_at: {
+        type: Date,
+        required: true
+        // Index with TTL will be added below
     }
 }, {
     timestamps: true,
@@ -100,6 +105,9 @@ const analysisSessionSchema = new mongoose.Schema({
 analysisSessionSchema.index({ user_id: 1, status: 1 });
 // session_id index not needed - unique constraint already creates one
 analysisSessionSchema.index({ last_updated: 1 });
+
+// Auto-delete expired analysis sessions
+analysisSessionSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 });
 
 // Virtual for progress percentage
 analysisSessionSchema.virtual('progress_percentage').get(function() {
@@ -186,15 +194,91 @@ analysisSessionSchema.methods.timeoutCurrentStock = function() {
     return this.save();
 };
 
+// Static method to get expiry time (same logic as stock analysis)
+analysisSessionSchema.statics.getExpiryTime = async function() {
+    try {
+        const now = new Date();
+        // FIXED: Proper IST timezone handling
+        const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000)); // Add 5.5 hours for IST
+        
+        // Import MarketTiming for holiday checking
+        const MarketTiming = (await import('./marketTiming.js')).default;
+        
+        // Helper function to check if a date is a trading day
+        const isTradingDay = async (date) => {
+            // Format date as YYYY-MM-DD using UTC methods on IST-adjusted time
+            const year = date.getUTCFullYear();
+            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(date.getUTCDate()).padStart(2, '0');
+            const dateStr = `${year}-${month}-${day}`; // YYYY-MM-DD format
+            const marketTiming = await MarketTiming.findOne({ date: dateStr });
+            
+            // If no record exists, assume it's a trading day if it's a weekday
+            if (!marketTiming) {
+                const dayOfWeek = date.getUTCDay();
+                return dayOfWeek >= 1 && dayOfWeek <= 5; // Monday to Friday
+            }
+            
+            return marketTiming.isMarketOpen;
+        };
+        
+        // Helper function to find next trading day
+        const findNextTradingDay = async (fromDate) => {
+            let checkDate = new Date(fromDate);
+            checkDate.setUTCDate(checkDate.getUTCDate() + 1); // Start from next day
+            
+            let maxDays = 10; // Prevent infinite loop
+            while (maxDays > 0) {
+                if (await isTradingDay(checkDate)) {
+                    return checkDate;
+                }
+                checkDate.setUTCDate(checkDate.getUTCDate() + 1);
+                maxDays--;
+            }
+            
+            // Fallback: return next Monday if can't find trading day
+            const nextMonday = new Date(fromDate);
+            nextMonday.setUTCDate(nextMonday.getUTCDate() + ((1 + 7 - nextMonday.getUTCDay()) % 7 || 7));
+            return nextMonday;
+        };
+        
+        // Current date for checking if it's a trading day (using IST-adjusted time)
+        const currentDate = new Date(istTime);
+        currentDate.setUTCHours(0, 0, 0, 0); // Reset to start of day
+        
+        // Find next trading day and set expiry to 8:45 AM IST
+        const nextTradingDay = await findNextTradingDay(currentDate);
+        
+        // Create expiry time: 8:45 AM IST on next trading day
+        // 8:45 AM IST = 3:15 AM UTC (8:45 - 5:30 = 3:15)
+        const expiryTime = new Date(nextTradingDay);
+        expiryTime.setUTCHours(3, 15, 0, 0); // 3:15 AM UTC = 8:45 AM IST
+        
+        console.log(`📅 [ANALYSIS SESSION EXPIRY] Session expires at next trading day 8:45 AM IST: ${new Date(expiryTime.getTime() + (5.5 * 60 * 60 * 1000)).toISOString()}`);
+        
+        return expiryTime;
+    } catch (error) {
+        console.error('❌ [ANALYSIS SESSION EXPIRY] Error calculating expiry time:', error);
+        // Fallback: expire in 24 hours
+        const fallbackExpiry = new Date();
+        fallbackExpiry.setHours(fallbackExpiry.getHours() + 24);
+        return fallbackExpiry;
+    }
+};
+
 // Static method to create new session
 analysisSessionSchema.statics.createSession = async function(userId, watchlistStocks, analysisType = 'swing') {
     const sessionId = `session_${userId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Calculate expiry time using the same logic as stock analysis
+    const expiryTime = await this.getExpiryTime();
     
     const session = new this({
         session_id: sessionId,
         user_id: userId,
         analysis_type: analysisType,
         total_stocks: watchlistStocks.length,
+        expires_at: expiryTime,
         metadata: {
             watchlist_stocks: watchlistStocks.map(stock => ({
                 instrument_key: stock.instrument_key,
@@ -225,7 +309,8 @@ analysisSessionSchema.statics.findActiveSession = async function(userId, analysi
         const query = {
             user_id: userObjectId,
             analysis_type: analysisType,
-            status: { $in: ['pending', 'running', 'paused'] }
+            status: { $in: ['pending', 'running', 'paused'] },
+            expires_at: { $gt: new Date() }
         };
         
         console.log(`🔍 [SESSION QUERY] Query:`, JSON.stringify(query, null, 2));
@@ -259,6 +344,7 @@ analysisSessionSchema.statics.findResumableSession = async function(userId, anal
             analysis_type: analysisType,
             status: { $in: ['pending', 'running', 'paused', 'failed', 'cancelled'] },
             processed_stocks: { $gt: 0 }, // Must have some progress
+            expires_at: { $gt: new Date() }, // Not expired
             $expr: { $lt: ['$processed_stocks', '$total_stocks'] } // Not fully completed
         }).sort({ createdAt: -1 });
         
@@ -284,7 +370,8 @@ analysisSessionSchema.statics.cleanupTimedOutSessions = async function() {
     const result = await this.updateMany(
         {
             status: { $in: ['running', 'paused'] },
-            last_updated: { $lt: cutoffTime }
+            last_updated: { $lt: cutoffTime },
+            expires_at: { $gt: new Date() } // Only cleanup non-expired sessions
         },
         {
             status: 'failed',

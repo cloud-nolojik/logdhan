@@ -490,19 +490,28 @@ class AgendaMonitoringService {
         }
     }
 
-    async getMonitoringStatus(analysisId, strategyId = null) {
+    async getMonitoringStatus(analysisId, strategyId = null, userId = null) {
         try {
-            console.log(`📊 Getting monitoring status for analysis ${analysisId}${strategyId ? `, strategy ${strategyId}` : ''}`);
+            console.log(`📊 Getting monitoring status for analysis ${analysisId}${strategyId ? `, strategy ${strategyId}` : ''}, user ${userId}`);
+
+            // Note: Analysis user validation removed - monitoring is user-linked, not analysis-linked
 
             const jobKey = strategyId ? `${analysisId}_${strategyId}` : analysisId;
             
             if (strategyId) {
                 // Always check MongoDB first (source of truth)
-                const agendaJobs = await this.agenda.jobs({
+                const queryParams = {
                     name: 'check-triggers',
                     'data.analysisId': analysisId,
                     'data.strategyId': strategyId
-                });
+                };
+                
+                // Add userId to query if provided
+                if (userId) {
+                    queryParams['data.userId'] = userId;
+                }
+                
+                const agendaJobs = await this.agenda.jobs(queryParams);
 
                 const jobKey = `${analysisId}_${strategyId}`;
 
@@ -539,10 +548,17 @@ class AgendaMonitoringService {
 
             } else {
                 // Check analysis-level (any strategy)
-                const analysisJobs = await this.agenda.jobs({
+                const queryParams = {
                     name: 'check-triggers',
                     'data.analysisId': analysisId
-                });
+                };
+                
+                // Add userId to query if provided
+                if (userId) {
+                    queryParams['data.userId'] = userId;
+                }
+                
+                const analysisJobs = await this.agenda.jobs(queryParams);
 
                 return {
                     isMonitoring: analysisJobs.length > 0,

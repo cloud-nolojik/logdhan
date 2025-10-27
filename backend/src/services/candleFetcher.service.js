@@ -142,10 +142,15 @@ class CandleFetcherService {
             const endpoints = [];
             
             for (const timeframe of timeframes) {
+                console.log(`🔍 [ENDPOINT DEBUG] ================================`);
+                console.log(`🔍 [ENDPOINT DEBUG] Processing timeframe: ${timeframe}`);
+                
                 const params = await dateCalculator.getTimeframeParams(timeframe);
+                console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - params.useIntraday:`, params.useIntraday);
+                console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - params.barsNeeded:`, params.barsNeeded);
                 
                 if (params.useIntraday && (timeframe === '15m' || timeframe === '1h' || timeframe === '1d')) {
-                    // HYBRID APPROACH: Get both intraday (today) + historical (past days)
+                    console.log(`✅ [ENDPOINT DEBUG] ${timeframe} - Using HYBRID APPROACH (intraday + historical)`);
                     // HYBRID APPROACH: Get both intraday (today) + historical (past days)
                     
                     // 1. Intraday endpoint for today's data
@@ -183,7 +188,11 @@ class CandleFetcherService {
                     console.log(`📅 [HISTORICAL PARAMS] toDate: ${dateCalculator.formatDateISO(historicalParams.toDate)}, fromDate: ${dateCalculator.formatDateISO(historicalParams.fromDate)}`);
                     
                     // Create endpoints for each chunk
+                    console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - historicalParams.chunks:`, historicalParams.chunks ? `${historicalParams.chunks.length} chunks` : 'null/undefined');
+                    
                     if (historicalParams.chunks && historicalParams.chunks.length > 0) {
+                        console.log(`✅ [ENDPOINT DEBUG] ${timeframe} - Using chunked approach with ${historicalParams.chunks.length} chunks`);
+                        
                         historicalParams.chunks.forEach((chunk, index) => {
                             const chunkUrl = this.buildHistoricalUrlFromDates(
                                 tradeData.instrument_key, 
@@ -201,9 +210,18 @@ class CandleFetcherService {
                             });
                         });
                     } else {
+                        console.log(`⚠️ [ENDPOINT DEBUG] ${timeframe} - No chunks found, using fallback single call`);
+                        
                         // Fallback: single historical call
+                        console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - Building fallback URL with params:`, {
+                            fromDate: dateCalculator.formatDateISO(historicalParams.fromDate),
+                            toDate: dateCalculator.formatDateISO(historicalParams.toDate),
+                            tradingDaysFound: historicalParams.tradingDaysFound,
+                            calendarDaysNeeded: historicalParams.calendarDaysNeeded
+                        });
+                        
                         const historicalUrl = this.buildHistoricalUrl(tradeData.instrument_key, timeframe, historicalParams);
-                        console.log(`📊 [HISTORICAL] ${timeframe}: ${historicalUrl}`);
+                        console.log(`📊 [HISTORICAL FALLBACK] ${timeframe}: ${historicalUrl}`);
                         
                         endpoints.push({
                             frame: timeframe,
@@ -214,6 +232,9 @@ class CandleFetcherService {
                     }
                     
                 } else {
+                    console.log(`⚠️ [ENDPOINT DEBUG] ${timeframe} - Using HISTORICAL ONLY approach`);
+                    console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - Reason: useIntraday=${params.useIntraday}, timeframe in list=${timeframe === '15m' || timeframe === '1h' || timeframe === '1d'}`);
+                    
                     // Use only historical API for daily timeframe or when market is closed
                     const historicalUrl = this.buildHistoricalUrl(tradeData.instrument_key, timeframe, params);
                     console.log(`📊 [HISTORICAL] ${timeframe}: ${historicalUrl}`);
@@ -225,6 +246,9 @@ class CandleFetcherService {
                         params: params
                     });
                 }
+                
+                console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - Endpoints added for this timeframe: ${endpoints.filter(e => e.frame === timeframe).length}`);
+                console.log(`🔍 [ENDPOINT DEBUG] ================================`);
             }
             
             console.log(`📡 [ENDPOINTS] Built ${endpoints.length} endpoints using hybrid approach`);
