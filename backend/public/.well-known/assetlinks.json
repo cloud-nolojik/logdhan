@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.nolojik.logdhan",
+      "sha256_cert_fingerprints": [
+        "0D:07:0C:16:D0:0C:34:2B:1A:33:27:29:4E:81:37:33:24:DA:58:0C:BB:1F:67:6D:89:3D:93:F9:2D:3A:F2:55"
+      ]
+    }
+  }
+]

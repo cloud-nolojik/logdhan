@@ -83,6 +83,31 @@ export class MessagingService {
   }
 
   /**
+   * Send monitoring conditions met alert via WhatsApp
+   */
+  async sendMonitoringConditionsMet(mobileNumber, alertData) {
+    if (!this.infobipProvider) {
+      console.warn('⚠️ Infobip provider not initialized. Monitoring alert not sent.');
+      return null;
+    }
+
+    try {
+      return await this.infobipProvider.sendMessage({
+        to: mobileNumber,
+        templateName: 'monitoring_conditions_met',
+        templateData: {
+          userName: alertData.userName || 'logdhanuser',
+          stockSymbol: alertData.stockSymbol || 'Stock',
+          instrumentKey: alertData.instrumentKey || ''
+        }
+      });
+    } catch (error) {
+      console.error('❌ Failed to send monitoring conditions met alert:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get message delivery status
    */
   async getMessageStatus(messageId) {

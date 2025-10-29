@@ -2099,14 +2099,14 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                 stock.processing_completed_at = now;
                 stock.error_reason = null;
                 
-                activeSession.successful_stocks += 1;
+                activeSession.successful_stocks = (activeSession.successful_stocks || 0) + 1;
                 console.log(`✅ [SESSION UPDATE] Marked ${stock.trading_symbol} as completed in bulk session`);
             } else if (status === 'failed') {
                 stock.processed = true;
                 stock.processing_completed_at = now;
                 stock.error_reason = 'Analysis failed or insufficient data';
                 
-                activeSession.failed_stocks += 1;
+                activeSession.failed_stocks = (activeSession.failed_stocks || 0) + 1;
                 console.log(`❌ [SESSION UPDATE] Marked ${stock.trading_symbol} as failed in bulk session`);
             }
 

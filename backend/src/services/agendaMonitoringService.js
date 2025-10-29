@@ -291,30 +291,25 @@ class AgendaMonitoringService {
                         return;
                     }
 
-                    // Prepare WhatsApp strategy alert data
-                    const strategyData = {
-                        stock_name: analysis.stock_name || analysis.stock_symbol,
-                        entry_price: strategy.entry_price || 0,
-                        target_price: strategy.target || 0,
-                        stop_loss: strategy.stop_loss || 0,
-                        strategy_type: strategy.direction || 'BUY',
-                        current_price: triggerResult.data?.current_price || analysis.current_price || 0,
-                        triggers_satisfied: triggersSatisfied,
-                        next_action: 'Open LogDhan app to review and place order manually'
+                    // Prepare monitoring conditions met alert data
+                    const alertData = {
+                        userName: user.name || user.email?.split('@')[0] || 'logdhanuser',
+                        stockSymbol: analysis.stock_symbol || analysis.stock_name,
+                        instrumentKey: analysis.instrument_key || analysis.stock_symbol || ''
                     };
 
-                    // Send WhatsApp notification
-                    const whatsappResult = await messagingService.sendStrategyAlert(
+                    // Send WhatsApp monitoring alert
+                    const whatsappResult = await messagingService.sendMonitoringConditionsMet(
                         user.mobile_number,
-                        strategyData
+                        alertData
                     );
 
-                    console.log(`📱 WhatsApp strategy alert sent for ${analysisId}_${strategyId}, continuing monitoring`);
+                    console.log(`📱 Monitoring conditions met alert sent for ${analysisId}_${strategyId}, continuing monitoring`);
                     
-                    historyEntry.status = 'whatsapp_sent';
-                    historyEntry.reason = 'WhatsApp strategy alert sent successfully';
+                    historyEntry.status = 'alert_sent';
+                    historyEntry.reason = 'Monitoring conditions met alert sent successfully';
                     historyEntry.details.whatsapp_result = whatsappResult;
-                    historyEntry.details.strategy_data = strategyData;
+                    historyEntry.details.alert_data = alertData;
                     historyEntry.monitoring_duration_ms = Date.now() - startTime;
                     await historyEntry.save();
                     
@@ -322,10 +317,10 @@ class AgendaMonitoringService {
                     console.log(`🔄 Monitoring continues for ${analysisId}_${strategyId} after WhatsApp notification`);
                     
                 } catch (whatsappError) {
-                    console.error(`❌ Error sending WhatsApp notification for ${analysisId}_${strategyId}:`, whatsappError);
+                    console.error(`❌ Error sending monitoring conditions met alert for ${analysisId}_${strategyId}:`, whatsappError);
                     
                     historyEntry.status = 'error';
-                    historyEntry.reason = 'WhatsApp notification failed';
+                    historyEntry.reason = 'Monitoring conditions met alert failed';
                     historyEntry.details.error_message = whatsappError.message;
                     historyEntry.monitoring_duration_ms = Date.now() - startTime;
                     await historyEntry.save();

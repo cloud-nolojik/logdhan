@@ -21,6 +21,14 @@ export class InfobipProvider extends MessagingProvider {
         placeholderCount: 2, // userName, stocksWithFeedback
         hasButton: true,
         buttonUrl: 'https://logdhan.com/analysis/completed'
+      },
+      monitoring_conditions_met: {
+        templateName: 'monitoring_conditons', // Template for monitoring alert
+        templateId: '1540052193658826', // Template ID from Infobip
+        language: 'en',
+        placeholderCount: 2, // userName, stockSymbol
+        hasButton: true,
+        buttonUrl: 'https://logdhan.com/analysis/view' // Base URL, parameter added dynamically
       }
     };
   }
@@ -72,12 +80,19 @@ export class InfobipProvider extends MessagingProvider {
       };
     }
 
-    // Add buttons only for OTP template
+    // Add buttons for templates that have them
     if (templateName === 'otp') {
       content.templateData.buttons = [
         {
           type: "URL",
           parameter: templateData.otp || "000000"
+        }
+      ];
+    } else if (templateName === 'monitoring_conditions_met') {
+      content.templateData.buttons = [
+        {
+          type: "URL",
+          parameter: templateData.instrumentKey || ""
         }
       ];
     }
@@ -155,6 +170,11 @@ export class InfobipProvider extends MessagingProvider {
         return [
           templateData.userName || 'logdhanuser',
           templateData.stocksWithFeedback || '0 stocks'
+        ];
+      case 'monitoring_conditions_met':
+        return [
+          templateData.userName || 'logdhanuser',
+          templateData.stockSymbol || 'Stock'
         ];
       default:
         return [];

@@ -7,8 +7,34 @@ import { User } from '../models/user.js';
 import { Subscription } from '../models/subscription.js';
 import { getCurrentPrice } from '../utils/stock.js';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
+import { messagingService } from '../services/messaging/messaging.service.js';
 
 const router = express.Router();
+
+// Helper function to send WhatsApp notification when bulk analysis completes
+async function sendBulkAnalysisCompletionNotification(session) {
+    try {
+        const user = await User.findById(session.user_id);
+        if (user && user.mobileNumber) {
+            const analysisData = {
+                userName: user.name || user.email?.split('@')[0] || 'logdhanuser',
+                stocksProcessed: session.successful_stocks || session.stocks?.length || 0
+            };
+            
+            await messagingService.sendAnalysisServiceUpdate(
+                user.mobileNumber,
+                analysisData
+            );
+            
+            console.log(`📱 Bulk analysis completion notification sent to ${user.mobile_number} for session ${session.session_id}`);
+        } else {
+            console.log(`⚠️ User not found or missing mobile number for session ${session.session_id}`);
+        }
+    } catch (notificationError) {
+        console.error(`❌ Failed to send bulk analysis completion notification for session ${session.session_id}:`, notificationError);
+        // Don't fail the entire session if notification fails
+    }
+}
 
 // Helper function to get user-friendly bulk analysis messages
 function getBulkAnalysisMessage(reason) {
@@ -218,10 +244,10 @@ router.post('/cancel', auth, async (req, res) => {
         const session = await AnalysisSession.findActiveSession(userId, analysis_type);
         
         if (!session) {
-            return res.status(404).json({
-                success: false,
-                error: 'No active analysis session found',
-                message: 'There is no running analysis session to cancel.'
+            return res.status(200).json({
+                success: true,
+                message: 'Analysis has already completed successfully.',
+                status: 'already_completed'
             });
         }
         
@@ -935,6 +961,9 @@ async function processSessionBasedBulkAnalysis(session) {
                     sessionStock.error_reason = null;
                 }
                 console.log(`✅ [EXISTING ANALYSIS] Using existing valid analysis for ${stock.trading_symbol}`);
+                
+                // Increment successful stocks counter for existing valid analysis
+                session.successful_stocks = (session.successful_stocks || 0) + 1;
             } else {
                 stocksNeedingAnalysis.push(stock);
             }
@@ -956,6 +985,10 @@ async function processSessionBasedBulkAnalysis(session) {
             session.status = 'completed';
             session.completed_at = new Date();
             await session.save();
+            
+            // Send WhatsApp notification for bulk analysis completion
+            await sendBulkAnalysisCompletionNotification(session);
+            
             return;
         }
         
@@ -1100,6 +1133,9 @@ async function processSessionBasedBulkAnalysis(session) {
         
         //console.log(`🏁 [SESSION ANALYSIS] Session completed: ${session.session_id}. Success: ${session.successful_stocks}, Failed: ${session.failed_stocks}`);
         
+        // Send WhatsApp notification for bulk analysis completion
+        await sendBulkAnalysisCompletionNotification(session);
+        
     } catch (sessionError) {
         console.error(`❌ [SESSION ANALYSIS] Session failed: ${session.session_id}`, sessionError);
         console.error(`❌ [SESSION ANALYSIS] Full error details:`, sessionError.stack);
@@ -1183,8 +1219,8 @@ async function markStockAsFailed(session, stock, errorReason, retryCount = 0) {
             stockInSession.error_reason = errorReason;
         }
         
-        freshSession.failed_stocks += 1;
-        freshSession.processed_stocks += 1;
+        freshSession.failed_stocks = (freshSession.failed_stocks || 0) + 1;
+        freshSession.processed_stocks = (freshSession.processed_stocks || 0) + 1;
         freshSession.last_updated = new Date();
         
         await freshSession.save();
@@ -1223,8 +1259,8 @@ async function markStockAsSuccessful(session, stock, retryCount = 0) {
             stockInSession.processing_completed_at = new Date();
         }
         
-        freshSession.successful_stocks += 1;
-        freshSession.processed_stocks += 1;
+        freshSession.successful_stocks = (freshSession.successful_stocks || 0) + 1;
+        freshSession.processed_stocks = (freshSession.processed_stocks || 0) + 1;
         freshSession.last_updated = new Date();
         
         await freshSession.save();
