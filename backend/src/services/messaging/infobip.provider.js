@@ -15,20 +15,20 @@ export class InfobipProvider extends MessagingProvider {
         placeholderCount: 1 // Only OTP
       },
       analysis_service_update: {
-        templateName: 'analysis_service_update1', // Template for analysis completion
-        templateId: '25089282827358301', // Update after approval
+        templateName: 'analysis_service_update3', // Template for analysis completion
+        templateId: '1874720356449286', // Update after approval
         language: 'en',
         placeholderCount: 2, // userName, stocksWithFeedback
         hasButton: true,
-        buttonUrl: 'https://logdhan.com/analysis/completed'
+        buttonUrl: 'https://logdhan.com/app/analysis/completed'
       },
       monitoring_conditions_met: {
-        templateName: 'monitoring_conditons', // Template for monitoring alert
-        templateId: '1540052193658826', // Template ID from Infobip
+        templateName: 'monitoring_conditons2', // Template for monitoring alert
+        templateId: '1157781149657688', // Template ID from Infobip
         language: 'en',
         placeholderCount: 2, // userName, stockSymbol
         hasButton: true,
-        buttonUrl: 'https://logdhan.com/analysis/view' // Base URL, parameter added dynamically
+        buttonUrl: 'https://logdhan.com/app/monitoring/completed/' // Base URL, parameter added dynamically
       }
     };
   }
