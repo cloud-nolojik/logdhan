@@ -71,11 +71,19 @@ app.use(express.static('public', {
     if (path.endsWith('.gif')) res.setHeader('Content-Type', 'image/gif');
     if (path.endsWith('.webp')) res.setHeader('Content-Type', 'image/webp');
     if (path.endsWith('.ico')) res.setHeader('Content-Type', 'image/x-icon');
+    if (path.endsWith('.json')) res.setHeader('Content-Type', 'application/json');
     // Enable CORS for images
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'public, max-age=31536000');
   }
 }));
+
+// Specific route for Android App Links verification
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.sendFile(path.join(process.cwd(), 'public', '.well-known', 'assetlinks.json'));
+});
 
 // Serve static chart files with security headers
 app.use('/charts', (req, res, next) => {
