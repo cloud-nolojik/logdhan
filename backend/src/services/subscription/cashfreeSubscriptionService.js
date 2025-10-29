@@ -210,7 +210,7 @@ class CashfreeSubscriptionService {
         },
         subscription_meta: {
           return_url: `https://www.nolojik.com/logdhan/thankyou`,
-          notification_url: `https://trim-soviet-championship-tyler.trycloudflare.com/api/v1/subscriptions/webhook`
+          notification_url: `https://cooling-sciences-silence-strikes.trycloudflare.com/api/v1/subscriptions/webhook`
         },
         subscription_first_charge_time: null,
         subscription_expiry_time: new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString() // 1 day from now
@@ -236,7 +236,7 @@ class CashfreeSubscriptionService {
       console.log('📦 Full Cashfree response:', JSON.stringify(response.data, null, 2));
       
       return {
-        subscriptionId: response.data.cf_subscription_id || response.data.subscription_id,
+        subscriptionId: response.data.subscription_id,
         subscriptionSessionId: response.data.subscription_session_id,
         subscriptionPaymentUrl: response.data.subscription_payment_url,
         subscriptionStatus: response.data.subscription_status

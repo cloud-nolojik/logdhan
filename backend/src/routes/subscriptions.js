@@ -119,6 +119,9 @@ router.get('/current', auth, async (req, res) => {
         isTrialExpired: subscription.isTrialExpired,
         restrictions: subscription.restrictions,
         features: plan?.features || [],
+        // Cashfree integration fields - CRITICAL for refresh button functionality
+        cashfreeSubscriptionId: subscription.cashfreeSubscriptionId,
+        cashfreeSessionId: subscription.cashfreeSessionId,
         canUpgrade: subscription.planId !== 'premium_monthly',
         canDowngrade: false, // No downgrade concept in new model
         isExpired: isExpired,
@@ -195,7 +198,7 @@ router.post('/generate-payment-url', auth, async (req, res) => {
         paymentUrl: result.paymentUrl,
         planName: result.planName,
         amount: result.amount,
-        credits: result.credits,
+        stockLimit: result.stockLimit,
         subscriptionSessionId: result.subscriptionSessionId,
         planType: result.planType,
         isRecurring: result.isRecurring
@@ -320,6 +323,102 @@ router.post('/topup', auth, async (req, res) => {
 });
 
 /**
+ * Manual subscription status check and refresh
+ * POST /api/v1/subscriptions/refresh-status
+ */
+router.post('/refresh-status', auth, async (req, res) => {
+  try {
+    console.log('🔄 Manual subscription status refresh requested by user:', req.user.id);
+    
+    // Get user's current subscription
+    const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
+    
+    if (!subscription) {
+      return res.json({
+        success: true,
+        message: 'No subscription found',
+        data: { updated: false }
+      });
+    }
+
+    // Check if subscription has a Cashfree ID
+    if (!subscription.cashfreeSubscriptionId) {
+      console.log('ℹ️ No Cashfree subscription ID found - status is current');
+      return res.json({
+        success: true,
+        message: 'No Cashfree subscription ID - status is current',
+        data: { 
+          updated: false, 
+          subscription: subscription,
+          message: 'Trial subscription - no payment status to check'
+        }
+      });
+    }
+
+    console.log(`🔍 Checking Cashfree status for subscription: ${subscription.cashfreeSubscriptionId}`);
+
+    try {
+      // Use the new subscription update service
+      const { subscriptionUpdateService } = await import('../services/subscription/subscriptionUpdateService.js');
+      const result = await subscriptionUpdateService.processSubscriptionUpdate(subscription.cashfreeSubscriptionId);
+      
+      console.log('🎉 Subscription update completed:', result.updated ? 'Updated' : 'No update needed');
+      
+      return res.json({
+        success: true,
+        message: result.message,
+        data: result
+      });
+      
+    } catch (updateError) {
+      console.log('❌ Subscription update error:', updateError.message);
+      
+      // Handle Cashfree subscription not found
+      if (updateError.message && updateError.message.includes('SUBSCRIPTION_DOES_NOT_EXIST_EXCEPTION')) {
+        console.log('❌ Cashfree subscription not found, moving ID to oldTransactionIds');
+        
+        // Use the subscription update service to move IDs
+        const { subscriptionUpdateService } = await import('../services/subscription/subscriptionUpdateService.js');
+        await subscriptionUpdateService.moveToOldTransactionIds(subscription, 'CASHFREE_NOT_FOUND');
+        
+        console.log('✅ Moved invalid cashfree IDs to oldTransactionIds');
+        
+        return res.json({
+          success: true,
+          message: 'Cashfree subscription not found - cleared invalid IDs',
+          data: {
+            updated: true,
+            subscription: subscription,
+            cashfreeStatus: null,
+            message: 'Invalid Cashfree subscription ID was cleared'
+          }
+        });
+      } else {
+        // For other errors, return the error
+        console.log('❌ Subscription update error (not subscription not found):', updateError.message);
+        return res.json({
+          success: false,
+          message: 'Failed to update subscription',
+          data: {
+            updated: false,
+            error: updateError.message
+          }
+        });
+      }
+    }
+
+  } catch (error) {
+    console.error('❌ Error refreshing subscription status:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to refresh subscription status',
+      error: error.message
+    });
+  }
+});
+
+/**
  * Check if user can add more stocks to watchlist
  * GET /api/v1/subscriptions/can-add-stock
  */
@@ -412,13 +511,11 @@ router.get('/analytics', auth, async (req, res) => {
     
     const analytics = {
       usage: {
-        creditsUsed: subscription.credits.used,
-        creditsTotal: subscription.credits.total,
-        creditsRemaining: subscription.credits.remaining,
-        rolloverCredits: subscription.credits.rollover,
-        usagePercentage: subscription.creditUsagePercentage,
-        averageCreditsPerDay: daysSinceCycleStart > 0 ? 
-          Math.round(subscription.credits.used / daysSinceCycleStart * 10) / 10 : 0
+        stocksAnalyzed: 0, // TODO: Track actual stocks analyzed
+        stockLimit: subscription.stockLimit,
+        analysisCount: 0, // TODO: Track actual analysis count
+        usagePercentage: 0.0,
+        averageAnalysisPerDay: 0.0
       },
       billing: {
         currentCycle: {
@@ -443,18 +540,18 @@ router.get('/analytics', auth, async (req, res) => {
     };
 
     // Add recommendations based on usage patterns
-    if (analytics.usage.usagePercentage > 80) {
+    if (subscription.stockLimit <= 3) {
       analytics.recommendations.push({
-        type: 'low_credits',
-        message: 'You\'re running low on credits. Consider purchasing a top-up pack or upgrading your plan.',
+        type: 'stock_limit_low',
+        message: 'Track more stocks to discover more opportunities. Upgrade to a higher plan.',
         action: 'upgrade'
       });
     }
 
-    if (subscription.planId === 'pro_monthly' && analytics.usage.averageCreditsPerDay > 5) {
+    if (subscription.planId === 'pro_monthly') {
       analytics.recommendations.push({
-        type: 'upgrade_suggestion',
-        message: 'Based on your usage, the Annual plan would save you money and provide more credits.',
+        type: 'upgrade_suggestion', 
+        message: 'Upgrade to Annual plan for better value and track more stocks.',
         action: 'upgrade_annual',
         savings: 189
       });

@@ -59,56 +59,25 @@ export class MessagingService {
   }
 
   /**
-   * Send strategy alert via WhatsApp when trigger conditions are met
+   * Send analysis service update notification via WhatsApp
    */
-  async sendStrategyAlert(mobileNumber, strategyData) {
+  async sendAnalysisServiceUpdate(mobileNumber, analysisData) {
     if (!this.infobipProvider) {
-      console.warn('⚠️ Infobip provider not initialized. Strategy alert not sent.');
+      console.warn('⚠️ Infobip provider not initialized. Analysis service update not sent.');
       return null;
     }
 
     try {
       return await this.infobipProvider.sendMessage({
         to: mobileNumber,
-        templateName: 'strategy_alert',
+        templateName: 'analysis_service_update',
         templateData: {
-          stock_name: strategyData.stock_name,
-          entry_price: `₹${strategyData.entry_price}`,
-          target_price: `₹${strategyData.target_price}`,
-          stop_loss: `₹${strategyData.stop_loss}`,
-          strategy_type: strategyData.strategy_type,
-          current_price: `₹${strategyData.current_price}`,
-          triggers_satisfied: strategyData.triggers_satisfied || 'All trigger conditions met',
-          next_action: strategyData.next_action || 'Open LogDhan app to place order'
+          userName: analysisData.userName || 'logdhanuser',
+          stocksWithFeedback: `${analysisData.stocksProcessed || 0} stocks`
         }
       });
     } catch (error) {
-      console.error('❌ Failed to send strategy alert:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Send analysis completion notification via WhatsApp
-   */
-  async sendAnalysisComplete(mobileNumber, analysisData) {
-    if (!this.infobipProvider) {
-      console.warn('⚠️ Infobip provider not initialized. Analysis complete notification not sent.');
-      return null;
-    }
-
-    try {
-      return await this.infobipProvider.sendMessage({
-        to: mobileNumber,
-        templateName: 'analysis_complete',
-        templateData: {
-          stock_name: analysisData.stock_name,
-          strategies_count: analysisData.strategies_count.toString(),
-          analysis_type: analysisData.analysis_type
-        }
-      });
-    } catch (error) {
-      console.error('❌ Failed to send analysis complete notification:', error.message);
+      console.error('❌ Failed to send analysis service update:', error.message);
       throw error;
     }
   }

@@ -54,6 +54,7 @@ import webhookRoutes from './routes/webhook.js';
 import monitoringRoutes from './routes/agendaMonitoring.js'; // Using Agenda instead of BullMQ
 import publicRoutes from './routes/public.js';
 import consentRoutes from './routes/consent.js';
+import appLinksRoutes from './routes/app-links.js';
 
 
 const app = express();
@@ -140,6 +141,9 @@ app.use('/api/v1/webhook', webhookRoutes);
 app.use('/api/v1/monitoring', monitoringRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/v1/consent', consentRoutes);
+
+// Deep link routes for WhatsApp templates (logdhan.com domain)
+app.use('/', appLinksRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

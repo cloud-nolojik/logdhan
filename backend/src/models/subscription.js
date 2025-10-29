@@ -46,6 +46,12 @@ const subscriptionSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  oldTransactionIds: [{
+    cashfreeSubscriptionId: String,
+    cashfreeSessionId: String,
+    processedAt: Date,
+    status: String // 'PROCESSED_SUCCESSFULLY', 'CANCELLED', etc.
+  }],
   pricing: {
     amount: {
       type: Number,

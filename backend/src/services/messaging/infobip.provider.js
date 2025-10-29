@@ -14,18 +14,13 @@ export class InfobipProvider extends MessagingProvider {
         language: 'en_GB',
         placeholderCount: 1 // Only OTP
       },
-      strategy_alert: {
-        templateName: 'logdhan_strategy_alert', // Template for strategy trigger alerts
-        templateId: '1339203531328157', // Your Infobip template ID
+      analysis_service_update: {
+        templateName: 'analysis_service_update1', // Template for analysis completion
+        templateId: '25089282827358301', // Update after approval
         language: 'en',
-        placeholderCount: 8 // stock_name, entry_price, target_price, stop_loss, strategy_type, current_price, triggers_satisfied, next_action
-      },
-      analysis_complete: {
-        templateName: 'logdhan_analysis_complete', // Template for analysis completion
-        templateId: 'TBD', // You'll need to provide this after creating the template
-        language: 'en',
-        placeholderCount: 3, // stock_name, strategies_count, analysis_type
-        hasHeader: true // This template has a header section
+        placeholderCount: 2, // userName, stocksWithFeedback
+        hasButton: true,
+        buttonUrl: 'https://logdhan.com/analysis/completed'
       }
     };
   }
@@ -156,22 +151,10 @@ export class InfobipProvider extends MessagingProvider {
         return [
           templateData.otp || '000000'
         ];
-      case 'strategy_alert':
+      case 'analysis_service_update':
         return [
-          templateData.stock_name || 'UNKNOWN',
-          templateData.entry_price || '0',
-          templateData.target_price || '0',
-          templateData.stop_loss || '0',
-          templateData.strategy_type || 'BUY',
-          templateData.current_price || '0',
-          templateData.triggers_satisfied || 'All conditions met',
-          templateData.next_action || 'Review and place order manually'
-        ];
-      case 'analysis_complete':
-        return [
-          templateData.stock_name || 'UNKNOWN',
-          templateData.strategies_count || '0',
-          templateData.analysis_type || 'swing'
+          templateData.userName || 'logdhanuser',
+          templateData.stocksWithFeedback || '0 stocks'
         ];
       default:
         return [];
