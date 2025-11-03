@@ -97,7 +97,7 @@ class AgendaMonitoringService {
             const analysis = await StockAnalysis.findById(analysisId);
             if (!analysis) {
                 console.log(`❌ Analysis ${analysisId} not found, stopping monitoring`);
-                
+
                 // Create history entry for stopped monitoring
                 await MonitoringHistory.create({
                     analysis_id: analysisId,
@@ -109,7 +109,16 @@ class AgendaMonitoringService {
                     details: { error_message: 'Analysis document not found in database' },
                     monitoring_duration_ms: Date.now() - startTime
                 });
-                
+
+                // Send WhatsApp notification
+                await this.sendMonitoringFailureNotification(
+                    userId,
+                    analysisId,
+                    'Unknown',
+                    'Analysis not found',
+                    { error_message: 'Analysis document not found in database' }
+                );
+
                 await this.stopMonitoring(analysisId, strategyId);
                 return;
             }
@@ -129,13 +138,22 @@ class AgendaMonitoringService {
             // Check if analysis has expired
             if (analysis.expires_at && new Date(analysis.expires_at) < new Date()) {
                 console.log(`⏰ Analysis ${analysisId} has expired, stopping monitoring`);
-                
+
                 historyEntry.status = 'stopped';
                 historyEntry.reason = 'Analysis expired';
                 historyEntry.details.error_message = 'Analysis validity period ended';
                 historyEntry.monitoring_duration_ms = Date.now() - startTime;
                 await historyEntry.save();
-                
+
+                // Send WhatsApp notification
+                await this.sendMonitoringFailureNotification(
+                    userId,
+                    analysisId,
+                    analysis.stock_symbol,
+                    'Analysis expired',
+                    { expires_at: analysis.expires_at }
+                );
+
                 await this.stopMonitoring(analysisId, strategyId);
                 return;
             }
@@ -326,8 +344,64 @@ class AgendaMonitoringService {
                     await historyEntry.save();
                 }
             } else {
+                // Check for specific failure reasons that require stopping monitoring
+                const shouldStopMonitoring = triggerResult.data?.should_monitor === false;
+
+                if (shouldStopMonitoring) {
+                    // Handle different failure types
+                    if (triggerResult.reason === 'invalidation_triggered' || triggerResult.reason === 'position_closure_required') {
+                        console.log(`❌ Invalidation triggered for ${analysisId}_${strategyId}, stopping monitoring`);
+
+                        historyEntry.status = 'stopped';
+                        historyEntry.reason = 'Invalidation triggered';
+                        historyEntry.details.invalidation_details = triggerResult.data?.invalidation || {};
+                        historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                        await historyEntry.save();
+
+                        // Send WhatsApp notification
+                        await this.sendMonitoringFailureNotification(
+                            userId,
+                            analysisId,
+                            analysis.stock_symbol,
+                            'Pre-entry invalidation triggered',
+                            {
+                                invalidation_details: triggerResult.message || 'Price moved against the setup',
+                                current_price: triggerResult.data?.current_price
+                            }
+                        );
+
+                        await this.stopMonitoring(analysisId, strategyId);
+                        return;
+
+                    } else if (triggerResult.data?.expired_trigger) {
+                        console.log(`⏳ Trigger expired for ${analysisId}_${strategyId}, stopping monitoring`);
+
+                        historyEntry.status = 'stopped';
+                        historyEntry.reason = 'Trigger expired';
+                        historyEntry.details.expired_trigger = triggerResult.data.expired_trigger;
+                        historyEntry.monitoring_duration_ms = Date.now() - startTime;
+                        await historyEntry.save();
+
+                        // Send WhatsApp notification
+                        await this.sendMonitoringFailureNotification(
+                            userId,
+                            analysisId,
+                            analysis.stock_symbol,
+                            'Entry trigger expired',
+                            {
+                                bars_checked: triggerResult.data.session?.total_bars || 'N/A',
+                                trigger_details: triggerResult.data.expired_trigger
+                            }
+                        );
+
+                        await this.stopMonitoring(analysisId, strategyId);
+                        return;
+                    }
+                }
+
+                // Normal case: triggers not yet met, continue monitoring
                 console.log(`⏳ Triggers not yet met for ${analysisId}_${strategyId}, continuing monitoring`);
-                
+
                 historyEntry.status = 'triggers_not_met';
                 historyEntry.reason = triggerResult.message || 'Entry conditions not satisfied';
                 if (triggerResult.data) {
@@ -744,6 +818,47 @@ class AgendaMonitoringService {
         } catch (error) {
             console.error('❌ Error in stale lock cleanup job:', error);
             return null;
+        }
+    }
+
+    /**
+     * Send WhatsApp notification when monitoring fails or stops
+     */
+    async sendMonitoringFailureNotification(userId, analysisId, stockSymbol, reason, details = {}) {
+        try {
+            const user = await User.findById(userId);
+            if (!user || !user.mobile_number) {
+                console.log(`⚠️ No mobile number for user ${userId}, skipping WhatsApp notification`);
+                return;
+            }
+
+            let message = `🛑 *MONITORING STOPPED* 🛑\n\n`;
+            message += `*Stock:* ${stockSymbol || 'Unknown'}\n`;
+            message += `*Reason:* ${reason}\n\n`;
+
+            // Add specific details based on reason
+            if (reason.includes('expired')) {
+                message += `⏰ The analysis validity period has ended. Please generate a new analysis to continue monitoring.\n\n`;
+            } else if (reason.includes('trigger') && reason.includes('expired')) {
+                message += `⏳ Entry conditions did not occur within the expected timeframe (${details.bars_checked || 'N/A'} bars checked).\n\n`;
+                message += `*Suggestion:* Market conditions may have changed. Consider running a fresh analysis.\n\n`;
+            } else if (reason.includes('invalidation')) {
+                message += `❌ A cancel condition was triggered:\n`;
+                message += `${details.invalidation_details || 'Price moved against the setup'}\n\n`;
+                message += `*This is good risk management* - the setup is no longer valid.\n\n`;
+            } else if (reason.includes('not found')) {
+                message += `📋 Analysis data was not found. This may have been deleted or expired.\n\n`;
+            }
+
+            message += `Analysis ID: ${analysisId}\n`;
+            message += `Time: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}\n\n`;
+            message += `ℹ️ You can start a new monitoring session anytime from the app.`;
+
+            await messagingService.sendWhatsAppMessage(user.mobile_number, message);
+            console.log(`📱 Monitoring failure notification sent to ${user.mobile_number}`);
+
+        } catch (error) {
+            console.error(`❌ Error sending monitoring failure notification:`, error);
         }
     }
 

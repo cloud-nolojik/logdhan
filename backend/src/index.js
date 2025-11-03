@@ -55,6 +55,7 @@ import monitoringRoutes from './routes/agendaMonitoring.js'; // Using Agenda ins
 import publicRoutes from './routes/public.js';
 import consentRoutes from './routes/consent.js';
 import appRedirectRoutes from './routes/app-redirect.js';
+import feedbackRoutes from './routes/feedback.js';
 
 
 const app = express();
@@ -147,6 +148,7 @@ app.use('/api/v1/ai', aiRoutes);
 app.use('/api/v1/bulk-analysis', bulkAnalysisRoutes);
 app.use('/api/v1/webhook', webhookRoutes);
 app.use('/api/v1/monitoring', monitoringRoutes);
+app.use('/api/v1/feedback', feedbackRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/v1/consent', consentRoutes);
 

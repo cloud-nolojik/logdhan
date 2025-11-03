@@ -108,32 +108,32 @@ router.post('/analyze-all', auth, async (req, res) => {
         console.log(`✅ [BULK TIMING] Analysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);
         
         // Check if user can analyze stocks (trial expiry check)
-        try {
-            const analysisPermissionCheck = await Subscription.canUserAnalyzeStock(userId);
+        // try {
+        //     const analysisPermissionCheck = await Subscription.canUserAnalyzeStock(userId);
             
-            if (!analysisPermissionCheck.canAnalyze) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'analysis_not_allowed',
-                    message: analysisPermissionCheck.isTrialExpired 
-                        ? 'Your free trial has expired. Please subscribe to continue analyzing stocks.'
-                        : 'You need an active subscription to analyze stocks.',
-                    data: {
-                        planId: analysisPermissionCheck.planId,
-                        isTrialExpired: analysisPermissionCheck.isTrialExpired,
-                        trialExpiryDate: analysisPermissionCheck.trialExpiryDate,
-                        needsUpgrade: true
-                    }
-                });
-            }
-        } catch (subscriptionError) {
-            console.error('Error checking analysis permission:', subscriptionError);
-            return res.status(400).json({
-                success: false,
-                error: 'subscription_check_failed',
-                message: subscriptionError.message
-            });
-        }
+        //     if (!analysisPermissionCheck.canAnalyze) {
+        //         return res.status(403).json({
+        //             success: false,
+        //             error: 'analysis_not_allowed',
+        //             message: analysisPermissionCheck.isTrialExpired 
+        //                 ? 'Your free trial has expired. Please subscribe to continue analyzing stocks.'
+        //                 : 'You need an active subscription to analyze stocks.',
+        //             data: {
+        //                 planId: analysisPermissionCheck.planId,
+        //                 isTrialExpired: analysisPermissionCheck.isTrialExpired,
+        //                 trialExpiryDate: analysisPermissionCheck.trialExpiryDate,
+        //                 needsUpgrade: true
+        //             }
+        //         });
+        //     }
+        // } catch (subscriptionError) {
+        //     console.error('Error checking analysis permission:', subscriptionError);
+        //     return res.status(400).json({
+        //         success: false,
+        //         error: 'subscription_check_failed',
+        //         message: subscriptionError.message
+        //     });
+        // }
         
         // Get user's watchlist
         const watchlistStocks = await getUserWatchlist(userId);
@@ -1445,9 +1445,9 @@ router.get('/timing-check', auth, async (req, res) => {
         const response = {
             success: true,
             data: {
-                allowed: analysisPermission.allowed,
-                reason: analysisPermission.reason,
-                message: getBulkAnalysisMessage(analysisPermission.reason),
+                allowed: true,
+                reason: null,
+                message: null,
                 nextAllowed: analysisPermission.nextAllowed || null,
                 validUntil: analysisPermission.validUntil || null
             }
