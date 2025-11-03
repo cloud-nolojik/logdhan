@@ -163,6 +163,25 @@ class AdvancedTriggerEngine {
             return { satisfied: false, expired: false, error: `No data for ${trigger.timeframe}` };
         }
 
+        // CRITICAL FIX #3: Validate candle freshness
+        // Upstox API sometimes returns stale data for 1-3 minutes
+        const now = Date.now();
+        const candleTimestamp = new Date(timeframeData.timestamp).getTime();
+        const dataAgeMs = now - candleTimestamp;
+        const dataAgeMinutes = dataAgeMs / (1000 * 60);
+
+        // Skip evaluation if data is older than 3 minutes (stale)
+        if (dataAgeMinutes > 3) {
+            console.warn(`⚠️ ${trigger.id}: Stale market data (${dataAgeMinutes.toFixed(1)} min old) - skipping evaluation`);
+            return {
+                satisfied: false,
+                expired: false,
+                error: `Stale data: ${dataAgeMinutes.toFixed(1)} minutes old`,
+                dataAge: dataAgeMinutes,
+                skipped: true
+            };
+        }
+
         // Check if this is a new bar
         const currentBarTime = timeframeData.timestamp;
         const isNewBar = barCounter.lastBarTime !== currentBarTime;
@@ -180,23 +199,44 @@ class AdvancedTriggerEngine {
             return { satisfied: false, expired: true, barsChecked: barCounter.barsChecked };
         }
 
-        // Evaluate trigger condition
-        const conditionMet = this.evaluateCondition(trigger, timeframeData);
-        
+        // Get previous value for cross detection (CRITICAL for crosses_above/crosses_below)
+        // Store current value for next iteration
+        const valueHistoryKey = `${triggerKey}_values`;
+        if (!this.triggerHistory.has(valueHistoryKey)) {
+            this.triggerHistory.set(valueHistoryKey, []);
+        }
+
+        const valueHistory = this.triggerHistory.get(valueHistoryKey);
+        const currentValue = this.getValue(trigger.left, timeframeData);
+        const previousValue = valueHistory.length > 0 ? valueHistory[valueHistory.length - 1] : null;
+
+        // Store current value for next iteration (on new bars only)
+        if (isNewBar && currentValue !== null) {
+            valueHistory.push(currentValue);
+            // Keep only last 2 values (current and previous)
+            if (valueHistory.length > 2) {
+                valueHistory.shift();
+            }
+        }
+
+        // Evaluate trigger condition (with previous value for cross detection)
+        const conditionMet = this.evaluateCondition(trigger, timeframeData, previousValue);
+
         // Handle consecutive occurrences
         const historyKey = `${triggerKey}_history`;
         if (!this.triggerHistory.has(historyKey)) {
             this.triggerHistory.set(historyKey, []);
         }
-        
+
         const history = this.triggerHistory.get(historyKey);
-        
+
         // Add current result to history
         if (isNewBar) {
             history.push({
                 timestamp: currentBarTime,
                 satisfied: conditionMet,
-                barNumber: barCounter.barsChecked
+                barNumber: barCounter.barsChecked,
+                value: currentValue // Store value in history for debugging
             });
             
             // Keep only relevant history
@@ -301,7 +341,7 @@ class AdvancedTriggerEngine {
     /**
      * Evaluate a single condition
      */
-    evaluateCondition(condition, timeframeData) {
+    evaluateCondition(condition, timeframeData, previousValue = null) {
         const leftValue = this.getValue(condition.left, timeframeData);
         const rightValue = this.getValue(condition.right, timeframeData);
 
@@ -318,10 +358,50 @@ class AdvancedTriggerEngine {
             case '<': return leftValue < rightValue;
             case '==': return leftValue === rightValue;
             case '!=': return leftValue !== rightValue;
+            case 'crosses_above':
+                return this.evaluateCross(leftValue, rightValue, previousValue, 'above');
+            case 'crosses_below':
+                return this.evaluateCross(leftValue, rightValue, previousValue, 'below');
             default:
                 console.error(`❌ Unknown operator: ${condition.op}`);
                 return false;
         }
+    }
+
+    /**
+     * Evaluate cross conditions (crosses_above, crosses_below)
+     * CRITICAL: This is the most important operator for breakout trading
+     *
+     * crosses_above: (prevValue <= threshold) AND (currentValue > threshold)
+     * crosses_below: (prevValue >= threshold) AND (currentValue < threshold)
+     */
+    evaluateCross(currentValue, threshold, previousValue, direction) {
+        // Need previous value to detect cross
+        if (previousValue === null || previousValue === undefined) {
+            console.log(`⚠️ No previous value for cross detection, treating as false`);
+            return false;
+        }
+
+        if (direction === 'above') {
+            // Price must cross FROM below TO above threshold
+            const wasBelowOrAt = previousValue <= threshold;
+            const nowAbove = currentValue > threshold;
+            const crossed = wasBelowOrAt && nowAbove;
+
+            console.log(`🔍 Cross Above Check: prev=${previousValue}, curr=${currentValue}, threshold=${threshold} → ${crossed ? 'CROSSED ✅' : 'not crossed'}`);
+            return crossed;
+
+        } else if (direction === 'below') {
+            // Price must cross FROM above TO below threshold
+            const wasAboveOrAt = previousValue >= threshold;
+            const nowBelow = currentValue < threshold;
+            const crossed = wasAboveOrAt && nowBelow;
+
+            console.log(`🔍 Cross Below Check: prev=${previousValue}, curr=${currentValue}, threshold=${threshold} → ${crossed ? 'CROSSED ✅' : 'not crossed'}`);
+            return crossed;
+        }
+
+        return false;
     }
 
     /**
@@ -407,6 +487,39 @@ class AdvancedTriggerEngine {
                 counter.isExpired = true;
             }
         }
+    }
+
+    /**
+     * CRITICAL: Clean up all state when monitoring stops
+     * Without this, if user starts same analysis next day → wrong bar counts
+     */
+    cleanupSession(analysisId, strategyId) {
+        const sessionKey = strategyId ? `${analysisId}_${strategyId}` : analysisId;
+
+        console.log(`🧹 Cleaning up session state for: ${sessionKey}`);
+
+        // 1. Remove session counter
+        this.sessionCounters.delete(sessionKey);
+
+        // 2. Remove all bar counters for this session
+        const barCounterKeysToDelete = [];
+        for (const [key] of this.barCounters.entries()) {
+            if (key.startsWith(sessionKey)) {
+                barCounterKeysToDelete.push(key);
+            }
+        }
+        barCounterKeysToDelete.forEach(key => this.barCounters.delete(key));
+
+        // 3. Remove all trigger history for this session
+        const historyKeysToDelete = [];
+        for (const [key] of this.triggerHistory.entries()) {
+            if (key.startsWith(sessionKey)) {
+                historyKeysToDelete.push(key);
+            }
+        }
+        historyKeysToDelete.forEach(key => this.triggerHistory.delete(key));
+
+        console.log(`✅ Cleaned up: ${barCounterKeysToDelete.length} bar counters, ${historyKeysToDelete.length} history entries`);
     }
 
     /**

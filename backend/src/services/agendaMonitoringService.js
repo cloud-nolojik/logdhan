@@ -466,12 +466,17 @@ class AgendaMonitoringService {
                 }
             }
 
+            // CRITICAL FIX #2: Clean up trigger engine state (bar counters, history, etc.)
+            // Without this, restarting monitoring will have wrong bar counts
+            const advancedTriggerEngine = (await import('./advancedTriggerEngine.js')).default;
+            advancedTriggerEngine.cleanupSession(analysisId, strategyId);
+
             console.log(`✅ Stopped ${cancelledJobs} monitoring job(s) for ${analysisId}${strategyId ? `_${strategyId}` : ''}`);
 
             return {
                 success: true,
-                message: strategyId 
-                    ? `Monitoring stopped for strategy ${strategyId}` 
+                message: strategyId
+                    ? `Monitoring stopped for strategy ${strategyId}`
                     : `Monitoring stopped for all strategies in analysis ${analysisId}`,
                 removedJobs: cancelledJobs
             };
