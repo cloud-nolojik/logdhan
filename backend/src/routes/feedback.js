@@ -67,11 +67,25 @@ router.post('/analysis/:analysisId', auth, async (req, res) => {
                 }
             });
         } else {
-            // Create new feedback
+            // Create new feedback with strategy snapshot
+            // Extract strategy (we use strategies[0] as current design has one strategy per analysis)
+            const strategy = analysis.analysis_data?.strategies?.[0] || null;
+
+            // Create analysis snapshot for context
+            const analysisSnapshot = {
+                analysis_type: analysis.analysis_type,
+                generated_at: analysis.generated_at_ist || analysis.createdAt,
+                market_summary: analysis.analysis_data?.market_summary || {},
+                overall_sentiment: analysis.analysis_data?.overall_sentiment || 'NEUTRAL',
+                schema_version: analysis.analysis_data?.schema_version || 'unknown'
+            };
+
             feedback = await AnalysisFeedback.create({
                 analysis_id: analysisId,
                 user_id: userId,
                 stock_symbol: analysis.stock_symbol,
+                strategy_snapshot: strategy,  // 🎯 SNAPSHOT: Entire strategy object
+                analysis_snapshot: analysisSnapshot,  // 🎯 SNAPSHOT: Analysis metadata
                 rating,
                 comment: comment || '',
                 tags: tags || [],
@@ -90,6 +104,8 @@ router.post('/analysis/:analysisId', auth, async (req, res) => {
                         tags: feedback.tags,
                         detailed_ratings: feedback.detailed_ratings,
                         outcome: feedback.outcome,
+                        strategy_snapshot: feedback.strategy_snapshot,
+                        analysis_snapshot: feedback.analysis_snapshot,
                         createdAt: feedback.createdAt,
                         updatedAt: feedback.updatedAt
                     }
@@ -142,6 +158,8 @@ router.get('/analysis/:analysisId', auth, async (req, res) => {
                     tags: feedback.tags,
                     detailed_ratings: feedback.detailed_ratings,
                     outcome: feedback.outcome,
+                    strategy_snapshot: feedback.strategy_snapshot,
+                    analysis_snapshot: feedback.analysis_snapshot,
                     createdAt: feedback.createdAt,
                     updatedAt: feedback.updatedAt,
                     edited_at: feedback.edited_at
@@ -228,6 +246,8 @@ router.get('/my-feedback', auth, async (req, res) => {
                     tags: fb.tags,
                     detailed_ratings: fb.detailed_ratings,
                     outcome: fb.outcome,
+                    strategy_snapshot: fb.strategy_snapshot,
+                    analysis_snapshot: fb.analysis_snapshot,
                     createdAt: fb.createdAt,
                     updatedAt: fb.updatedAt,
                     edited_at: fb.edited_at

@@ -23,6 +23,25 @@ const analysisFeedbackSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    // Snapshot of the strategy that was rated (copied at feedback creation time)
+    // This preserves the exact strategy even if the analysis document is deleted
+    strategy_snapshot: {
+        type: mongoose.Schema.Types.Mixed,
+        required: false  // Made optional for backward compatibility
+    },
+    // Snapshot of analysis metadata
+    analysis_snapshot: {
+        analysis_type: String,  // 'swing', 'intraday', etc.
+        generated_at: Date,
+        market_summary: {
+            last: Number,
+            trend: String,
+            volatility: String,
+            volume: String
+        },
+        overall_sentiment: String,
+        schema_version: String
+    },
     // Star rating (1-5)
     rating: {
         type: Number,
