@@ -222,10 +222,26 @@ class AIAnalyzeService {
                 } else {
                     console.log(`✅ [ANALYSIS STATUS] Marking ${stock_symbol} as completed with valid analysis`);
                     await pendingAnalysis.markCompleted();
-                    
+
                     // Update bulk session if this analysis is part of one
                    // await this.updateBulkSessionProgress(instrument_key, analysis_type, 'completed');
-                    
+
+                    // 💰 Save token usage for cost tracking (if we have token data)
+                    if (analysisResult._tokenTracking && user_id) {
+                        await this.saveTokenUsage({
+                            userId: user_id,
+                            analysisId: pendingAnalysis._id,
+                            stockSymbol: stock_symbol,
+                            analysisType: analysis_type,
+                            analysisData: analysisResult,
+                            tokenTracking: analysisResult._tokenTracking,
+                            processingTime: analysisResult._processingTime || 0
+                        }).catch(err => {
+                            // Log but don't fail the analysis if tracking fails
+                            console.error(`⚠️ Failed to save token usage for ${stock_symbol}:`, err.message);
+                        });
+                    }
+
                     // Send WhatsApp notification for analysis completion (only for individual user analysis)
                     if (user_id) {
                         await this.sendAnalysisCompleteNotification(user_id, pendingAnalysis);
