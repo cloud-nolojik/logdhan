@@ -2052,7 +2052,93 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
 
         console.log(`📊 [TOKEN USAGE] ${stock_symbol} - Total: ${tokenTracking.total.total_tokens} (Input: ${tokenTracking.total.input_tokens}, Output: ${tokenTracking.total.output_tokens}, Cached: ${tokenTracking.total.cached_tokens})`);
 
+        // Store usage data in separate collection for persistent cost tracking
+        // Note: This will be called from the caller with userId
+        finalOut._tokenTracking = tokenTracking;  // Pass along for caller to save
+        finalOut._processingTime = Date.now() - t0;
+
         return finalOut;
+    }
+
+    /**
+     * Save token usage data for cost tracking
+     * Call this AFTER analysis is generated and you have userId
+     */
+    async saveTokenUsage({ userId, analysisId, stockSymbol, analysisType, analysisData, tokenTracking, processingTime }) {
+        try {
+            const UserAnalyticsUsage = (await import('../models/userAnalyticsUsage.js')).default;
+
+            // Extract result metadata
+            const strategy = analysisData?.strategies?.[0];
+            const resultMeta = {
+                insufficient_data: analysisData?.insufficientData || false,
+                strategy_type: strategy?.type || 'UNKNOWN',
+                confidence: strategy?.confidence || 0,
+                risk_reward: strategy?.riskReward || 0
+            };
+
+            // OpenAI pricing (as of Jan 2025 for gpt-4o)
+            const pricing = {
+                model_name: 'gpt-4o',
+                input_price_per_1k: 0.0025,   // $2.50 per 1M input tokens
+                output_price_per_1k: 0.010,   // $10.00 per 1M output tokens
+                cached_price_per_1k: 0.00125, // 50% discount for cached
+                usd_to_inr_rate: 83.0
+            };
+
+            // Calculate costs
+            const inputCost = (tokenTracking.total.input_tokens / 1000) * pricing.input_price_per_1k;
+            const outputCost = (tokenTracking.total.output_tokens / 1000) * pricing.output_price_per_1k;
+            const cachedCost = (tokenTracking.total.cached_tokens / 1000) * pricing.cached_price_per_1k;
+            const totalCostUsd = inputCost + outputCost + cachedCost;
+            const totalCostInr = totalCostUsd * pricing.usd_to_inr_rate;
+
+            // Calculate cache hit rate
+            const totalNonCachedTokens = tokenTracking.total.input_tokens + tokenTracking.total.output_tokens;
+            const cacheHitRate = totalNonCachedTokens > 0
+                ? (tokenTracking.total.cached_tokens / (tokenTracking.total.cached_tokens + totalNonCachedTokens)) * 100
+                : 0;
+
+            // Create usage record
+            const usageRecord = await UserAnalyticsUsage.create({
+                user_id: userId,
+                analysis_id: analysisId || null,
+                stock_symbol: stockSymbol,
+                analysis_type: analysisType,
+                token_usage: tokenTracking,
+                cost_breakdown: {
+                    input_cost: inputCost,
+                    output_cost: outputCost,
+                    cached_cost: cachedCost,
+                    total_cost_usd: totalCostUsd,
+                    total_cost_inr: totalCostInr
+                },
+                pricing_model: pricing,
+                performance: {
+                    total_duration_ms: processingTime,
+                    stage1_duration_ms: 0,  // TODO: Track individual stage times
+                    stage2_duration_ms: 0,
+                    stage3_duration_ms: 0,
+                    cache_hit_rate: cacheHitRate
+                },
+                result: resultMeta,
+                billing_context: {
+                    is_free_tier: true,  // TODO: Get from user subscription
+                    is_trial: false,
+                    subscription_plan: 'free',
+                    charge_user: false
+                }
+            });
+
+            console.log(`💰 [COST TRACKING] Saved usage for ${stockSymbol}: ₹${totalCostInr.toFixed(4)} (${tokenTracking.total.total_tokens} tokens)`);
+
+            return usageRecord;
+
+        } catch (error) {
+            console.error(`❌ [COST TRACKING] Failed to save usage data:`, error);
+            // Don't throw - tracking failure shouldn't break analysis
+            return null;
+        }
     }
 
 
