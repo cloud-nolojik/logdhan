@@ -12,6 +12,7 @@ import { messagingService } from './messaging/messaging.service.js';
 import { User } from '../models/user.js';
 import modelSelectorService from './ai/modelSelector.service.js';
 import AnalysisSession from '../models/analysisSession.js';
+import { buildStage1Prompt, buildStage2Prompt, buildStage3Prompt } from '../prompts/swingPrompts.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -458,10 +459,10 @@ class AIAnalyzeService {
 //             console.log(`📊 Generated clean payload for stock analysis of ${stock_symbol}`);
 //             console.log(`🤖 Using AI models - Analysis: ${this.analysisModel}, Sentiment: ${this.sentimentalModel}`);
 
-            // Generate analysis with real market data and sector context
-            const analysisResult = await this.generateStockAnalysisWithPayload({
+            // Generate analysis with real market data and sector context using 3-stage process
+            const analysisResult = await this.generateStockAnalysis3Call({
                 stock_name,
-                stock_symbol, 
+                stock_symbol,
                 current_price,
                 analysis_type,
                 marketPayload: payload,
@@ -1622,6 +1623,14 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
           "Place order type that matches entryType"
         ]
       },
+      "ui_friendly": {
+      "why_smart_move": "Simple 1-2 sentence explanation for the non technical retail trader ",
+      "ai_will_watch": [
+        "Non-Technical-Human-Retail-Trader-readable trigger 1",
+        Non-Technical-Human-Retail-Trader-readable trigger 2"
+      ],
+      "beginner_explanation": "One paragraph summary for Non-Technical-Human-Retail-Trader"
+    },
       "why_in_plain_words": [
         {"point": "<short reason>", "evidence": "<field reference from MARKET DATA>"},
         {"point": "<short reason>", "evidence": "<field reference from MARKET DATA>"}
@@ -1654,6 +1663,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         ],
         "note": "Position sizing is based purely on stop distance and a fixed risk budget."
       },
+
       "risk_meter": {
         "label": "Low"|"Medium"|"High",
         "score": <number 0..1>,
@@ -1789,10 +1799,261 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         // console.log(`✅ GPT-5 analysis complete for ${stock_symbol}`);
         // console.log(`   Strategies: ${parsed.strategies?.length || 0}`);
         // console.log(`   Confidence: ${parsed.strategies?.[0]?.confidence || 'N/A'}`);
-        
+
         return parsed;
     }
 
+
+    /**
+     * Helper function to call OpenAI API with JSON strict mode and token tracking
+     */
+    async callOpenAIJsonStrict(model, messages, forceJson = true) {
+        const payload = this.buildRequestPayload(model, messages, !!forceJson);
+
+        const res = await axios.post('https://api.openai.com/v1/chat/completions', payload, {
+            headers: {
+                'Authorization': `Bearer ${this.openaiApiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        // Extract token usage from response
+        const usage = res.data?.usage || {};
+        const tokenUsage = {
+            input_tokens: usage.prompt_tokens || 0,
+            output_tokens: usage.completion_tokens || 0,
+            cached_tokens: usage.prompt_tokens_details?.cached_tokens || 0,
+            total_tokens: usage.total_tokens || 0
+        };
+
+        let content = res.data?.choices?.[0]?.message?.content ?? '';
+
+        // Strip accidental code fences
+        content = content.trim().replace(/^```json\s*/i, '').replace(/```$/,'');
+
+        return {
+            data: JSON.parse(content),
+            tokenUsage
+        };
+    }
+
+
+    /**
+     * Stage 1: Preflight & Market Summary
+     * Validates MARKET DATA and computes market_summary
+     */
+    async stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo }) {
+        const { system, user } = buildStage1Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
+        const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
+
+        console.log('🛫 Stage 1: Preflight - Calling OpenAI API...',JSON.stringify(msgs));
+        const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
+
+        // Gate quickly
+        if (out.insufficientData === true) {
+            return { ok: false, s1: out, tokenUsage };
+        }
+        return { ok: true, s1: out, tokenUsage };
+    }
+
+
+    /**
+     * Stage 2: Strategy Skeleton & Triggers
+     * Builds ONE best-fit skeleton (BUY/SELL/NO_TRADE) with entry/stop/target ranges
+     */
+    async stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1 }) {
+        const { system, user } = buildStage2Prompt({ stock_name, stock_symbol, current_price, marketPayload, s1 });
+        const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
+
+        console.log('🛫 Stage 2: Skeleton - Calling OpenAI API...',JSON.stringify(msgs));
+        const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
+
+        // Gate: if NO_TRADE is returned we still go to Stage 3 (final will carry NO_TRADE)
+        if (out.insufficientData === true) {
+            return { ok: false, s2: out, tokenUsage };
+        }
+        return { ok: true, s2: out, tokenUsage };
+    }
+
+
+    /**
+     * Stage 3: Final Assembly (v1.4)
+     * Combines MARKET DATA + S1 + S2 + sentimentContext
+     */
+    async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2 }) {
+        const { system, user } = buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2 });
+        const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
+
+        console.log('🛫 Stage 3: Finalize - Calling OpenAI API...',JSON.stringify(msgs));
+        const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
+
+        return { data: out, tokenUsage };
+    }
+
+
+    /**
+     * NEW ORCHESTRATOR (3-call) - Generates stock analysis using 3-stage process
+     * Includes token tracking for cost calculation
+     */
+    async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo }) {
+        const t0 = Date.now();
+
+        // Initialize token tracking
+        const tokenTracking = {
+            stage1: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 },
+            stage2: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 },
+            stage3: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 },
+            total: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 }
+        };
+
+        // STAGE 1
+        const s1r = await this.stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
+        tokenTracking.stage1 = s1r.tokenUsage;
+
+        if (!s1r.ok) {
+            // Calculate totals
+            Object.keys(tokenTracking.total).forEach(key => {
+                tokenTracking.total[key] = tokenTracking.stage1[key];
+            });
+
+            // Return minimal v1.4-shaped NO_TRADE with insufficientData flag
+            return {
+                schema_version: "1.4",
+                symbol: stock_symbol,
+                analysis_type: "swing",
+                generated_at_ist: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + "+05:30",
+                insufficientData: true,
+                market_summary: s1r.s1?.market_summary ?? {
+                    last: Number(current_price) || null,
+                    trend: "NEUTRAL",
+                    volatility: "MEDIUM",
+                    volume: "UNKNOWN"
+                },
+                overall_sentiment: (marketPayload?.sentimentContext?.basicSentiment || 'neutral').toUpperCase(),
+                sentiment_analysis: {
+                    confidence: marketPayload?.sentimentContext?.confidence ?? 0,
+                    strength: marketPayload?.sentimentContext?.strength ?? "low",
+                    reasoning: "Insufficient market data to build a valid setup.",
+                    key_factors: [],
+                    sector_specific: !!marketPayload?.sentimentContext?.sectorSpecific,
+                    market_alignment: marketPayload?.sentimentContext?.marketAlignment || "neutral",
+                    trading_bias: "neutral",
+                    risk_level: "high",
+                    position_sizing: "reduced",
+                    entry_strategy: "cautious",
+                    news_count: marketPayload?.sentimentContext?.newsAnalyzed ?? 0,
+                    recent_news_count: marketPayload?.sentimentContext?.recentNewsCount ?? 0,
+                    sector_news_weight: marketPayload?.sentimentContext?.sectorNewsWeight ?? 0
+                },
+                runtime: { triggers_evaluated: [], pre_entry_invalidations_hit: false },
+                order_gate: {
+                    all_triggers_true: false,
+                    no_pre_entry_invalidations: true,
+                    actionability_status: "monitor_only",
+                    entry_type_sane: true,
+                    can_place_order: false
+                },
+                strategies: [
+                    {
+                        "id": "S1",
+                        "type": "NO_TRADE",
+                        "archetype": "trend-follow",
+                        "alignment": "neutral",
+                        "title": "No trade — insufficient data",
+                        "confidence": 0.0,
+                        "why_best": "Cannot satisfy data requirements safely.",
+                        "entryType": "limit",
+                        "entry": Number(current_price) || 0,
+                        "entryRange": null,
+                        "target": Number(current_price) || 0,
+                        "stopLoss": Number(current_price) || 0,
+                        "riskReward": 0.0,
+                        "timeframe": "3-7 days",
+                        "indicators": [],
+                        "reasoning": [],
+                        "warnings": [],
+                        "triggers": [],
+                        "confirmation": { "require": "NONE", "window_bars": 0, "conditions": [] },
+                        "invalidations": [],
+                        "validity": {
+                            "entry": { "type": "GTD", "bars_limit": 0, "trading_sessions_soft": 5, "trading_sessions_hard": 8, "expire_calendar_cap_days": 10 },
+                            "position": { "time_stop_sessions": 7, "gap_policy": "exit_at_open_with_slippage" },
+                            "non_trading_policy": "pause_clock"
+                        },
+                        "beginner_summary": { "one_liner": "No trade due to missing data.", "steps": [], "checklist": [] },
+                        "why_in_plain_words": [],
+                        "what_could_go_wrong": [],
+                        "ui_friendly": {
+                            "why_smart_move": "Skipping avoids random risk.",
+                            "ai_will_watch": [],
+                            "beginner_explanation": "Wait for better data quality before acting."
+                        },
+                        "money_example": {
+                            "per_share": { "risk": 0, "reward": 0, "rr": 0 },
+                            "position": { "qty": 0, "max_loss": 0, "potential_profit": 0, "distance_to_stop_pct": 0, "distance_to_target_pct": 0 }
+                        },
+                        "suggested_qty": {
+                            "risk_budget_inr": 1000,
+                            "risk_per_share": 0,
+                            "qty": 0,
+                            "alternatives": [
+                                {"risk_budget_inr":500,"qty":0},
+                                {"risk_budget_inr":1000,"qty":0},
+                                {"risk_budget_inr":2500,"qty":0}
+                            ],
+                            "note": "No trade."
+                        },
+                        "risk_meter": { "label": "High", "score": 1.0, "drivers": ["Data quality"] },
+                        "actionability": { "label": "No trade", "status": "monitor_only", "next_check_in": "daily", "checklist": [] },
+                        "glossary": {
+                            "entry": {"definition":"Price to open the trade.","example":"₹0"},
+                            "target":{"definition":"Price to take profits.","example":"₹0"},
+                            "stopLoss":{"definition":"Price to exit to limit loss.","example":"₹0"}
+                        }
+                    }
+                ],
+                "disclaimer": "AI-generated educational analysis. Not investment advice.",
+                "meta": {
+                    "processing_time_ms": Date.now() - t0,
+                    "stage": "s1-stop",
+                    "model_used": this.analysisModel,
+                    "token_usage": tokenTracking
+                }
+            };
+        }
+
+        // STAGE 2
+        const s2r = await this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
+        tokenTracking.stage2 = s2r.tokenUsage;
+
+        // STAGE 3
+
+        const s3result = await this.stage3Finalize({
+            stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2
+        });
+        tokenTracking.stage3 = s3result.tokenUsage;
+
+        const finalOut = s3result.data;
+
+        // Calculate total token usage
+        Object.keys(tokenTracking.total).forEach(key => {
+            tokenTracking.total[key] =
+                tokenTracking.stage1[key] +
+                tokenTracking.stage2[key] +
+                tokenTracking.stage3[key];
+        });
+
+        // Attach meta with token tracking
+        if (!finalOut.meta) finalOut.meta = {};
+        finalOut.meta.model_used = this.analysisModel;
+        finalOut.meta.processing_time_ms = Date.now() - t0;
+        finalOut.meta.stage_chain = ["s1","s2","s3"];
+        finalOut.meta.token_usage = tokenTracking;
+
+        console.log(`📊 [TOKEN USAGE] ${stock_symbol} - Total: ${tokenTracking.total.total_tokens} (Input: ${tokenTracking.total.input_tokens}, Output: ${tokenTracking.total.output_tokens}, Cached: ${tokenTracking.total.cached_tokens})`);
+
+        return finalOut;
+    }
 
 
     /**
