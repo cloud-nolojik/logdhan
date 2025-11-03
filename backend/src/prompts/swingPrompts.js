@@ -142,6 +142,15 @@ ${JSON.stringify(s1, null, 2)}
 STAGE-2:
 ${JSON.stringify(s2, null, 2)}
 
+### CRITICAL: TRIGGER & INVALIDATION COPYING RULES
+1. You MUST copy "triggers" array from STAGE-2 skeleton.triggers into the final strategies[0].triggers array EXACTLY as provided.
+   The monitoring system depends on strategies[0].triggers to check conditions in real-time.
+   If STAGE-2 has triggers, they MUST appear in the final output. DO NOT leave triggers empty.
+
+2. You MUST copy "invalidations_pre_entry" from STAGE-2 skeleton.invalidations_pre_entry into strategies[0].invalidations array.
+   Change the scope field to "pre_entry" and keep all other fields intact.
+   Then add post_entry invalidation for stopLoss breach.
+
 ### RETAIL BEGINNER TRANSLATION RULE FOR UI
 For the "ui_friendly" block inside strategies:
 - "why_smart_move" MUST be simplified beginner friendly, based on THIS stock specific reasoning.
@@ -242,13 +251,14 @@ STRICT JSON RETURN (schema v1.4):
           "mitigation": ["reduce_qty","wider_stop","skip_on_news"]
         }
       ],
-      "triggers": [],
+      "triggers": <COPY FROM STAGE-2 skeleton.triggers EXACTLY>,
       "confirmation": {
         "require": "ALL",
         "window_bars": 8,
         "conditions": []
       },
       "invalidations": [
+        <COPY FROM STAGE-2 skeleton.invalidations_pre_entry with scope="pre_entry">,
         {
           "scope": "post_entry",
           "timeframe": "1h",

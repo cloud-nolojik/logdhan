@@ -115,7 +115,23 @@ const strategySchema = new mongoose.Schema({
         required: false
     },
     confirmation: mongoose.Schema.Types.Mixed, // Accept object or string
-    validity: mongoose.Schema.Types.Mixed // Accept any object structure
+    validity: mongoose.Schema.Types.Mixed, // Accept any object structure
+    
+    // UI-friendly fields for non-technical retail traders
+    ui_friendly: {
+        why_smart_move: {
+            type: String,
+            required: false
+        },
+        ai_will_watch: [{
+            type: String,
+            required: false
+        }],
+        beginner_explanation: {
+            type: String,
+            required: false
+        }
+    }
 });
 
 const stockAnalysisSchema = new mongoose.Schema({
@@ -861,13 +877,13 @@ stockAnalysisSchema.statics.getExpiryTime = async function() {
     const currentDate = new Date(istTime);
     currentDate.setUTCHours(0, 0, 0, 0);
     
-    // Find next trading day and set expiry to 8:45 AM
+    // Find next trading day and set expiry to market close (3:30 PM)
     const nextTradingDay = await findNextTradingDay(currentDate);
     const expiryTime = new Date(nextTradingDay);
-    expiryTime.setHours(8, 45, 0, 0); // 8:45 AM next trading day
-    
-    console.log(`📅 [EXPIRY] Strategy expires at next trading day 8:45 AM: ${expiryTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
-    
+    expiryTime.setHours(15, 30, 0, 0); // 3:30 PM market close
+
+    console.log(`📅 [EXPIRY] Strategy expires at next trading day market close 3:30 PM: ${expiryTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
+
     return expiryTime;
 };
 

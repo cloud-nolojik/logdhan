@@ -154,22 +154,88 @@ router.post('/start', authenticateToken, async (req, res) => {
             });
         }
         
+        // Check if we're in market hours
+        const now = new Date();
+        const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+        const currentHours = istTime.getHours();
+        const currentMinutes = istTime.getMinutes();
+        const currentTimeInMinutes = currentHours * 60 + currentMinutes;
+        const marketOpen = 9 * 60 + 15;  // 9:15 AM
+        const marketClose = 15 * 60 + 30; // 3:30 PM
+        const dayOfWeek = istTime.getDay(); // 0 = Sunday, 6 = Saturday
+
+        const isMarketHours = dayOfWeek >= 1 && dayOfWeek <= 5 &&
+                             currentTimeInMinutes >= marketOpen &&
+                             currentTimeInMinutes <= marketClose;
+
         // Check current trigger status first
         const triggerCheck = await triggerOrderService.checkTriggerConditions(analysis);
-        
+
         // If triggers are already met, suggest immediate order placement
         if (triggerCheck.triggersConditionsMet) {
-            return res.status(200).json({
-                success: true,
-                message: 'Triggers are already satisfied. You can place the order immediately.',
-                data: {
-                    triggers_met: true,
-                    current_price: triggerCheck.data.current_price,
-                    triggers: triggerCheck.data.triggers,
-                    // COMMENTED OUT: Upstox order placement suggestion - using WhatsApp notifications instead
-                    suggestion: 'You will receive WhatsApp notification with strategy details for manual order placement'
-                }
-            });
+            // During market hours, this is more critical
+            if (isMarketHours) {
+                return res.status(200).json({
+                    success: true,
+                    message: 'Entry conditions already met! Price has reached your trigger point.',
+                    data: {
+                        triggers_met: true,
+                        current_price: triggerCheck.data.current_price,
+                        triggers: triggerCheck.data.triggers,
+                        market_status: 'open',
+                        suggestion: 'Place order immediately or wait for price to come back',
+                        user_message: {
+                            title: '🎯 Entry Point Reached!',
+                            description: `The conditions for entry have already been met. Current price: ₹${triggerCheck.data.current_price}`,
+                            action_button: 'Place Order Now',
+                            skip_button: 'Wait for Next Opportunity'
+                        }
+                    }
+                });
+            } else {
+                // Outside market hours, we can still start monitoring
+                return res.status(200).json({
+                    success: true,
+                    message: 'Triggers conditions met. Will place order when market opens.',
+                    data: {
+                        triggers_met: true,
+                        current_price: triggerCheck.data.current_price,
+                        triggers: triggerCheck.data.triggers,
+                        market_status: 'closed',
+                        suggestion: 'Monitoring will execute order at market open if conditions still valid'
+                    }
+                });
+            }
+        }
+
+        // Additional validation for market hours - check if price moved too far
+        if (isMarketHours) {
+            const currentPrice = analysis.current_price;
+            const entryPrice = strategy.entry;
+            const priceDeviation = Math.abs((currentPrice - entryPrice) / entryPrice) * 100;
+
+            // If price has moved more than 2% from entry, warn user
+            if (priceDeviation > 2) {
+                const direction = currentPrice > entryPrice ? 'above' : 'below';
+                return res.status(400).json({
+                    success: false,
+                    error: 'price_moved_significantly',
+                    message: `Price has moved ${priceDeviation.toFixed(1)}% ${direction} entry point during market hours`,
+                    data: {
+                        current_price: currentPrice,
+                        entry_price: entryPrice,
+                        deviation: priceDeviation.toFixed(2) + '%',
+                        market_status: 'open',
+                        suggestion: 'Consider getting fresh analysis with current market conditions'
+                    },
+                    user_message: {
+                        title: '⚠️ Price Already Moved',
+                        description: `Current price (₹${currentPrice}) is ${priceDeviation.toFixed(1)}% ${direction} your entry point (₹${entryPrice}). Market conditions may have changed.`,
+                        action_button: 'Get Fresh Analysis',
+                        skip_button: 'Start Monitoring Anyway'
+                    }
+                });
+            }
         }
         
         // Start monitoring with Agenda
