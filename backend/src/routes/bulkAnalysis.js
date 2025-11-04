@@ -1082,6 +1082,7 @@ async function processSessionBasedBulkAnalysis(session) {
                         stock_name: stock.stock_name,
                         current_price: numericPrice,
                         analysis_type: session.analysis_type,
+                        user_id:session.user_id,
                         // user_id: removed for bulk analysis to make results shareable across users
                         forceFresh: true
                     });
