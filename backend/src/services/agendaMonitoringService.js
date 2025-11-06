@@ -776,7 +776,7 @@ class AgendaMonitoringService {
                         return { strategy: strategy.id, skipped: true };
                     }
 
-                    console.log(`🎯 [BATCH ${batchId}] Checking ${analysis.stock_symbol} strategy ${strategy.id} (${subscription.subscribed_users.length} users subscribed)`);
+                    // console.log(`🎯 [BATCH ${batchId}] Checking ${analysis.stock_symbol} strategy ${strategy.id} (${subscription.subscribed_users.length} users subscribed)`);
                     
                     // Execute the actual monitoring check
                     await this.executeMonitoringCheck(analysisId, strategy.id);

@@ -83,51 +83,22 @@ class AgendaDailyReminderService {
     }
 
     defineJobs() {
-        // Daily morning reminder job
-        this.agenda.define('send-daily-reauth-reminders', async (job) => {
-            await this.sendDailyReauthReminders();
-        });
-
-        // Hourly session expiry check
-        this.agenda.define('check-expired-sessions', async (job) => {
-            await this.checkExpiredSessions();
-        });
-
-        // Individual reminder jobs
-        this.agenda.define('send-individual-reminder', async (job) => {
-            const { userId, type, reason } = job.attrs.data;
-            await this.sendIndividualReminder(userId, type, reason);
-        });
-
-        // Session expired notification
-        this.agenda.define('send-session-expired-notification', async (job) => {
-            const { userId, reason } = job.attrs.data;
-            await this.sendSessionExpiredNotification(userId, reason);
-        });
+        // REMOVED: send-daily-reauth-reminders job (not required)
+        // REMOVED: check-expired-sessions job (not required)
+        // REMOVED: send-individual-reminder job (not required)
+        // REMOVED: send-session-expired-notification job (not required)
     }
 
     async scheduleRecurringJobs() {
         try {
-            // Cancel existing recurring jobs to avoid duplicates
+            // Cancel existing recurring jobs (cleanup)
             await this.agenda.cancel({ name: 'send-daily-reauth-reminders' });
             await this.agenda.cancel({ name: 'check-expired-sessions' });
 
-            // Schedule daily reminders at 9:00 AM IST
-            await this.agenda.every('0 9 * * *', 'send-daily-reauth-reminders', {}, {
-                timezone: 'Asia/Kolkata'
-            });
-
-            // Schedule session checks every 2 hours
-            await this.agenda.every('0 */2 * * *', 'check-expired-sessions', {}, {
-                timezone: 'Asia/Kolkata'
-            });
-
-            console.log('📅 Scheduled recurring reminder jobs:');
-            console.log('   ✓ Daily re-auth reminders: 9:00 AM IST');
-            console.log('   ✓ Session expiry checks: Every 2 hours');
+            console.log('🧹 Cancelled all reminder jobs - no longer required');
 
         } catch (error) {
-            console.error('❌ Error scheduling recurring jobs:', error);
+            console.error('❌ Error cancelling reminder jobs:', error);
         }
     }
 

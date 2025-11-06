@@ -230,23 +230,39 @@ class AdvancedTriggerEngine {
             return { satisfied: false, expired: false, error: `No data for ${trigger.timeframe}` };
         }
 
-        // CRITICAL FIX #3: Validate candle freshness
-        // Upstox API sometimes returns stale data for 1-3 minutes
+        // CRITICAL FIX #3: Validate candle freshness (timeframe-aware)
+        // Only check for stale data during market hours on trading days
         const now = Date.now();
-        const candleTimestamp = new Date(timeframeData.timestamp).getTime();
-        const dataAgeMs = now - candleTimestamp;
-        const dataAgeMinutes = dataAgeMs / (1000 * 60);
+        const nowIST = MarketHoursUtil.toIST(new Date(now));
+        const isMarketOpen = MarketHoursUtil.isMarketOpen(nowIST);
+        const isTradingDay = MarketHoursUtil.isTradingDay(nowIST);
 
-        // Skip evaluation if data is older than 3 minutes (stale)
-        if (dataAgeMinutes > 3) {
-            console.warn(`⚠️ ${trigger.id}: Stale market data (${dataAgeMinutes.toFixed(1)} min old) - skipping evaluation`);
-            return {
-                satisfied: false,
-                expired: false,
-                error: `Stale data: ${dataAgeMinutes.toFixed(1)} minutes old`,
-                dataAge: dataAgeMinutes,
-                skipped: true
-            };
+        // Only validate data freshness if market is open
+        if (isMarketOpen && isTradingDay) {
+            const candleTimestamp = new Date(timeframeData.timestamp).getTime();
+            const dataAgeMs = now - candleTimestamp;
+            const dataAgeMinutes = dataAgeMs / (1000 * 60);
+
+            // Calculate stale threshold based on timeframe
+            // Rule: Data is stale if older than 2x the timeframe duration
+            const timeframeMinutes = this.parseTimeframeToMinutes(trigger.timeframe);
+            const staleThresholdMinutes = timeframeMinutes * 2;
+
+            // Skip evaluation if data is stale (only during market hours)
+            if (dataAgeMinutes > staleThresholdMinutes) {
+                console.warn(`⚠️ ${trigger.id}: Stale market data (${dataAgeMinutes.toFixed(1)} min old, threshold: ${staleThresholdMinutes} min for ${trigger.timeframe}) - skipping evaluation`);
+                return {
+                    satisfied: false,
+                    expired: false,
+                    error: `Stale data: ${dataAgeMinutes.toFixed(1)} minutes old (threshold: ${staleThresholdMinutes} min)`,
+                    dataAge: dataAgeMinutes,
+                    staleThreshold: staleThresholdMinutes,
+                    skipped: true
+                };
+            }
+        } else {
+            // Outside market hours - data age is expected to be old, so skip freshness check
+            console.log(`📅 ${trigger.id}: Market closed - skipping freshness check`);
         }
 
         // Check if this is a new bar
@@ -600,6 +616,28 @@ class AdvancedTriggerEngine {
 
         // Use the minimum within_sessions from all triggers
         return Math.min(...strategy.triggers.map(t => t.within_sessions || 5));
+    }
+
+    /**
+     * Parse timeframe string to minutes
+     * Examples: "1m" → 1, "5m" → 5, "15m" → 15, "1h" → 60, "1d" → 1440
+     */
+    parseTimeframeToMinutes(timeframe) {
+        const match = timeframe.match(/^(\d+)([mhd])$/);
+        if (!match) {
+            console.warn(`⚠️ Unknown timeframe format: ${timeframe}, defaulting to 1 minute`);
+            return 1;
+        }
+
+        const value = parseInt(match[1]);
+        const unit = match[2];
+
+        switch (unit) {
+            case 'm': return value;
+            case 'h': return value * 60;
+            case 'd': return value * 1440;
+            default: return 1;
+        }
     }
 
     /**

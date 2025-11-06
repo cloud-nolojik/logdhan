@@ -68,112 +68,14 @@ class AgendaDataPrefetchService {
      * Define all job types
      */
     defineJobs() {
-        // Daily data pre-fetch job
-        this.agenda.define('daily-data-prefetch', async (job) => {
-            console.log('🌅 [AGENDA DATA] Starting daily data pre-fetch job');
-            this.stats.dataPrefetchJobs++;
-            
-            try {
-                const result = await dailyDataPrefetchService.runDailyPrefetch();
-                
-                if (result.success) {
-                    console.log('✅ [AGENDA DATA] Daily data pre-fetch completed successfully');
-                    console.log(`📊 [AGENDA DATA] Job summary: ${result.job?.summary?.unique_stocks || 0} stocks, ${result.job?.summary?.total_bars_fetched || 0} bars`);
-                    this.stats.successfulJobs++;
-                } else {
-                    console.log(`⚠️ [AGENDA DATA] Daily data pre-fetch skipped: ${result.reason}`);
-                    this.stats.successfulJobs++;
-                }
-                
-            } catch (error) {
-                console.error('❌ [AGENDA DATA] Daily data pre-fetch failed:', error);
-                this.stats.failedJobs++;
-                
-                // Log error to job status for monitoring
-                try {
-                    const errorJob = DailyJobStatus.createJob(new Date(), 'data_prefetch', 0);
-                    errorJob.markFailed(`Agenda job error: ${error.message}`);
-                    await errorJob.save();
-                } catch (logError) {
-                    console.error('❌ [AGENDA DATA] Failed to log error to job status:', logError);
-                }
-                
-                throw error;
-            }
-        });
+        // REMOVED: daily-data-prefetch job (not required)
 
         // Note: Cache cleanup removed - MongoDB TTL index handles this automatically and more efficiently
 
         // Note: Job status cleanup removed - MongoDB TTL indexes handle this automatically
         // Note: System health check removed - manual monitoring preferred
 
-        // Chart cleanup job (moved from setInterval in index.js)
-        this.agenda.define('chart-cleanup', async (job) => {
-            console.log('🗑️ [AGENDA DATA] Starting chart cleanup job');
-            
-            try {
-                let azureStorageService;
-                try {
-                    const azureModule = await import('../storage/azureStorage.service.js');
-                    azureStorageService = azureModule.azureStorageService || azureModule.default;
-                } catch (importError) {
-                    console.log('⚠️ [AGENDA DATA] Azure storage service not available, skipping cloud cleanup');
-                    azureStorageService = null;
-                }
-                
-                const path = await import('path');
-                const fs = await import('fs');
-                
-                // Clean up local files
-                const chartDir = path.join(process.cwd(), 'temp', 'charts');
-                let localFilesDeleted = 0;
-                
-                if (fs.existsSync(chartDir)) {
-                    const files = fs.readdirSync(chartDir);
-                    const now = Date.now();
-                    const oneHour = 60 * 60 * 1000;
-                    
-                    files.forEach(file => {
-                        const filePath = path.join(chartDir, file);
-                        try {
-                            const stats = fs.statSync(filePath);
-                            
-                            if (now - stats.mtime.getTime() > oneHour) {
-                                if (fs.existsSync(filePath)) {
-                                    fs.unlinkSync(filePath);
-                                    localFilesDeleted++;
-                                    console.log(`🗑️ [AGENDA DATA] Cleaned up old local chart: ${file}`);
-                                }
-                            }
-                        } catch (fileError) {
-                            if (fileError.code !== 'ENOENT') {
-                                console.warn(`⚠️ [AGENDA DATA] Could not clean up ${file}:`, fileError.message);
-                            }
-                        }
-                    });
-                }
-                
-                // Clean up Azure storage
-                if (azureStorageService) {
-                    try {
-                        await azureStorageService.cleanupOldCharts(24);
-                        console.log('✅ [AGENDA DATA] Azure chart cleanup completed');
-                    } catch (azureError) {
-                        console.warn('⚠️ [AGENDA DATA] Azure chart cleanup failed:', azureError.message);
-                    }
-                } else {
-                    console.log('⚠️ [AGENDA DATA] Skipping Azure cleanup - service not available');
-                }
-                
-                console.log(`✅ [AGENDA DATA] Chart cleanup completed: ${localFilesDeleted} local files deleted`);
-                this.stats.successfulJobs++;
-                
-            } catch (error) {
-                console.error('❌ [AGENDA DATA] Chart cleanup failed:', error);
-                this.stats.failedJobs++;
-                throw error;
-            }
-        });
+        // REMOVED: chart-cleanup job (not required)
 
         // Manual trigger job (for testing and admin purposes)
         this.agenda.define('manual-data-prefetch', async (job) => {
@@ -310,15 +212,10 @@ class AgendaDataPrefetchService {
         try {
             // Cancel any existing recurring jobs to avoid duplicates
             await this.agenda.cancel({
-                name: { $in: ['daily-data-prefetch', 'chart-cleanup', 'current-day-prefetch', 'trigger-analysis'] }
+                name: { $in: ['current-day-prefetch', 'trigger-analysis'] }
             });
 
-            // UPDATED: Daily data pre-fetch: 4:00 PM IST on weekdays (right at market close)
-            // Better timing: get fresh EOD data immediately after market close
-            await this.agenda.every('0 16 * * 1-5', 'daily-data-prefetch', {}, {
-                timezone: 'Asia/Kolkata'
-            });
-            console.log('📅 [AGENDA DATA] Scheduled daily data pre-fetch for 4:00 PM IST (market close)');
+            // REMOVED: daily-data-prefetch job scheduling (not required)
 
             // Current day data pre-fetch: 4:05 PM IST on weekdays (after market close)
             await this.agenda.every('5 16 * * 1-5', 'current-day-prefetch', {}, {
@@ -443,7 +340,7 @@ class AgendaDataPrefetchService {
     async pauseJobs() {
         try {
             await this.agenda.cancel({
-                name: { $in: ['daily-data-prefetch', 'chart-cleanup'] }
+                name: { $in: [] } // All removed
             });
             console.log('⏸️ [AGENDA DATA] All recurring jobs paused');
             

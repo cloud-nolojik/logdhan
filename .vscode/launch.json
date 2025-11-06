@@ -16,8 +16,7 @@
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]
-        }
-        ,
+        },
         {
             "name": "Launch Frontend (Chrome)",
             "type": "chrome",
@@ -25,6 +24,43 @@
             "url": "http://localhost:5173",
             "webRoot": "${workspaceFolder}/frontend/src",
             "preLaunchTask": "npm: dev"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Bulk Historical Data Fetcher",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "/Users/nolojik/Documents/logdhan-app/backend/bulk-historical-data-fetcher.js",
+            "envFile": "/Users/nolojik/Documents/logdhan-app/backend/.env",
+            "console": "integratedTerminal",
+            "cwd": "/Users/nolojik/Documents/logdhan-app/backend"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Bulk Fetcher (Test - 5 stocks)",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "/Users/nolojik/Documents/logdhan-app/backend/bulk-historical-data-fetcher.js",
+            "args": ["--batch-size", "5"],
+            "envFile": "/Users/nolojik/Documents/logdhan-app/backend/.env",
+            "console": "integratedTerminal",
+            "cwd": "/Users/nolojik/Documents/logdhan-app/backend"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Cleanup Old Agenda Jobs",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "/Users/nolojik/Documents/logdhan-app/backend/cleanup-old-agenda-jobs.js",
+            "envFile": "/Users/nolojik/Documents/logdhan-app/backend/.env",
+            "console": "integratedTerminal",
+            "cwd": "/Users/nolojik/Documents/logdhan-app/backend"
         }
     ]
 }

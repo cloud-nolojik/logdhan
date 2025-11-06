@@ -27,7 +27,7 @@ class BatchManager {
             // Get all active monitoring subscriptions
             const activeSubscriptions = await MonitoringSubscription.find({
                 monitoring_status: 'active',
-                expires_at: { $gt: new Date() }
+                 expires_at: { $gt: new Date() }
             }).select('analysis_id strategy_id stock_symbol subscribed_users monitoring_config');
 
             if (activeSubscriptions.length === 0) {
