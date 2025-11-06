@@ -246,15 +246,13 @@ analysisSessionSchema.statics.getExpiryTime = async function() {
         const currentDate = new Date(istTime);
         currentDate.setUTCHours(0, 0, 0, 0); // Reset to start of day
         
-        // Find next trading day and set expiry to 8:45 AM IST
+        // Find next trading day and set expiry to 3:30 PM IST (market close)
+        // FIXED: Match StockAnalysis expiry time for consistency
         const nextTradingDay = await findNextTradingDay(currentDate);
-        
-        // Create expiry time: 8:45 AM IST on next trading day
-        // 8:45 AM IST = 3:15 AM UTC (8:45 - 5:30 = 3:15)
         const expiryTime = new Date(nextTradingDay);
-        expiryTime.setUTCHours(3, 15, 0, 0); // 3:15 AM UTC = 8:45 AM IST
-        
-        console.log(`📅 [ANALYSIS SESSION EXPIRY] Session expires at next trading day 8:45 AM IST: ${new Date(expiryTime.getTime() + (5.5 * 60 * 60 * 1000)).toISOString()}`);
+        expiryTime.setHours(15, 30, 0, 0); // 3:30 PM IST (market close)
+
+        console.log(`📅 [ANALYSIS SESSION EXPIRY] Session expires at next trading day market close 3:30 PM IST: ${expiryTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
         
         return expiryTime;
     } catch (error) {

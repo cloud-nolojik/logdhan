@@ -1,11 +1,10 @@
 import Agenda from 'agenda';
 import mongoose from 'mongoose';
 import triggerOrderService from './triggerOrderService.js';
-import upstoxMarketTimingService from './upstoxMarketTiming.service.js';
-import UpstoxUser from '../models/upstoxUser.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import MonitoringHistory from '../models/monitoringHistory.js';
-import { decrypt } from '../utils/encryption.js';
+import AnalysisSession from '../models/analysisSession.js';
+import MonitoringSubscription from '../models/monitoringSubscription.js';
 import { messagingService } from './messaging/messaging.service.js';
 import { User } from '../models/user.js';
 
@@ -37,8 +36,8 @@ class AgendaMonitoringService {
 
             // Define the monitoring job
             this.agenda.define('check-triggers', async (job) => {
-                const { analysisId, strategyId, userId } = job.attrs.data;
-                await this.executeMonitoringCheck(analysisId, strategyId, userId);
+                const { analysisId, strategyId } = job.attrs.data;
+                await this.executeMonitoringCheck(analysisId, strategyId);
             });
             
             // Define cleanup job for stale order processing locks
@@ -71,10 +70,7 @@ class AgendaMonitoringService {
                 _id: 'stale-lock-cleanup',
                 timezone: 'Asia/Kolkata'
             });
-            
-            // Migrate existing jobs to use Upstox API for market timing
-            await this.migrateToUpstoxMarketTiming();
-            
+
             this.isInitialized = true;
             console.log('🚀 Agenda monitoring service initialized successfully');
 
@@ -86,48 +82,85 @@ class AgendaMonitoringService {
         }
     }
 
-    async executeMonitoringCheck(analysisId, strategyId, userId) {
+    async executeMonitoringCheck(analysisId, strategyId) {
         const startTime = Date.now();
         let historyEntry = null;
-        
+
         try {
-            console.log(`🔍 Executing monitoring check for analysis ${analysisId}, strategy ${strategyId}`);
+            console.log(`\n${'='.repeat(100)}`);
+            console.log(`🔍 [MONITORING CHECK] Starting execution`);
+            console.log(`${'='.repeat(100)}`);
+            console.log(`📋 Check Details:`);
+            console.log(`   ├─ Analysis ID: ${analysisId}`);
+            console.log(`   ├─ Strategy ID: ${strategyId}`);
+            console.log(`   └─ Timestamp: ${new Date().toISOString()}`);
+            console.log(`${'='.repeat(100)}\n`);
+
+            // Get subscription to fetch all subscribed users
+            console.log(`📂 [STEP 0/6] Fetching monitoring subscription...`);
+            const subscription = await MonitoringSubscription.findOne({
+                analysis_id: analysisId,
+                strategy_id: strategyId
+            });
+
+            if (!subscription) {
+                console.log(`❌ [STEP 0/6] FAILED - Subscription not found for ${analysisId}_${strategyId}`);
+                await this.stopMonitoring(analysisId, strategyId);
+                return;
+            }
+
+            const subscribedUserIds = subscription.subscribed_users.map(sub => sub.user_id);
+            console.log(`✅ [STEP 0/6] Subscription loaded: ${subscribedUserIds.length} users subscribed`);
+            console.log(`   └─ User IDs: ${subscribedUserIds.join(', ')}\n`);
 
             // Get analysis
+            console.log(`📂 [STEP 1/6] Fetching analysis document from database...`);
             const analysis = await StockAnalysis.findById(analysisId);
+
             if (!analysis) {
-                console.log(`❌ Analysis ${analysisId} not found, stopping monitoring`);
+                console.log(`❌ [STEP 1/6] FAILED - Analysis ${analysisId} not found in database`);
 
-                // Create history entry for stopped monitoring
-                await MonitoringHistory.create({
-                    analysis_id: analysisId,
-                    strategy_id: strategyId,
-                    user_id: userId,
-                    stock_symbol: 'Unknown',
-                    status: 'stopped',
-                    reason: 'Analysis not found',
-                    details: { error_message: 'Analysis document not found in database' },
-                    monitoring_duration_ms: Date.now() - startTime
-                });
+                // Create history entries for all subscribed users
+                for (const userId of subscribedUserIds) {
+                    await MonitoringHistory.create({
+                        analysis_id: analysisId,
+                        strategy_id: strategyId,
+                        user_id: userId,
+                        stock_symbol: 'Unknown',
+                        status: 'stopped',
+                        reason: 'Analysis not found',
+                        details: { error_message: 'Analysis document not found in database' },
+                        monitoring_duration_ms: Date.now() - startTime
+                    });
 
-                // Send WhatsApp notification
-                await this.sendMonitoringFailureNotification(
-                    userId,
-                    analysisId,
-                    'Unknown',
-                    'Analysis not found',
-                    { error_message: 'Analysis document not found in database' }
-                );
+                    // Send WhatsApp notification to each user
+                    await this.sendMonitoringFailureNotification(
+                        userId,
+                        analysisId,
+                        'Unknown',
+                        'Analysis not found',
+                        { error_message: 'Analysis document not found in database' }
+                    );
+                }
+
+                // Update subscription status
+                await subscription.stopMonitoring('invalidation');
 
                 await this.stopMonitoring(analysisId, strategyId);
                 return;
             }
-            
-            // Initialize history entry
+
+            console.log(`✅ [STEP 1/6] Analysis loaded successfully`);
+            console.log(`   ├─ Stock Symbol: ${analysis.stock_symbol}`);
+            console.log(`   ├─ Instrument Key: ${analysis.instrument_key}`);
+            console.log(`   ├─ Has Active Orders: ${analysis.hasActiveOrders ? analysis.hasActiveOrders() : 'N/A'}`);
+            console.log(`   └─ Order Processing: ${analysis.order_processing ? 'TRUE' : 'FALSE'}\n`);
+
+            // Initialize history entry for first user (we'll create one per user when conditions met)
             historyEntry = new MonitoringHistory({
                 analysis_id: analysisId,
                 strategy_id: strategyId,
-                user_id: userId,
+                user_id: subscribedUserIds[0], // Use first user for initial history tracking
                 stock_symbol: analysis.stock_symbol,
                 status: 'checking',
                 reason: 'Starting monitoring check',
@@ -205,57 +238,66 @@ class AgendaMonitoringService {
                 }
             }
 
-            // COMMENTED OUT: Upstox token validation - using WhatsApp notifications instead of order placement
-            // const upstoxUser = await UpstoxUser.findByUserId(userId);
-            // if (!upstoxUser || !upstoxUser.isTokenValid()) {
-            //     console.log(`🔑 Upstox token invalid for user ${userId}, pausing monitoring`);
-            //     
-            //     historyEntry.status = 'error';
-            //     historyEntry.reason = 'Upstox token invalid';
-            //     historyEntry.details.error_message = 'User needs to re-authenticate with Upstox';
-            //     historyEntry.monitoring_duration_ms = Date.now() - startTime;
-            //     await historyEntry.save();
-            //     
-            //     await this.pauseMonitoring(analysisId, strategyId, 'upstox_token_invalid');
-            //     return;
-            // }
+            // Check if market is open using simple time-based logic
+            console.log(`📈 [STEP 2/6] Checking market status...`);
+            const now = new Date();
+            const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+            const currentHours = istTime.getHours();
+            const currentMinutes = istTime.getMinutes();
+            const currentTimeInMinutes = currentHours * 60 + currentMinutes;
+            const marketOpen = 9 * 60 + 15;  // 9:15 AM
+            const marketClose = 15 * 60 + 30; // 3:30 PM
+            const dayOfWeek = istTime.getDay(); // 0 = Sunday, 6 = Saturday
 
-            // const accessToken = decrypt(upstoxUser.access_token);
-            
-            // For market timing, we'll use a dummy token or skip Upstox-specific validation
-            const accessToken = 'dummy_token_for_market_timing';
-            const today = new Date().toISOString().split('T')[0];
+            const isMarketOpen = dayOfWeek >= 1 && dayOfWeek <= 5 &&
+                                currentTimeInMinutes >= marketOpen &&
+                                currentTimeInMinutes <= marketClose;
 
-            // Check if market is open (optimized - uses database cache first)
-            const marketStatus = await upstoxMarketTimingService.getMarketStatusOptimized(today, accessToken);
-            if (!marketStatus.isOpen) {
-                const optimizedMsg = marketStatus.optimized ? ' (cached)' : ' (API)';
-                console.log(`🏪 Market is closed${optimizedMsg}, skipping monitoring check for ${analysisId}_${strategyId}`);
-                console.log(`📅 Reason: ${marketStatus.reason}, Next market session: ${marketStatus.nextOpen || 'Unknown'}`);
-                
+            console.log(`   ├─ Market Open: ${isMarketOpen ? 'YES ✅' : 'NO ❌'}`);
+            console.log(`   ├─ Current Time (IST): ${istTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
+            console.log(`   ├─ Day of Week: ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek]}`);
+            console.log(`   └─ Time: ${String(currentHours).padStart(2, '0')}:${String(currentMinutes).padStart(2, '0')}\n`);
+
+            if (!isMarketOpen) {
+                console.log(`⏸️ [STEP 2/6] SKIPPING - Market is closed, no trigger check needed`);
+                console.log(`   └─ Will resume checking when market opens\n`);
+
                 // Save market closed status to history
                 historyEntry.status = 'market_closed';
-                historyEntry.reason = marketStatus.reason;
+                historyEntry.reason = 'Market is closed';
                 historyEntry.addMarketStatus({
                     is_open: false,
-                    reason: marketStatus.reason,
-                    next_open: marketStatus.nextOpen
+                    reason: 'Market is closed',
+                    next_open: null
                 });
                 historyEntry.monitoring_duration_ms = Date.now() - startTime;
                 await historyEntry.save();
-                
+
                 return; // Don't check triggers when market is closed
             }
-            
-            const optimizedMsg = marketStatus.optimized ? ' (cached)' : ' (API)';
-            console.log(`📈 Market is open${optimizedMsg}, proceeding with monitoring check for ${analysisId}_${strategyId}`);
+
+            console.log(`✅ [STEP 2/6] Market is OPEN - Proceeding with trigger check`);
+            console.log(`${'='.repeat(100)}\n`);
 
             // Smart trigger checking - only evaluate relevant triggers based on current time
+            console.log(`🎯 [STEP 3/6] Checking trigger conditions...`);
             const currentTime = new Date();
+            console.log(`   ├─ Current Time (IST): ${currentTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+            console.log(`   ├─ Analysis ID: ${analysisId}`);
+            console.log(`   └─ Strategy ID: ${strategyId}\n`);
+
+            console.log(`⏳ Calling triggerOrderService.checkTriggerConditionsWithTiming()...\n`);
             const triggerResult = await triggerOrderService.checkTriggerConditionsWithTiming(
-                analysis, 
+                analysis,
                 currentTime
             );
+
+            console.log(`📊 [STEP 3/6] Trigger check completed`);
+            console.log(`   ├─ Conditions Met: ${triggerResult.triggersConditionsMet ? 'YES ✅' : 'NO ❌'}`);
+            console.log(`   ├─ Reason: ${triggerResult.reason || 'N/A'}`);
+            console.log(`   ├─ Current Price: ₹${triggerResult.data?.current_price || 'N/A'}`);
+            console.log(`   ├─ Should Monitor: ${triggerResult.data?.should_monitor !== false ? 'YES' : 'NO'}`);
+            console.log(`   └─ All Triggers Passed: ${triggerResult.data?.all_triggers_passed ? 'YES' : 'NO'}\n`);
             
             // Add market status to history entry
             historyEntry.addMarketStatus({
@@ -265,7 +307,18 @@ class AgendaMonitoringService {
             });
             
             if (triggerResult.triggersConditionsMet) {
-                console.log(`🎯 Triggers met for analysis ${analysisId}, strategy ${strategyId}! Placing order...`);
+                console.log(`${'='.repeat(100)}`);
+                console.log(`🎯 [STEP 4/6] ✅✅✅ TRIGGERS MET! ✅✅✅`);
+                console.log(`${'='.repeat(100)}`);
+                console.log(`📋 Trigger Details:`);
+                if (triggerResult.data?.triggers) {
+                    triggerResult.data.triggers.forEach((t, idx) => {
+                        console.log(`   ${idx + 1}. ${t.condition || t.id}: ${t.satisfied ? '✅ PASSED' : '❌ FAILED'}`);
+                    });
+                }
+                console.log(`\n💰 Current Price: ₹${triggerResult.data?.current_price}`);
+                console.log(`📱 Sending WhatsApp notification to user...`);
+                console.log(`${'='.repeat(100)}\n`);
                 
                 historyEntry.status = 'conditions_met';
                 historyEntry.reason = 'All trigger conditions satisfied';
@@ -276,81 +329,188 @@ class AgendaMonitoringService {
                     );
                 }
                 
-                // Send WhatsApp notification instead of placing order
+                // 🎯 NEW LOGIC: Save trigger snapshot and notify ALL subscribed users
                 try {
-                    // Get user details for WhatsApp notification
-                    const user = await User.findById(userId);
-                    if (!user || !user.mobile_number) {
-                        console.log(`❌ User ${userId} not found or missing mobile number for WhatsApp notification`);
-                        
-                        historyEntry.status = 'error';
-                        historyEntry.reason = 'User mobile number not found';
-                        historyEntry.details.error_message = 'Cannot send WhatsApp notification - user mobile number missing';
-                        historyEntry.monitoring_duration_ms = Date.now() - startTime;
-                        await historyEntry.save();
-                        return;
-                    }
-
-                    // Format trigger conditions that were satisfied
-                    const triggersSatisfied = triggerResult.data?.triggers 
-                        ? triggerResult.data.triggers.map(t => `${t.name}: ${t.status}`).join(', ')
-                        : 'All trigger conditions met';
-
-                    // Get strategy details from analysis
-                    const strategy = analysis.strategies?.find(s => s.id === strategyId);
-                    if (!strategy) {
-                        console.log(`❌ Strategy ${strategyId} not found in analysis ${analysisId}`);
-                        
-                        historyEntry.status = 'error';
-                        historyEntry.reason = 'Strategy not found';
-                        historyEntry.details.error_message = 'Strategy details not found for WhatsApp notification';
-                        historyEntry.monitoring_duration_ms = Date.now() - startTime;
-                        await historyEntry.save();
-                        return;
-                    }
-
-                    // Prepare monitoring conditions met alert data
-                    const alertData = {
-                        userName: user.name || user.email?.split('@')[0] || 'logdhanuser',
-                        stockSymbol: analysis.stock_symbol || analysis.stock_name,
-                        instrumentKey: analysis.instrument_key || analysis.stock_symbol || ''
+                    // 1. Build trigger snapshot for audit trail
+                    const triggerSnapshot = {
+                        price: triggerResult.data?.current_price,
+                        timestamp: new Date(),
+                        timeframe_data: triggerResult.data?.timeframe_data || {},
+                        evaluated_triggers: (triggerResult.data?.triggers || []).map(t => ({
+                            trigger_type: t.type || t.id,
+                            condition: t.condition || t.name,
+                            met: t.satisfied || false,
+                            actual_value: t.actual,
+                            expected_value: t.expected
+                        })),
+                        market_conditions: {
+                            trend: triggerResult.data?.trend || 'unknown',
+                            volatility: triggerResult.data?.volatility || 'unknown',
+                            volume_profile: triggerResult.data?.volume_profile || 'unknown'
+                        }
                     };
 
-                    // Send WhatsApp monitoring alert
-                    const whatsappResult = await messagingService.sendMonitoringConditionsMet(
-                        user.mobile_number,
-                        alertData
-                    );
+                    // 2. Save trigger snapshot to subscription
+                    await subscription.markConditionsMet(triggerSnapshot);
+                    console.log(`📸 Trigger snapshot saved to subscription`);
 
-                    console.log(`📱 Monitoring conditions met alert sent for ${analysisId}_${strategyId}, continuing monitoring`);
-                    
-                    historyEntry.status = 'alert_sent';
-                    historyEntry.reason = 'Monitoring conditions met alert sent successfully';
-                    historyEntry.details.whatsapp_result = whatsappResult;
-                    historyEntry.details.alert_data = alertData;
-                    historyEntry.monitoring_duration_ms = Date.now() - startTime;
-                    await historyEntry.save();
-                    
-                    // Continue monitoring (don't stop like we did with order placement)
-                    console.log(`🔄 Monitoring continues for ${analysisId}_${strategyId} after WhatsApp notification`);
-                    
+                    // 3. Send WhatsApp notifications to ALL subscribed users
+                    let successfulNotifications = 0;
+                    let failedNotifications = 0;
+
+                    for (const userSubscription of subscription.subscribed_users) {
+                        try {
+                            const userId = userSubscription.user_id;
+                            const user = await User.findById(userId);
+
+                            if (!user || !user.mobile_number) {
+                                console.log(`⚠️ User ${userId} not found or missing mobile number - skipping notification`);
+                                failedNotifications++;
+
+                                // Create history entry
+                                await MonitoringHistory.create({
+                                    analysis_id: analysisId,
+                                    strategy_id: strategyId,
+                                    user_id: userId,
+                                    stock_symbol: analysis.stock_symbol,
+                                    status: 'error',
+                                    reason: 'User mobile number not found',
+                                    details: { error_message: 'Cannot send WhatsApp notification - user mobile number missing' },
+                                    monitoring_duration_ms: Date.now() - startTime
+                                });
+                                continue;
+                            }
+
+                            // Check if user wants WhatsApp notifications
+                            if (!userSubscription.notification_preferences?.whatsapp) {
+                                console.log(`🔕 User ${userId} has disabled WhatsApp notifications - skipping`);
+                                continue;
+                            }
+
+                            // Prepare monitoring conditions met alert data
+                            const alertData = {
+                                userName: user.name || user.email?.split('@')[0] || 'logdhanuser',
+                                stockSymbol: analysis.stock_symbol || analysis.stock_name,
+                                instrumentKey: analysis.instrument_key || analysis.stock_symbol || ''
+                            };
+
+                            // Send WhatsApp monitoring alert
+                            const whatsappResult = await messagingService.sendMonitoringConditionsMet(
+                                user.mobile_number,
+                                alertData
+                            );
+
+                            console.log(`📱 Notification sent to user ${userId} (${user.name})`);
+                            successfulNotifications++;
+
+                            // Create success history entry for this user
+                            await MonitoringHistory.create({
+                                analysis_id: analysisId,
+                                strategy_id: strategyId,
+                                user_id: userId,
+                                stock_symbol: analysis.stock_symbol,
+                                status: 'conditions_met',
+                                reason: 'Monitoring conditions met alert sent successfully',
+                                details: {
+                                    whatsapp_result: whatsappResult,
+                                    alert_data: alertData,
+                                    current_price: triggerResult.data?.current_price,
+                                    triggers_satisfied: triggerResult.data?.triggers?.map(t => t.condition || t.name)
+                                },
+                                monitoring_duration_ms: Date.now() - startTime
+                            });
+
+                        } catch (userNotificationError) {
+                            console.error(`❌ Failed to notify user ${userSubscription.user_id}:`, userNotificationError);
+                            failedNotifications++;
+
+                            // Create error history entry
+                            await MonitoringHistory.create({
+                                analysis_id: analysisId,
+                                strategy_id: strategyId,
+                                user_id: userSubscription.user_id,
+                                stock_symbol: analysis.stock_symbol,
+                                status: 'error',
+                                reason: 'Notification failed',
+                                details: { error_message: userNotificationError.message },
+                                monitoring_duration_ms: Date.now() - startTime
+                            });
+                        }
+                    }
+
+                    // 4. Mark notification as sent in subscription
+                    await subscription.markNotificationSent();
+
+                    console.log(`\n${'='.repeat(100)}`);
+                    console.log(`📊 Notification Summary:`);
+                    console.log(`   ├─ Total Subscribed Users: ${subscription.subscribed_users.length}`);
+                    console.log(`   ├─ Successful Notifications: ${successfulNotifications}`);
+                    console.log(`   ├─ Failed Notifications: ${failedNotifications}`);
+                    console.log(`   └─ Timestamp: ${new Date().toISOString()}`);
+                    console.log(`${'='.repeat(100)}\n`);
+
+                    // 5. 🛑 STOP JOB IMMEDIATELY - Conditions met, no need to continue monitoring
+                    console.log(`🛑 Stopping monitoring job ${analysisId}_${strategyId} - conditions met`);
+                    await subscription.stopMonitoring('conditions_met');
+                    await this.stopMonitoring(analysisId, strategyId);
+
+                    console.log(`✅ Monitoring stopped successfully after notifying all users`);
+                    return; // Exit immediately
+
                 } catch (whatsappError) {
-                    console.error(`❌ Error sending monitoring conditions met alert for ${analysisId}_${strategyId}:`, whatsappError);
-                    
+                    console.error(`❌ Error in multi-user notification process for ${analysisId}_${strategyId}:`, whatsappError);
+
+                    // Create error history for first user
                     historyEntry.status = 'error';
-                    historyEntry.reason = 'Monitoring conditions met alert failed';
+                    historyEntry.reason = 'Multi-user notification failed';
                     historyEntry.details.error_message = whatsappError.message;
                     historyEntry.monitoring_duration_ms = Date.now() - startTime;
                     await historyEntry.save();
                 }
             } else {
                 // Check for specific failure reasons that require stopping monitoring
+                console.log(`${'='.repeat(100)}`);
+                console.log(`⏳ [STEP 4/6] ❌ TRIGGERS NOT MET ❌`);
+                console.log(`${'='.repeat(100)}`);
+                console.log(`📋 Failure Analysis:`);
+                console.log(`   ├─ Reason: ${triggerResult.reason || 'Conditions not satisfied'}`);
+                console.log(`   ├─ Message: ${triggerResult.message || 'N/A'}`);
+                console.log(`   ├─ Current Price: ₹${triggerResult.data?.current_price || 'N/A'}`);
+                console.log(`   └─ Should Continue Monitoring: ${triggerResult.data?.should_monitor !== false ? 'YES ✅' : 'NO ❌'}\n`);
+
+                if (triggerResult.data?.failed_triggers && triggerResult.data.failed_triggers.length > 0) {
+                    console.log(`📊 Failed Triggers:`);
+                    triggerResult.data.failed_triggers.forEach((t, idx) => {
+                        console.log(`   ${idx + 1}. ${t.condition || t.id}`);
+                        console.log(`      ├─ Expected: ${t.expected || 'N/A'}`);
+                        console.log(`      ├─ Actual: ${t.actual || 'N/A'}`);
+                        console.log(`      └─ Status: ${t.satisfied ? '✅' : '❌'}`);
+                    });
+                    console.log(``);
+                }
+
+                if (triggerResult.data?.triggers) {
+                    console.log(`📋 All Trigger States:`);
+                    triggerResult.data.triggers.forEach((t, idx) => {
+                        console.log(`   ${idx + 1}. ${t.condition || t.id}: ${t.satisfied ? '✅ PASSED' : '❌ FAILED'}`);
+                        if (t.left_value !== undefined && t.right_value !== undefined) {
+                            console.log(`      └─ ${t.left_value} vs ${t.right_value}`);
+                        }
+                    });
+                    console.log(``);
+                }
+
                 const shouldStopMonitoring = triggerResult.data?.should_monitor === false;
+                console.log(`🔍 Should Stop Monitoring: ${shouldStopMonitoring ? 'YES (stopping)' : 'NO (continuing)'}\n`);
+                console.log(`${'='.repeat(100)}\n`);
 
                 if (shouldStopMonitoring) {
                     // Handle different failure types
                     if (triggerResult.reason === 'invalidation_triggered' || triggerResult.reason === 'position_closure_required') {
-                        console.log(`❌ Invalidation triggered for ${analysisId}_${strategyId}, stopping monitoring`);
+                        console.log(`❌ [CRITICAL] Invalidation triggered - STOPPING MONITORING`);
+                        console.log(`   ├─ Reason: ${triggerResult.reason}`);
+                        console.log(`   ├─ Message: ${triggerResult.message}`);
+                        console.log(`   └─ Invalidation: ${JSON.stringify(triggerResult.data?.invalidation || {})}\n`);
 
                         historyEntry.status = 'stopped';
                         historyEntry.reason = 'Invalidation triggered';
@@ -374,7 +534,10 @@ class AgendaMonitoringService {
                         return;
 
                     } else if (triggerResult.data?.expired_trigger) {
-                        console.log(`⏳ Trigger expired for ${analysisId}_${strategyId}, stopping monitoring`);
+                        console.log(`⏳ [CRITICAL] Trigger EXPIRED - STOPPING MONITORING`);
+                        console.log(`   ├─ Expired Trigger: ${triggerResult.data.expired_trigger}`);
+                        console.log(`   ├─ Bars Checked: ${triggerResult.data.session?.total_bars || 'N/A'}`);
+                        console.log(`   └─ Reason: Entry conditions did not occur within timeframe\n`);
 
                         historyEntry.status = 'stopped';
                         historyEntry.reason = 'Trigger expired';
@@ -400,7 +563,10 @@ class AgendaMonitoringService {
                 }
 
                 // Normal case: triggers not yet met, continue monitoring
-                console.log(`⏳ Triggers not yet met for ${analysisId}_${strategyId}, continuing monitoring`);
+                console.log(`✅ [STEP 5/6] Continuing monitoring - conditions not yet satisfied`);
+                console.log(`   ├─ Status: Monitoring will continue`);
+                console.log(`   ├─ Next Check: As per schedule`);
+                console.log(`   └─ Action: Waiting for trigger conditions\n`);
 
                 historyEntry.status = 'triggers_not_met';
                 historyEntry.reason = triggerResult.message || 'Entry conditions not satisfied';
@@ -444,21 +610,79 @@ class AgendaMonitoringService {
         }
     }
 
-    async startMonitoring(analysisId, strategyId, userId, frequency = { seconds: 60 }) {
+    async startMonitoring(analysisId, strategyId, userId, frequency = { seconds: 60 }, stockSymbol = null, instrumentKey = null) {
         try {
             if (!this.isInitialized) {
                 await this.initialize();
             }
 
             const jobId = `monitor_${analysisId}_${strategyId}`;
-            
+
             console.log(`🚀 Starting monitoring for ${jobId} with ${frequency.seconds}s frequency`);
             console.log(`📅 OPTIMAL: Start monitoring after 4:30 PM when fresh analysis with EOD data is available`);
 
-            // Cancel any existing job first
-            await this.agenda.cancel({ name: 'check-triggers', 'data.analysisId': analysisId, 'data.strategyId': strategyId });
+            // Check if user can start monitoring (not already met conditions recently)
+            const canStart = await MonitoringSubscription.canUserStartMonitoring(analysisId, strategyId);
+            if (!canStart.can_start) {
+                console.log(`❌ Cannot start monitoring: ${canStart.reason}`);
+                return {
+                    success: false,
+                    message: canStart.reason,
+                    conditions_met_at: canStart.conditions_met_at
+                };
+            }
 
-            // Create cron expression based on frequency - rely on Upstox API for market timing
+            // Fetch analysis to get stock details if not provided
+            if (!stockSymbol || !instrumentKey) {
+                const analysis = await StockAnalysis.findById(analysisId);
+                if (!analysis) {
+                    return {
+                        success: false,
+                        message: 'Analysis not found'
+                    };
+                }
+                stockSymbol = analysis.stock_symbol;
+                instrumentKey = analysis.instrument_key;
+            }
+
+            // Find or create subscription
+            let subscription = await MonitoringSubscription.findOrCreateSubscription(
+                analysisId,
+                strategyId,
+                userId,
+                stockSymbol,
+                instrumentKey,
+                jobId,
+                {
+                    frequency_seconds: frequency.seconds,
+                    notification_preferences: {
+                        whatsapp: true,
+                        email: false
+                    }
+                }
+            );
+
+            console.log(`✅ Subscription ${subscription._id} ${subscription.subscribed_users.length === 1 ? 'created' : 'updated'}`);
+            console.log(`   ├─ Subscribed Users: ${subscription.subscribed_users.length}`);
+            console.log(`   └─ Expires At: ${subscription.expires_at.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
+
+            // Check if job already exists (shared monitoring)
+            const existingJobs = await this.agenda.jobs({ name: 'check-triggers', 'data.analysisId': analysisId, 'data.strategyId': strategyId });
+
+            if (existingJobs.length > 0) {
+                console.log(`♻️ Job already exists - user ${userId} joined existing monitoring job`);
+                return {
+                    success: true,
+                    jobId,
+                    frequency,
+                    message: `Monitoring started for strategy ${strategyId} (joined existing job)`,
+                    subscription_id: subscription._id,
+                    subscribed_users_count: subscription.subscribed_users.length
+                };
+            }
+
+            // Create new job if it doesn't exist
+            // Create cron expression based on frequency - market timing is checked inside executeMonitoringCheck
             let cronExpression;
             if (frequency.seconds === 60) {
                 cronExpression = '*/1 * * * *'; // Every minute
@@ -472,14 +696,13 @@ class AgendaMonitoringService {
                 // For custom intervals, use every minute as base
                 cronExpression = '*/1 * * * *';
             }
-            
-            console.log(`📅 Using cron: ${cronExpression} (${frequency.seconds}s frequency) - market timing handled by Upstox API`);
 
-            // Schedule the recurring job
+            console.log(`📅 Creating new job with cron: ${cronExpression} (${frequency.seconds}s frequency)`);
+
+            // Schedule the recurring job (NO userId in job data - use subscription instead)
             const job = await this.agenda.every(cronExpression, 'check-triggers', {
                 analysisId,
                 strategyId,
-                userId,
                 frequency
             }, {
                 _id: jobId,
@@ -491,19 +714,21 @@ class AgendaMonitoringService {
                 jobId,
                 analysisId,
                 strategyId,
-                userId,
                 frequency,
                 startedAt: new Date(),
-                status: 'active'
+                status: 'active',
+                subscribedUsersCount: subscription.subscribed_users.length
             });
 
-            console.log(`✅ Monitoring started successfully for ${jobId}`);
+            console.log(`✅ Monitoring job created successfully for ${jobId}`);
 
             return {
                 success: true,
                 jobId,
                 frequency,
-                message: `Monitoring started for strategy ${strategyId}`
+                message: `Monitoring started for strategy ${strategyId}`,
+                subscription_id: subscription._id,
+                subscribed_users_count: subscription.subscribed_users.length
             };
 
         } catch (error) {
@@ -515,19 +740,59 @@ class AgendaMonitoringService {
         }
     }
 
-    async stopMonitoring(analysisId, strategyId = null) {
+    async stopMonitoring(analysisId, strategyId = null, userId = null) {
         try {
-            console.log(`🛑 Stopping monitoring for analysis ${analysisId}${strategyId ? `, strategy ${strategyId}` : ' (all strategies)'}`);
+            console.log(`🛑 Stopping monitoring for analysis ${analysisId}${strategyId ? `, strategy ${strategyId}` : ' (all strategies)'}${userId ? `, user ${userId}` : ''}`);
 
             let cancelQuery = { name: 'check-triggers', 'data.analysisId': analysisId };
-            
+
             if (strategyId) {
                 cancelQuery['data.strategyId'] = strategyId;
             }
 
+            // CRITICAL: Update MonitoringSubscription status FIRST (source of truth)
+            if (strategyId) {
+                const subscription = await MonitoringSubscription.findOne({
+                    analysis_id: analysisId,
+                    strategy_id: strategyId
+                });
+
+                if (subscription) {
+                    if (userId) {
+                        // Remove specific user from subscription
+                        await subscription.removeUser(userId);
+                        console.log(`✅ Removed user ${userId} from subscription ${subscription._id}`);
+
+                        // If no users left, subscription is auto-marked as cancelled by removeUser()
+                        if (subscription.subscribed_users.length === 0) {
+                            console.log(`🗑️ No users left in subscription ${subscription._id}, marked as cancelled`);
+                        }
+                    } else {
+                        // Stop monitoring for all users
+                        await subscription.stopMonitoring('user_cancelled');
+                        console.log(`✅ Updated subscription ${subscription._id} status to cancelled`);
+                    }
+                }
+            } else {
+                // Stop all strategies for this analysis
+                const subscriptions = await MonitoringSubscription.find({
+                    analysis_id: analysisId
+                });
+
+                for (const subscription of subscriptions) {
+                    if (userId) {
+                        await subscription.removeUser(userId);
+                    } else {
+                        await subscription.stopMonitoring('user_cancelled');
+                    }
+                }
+
+                console.log(`✅ Updated ${subscriptions.length} subscription(s) to cancelled`);
+            }
+
             // Cancel jobs in Agenda
             const cancelledJobs = await this.agenda.cancel(cancelQuery);
-            
+
             // Remove from local tracking
             if (strategyId) {
                 this.activeJobs.delete(`${analysisId}_${strategyId}`);
@@ -545,6 +810,14 @@ class AgendaMonitoringService {
             const advancedTriggerEngine = (await import('./advancedTriggerEngine.js')).default;
             advancedTriggerEngine.cleanupSession(analysisId, strategyId);
 
+            // CRITICAL FIX #3: Clean up orphaned analysis_session records in database
+            // Get userId from job data to clean up sessions
+            const jobs = await this.agenda.jobs(cancelQuery);
+            if (jobs.length > 0 && jobs[0].attrs.data.userId) {
+                const userIdFromJob = jobs[0].attrs.data.userId;
+                await this.cleanupAnalysisSessionRecords(analysisId, userIdFromJob);
+            }
+
             console.log(`✅ Stopped ${cancelledJobs} monitoring job(s) for ${analysisId}${strategyId ? `_${strategyId}` : ''}`);
 
             return {
@@ -552,7 +825,7 @@ class AgendaMonitoringService {
                 message: strategyId
                     ? `Monitoring stopped for strategy ${strategyId}`
                     : `Monitoring stopped for all strategies in analysis ${analysisId}`,
-                removedJobs: cancelledJobs
+                cancelledJobs
             };
 
         } catch (error) {
@@ -564,85 +837,154 @@ class AgendaMonitoringService {
         }
     }
 
+    /**
+     * Map MonitoringSubscription status to Android app state
+     * Backend status → App state mapping:
+     * - 'active' → 'active' (AI is watching, monitoring ongoing)
+     * - 'conditions_met' → 'finished' (Alert sent, entry conditions met)
+     * - 'expired' → 'finished' (Monitoring expired at 3:30 PM without conditions being met)
+     * - 'invalidated' → 'finished' (Setup invalidated)
+     * - 'cancelled' → 'finished' (User stopped monitoring)
+     */
+    mapSubscriptionStateToAppState(subscriptionStatus, isExpired = false) {
+        const stateMap = {
+            'active': 'active',
+            'conditions_met': 'finished',  // Conditions were met, alert sent
+            'expired': 'finished',         // Time expired without meeting conditions
+            'invalidated': 'finished',     // Setup invalidated
+            'cancelled': 'finished'        // User cancelled
+        };
+
+        return stateMap[subscriptionStatus] || 'finished';
+    }
+
     async getMonitoringStatus(analysisId, strategyId = null, userId = null) {
         try {
             console.log(`📊 Getting monitoring status for analysis ${analysisId}${strategyId ? `, strategy ${strategyId}` : ''}, user ${userId}`);
 
-            // Note: Analysis user validation removed - monitoring is user-linked, not analysis-linked
-
-            const jobKey = strategyId ? `${analysisId}_${strategyId}` : analysisId;
-            
             if (strategyId) {
-                // Always check MongoDB first (source of truth)
-                const queryParams = {
-                    name: 'check-triggers',
-                    'data.analysisId': analysisId,
-                    'data.strategyId': strategyId
-                };
-                
-                // Add userId to query if provided
-                if (userId) {
-                    queryParams['data.userId'] = userId;
-                }
-                
-                const agendaJobs = await this.agenda.jobs(queryParams);
+                // Check MonitoringSubscription (source of truth for multi-user monitoring)
+                const subscription = await MonitoringSubscription.findOne({
+                    analysis_id: analysisId,
+                    strategy_id: strategyId
+                });
 
-                const jobKey = `${analysisId}_${strategyId}`;
-
-                if (agendaJobs.length > 0) {
-                    const job = agendaJobs[0];
-                    
-                    // Update local cache if it exists
-                    if (this.activeJobs.has(jobKey)) {
-                        const localJob = this.activeJobs.get(jobKey);
-                        localJob.jobId = job.attrs._id;
-                        localJob.frequency = job.attrs.data.frequency;
-                    }
-                    
-                    return {
-                        isMonitoring: true,
-                        state: 'active',
-                        jobId: job.attrs._id,
-                        frequency: job.attrs.data.frequency,
-                        nextRun: job.attrs.nextRunAt
-                    };
-                } else {
-                    // No job in MongoDB - clean up local cache if it exists
-                    if (this.activeJobs.has(jobKey)) {
-                        console.log(`🧹 Cleaning up stale local cache for ${jobKey}`);
-                        this.activeJobs.delete(jobKey);
-                    }
-                    
+                if (!subscription) {
                     return {
                         isMonitoring: false,
                         state: 'inactive',
-                        message: 'Not currently monitoring'
+                        message: 'No monitoring subscription found',
+                        jobId: null,
+                        startedAt: null,
+                        isPaused: false,
+                        pausedReason: null
                     };
                 }
 
-            } else {
-                // Check analysis-level (any strategy)
-                const queryParams = {
-                    name: 'check-triggers',
-                    'data.analysisId': analysisId
-                };
-                
-                // Add userId to query if provided
+                // Check if user is subscribed (if userId provided)
+                let isUserSubscribed = true;
+                let userSubscriptionData = null;
                 if (userId) {
-                    queryParams['data.userId'] = userId;
+                    userSubscriptionData = subscription.subscribed_users.find(
+                        sub => sub.user_id.toString() === userId.toString()
+                    );
+                    isUserSubscribed = !!userSubscriptionData;
                 }
-                
-                const analysisJobs = await this.agenda.jobs(queryParams);
+
+                // Check if subscription is actively monitoring
+                const isExpired = subscription.expires_at <= new Date();
+                const isActive = subscription.monitoring_status === 'active' && !isExpired;
+
+                // Map backend status to app state
+                const appState = this.mapSubscriptionStateToAppState(
+                    subscription.monitoring_status,
+                    isExpired
+                );
+
+                // Build appropriate message based on state
+                let message = '';
+                if (subscription.monitoring_status === 'conditions_met') {
+                    message = '✅ Entry conditions met! Alert sent.';
+                } else if (subscription.monitoring_status === 'expired' || isExpired) {
+                    message = '⏰ Monitoring expired at 3:30 PM';
+                } else if (subscription.monitoring_status === 'cancelled') {
+                    message = 'Monitoring stopped by user';
+                } else if (subscription.monitoring_status === 'invalidated') {
+                    message = 'Setup invalidated';
+                } else if (isActive && isUserSubscribed) {
+                    message = '👁️ AI is watching the market';
+                } else if (isActive && !isUserSubscribed) {
+                    message = 'User is not subscribed to this monitoring';
+                } else {
+                    message = `Monitoring is ${subscription.monitoring_status}`;
+                }
 
                 return {
-                    isMonitoring: analysisJobs.length > 0,
-                    state: analysisJobs.length > 0 ? 'active' : 'inactive',
-                    activeStrategies: analysisJobs.length,
-                    jobs: analysisJobs.map(job => ({
-                        jobId: job.attrs._id,
-                        strategyId: job.attrs.data.strategyId,
-                        nextRun: job.attrs.nextRunAt
-                    }))
+                    isMonitoring: isActive && isUserSubscribed,
+                    state: appState,
+                    subscription_id: subscription._id,
+                    subscribed_users_count: subscription.subscribed_users.length,
+                    is_user_subscribed: isUserSubscribed,
+                    conditions_met_at: subscription.conditions_met_at,
+                    notification_sent_at: subscription.notification_sent_at,
+                    expires_at: subscription.expires_at,
+                    jobId: subscription.job_id,
+                    startedAt: userSubscriptionData?.subscribed_at || subscription.createdAt,
+                    isPaused: false, // We don't have pause functionality in current implementation
+                    pausedReason: null,
+                    message
+                };
+
+            } else {
+                // Check analysis-level (all strategies)
+                const subscriptions = await MonitoringSubscription.find({
+                    analysis_id: analysisId
+                });
+
+                if (!subscriptions || subscriptions.length === 0) {
+                    return {
+                        isMonitoring: false,
+                        state: 'inactive',
+                        activeStrategies: 0,
+                        message: 'No monitoring subscriptions found'
+                    };
+                }
+
+                // Filter active subscriptions
+                const now = new Date();
+                const activeSubscriptions = subscriptions.filter(
+                    sub => sub.monitoring_status === 'active' && sub.expires_at > now
+                );
+
+                // Check user subscription if userId provided
+                let userActiveCount = 0;
+                if (userId) {
+                    userActiveCount = activeSubscriptions.filter(sub =>
+                        sub.subscribed_users.some(u => u.user_id.toString() === userId.toString())
+                    ).length;
+                }
+
+                return {
+                    isMonitoring: activeSubscriptions.length > 0,
+                    state: activeSubscriptions.length > 0 ? 'active' : 'inactive',
+                    activeStrategies: activeSubscriptions.length,
+                    user_active_subscriptions: userId ? userActiveCount : null,
+                    subscriptions: subscriptions.map(sub => {
+                        const isExpired = sub.expires_at <= now;
+                        const isActive = sub.monitoring_status === 'active' && !isExpired;
+
+                        return {
+                            subscription_id: sub._id,
+                            strategy_id: sub.strategy_id,
+                            status: sub.monitoring_status,
+                            state: this.mapSubscriptionStateToAppState(sub.monitoring_status, isExpired),
+                            isMonitoring: isActive,
+                            subscribed_users_count: sub.subscribed_users.length,
+                            conditions_met_at: sub.conditions_met_at,
+                            expires_at: sub.expires_at,
+                            jobId: sub.job_id
+                        };
+                    })
                 };
             }
 
@@ -651,7 +993,11 @@ class AgendaMonitoringService {
             return {
                 isMonitoring: false,
                 state: 'error',
-                message: `Error checking status: ${error.message}`
+                message: `Error checking status: ${error.message}`,
+                jobId: null,
+                startedAt: null,
+                isPaused: false,
+                pausedReason: null
             };
         }
     }
@@ -763,42 +1109,6 @@ class AgendaMonitoringService {
         }
     }
 
-    /**
-     * Migrate existing jobs to use Upstox API for market timing
-     */
-    async migrateToUpstoxMarketTiming() {
-        try {
-            console.log('🔄 Migrating existing jobs to use Upstox API for market timing...');
-
-            // Get all existing monitoring jobs
-            const existingJobs = await this.agenda.jobs({ name: 'check-triggers' });
-            let migratedCount = 0;
-
-            for (const job of existingJobs) {
-                const { analysisId, strategyId, userId, frequency } = job.attrs.data;
-                
-                // Check if job is using old cron-restricted scheduling
-                const currentInterval = job.attrs.repeatInterval;
-                if (currentInterval && currentInterval.includes('1-5')) { // Has cron restrictions
-                    console.log(`🔄 Migrating job ${analysisId}_${strategyId} from ${currentInterval} to rely on Upstox API`);
-                    
-                    // Cancel old job
-                    await job.remove();
-                    
-                    // Create new job that relies on Upstox API for market timing
-                    await this.startMonitoring(analysisId, strategyId, userId, frequency || { seconds: 900 });
-                    migratedCount++;
-                }
-            }
-
-            console.log(`✅ Migrated ${migratedCount} jobs to use Upstox API for market timing`);
-            return { success: true, migratedCount };
-
-        } catch (error) {
-            console.error('❌ Error migrating to Upstox API market timing:', error);
-            return { success: false, error: error.message };
-        }
-    }
 
     /**
      * Clean up stale order processing locks
@@ -818,6 +1128,49 @@ class AgendaMonitoringService {
         } catch (error) {
             console.error('❌ Error in stale lock cleanup job:', error);
             return null;
+        }
+    }
+
+    /**
+     * Clean up orphaned analysis_session records when analysis expires/deletes
+     */
+    async cleanupAnalysisSessionRecords(analysisId, userId) {
+        try {
+            console.log(`🧹 [SESSION CLEANUP] Cleaning up analysis_session records for analysis ${analysisId}`);
+
+            // Find all sessions related to this analysis that are still active
+            const activeSessions = await AnalysisSession.find({
+                user_id: userId,
+                status: { $in: ['pending', 'running', 'paused'] }
+            });
+
+            if (activeSessions.length === 0) {
+                console.log(`✅ [SESSION CLEANUP] No active analysis_session records to clean up`);
+                return { cleaned: 0 };
+            }
+
+            // Mark them as cancelled since the analysis/monitoring has stopped
+            const result = await AnalysisSession.updateMany(
+                {
+                    user_id: userId,
+                    status: { $in: ['pending', 'running', 'paused'] }
+                },
+                {
+                    $set: {
+                        status: 'cancelled',
+                        cancelled_at: new Date(),
+                        completed_at: new Date(),
+                        error_message: `Associated analysis ${analysisId} monitoring stopped or expired`
+                    }
+                }
+            );
+
+            console.log(`✅ [SESSION CLEANUP] Cleaned up ${result.modifiedCount} orphaned analysis_session records`);
+            return { cleaned: result.modifiedCount };
+
+        } catch (error) {
+            console.error(`❌ [SESSION CLEANUP] Error cleaning up analysis_session records:`, error);
+            return { cleaned: 0, error: error.message };
         }
     }
 

@@ -5,10 +5,6 @@ import agendaDailyReminderService from '../services/agendaDailyReminderService.j
 import agendaDataPrefetchService from '../services/agendaDataPrefetchService.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import triggerOrderService from '../services/triggerOrderService.js';
-import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
-// COMMENTED OUT: Upstox user model - using WhatsApp notifications instead
-// import UpstoxUser from '../models/upstoxUser.js';
-import { decrypt } from '../utils/encryption.js';
 
 const router = express.Router();
 
@@ -21,12 +17,17 @@ router.post('/start', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
         const { analysisId, frequencySeconds = 60 } = req.body;
-        
-        console.log(`🚀 [AGENDA] Start monitoring request from user ${userId}:`, {
-            analysisId,
-            frequencySeconds
-        });
-        
+
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`🚀 [START MONITORING] Request received`);
+        console.log(`${'='.repeat(80)}`);
+        console.log(`📋 Request Details:`);
+        console.log(`   ├─ User ID: ${userId}`);
+        console.log(`   ├─ Analysis ID: ${analysisId}`);
+        console.log(`   ├─ Frequency: ${frequencySeconds}s`);
+        console.log(`   └─ Timestamp: ${new Date().toISOString()}`);
+        console.log(`${'='.repeat(80)}\n`);
+
         // Validate input
         if (!analysisId) {
             return res.status(400).json({
@@ -38,23 +39,32 @@ router.post('/start', authenticateToken, async (req, res) => {
         
         // Validate frequency (minimum 30 seconds, maximum 1 hour)
         if (frequencySeconds < 30 || frequencySeconds > 3600) {
+            console.log(`❌ [VALIDATION] Invalid frequency: ${frequencySeconds}s (must be 30-3600s)`);
             return res.status(400).json({
                 success: false,
                 error: 'invalid_frequency',
                 message: 'Frequency must be between 30 seconds and 1 hour'
             });
         }
-        
+
         // Verify analysis exists and belongs to user
+        console.log(`🔍 [VALIDATION] Step 1: Fetching analysis document...`);
         const analysis = await StockAnalysis.findById(analysisId);
-        
+
         if (!analysis) {
+            console.log(`❌ [VALIDATION] Analysis ${analysisId} not found in database`);
             return res.status(404).json({
                 success: false,
                 error: 'analysis_not_found',
                 message: 'Analysis not found'
             });
         }
+
+        console.log(`✅ [VALIDATION] Analysis found: ${analysis.stock_symbol}`);
+        console.log(`   ├─ Stock: ${analysis.stock_symbol}`);
+        console.log(`   ├─ Instrument Key: ${analysis.instrument_key}`);
+        console.log(`   ├─ Current Price: ₹${analysis.current_price || 'N/A'}`);
+        console.log(`   └─ Expires At: ${analysis.expires_at || 'No expiry'}\n`);
         
         // Note: Analysis user validation removed - monitoring is user-linked, not analysis-linked
         
@@ -77,19 +87,28 @@ router.post('/start', authenticateToken, async (req, res) => {
         }
         
         // Get first strategy (top strategy) automatically
+        console.log(`🔍 [VALIDATION] Step 2: Extracting trading strategy...`);
         const strategies = analysis.analysis_data?.strategies || [];
+
         if (strategies.length === 0) {
+            console.log(`❌ [VALIDATION] No strategies found in analysis`);
             return res.status(400).json({
                 success: false,
                 error: 'no_strategies',
                 message: 'No strategies found in analysis'
             });
         }
-        
+
         const strategy = strategies[0]; // Always use first strategy
         const strategyId = strategy.id;
-        
-        console.log(`🎯 [AGENDA] Using first strategy: ${strategy.type} (ID: ${strategyId})`);
+
+        console.log(`✅ [VALIDATION] Strategy found`);
+        console.log(`   ├─ Strategy Type: ${strategy.type || 'N/A'}`);
+        console.log(`   ├─ Strategy ID: ${strategyId}`);
+        console.log(`   ├─ Entry Price: ₹${strategy.entry || 'N/A'}`);
+        console.log(`   ├─ Stop Loss: ₹${strategy.stopLoss || 'N/A'}`);
+        console.log(`   ├─ Target: ₹${strategy.target || 'N/A'}`);
+        console.log(`   └─ Triggers Count: ${strategy.triggers?.length || 0}\n`);
         
         // Verify first strategy exists (redundant but safe)
         if (!strategy) {
@@ -169,10 +188,17 @@ router.post('/start', authenticateToken, async (req, res) => {
                              currentTimeInMinutes <= marketClose;
 
         // Check current trigger status first
+        console.log(`🔍 [VALIDATION] Step 3: Checking initial trigger conditions...`);
         const triggerCheck = await triggerOrderService.checkTriggerConditions(analysis);
 
+        console.log(`📊 [TRIGGER CHECK] Initial check complete`);
+        console.log(`   ├─ Triggers Met: ${triggerCheck.triggersConditionsMet ? 'YES ✅' : 'NO ❌'}`);
+        console.log(`   ├─ Reason: ${triggerCheck.reason || 'N/A'}`);
+        console.log(`   ├─ Current Price: ₹${triggerCheck.data?.current_price || 'N/A'}`);
+        console.log(`   └─ Should Monitor: ${triggerCheck.data?.should_monitor !== false ? 'YES' : 'NO'}\n`);
+
         // If triggers are already met, suggest immediate order placement
-        if (triggerCheck.triggersConditionsMet) {
+        if (!triggerCheck.triggersConditionsMet) {
             // During market hours, this is more critical
             if (isMarketHours) {
                 return res.status(200).json({
@@ -239,20 +265,33 @@ router.post('/start', authenticateToken, async (req, res) => {
         }
         
         // Start monitoring with Agenda
+        console.log(`🚀 [START MONITORING] Step 4: Initializing Agenda monitoring service...`);
+        console.log(`   ├─ Analysis ID: ${analysisId}`);
+        console.log(`   ├─ Strategy ID: ${strategyId}`);
+        console.log(`   ├─ User ID: ${userId}`);
+        console.log(`   └─ Frequency: ${frequencySeconds}s\n`);
+
         const result = await agendaMonitoringService.startMonitoring(
             analysisId,
             strategyId,
             userId,
-            { seconds: frequencySeconds }
+            { seconds: frequencySeconds },
+            analysis.stock_symbol,
+            analysis.instrument_key
         );
-        
+
         if (result.success) {
-            const frequencyText = frequencySeconds === 60 ? 'every minute' : 
-                                  frequencySeconds === 300 ? 'every 5 minutes' : 
-                                  frequencySeconds === 900 ? 'every 15 minutes' : 
-                                  frequencySeconds === 3600 ? 'every hour' : 
+            console.log(`✅ [START MONITORING] Monitoring successfully activated!`);
+            console.log(`   ├─ Job ID: ${result.jobId}`);
+            console.log(`   ├─ Stock: ${analysis.stock_symbol}`);
+            console.log(`   └─ Monitoring Status: ACTIVE\n`);
+            console.log(`${'='.repeat(80)}\n`);
+            const frequencyText = frequencySeconds === 60 ? 'every minute' :
+                                  frequencySeconds === 300 ? 'every 5 minutes' :
+                                  frequencySeconds === 900 ? 'every 15 minutes' :
+                                  frequencySeconds === 3600 ? 'every hour' :
                                   `every ${frequencySeconds} seconds`;
-            
+
             res.json({
                 success: true,
                 message: `🎯 Smart monitoring activated for ${analysis.stock_symbol}! We'll watch the market ${frequencyText} and place your order at the perfect moment.`,
@@ -263,6 +302,9 @@ router.post('/start', authenticateToken, async (req, res) => {
                     analysisId,
                     strategyId,
                     stock_symbol: analysis.stock_symbol,
+                    // 🆕 NEW FIELDS for shared monitoring
+                    subscription_id: result.subscription_id,
+                    subscribed_users_count: result.subscribed_users_count,
                     failed_triggers: triggerCheck.data?.failed_triggers || [],
                     user_message: {
                         title: '🔵 Monitoring Active',
@@ -282,6 +324,24 @@ router.post('/start', authenticateToken, async (req, res) => {
                 }
             });
         } else {
+            // 🆕 NEW: Handle blocking when conditions already met
+            if (result.conditions_met_at) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'conditions_already_met',
+                    message: result.message,
+                    data: {
+                        conditions_met_at: result.conditions_met_at,
+                        user_message: {
+                            title: '⚠️ Monitoring Not Available',
+                            description: result.message,
+                            action_button: 'Generate Fresh Analysis',
+                            suggestion: 'Please wait until after 4:30 PM to generate fresh analysis with latest market data'
+                        }
+                    }
+                });
+            }
+
             res.status(400).json({
                 success: false,
                 error: 'monitoring_start_failed',
@@ -337,9 +397,9 @@ router.post('/stop', authenticateToken, async (req, res) => {
         
         // Note: Analysis user validation removed - monitoring is user-linked, not analysis-linked
         
-        // Stop monitoring with Agenda
+        // Stop monitoring with Agenda (pass userId for subscription management)
         console.log(`🔄 Calling agendaMonitoringService.stopMonitoring...`);
-        const result = await agendaMonitoringService.stopMonitoring(analysisId, strategyId);
+        const result = await agendaMonitoringService.stopMonitoring(analysisId, strategyId, userId);
         console.log(`📤 Stop monitoring result:`, result);
         
         if (result.success) {
@@ -397,21 +457,27 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
         
         
         // Check monitoring status for only the first strategy (top strategy)
+        let conditionsMetCount = 0;
         if (strategies.length > 0) {
             const topStrategy = strategies[0]; // Consider only the first/top strategy
             const strategyStatus = await agendaMonitoringService.getMonitoringStatus(analysisId, topStrategy.id, userId);
             strategyStatuses[topStrategy.id] = strategyStatus;
-            
+
             if (strategyStatus.isMonitoring) {
                 hasAnyActiveMonitoring = true;
             }
+
+            // Track conditions_met status
+            if (strategyStatus.state === 'finished' && strategyStatus.conditions_met_at) {
+                conditionsMetCount++;
+            }
         }
-         
+
         res.json({
             success: true,
             data: {
-        
-                isMonitoring: hasAnyActiveMonitoring, // True if any strategy is being monitored        
+
+                isMonitoring: hasAnyActiveMonitoring, // True if any strategy is being monitored
                 // New strategy-level statuses
                 strategies: strategyStatuses,
                 // Additional info
@@ -419,7 +485,8 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
                 analysis_type: analysis.analysis_type,
                 total_strategies: strategies.length,
                 active_monitoring_count: Object.values(strategyStatuses).filter(s => s.isMonitoring).length,
-                
+                conditions_met_count: conditionsMetCount, // Number of strategies where conditions were met
+
                 // Agenda-specific info
                 monitoring_engine: 'agenda'
             }
@@ -616,20 +683,6 @@ router.post('/resume', authenticateToken, async (req, res) => {
             });
         }
         
-        // COMMENTED OUT: Upstox session validation - using WhatsApp notifications instead
-        // Check if user has valid Upstox session
-        // const upstoxUser = await UpstoxUser.findByUserId(userId);
-        // if (!upstoxUser || !upstoxUser.isTokenValid()) {
-        //     return res.status(401).json({
-        //         success: false,
-        //         error: 'upstox_session_required',
-        //         message: 'Please login to Upstox first to resume monitoring',
-        //         data: {
-        //             action_required: 'Upstox re-authentication needed',
-        //             reason: 'Session expired or not found'
-        //         }
-        //     });
-        // }
         
         // Resume monitoring
         const result = await agendaMonitoringService.resumeMonitoring(analysisId, strategyId, userId);

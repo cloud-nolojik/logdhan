@@ -4,6 +4,7 @@ import candleFetcherService from '../services/candleFetcher.service.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
 import { Subscription } from '../models/subscription.js';
+import MonitoringSubscription from '../models/monitoringSubscription.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import rateLimit from 'express-rate-limit';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
@@ -468,6 +469,34 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
 
         console.log(`✅ [ANALYSIS BY INSTRUMENT] Found complete analysis: ${analysis._id}, status: ${analysis.status}`);
 
+        // Check monitoring status for all strategies in this analysis
+        const monitoringStatus = {};
+        let globalCanStartMonitoring = true;
+        let globalMonitoringMessage = null;
+        let globalConditionsMetAt = null;
+
+        if (analysis.analysis_data?.strategies) {
+            for (const strategy of analysis.analysis_data.strategies) {
+                const canMonitor = await MonitoringSubscription.canUserStartMonitoring(
+                    analysis._id,
+                    strategy.id
+                );
+
+                monitoringStatus[strategy.id] = {
+                    can_start_monitoring: canMonitor.can_start,
+                    reason: canMonitor.reason,
+                    conditions_met_at: canMonitor.conditions_met_at
+                };
+
+                // If any strategy cannot be monitored, disable global monitoring
+                if (!canMonitor.can_start) {
+                    globalCanStartMonitoring = false;
+                    globalMonitoringMessage = canMonitor.reason;
+                    globalConditionsMetAt = canMonitor.conditions_met_at;
+                }
+            }
+        }
+
         // Format response to match AnalysisApiResponse structure
         const formattedResponse = {
             _id: analysis._id,
@@ -479,7 +508,13 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
             analysis_data: analysis.analysis_data,
             status: analysis.status,
             created_at: analysis.created_at,
-            expires_at: analysis.expires_at
+            expires_at: analysis.expires_at,
+            // NEW: Monitoring flags
+            can_start_monitoring: globalCanStartMonitoring,
+            monitoring_status: !globalCanStartMonitoring ? 'conditions_met' : null,
+            conditions_met_at: globalConditionsMetAt,
+            monitoring_message: globalMonitoringMessage,
+            strategy_monitoring_status: monitoringStatus // Per-strategy monitoring status
             // user_id removed - not needed in frontend
         };
 

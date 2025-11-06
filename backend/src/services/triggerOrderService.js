@@ -3,7 +3,8 @@ import axios from 'axios';
 // import * as upstoxService from './upstox.service.js';
 import { decrypt } from '../utils/encryption.js';
 import { getCurrentPrice } from '../utils/stock.js';
-import { getMarketDataForTriggers } from '../utils/candleData.js';
+// UPDATED: Using candleFetcher.service.js for better DB+API merge strategy
+import candleFetcherService from './candleFetcher.service.js';
 import advancedTriggerEngine from './advancedTriggerEngine.js';
 
 /**
@@ -29,11 +30,22 @@ class TriggerOrderService {
      */
     async checkTriggerConditions(analysis, currentTime = null) {
         try {
-            console.log(`🔍 Checking triggers for ${analysis.stock_symbol} (${analysis._id})`);
+            console.log(`\n${'▼'.repeat(80)}`);
+            console.log(`🔍 [TRIGGER SERVICE] checkTriggerConditions() - START`);
+            console.log(`${'▼'.repeat(80)}`);
+            console.log(`📊 Analysis Details:`);
+            console.log(`   ├─ Stock: ${analysis.stock_symbol}`);
+            console.log(`   ├─ Analysis ID: ${analysis._id}`);
+            console.log(`   └─ Current Time: ${currentTime ? currentTime.toISOString() : 'Not specified'}\n`);
             
             // Extract strategy with all conditions
+            console.log(`🔍 [STEP 1] Extracting strategy from analysis...`);
             const strategy = analysis.analysis_data.strategies[0];
+
             if (!strategy) {
+                console.log(`❌ [STEP 1] FAILED - No strategy found`);
+                console.log(`   └─ User Action: Run AI analysis to generate strategy\n`);
+                console.log(`${'▲'.repeat(80)}\n`);
                 return {
                     success: false,
                     triggersConditionsMet: false,
@@ -47,9 +59,22 @@ class TriggerOrderService {
                     }
                 };
             }
+
+            console.log(`✅ [STEP 1] Strategy found`);
+            console.log(`   ├─ Strategy ID: ${strategy.id}`);
+            console.log(`   ├─ Type: ${strategy.type || 'N/A'}`);
+            console.log(`   ├─ Entry: ₹${strategy.entry}`);
+            console.log(`   ├─ Stop Loss: ₹${strategy.stopLoss}`);
+            console.log(`   ├─ Target: ₹${strategy.target}`);
+            console.log(`   └─ Triggers: ${strategy.triggers?.length || 0}\n`);
             
             // Check if triggers exist and are properly configured
+            console.log(`🔍 [STEP 2] Validating triggers configuration...`);
+
             if (!strategy.triggers || strategy.triggers.length === 0) {
+                console.log(`❌ [STEP 2] FAILED - No triggers configured`);
+                console.log(`   └─ User Action: Rerun analysis with proper entry conditions\n`);
+                console.log(`${'▲'.repeat(80)}\n`);
                 return {
                     success: false,
                     triggersConditionsMet: false,
@@ -97,6 +122,13 @@ class TriggerOrderService {
             }
             
             if (invalidTriggers.length > 0) {
+                console.log(`❌ [STEP 2] FAILED - Invalid trigger configuration detected`);
+                console.log(`   └─ Invalid Triggers: ${invalidTriggers.length}\n`);
+                invalidTriggers.forEach((inv, idx) => {
+                    console.log(`   ${idx + 1}. Trigger ${inv.trigger_id}:`);
+                    inv.issues.forEach(issue => console.log(`      - ${issue}`));
+                });
+                console.log(`${'▲'.repeat(80)}\n`);
                 return {
                     success: false,
                     triggersConditionsMet: false,
@@ -167,11 +199,17 @@ class TriggerOrderService {
                 };
             }
             
+            console.log(`✅ [STEP 2] All triggers are valid\n`);
+
             // Initialize session for advanced trigger engine
+            console.log(`🔍 [STEP 3] Initializing advanced trigger engine session...`);
             advancedTriggerEngine.initializeSession(analysis._id.toString(), strategy);
-            
+            console.log(`✅ [STEP 3] Session initialized\n`);
+
             // Smart trigger filtering based on current time
+            console.log(`🔍 [STEP 4] Smart trigger filtering based on timeframes...`);
             let triggersToCheck = strategy.triggers || [];
+            console.log(`   └─ Total Triggers: ${triggersToCheck.length}\n`);
             
             if (currentTime) {
                 const currentMinute = currentTime.getMinutes();
@@ -180,25 +218,25 @@ class TriggerOrderService {
                 // Filter triggers based on timing relevance
                 const relevantTriggers = triggersToCheck.filter(trigger => {
                     const timeframe = trigger.timeframe?.toLowerCase() || '15m';
-                    
-                    switch(timeframe) {
-                        case '1m':
-                            return true; // Always check 1-minute triggers
-                        case '5m':
-                            return currentMinute % 5 === 0; // Check every 5 minutes
-                        case '15m':
-                            return currentMinute % 15 === 0; // Check every 15 minutes
-                        case '30m':
-                            return currentMinute % 30 === 0; // Check every 30 minutes
-                        case '1h':
-                        case '60m':
-                            return currentMinute === 0; // Check only at hour boundaries
-                        case '1d':
-                        case 'day':
-                            return currentMinute === 15 && currentHour === 9; // Check at market open (9:15 AM)
-                        default:
-                            return true; // Default: check all unknown timeframes
-                    }
+                    return true; 
+                    // switch(timeframe) {
+                    //     case '1m':
+                    //         return true; // Always check 1-minute triggers
+                    //     case '5m':
+                    //         return currentMinute % 5 === 0; // Check every 5 minutes
+                    //     case '15m':
+                    //         return currentMinute % 15 != 0; // Check every 15 minutes
+                    //     case '30m':
+                    //         return currentMinute % 30 === 0; // Check every 30 minutes
+                    //     case '1h':
+                    //     case '60m':
+                    //         return currentMinute === 0; // Check only at hour boundaries
+                    //     case '1d':
+                    //     case 'day':
+                    //         return currentMinute === 15 && currentHour === 9; // Check at market open (9:15 AM)
+                    //     default:
+                    //         return true; // Default: check all unknown timeframes
+                    // }
                 });
                 
                 console.log(`⏰ Trigger filtering: ${triggersToCheck.length} total, ${relevantTriggers.length} relevant at ${currentTime.toLocaleTimeString('en-US', {timeZone: 'Asia/Kolkata'})}`);
@@ -228,31 +266,56 @@ class TriggerOrderService {
             }
             
             // Get market data for all required timeframes (even if not all triggers are being checked)
+            console.log(`🔍 [STEP 5] Fetching market data for all timeframes...`);
             const allTriggers = strategy.triggers || [];
-            const marketData = await getMarketDataForTriggers(analysis.instrument_key, allTriggers);
-            
+            console.log(`   ├─ Instrument Key: ${analysis.instrument_key}`);
+            console.log(`   └─ Required Timeframes: ${[...new Set(allTriggers.map(t => t.timeframe || '15m'))].join(', ')}\n`);
+
+            const marketData = await candleFetcherService.getMarketDataForTriggers(analysis.instrument_key, allTriggers);
+
             if (!marketData.current_price) {
+                console.log(`❌ [STEP 5] FAILED - Unable to fetch market data`);
+                console.log(`${'▲'.repeat(80)}\n`);
                 throw new Error('Unable to fetch market data');
             }
-            
-            console.log(`📊 Market data fetched - Current: ${marketData.current_price}, Timeframes: ${Object.keys(marketData.timeframes).join(', ')}`);
+
+            console.log(`✅ [STEP 5] Market data fetched successfully`);
+            console.log(`   ├─ Current Price: ₹${marketData.current_price}`);
+            console.log(`   └─ Timeframes Available: ${Object.keys(marketData.timeframes).join(', ')}\n`);
             
             // Create a temporary strategy with only the relevant triggers for evaluation
             const tempStrategy = {
-                ...strategy,
+                ...strategy.toObject(),
                 triggers: triggersToCheck
             };
             
             // Use advanced trigger engine for comprehensive checking
+            console.log(`🔍 [STEP 6] Evaluating triggers with advanced trigger engine...`);
+            console.log(`   ├─ Analysis ID: ${analysis._id.toString()}`);
+            console.log(`   ├─ Strategy ID: ${tempStrategy.id}`);
+            console.log(`   ├─ Triggers to Check: ${triggersToCheck.length}`);
+            console.log(`   └─ Calling advancedTriggerEngine.checkTriggers()...\n`);
+
             const engineResult = await advancedTriggerEngine.checkTriggers(
-                analysis._id.toString(), 
-                tempStrategy, 
+                analysis._id.toString(),
+                tempStrategy,
                 marketData.timeframes
             );
 
+            console.log(`📊 [STEP 6] Advanced trigger engine result:`);
+            console.log(`   ├─ Action: ${engineResult.action}`);
+            console.log(`   ├─ Success: ${engineResult.success ? 'YES ✅' : 'NO ❌'}`);
+            console.log(`   ├─ Reason: ${engineResult.reason || 'N/A'}`);
+            console.log(`   └─ Triggers Checked: ${engineResult.triggers?.length || 0}\n`);
+
             // Handle different actions from the advanced engine
+            console.log(`🔍 [STEP 7] Processing engine result - Action: ${engineResult.action}`);
             switch (engineResult.action) {
                 case 'cancel_monitoring':
+                    console.log(`❌ [STEP 7] Result: CANCEL MONITORING`);
+                    console.log(`   ├─ Reason: ${engineResult.reason}`);
+                    console.log(`   └─ Expired Trigger: ${engineResult.expired_trigger || 'N/A'}\n`);
+                    console.log(`${'▲'.repeat(80)}\n`);
                     return {
                         success: false,
                         triggersConditionsMet: false,
@@ -268,6 +331,10 @@ class TriggerOrderService {
                     };
 
                 case 'cancel_entry':
+                    console.log(`❌ [STEP 7] Result: CANCEL ENTRY (Pre-entry invalidation)`);
+                    console.log(`   ├─ Reason: ${engineResult.reason}`);
+                    console.log(`   └─ Invalidation: ${JSON.stringify(engineResult.invalidation || {})}\n`);
+                    console.log(`${'▲'.repeat(80)}\n`);
                     return {
                         success: false,
                         triggersConditionsMet: false,
@@ -282,6 +349,10 @@ class TriggerOrderService {
                     };
 
                 case 'close_position':
+                    console.log(`❌ [STEP 7] Result: CLOSE POSITION (Post-entry invalidation)`);
+                    console.log(`   ├─ Reason: ${engineResult.reason}`);
+                    console.log(`   └─ Invalidation: ${JSON.stringify(engineResult.invalidation || {})}\n`);
+                    console.log(`${'▲'.repeat(80)}\n`);
                     return {
                         success: false,
                         triggersConditionsMet: false,
@@ -296,7 +367,18 @@ class TriggerOrderService {
                     };
 
                 case 'execute_order':
-                    console.log(`✅ All trigger conditions satisfied for ${analysis.stock_symbol}`);
+                    console.log(`✅✅✅ [STEP 7] Result: EXECUTE ORDER - ALL CONDITIONS MET! ✅✅✅`);
+                    console.log(`   ├─ Stock: ${analysis.stock_symbol}`);
+                    console.log(`   ├─ Current Price: ₹${marketData.current_price}`);
+                    console.log(`   └─ All Triggers Passed: YES\n`);
+                    if (engineResult.triggers) {
+                        console.log(`📋 Trigger States:`);
+                        engineResult.triggers.forEach((t, idx) => {
+                            console.log(`   ${idx + 1}. ${t.condition || t.id}: ${t.satisfied ? '✅ PASSED' : '❌ FAILED'}`);
+                        });
+                        console.log(``);
+                    }
+                    console.log(`${'▲'.repeat(80)}\n`);
                     return {
                         success: true,
                         triggersConditionsMet: true,
@@ -315,6 +397,34 @@ class TriggerOrderService {
 
                 case 'continue_monitoring':
                 default:
+                    console.log(`⏳ [STEP 7] Result: CONTINUE MONITORING - Conditions not yet met`);
+                    console.log(`   ├─ Current Price: ₹${marketData.current_price}`);
+                    console.log(`   ├─ Triggers Passed: ${engineResult.triggers?.filter(t => t.satisfied).length || 0}/${engineResult.triggers?.length || 0}`);
+                    console.log(`   └─ Action: Continue monitoring\n`);
+
+                    const failedTriggers = engineResult.triggers?.filter(t => !t.satisfied) || [];
+                    if (failedTriggers.length > 0) {
+                        console.log(`📊 Failed Triggers (${failedTriggers.length}):`);
+                        failedTriggers.forEach((t, idx) => {
+                            console.log(`   ${idx + 1}. ${t.condition || t.id}`);
+                            console.log(`      ├─ Left Value: ${t.left_value || 'N/A'}`);
+                            console.log(`      ├─ Operator: ${t.op || 'N/A'}`);
+                            console.log(`      ├─ Right Value: ${t.right_value || 'N/A'}`);
+                            console.log(`      └─ Status: ❌ NOT SATISFIED`);
+                        });
+                        console.log(``);
+                    }
+
+                    if (engineResult.warnings && engineResult.warnings.length > 0) {
+                        console.log(`⚠️  Warnings (${engineResult.warnings.length}):`);
+                        engineResult.warnings.forEach((w, idx) => {
+                            console.log(`   ${idx + 1}. [${w.severity}] ${w.code}: ${w.text}`);
+                        });
+                        console.log(``);
+                    }
+
+                    console.log(`${'▲'.repeat(80)}\n`);
+
                     return {
                         success: false,
                         triggersConditionsMet: false,
@@ -327,7 +437,7 @@ class TriggerOrderService {
                             triggers: engineResult.triggers,
                             warnings: engineResult.warnings,
                             session: engineResult.session,
-                            failed_triggers: engineResult.triggers?.filter(t => !t.satisfied) || [],
+                            failed_triggers: failedTriggers,
                             should_monitor: true,
                             monitoring_frequency: this.getMonitoringFrequency(analysis)
                         }

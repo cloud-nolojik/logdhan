@@ -37,21 +37,49 @@ class CandleFetcherService {
             }
             
             if (preFetchedResult.success && preFetchedResult.data?.length > 0) {
-                const sufficientData = this.checkDataSufficiency(preFetchedResult.data);
-                
-                if (sufficientData.sufficient) {
-                    console.log(`✅ [CANDLE FETCHER] Using pre-fetched data: ${preFetchedResult.data.length} timeframes`);
-                    
-                    return {
-                        success: true,
-                        source: 'database',
-                        data: this.formatDatabaseData(preFetchedResult.data)
-                    };
+                // CRITICAL: Check data freshness first (trading_date must be recent)
+                const freshnessCheck = this.checkDataFreshness(preFetchedResult.data);
+
+                if (!freshnessCheck.fresh) {
+                    console.log(`⚠️ [CANDLE FETCHER] Stale data detected: ${freshnessCheck.reason}`);
+                    console.log(`🔄 [INCREMENTAL FETCH] Fetching missing data and merging with DB...`);
+
+                    // Perform incremental fetch for stale timeframes
+                    const incrementalResult = await this.fetchIncrementalDataAndMerge(
+                        instrumentKey,
+                        preFetchedResult.data,
+                        freshnessCheck.staleTimeframes
+                    );
+
+                    if (incrementalResult.success) {
+                        console.log(`✅ [INCREMENTAL FETCH] Successfully updated stale data`);
+                        return {
+                            success: true,
+                            source: 'database+api (incremental)',
+                            data: incrementalResult.data
+                        };
+                    } else {
+                        console.log(`⚠️ [INCREMENTAL FETCH] Failed, falling back to full API fetch`);
+                        // Fall through to full API fetch
+                    }
                 } else {
-                    console.log(`⚠️ [CANDLE FETCHER] Insufficient data: ${sufficientData.reason}. Fetching from API.`);
+                    // Data is fresh, now check sufficiency
+                    const sufficientData = this.checkDataSufficiency(preFetchedResult.data);
+
+                    if (sufficientData.sufficient) {
+                        console.log(`✅ [CANDLE FETCHER] Using pre-fetched data: ${preFetchedResult.data.length} timeframes`);
+
+                        return {
+                            success: true,
+                            source: 'database',
+                            data: this.formatDatabaseData(preFetchedResult.data)
+                        };
+                    } else {
+                        console.log(`⚠️ [CANDLE FETCHER] Insufficient data: ${sufficientData.reason}. Fetching from API.`);
+                    }
                 }
             }
-            
+
             // Step 2: Fallback to API fetching
             console.log(`🔄 [CANDLE FETCHER] Fetching fresh data from API`);
             const apiResult = await this.fetchFromAPI(instrumentKey, term);
@@ -69,6 +97,73 @@ class CandleFetcherService {
     }
 
     /**
+     * Check if pre-fetched data is fresh (trading_date is recent)
+     * @param {Array} preFetchedData - Array of pre-fetched data records
+     * @returns {Object} - { fresh: boolean, reason: string, staleTimeframes: [] }
+     */
+    checkDataFreshness(preFetchedData) {
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`🔍 [FRESHNESS CHECK] Starting data freshness validation`);
+        console.log(`${'='.repeat(80)}`);
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Start of today
+        console.log(`📅 [FRESHNESS CHECK] Today's date (normalized): ${today.toISOString().split('T')[0]}`);
+        console.log(`📊 [FRESHNESS CHECK] Total timeframes to check: ${preFetchedData.length}\n`);
+
+        const staleTimeframes = [];
+
+        for (const timeframeData of preFetchedData) {
+            console.log(`🔹 [FRESHNESS CHECK] Checking timeframe: ${timeframeData.timeframe}`);
+
+            const tradingDate = new Date(timeframeData.trading_date);
+            const daysDiff = Math.floor((today - tradingDate) / (1000 * 60 * 60 * 24));
+
+            // For intraday timeframes (15m, 1h), data older than 1 day is stale
+            // For daily timeframe (1d), data older than 7 days is stale
+            const maxAgeDays = timeframeData.timeframe === '1d' ? 7 : 1;
+
+            console.log(`   ├─ Trading date: ${tradingDate.toISOString().split('T')[0]}`);
+            console.log(`   ├─ Age: ${daysDiff} days`);
+            console.log(`   ├─ Max allowed age: ${maxAgeDays} days`);
+            console.log(`   ├─ Bars in DB: ${timeframeData.bars_count || timeframeData.candle_data?.length || 0}`);
+
+            if (daysDiff > maxAgeDays) {
+                console.log(`   └─ Status: ❌ STALE (${daysDiff} days > ${maxAgeDays} days)\n`);
+                staleTimeframes.push({
+                    timeframe: timeframeData.timeframe,
+                    trading_date: tradingDate,
+                    age_days: daysDiff
+                });
+            } else {
+                console.log(`   └─ Status: ✅ FRESH (${daysDiff} days <= ${maxAgeDays} days)\n`);
+            }
+        }
+
+        if (staleTimeframes.length > 0) {
+            console.log(`${'='.repeat(80)}`);
+            console.log(`⚠️  [FRESHNESS CHECK RESULT] ${staleTimeframes.length}/${preFetchedData.length} timeframe(s) are STALE`);
+            console.log(`${'='.repeat(80)}`);
+            staleTimeframes.forEach((st, idx) => {
+                console.log(`   ${idx + 1}. ${st.timeframe}: ${st.age_days} days old (trading_date: ${st.trading_date.toISOString().split('T')[0]})`);
+            });
+            console.log(`\n🔄 [DECISION] Will trigger incremental data fetch for stale timeframes\n`);
+
+            return {
+                fresh: false,
+                reason: `${staleTimeframes.length} timeframe(s) have stale data (older than max age)`,
+                staleTimeframes: staleTimeframes
+            };
+        }
+
+        console.log(`${'='.repeat(80)}`);
+        console.log(`✅ [FRESHNESS CHECK RESULT] All ${preFetchedData.length} timeframes have FRESH data`);
+        console.log(`${'='.repeat(80)}`);
+        console.log(`🎯 [DECISION] No incremental fetch needed, using DB data as-is\n`);
+        return { fresh: true, staleTimeframes: [] };
+    }
+
+    /**
      * Check if pre-fetched data has sufficient candles for analysis
      */
     checkDataSufficiency(preFetchedData) {
@@ -76,7 +171,7 @@ class CandleFetcherService {
             const required = dateCalculator.requiredBars[timeframeData.timeframe] || 100;
             const available = timeframeData.candle_data?.length || 0;
             const threshold = Math.floor(required * 0.98); // Need 98% of required data (reasonable for holidays/gaps)
-            
+
             if (available < threshold) {
                 console.log(`⚠️ [INSUFFICIENT] ${timeframeData.timeframe}: ${available}/${required} bars (${((available/required)*100).toFixed(1)}% - need 98%)`);
                 return {
@@ -586,10 +681,543 @@ class CandleFetcherService {
     }
 
     /**
+     * Fetch incremental data for stale timeframes and merge with DB
+     * @param {string} instrumentKey - The instrument key
+     * @param {Array} dbData - Existing database records
+     * @param {Array} staleTimeframes - List of stale timeframes to update
+     * @returns {Object} - { success: boolean, data: formattedData }
+     */
+    async fetchIncrementalDataAndMerge(instrumentKey, dbData, staleTimeframes) {
+        console.log(`\n${'█'.repeat(80)}`);
+        console.log(`📡 [INCREMENTAL MERGE] Starting incremental data fetch and merge`);
+        console.log(`${'█'.repeat(80)}`);
+        console.log(`📋 [INCREMENTAL MERGE] Job details:`);
+        console.log(`   ├─ Instrument: ${instrumentKey}`);
+        console.log(`   ├─ Total timeframes: ${dbData.length}`);
+        console.log(`   ├─ Stale timeframes: ${staleTimeframes.length}`);
+        console.log(`   └─ Fresh timeframes: ${dbData.length - staleTimeframes.length}\n`);
+
+        try {
+            const updatedData = {};
+            let successCount = 0;
+            let errorCount = 0;
+
+            // Process each timeframe
+            for (let i = 0; i < dbData.length; i++) {
+                const dbRecord = dbData[i];
+                const timeframe = dbRecord.timeframe;
+                const isStale = staleTimeframes.some(st => st.timeframe === timeframe);
+
+                console.log(`${'─'.repeat(80)}`);
+                console.log(`📊 [TIMEFRAME ${i + 1}/${dbData.length}] Processing: ${timeframe}`);
+                console.log(`${'─'.repeat(80)}`);
+
+                if (isStale) {
+                    console.log(`⚠️  [${timeframe}] Status: STALE - Needs incremental fetch`);
+                    console.log(`🔄 [${timeframe}] Starting API fetch for missing data...\n`);
+
+                    // Get last bar time from DB
+                    console.log(`📍 [${timeframe}] Step 1: Determining last bar time from DB...`);
+                    const lastBarTime = dbRecord.data_quality?.last_bar_time
+                        ? new Date(dbRecord.data_quality.last_bar_time)
+                        : new Date(dbRecord.candle_data[dbRecord.candle_data.length - 1].timestamp);
+
+                    const now = new Date();
+                    const fromDate = lastBarTime.toISOString().split('T')[0];
+                    const toDate = now.toISOString().split('T')[0];
+                    const timeDiffDays = Math.floor((now - lastBarTime) / (1000 * 60 * 60 * 24));
+
+                    console.log(`   ├─ Last bar time: ${lastBarTime.toISOString()}`);
+                    console.log(`   ├─ Current time: ${now.toISOString()}`);
+                    console.log(`   ├─ Time gap: ${timeDiffDays} days`);
+                    console.log(`   ├─ Fetch range: ${fromDate} → ${toDate}`);
+                    console.log(`   └─ Existing bars in DB: ${dbRecord.candle_data?.length || 0}\n`);
+
+                    // Map timeframe to Upstox interval
+                    const intervalMap = { '15m': '15minute', '1h': '60minute', '1d': 'day' };
+                    const upstoxInterval = intervalMap[timeframe] || timeframe;
+                    console.log(`📡 [${timeframe}] Step 2: Fetching from Upstox API (interval: ${upstoxInterval})...`);
+
+                    try {
+                        // Fetch missing candles
+                        const apiCandles = await this.fetchCandlesFromAPI(
+                            instrumentKey,
+                            upstoxInterval,
+                            fromDate,
+                            toDate
+                        );
+
+                        console.log(`\n📥 [${timeframe}] Step 3: API fetch completed`);
+                        if (apiCandles && apiCandles.length > 0) {
+                            console.log(`   ✅ Received ${apiCandles.length} candles from API`);
+                            console.log(`   ├─ First candle: ${apiCandles[0].timestamp}`);
+                            console.log(`   └─ Last candle: ${apiCandles[apiCandles.length - 1].timestamp}\n`);
+
+                            console.log(`🔀 [${timeframe}] Step 4: Merging API data with existing DB data...`);
+                            // Merge: Keep all DB candles + append only NEW candles
+                            const existingCandles = dbRecord.candle_data || [];
+                            const existingTimestamps = new Set(
+                                existingCandles.map(c => c.timestamp.toString())
+                            );
+
+                            console.log(`   ├─ Building timestamp index from ${existingCandles.length} existing candles...`);
+                            const newCandles = apiCandles.filter(apiCandle => {
+                                const apiTimestamp = apiCandle.timestamp.toString();
+                                return !existingTimestamps.has(apiTimestamp);
+                            });
+
+                            console.log(`   ├─ Existing candles in DB: ${existingCandles.length}`);
+                            console.log(`   ├─ API candles: ${apiCandles.length}`);
+                            console.log(`   ├─ Duplicate candles: ${apiCandles.length - newCandles.length}`);
+                            console.log(`   └─ New unique candles: ${newCandles.length}\n`);
+
+                            if (newCandles.length > 0) {
+                                console.log(`✨ [${timeframe}] Step 5: Appending ${newCandles.length} new candles...`);
+                                // Append and sort
+                                const mergedCandles = [...existingCandles, ...newCandles]
+                                    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+                                // Keep only required number of bars (trim oldest if necessary)
+                                const maxBars = dateCalculator.requiredBars[timeframe] || 400;
+                                const finalCandles = mergedCandles.slice(-maxBars);
+                                const trimmedCount = mergedCandles.length - finalCandles.length;
+
+                                console.log(`   ├─ After merge: ${mergedCandles.length} total candles`);
+                                console.log(`   ├─ Max bars allowed: ${maxBars}`);
+                                console.log(`   ├─ Trimmed oldest: ${trimmedCount} candles`);
+                                console.log(`   └─ Final dataset: ${finalCandles.length} candles\n`);
+
+                                // Update DB
+                                console.log(`💾 [${timeframe}] Step 6: Updating MongoDB...`);
+                                const newLastBarTime = new Date(finalCandles[finalCandles.length - 1].timestamp);
+                                const updateResult = await PreFetchedData.updateOne(
+                                    { instrument_key: instrumentKey, timeframe: timeframe },
+                                    {
+                                        $set: {
+                                            candle_data: finalCandles,
+                                            bars_count: finalCandles.length,
+                                            trading_date: now,
+                                            updated_at: now,
+                                            'data_quality.last_bar_time': newLastBarTime
+                                        }
+                                    }
+                                );
+
+                                console.log(`   ├─ MongoDB update result: ${updateResult.modifiedCount} document(s) modified`);
+                                console.log(`   ├─ New bars_count: ${finalCandles.length}`);
+                                console.log(`   ├─ New trading_date: ${now.toISOString().split('T')[0]}`);
+                                console.log(`   └─ New last_bar_time: ${newLastBarTime.toISOString()}\n`);
+
+                                updatedData[timeframe] = finalCandles;
+                                successCount++;
+                                console.log(`✅ [${timeframe}] SUCCESS - Incremental update completed!\n`);
+                            } else {
+                                console.log(`ℹ️  [${timeframe}] Step 5: No new unique candles to add`);
+                                console.log(`   └─ All ${apiCandles.length} API candles already exist in DB\n`);
+                                // No new candles, use existing
+                                updatedData[timeframe] = existingCandles;
+                                successCount++;
+                                console.log(`✅ [${timeframe}] SUCCESS - Using existing data (no updates needed)\n`);
+                            }
+                        } else {
+                            console.log(`   ⚠️  API returned 0 candles (market closed or no data available)`);
+                            console.log(`   └─ Reason: Likely market closed or no trading data for date range\n`);
+                            // API returned no data, use existing
+                            updatedData[timeframe] = dbRecord.candle_data || [];
+                            successCount++;
+                            console.log(`✅ [${timeframe}] SUCCESS - Using existing DB data\n`);
+                        }
+                    } catch (apiError) {
+                        console.log(`\n❌ [${timeframe}] ERROR during API fetch or merge!`);
+                        console.error(`   ├─ Error type: ${apiError.name}`);
+                        console.error(`   ├─ Error message: ${apiError.message}`);
+                        if (apiError.stack) {
+                            console.error(`   └─ Stack trace: ${apiError.stack.split('\n')[0]}\n`);
+                        }
+                        // On error, use existing DB data
+                        updatedData[timeframe] = dbRecord.candle_data || [];
+                        errorCount++;
+                        console.log(`⚠️  [${timeframe}] FALLBACK - Continuing with existing DB data (${updatedData[timeframe].length} bars)\n`);
+                    }
+                } else {
+                    // Not stale, use as-is
+                    console.log(`✅ [${timeframe}] Status: FRESH - No fetch needed`);
+                    updatedData[timeframe] = dbRecord.candle_data || [];
+                    successCount++;
+                    console.log(`   └─ Using existing ${updatedData[timeframe].length} bars from DB\n`);
+                }
+            }
+
+            console.log(`${'█'.repeat(80)}`);
+            console.log(`📊 [INCREMENTAL MERGE] Job Summary`);
+            console.log(`${'█'.repeat(80)}`);
+            console.log(`✅ Success: ${successCount}/${dbData.length} timeframes`);
+            console.log(`❌ Errors: ${errorCount}/${dbData.length} timeframes`);
+            console.log(`📦 Total data ready: ${Object.keys(updatedData).length} timeframes`);
+            Object.keys(updatedData).forEach(tf => {
+                console.log(`   - ${tf}: ${updatedData[tf].length} bars`);
+            });
+            console.log(`${'█'.repeat(80)}\n`);
+
+            return {
+                success: true,
+                data: updatedData
+            };
+
+        } catch (error) {
+            console.error(`❌ [INCREMENTAL MERGE] Failed: ${error.message}`);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
      * Utility delay function
      */
     delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Fetch candles from API for a specific date range (used for incremental updates)
+     * Reuses existing buildHistoricalUrlFromDates() method to avoid code duplication
+     * @param {string} instrumentKey - The instrument key
+     * @param {string} interval - Upstox interval ('15minute', '60minute', 'day')
+     * @param {string} fromDate - Start date (YYYY-MM-DD or Date object)
+     * @param {string} toDate - End date (YYYY-MM-DD or Date object)
+     * @returns {Array} - Array of candle objects
+     */
+    async fetchCandlesFromAPI(instrumentKey, interval, fromDate, toDate) {
+        console.log(`\n${'▼'.repeat(80)}`);
+        console.log(`📡 [API FETCH] Starting Upstox Historical API call`);
+        console.log(`${'▼'.repeat(80)}`);
+
+        try {
+            console.log(`📋 [API FETCH] Request parameters:`);
+            console.log(`   ├─ Instrument: ${instrumentKey}`);
+            console.log(`   ├─ Interval: ${interval}`);
+            console.log(`   ├─ From date: ${fromDate}`);
+            console.log(`   └─ To date: ${toDate}`);
+
+            // Map Upstox interval to standard timeframe for URL builder
+            const intervalToTimeframeMap = {
+                '15minute': '15m',
+                '60minute': '1h',
+                'day': '1d'
+            };
+
+            const timeframe = intervalToTimeframeMap[interval];
+            if (!timeframe) {
+                throw new Error(`Unsupported interval: ${interval}. Expected one of: 15minute, 60minute, day`);
+            }
+
+            console.log(`   └─ Mapped to timeframe: ${timeframe}`);
+
+            // Convert date strings to Date objects if needed
+            console.log(`\n🔧 [API FETCH] Preparing dates for URL builder...`);
+            const fromDateObj = typeof fromDate === 'string' ? new Date(fromDate) : fromDate;
+            const toDateObj = typeof toDate === 'string' ? new Date(toDate) : toDate;
+            console.log(`   ├─ From Date Object: ${fromDateObj.toISOString()}`);
+            console.log(`   └─ To Date Object: ${toDateObj.toISOString()}`);
+
+            // Use existing method to build URL (avoids code duplication)
+            console.log(`\n🔧 [API FETCH] Building URL using buildHistoricalUrlFromDates()...`);
+            const url = this.buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDateObj, toDateObj);
+            console.log(`🔗 [API FETCH] URL: ${url}`);
+            console.log(`⏳ [API FETCH] Sending HTTP request...\n`);
+
+            const startTime = Date.now();
+            const response = await this.fetchCandleData(url);
+            const duration = Date.now() - startTime;
+
+            console.log(`✅ [API FETCH] HTTP response received in ${duration}ms`);
+
+            if (!response) {
+                console.log(`❌ [API FETCH] Response is null or undefined`);
+                console.log(`${'▲'.repeat(80)}\n`);
+                return [];
+            }
+
+            if (!response.data) {
+                console.log(`❌ [API FETCH] Response has no 'data' field`);
+                console.log(`   └─ Response keys: ${Object.keys(response).join(', ')}`);
+                console.log(`${'▲'.repeat(80)}\n`);
+                return [];
+            }
+
+            if (!response.data.candles) {
+                console.log(`❌ [API FETCH] Response.data has no 'candles' field`);
+                console.log(`   └─ Response.data keys: ${Object.keys(response.data).join(', ')}`);
+                console.log(`${'▲'.repeat(80)}\n`);
+                return [];
+            }
+
+            const candles = response.data.candles;
+            console.log(`\n📊 [API FETCH] Candles received: ${candles.length}`);
+
+            if (candles.length === 0) {
+                console.log(`⚠️  [API FETCH] API returned 0 candles`);
+                console.log(`   └─ Possible reasons: Market closed, no trading data, weekend/holiday`);
+                console.log(`${'▲'.repeat(80)}\n`);
+                return [];
+            }
+
+            // Show sample of raw data
+            console.log(`📋 [API FETCH] Sample raw candle (first): [${candles[0].join(', ')}]`);
+            if (candles.length > 1) {
+                console.log(`📋 [API FETCH] Sample raw candle (last): [${candles[candles.length - 1].join(', ')}]`);
+            }
+
+            // Convert array format to object format
+            console.log(`\n🔄 [API FETCH] Converting ${candles.length} candles from array to object format...`);
+            const formattedCandles = candles.map(c => ({
+                timestamp: c[0],
+                open: c[1],
+                high: c[2],
+                low: c[3],
+                close: c[4],
+                volume: c[5]
+            }));
+
+            console.log(`✅ [API FETCH] Conversion complete`);
+            console.log(`   ├─ First timestamp: ${formattedCandles[0].timestamp}`);
+            console.log(`   ├─ Last timestamp: ${formattedCandles[formattedCandles.length - 1].timestamp}`);
+            console.log(`   └─ Total formatted: ${formattedCandles.length} candles`);
+            console.log(`${'▲'.repeat(80)}\n`);
+
+            return formattedCandles;
+
+        } catch (error) {
+            console.log(`\n❌ [API FETCH] Exception caught!`);
+            console.error(`   ├─ Error type: ${error.name}`);
+            console.error(`   ├─ Error message: ${error.message}`);
+            if (error.response) {
+                console.error(`   ├─ HTTP status: ${error.response.status}`);
+                console.error(`   └─ Response data: ${JSON.stringify(error.response.data).substring(0, 200)}`);
+            }
+            if (error.stack) {
+                console.error(`   └─ Stack trace (first line): ${error.stack.split('\n')[0]}`);
+            }
+            console.log(`${'▲'.repeat(80)}\n`);
+            throw error;
+        }
+    }
+
+    /**
+     * Get market data for trigger monitoring (adapter for candleData.js compatibility)
+     * Returns data in format expected by trigger monitoring system
+     * @param {string} instrumentKey - The instrument key
+     * @param {Array} triggers - Array of trigger conditions with timeframes
+     * @returns {Object} - Market data with timeframes and indicators
+     */
+    async getMarketDataForTriggers(instrumentKey, triggers = []) {
+        console.log(`🔍 [TRIGGER ADAPTER] Getting market data for ${instrumentKey}`);
+
+        try {
+            // Extract unique timeframes from triggers
+            const timeframesNeeded = new Set(['1m']); // Always get current price (1m)
+            triggers.forEach(trigger => {
+                if (trigger.timeframe) {
+                    let normalized = trigger.timeframe.toLowerCase();
+                    if (normalized === '1d' || normalized === 'day' || normalized === '1day') {
+                        normalized = '1d';
+                    }
+                    timeframesNeeded.add(normalized);
+                }
+            });
+
+            console.log(`📊 Required timeframes: ${Array.from(timeframesNeeded).join(', ')}`);
+
+            // Get candle data using existing service (DB-first strategy)
+            const result = await this.getCandleDataForAnalysis(instrumentKey, 'swing');
+
+            if (!result.success) {
+                throw new Error('Failed to fetch candle data');
+            }
+
+            console.log(`✅ [TRIGGER ADAPTER] Data source: ${result.source}`);
+            console.log(`✅ [TRIGGER ADAPTER] Timeframes available: ${Object.keys(result.data).join(', ')}`);
+
+            // Transform data to trigger monitoring format
+            const marketData = {
+                current_price: null,
+                timeframes: {},
+                indicators: {}
+            };
+
+            // Import indicator calculation function
+            const { calculateTechnicalIndicators } = await import('../utils/indicatorCalculator.js');
+
+            // Process each timeframe
+            for (const timeframe of Array.from(timeframesNeeded)) {
+                let candles = result.data[timeframe];
+
+                if (!candles || candles.length === 0) {
+                    console.log(`⚠️  [TRIGGER ADAPTER] No data for ${timeframe}`);
+                    continue;
+                }
+
+                // CRITICAL: Check trading_date from DB to determine data freshness
+                // Strategy: DB = historical (previous days), API = today only
+                console.log(`\n🔍 [FRESHNESS CHECK] ${timeframe}: Checking data freshness...`);
+
+                // Query PreFetchedData directly to check trading_date
+                const dbRecord = await PreFetchedData.findOne({
+                    instrument_key: instrumentKey,
+                    timeframe: timeframe
+                }).lean();
+
+                if (dbRecord) {
+                    const tradingDate = new Date(dbRecord.trading_date);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0); // Start of today
+
+                    const lastBarTime = dbRecord.data_quality?.last_bar_time
+                        ? new Date(dbRecord.data_quality.last_bar_time)
+                        : new Date(candles[candles.length - 1].timestamp || candles[candles.length - 1][0]);
+
+                    console.log(`   ├─ Trading date: ${tradingDate.toISOString()}`);
+                    console.log(`   ├─ Last bar time: ${lastBarTime.toISOString()}`);
+                    console.log(`   ├─ Bars in DB: ${dbRecord.bars_count}`);
+                    console.log(`   └─ Updated at: ${new Date(dbRecord.updated_at).toISOString()}`);
+
+                    // Check if data is from previous day(s)
+                    if (tradingDate < today) {
+                        console.log(`   ⚠️  DB has data from ${tradingDate.toDateString()}, today is ${today.toDateString()}`);
+                        console.log(`   🔄 Fetching missing candles from API...`);
+
+                        // Calculate how many candles we need to fetch
+                        const now = new Date();
+                        const timeDiffMs = now - lastBarTime;
+                        const timeDiffHours = timeDiffMs / (1000 * 60 * 60);
+
+                        // Determine how many bars to fetch based on timeframe
+                        let barsToFetch = 0;
+                        if (timeframe === '15m') {
+                            barsToFetch = Math.ceil(timeDiffHours * 4); // 4 bars per hour
+                        } else if (timeframe === '1h') {
+                            barsToFetch = Math.ceil(timeDiffHours);
+                        } else if (timeframe === '1d') {
+                            barsToFetch = Math.ceil(timeDiffHours / 24);
+                        }
+
+                        console.log(`   ├─ Time gap: ${timeDiffHours.toFixed(1)} hours`);
+                        console.log(`   └─ Estimated bars to fetch: ${barsToFetch}`);
+
+                        if (barsToFetch > 0) {
+                            try {
+                                // Fetch missing candles from API
+                                const intervalMap = { '15m': '15minute', '1h': '60minute', '1d': 'day' };
+                                const upstoxInterval = intervalMap[timeframe] || timeframe;
+
+                                // Fetch from last bar time to now
+                                const apiCandles = await this.fetchCandlesFromAPI(
+                                    instrumentKey,
+                                    upstoxInterval,
+                                    lastBarTime.toISOString().split('T')[0], // from_date
+                                    now.toISOString().split('T')[0] // to_date
+                                );
+
+                                if (apiCandles && apiCandles.length > 0) {
+                                    console.log(`   ✅ Fetched ${apiCandles.length} new candles from API`);
+
+                                    // Merge: Keep all DB candles + append only NEW candles from API
+                                    const existingTimestamps = new Set(
+                                        candles.map(c => (c.timestamp || c[0]).toString())
+                                    );
+
+                                    const newCandles = apiCandles.filter(apiCandle => {
+                                        const apiTimestamp = (apiCandle.timestamp || apiCandle[0]).toString();
+                                        return !existingTimestamps.has(apiTimestamp);
+                                    });
+
+                                    console.log(`   ├─ New unique candles: ${newCandles.length}`);
+
+                                    if (newCandles.length > 0) {
+                                        // Append new candles to existing data
+                                        candles = [...candles, ...newCandles];
+
+                                        // Update DB with merged data
+                                        const mergedBarsCount = candles.length;
+                                        const newLastBarTime = new Date(candles[candles.length - 1].timestamp || candles[candles.length - 1][0]);
+
+                                        await PreFetchedData.updateOne(
+                                            { instrument_key: instrumentKey, timeframe: timeframe },
+                                            {
+                                                $set: {
+                                                    candle_data: candles,
+                                                    bars_count: mergedBarsCount,
+                                                    updated_at: new Date(),
+                                                    'data_quality.last_bar_time': newLastBarTime
+                                                }
+                                            }
+                                        );
+
+                                        console.log(`   ✅ DB updated: ${mergedBarsCount} total bars, last bar: ${newLastBarTime.toISOString()}`);
+                                    }
+                                } else {
+                                    console.log(`   ⚠️  No new candles from API (market closed or no data)`);
+                                }
+                            } catch (apiError) {
+                                console.error(`   ❌ Failed to fetch from API: ${apiError.message}`);
+                                console.log(`   ℹ️  Continuing with existing DB data`);
+                            }
+                        } else {
+                            console.log(`   ✅ DB data is fresh enough (within same day)`);
+                        }
+                    } else {
+                        console.log(`   ✅ DB data is from today, no incremental fetch needed`);
+                    }
+                } else {
+                    console.log(`   ⚠️  No DB record found for ${timeframe}, using data as-is`);
+                }
+
+                // Get latest candle (after potential merge)
+                const latestCandle = candles[candles.length - 1];
+                console.log(`✅ [TRIGGER ADAPTER] ${timeframe}: Using ${candles.length} candles`)
+
+                // Set current price from 1m timeframe
+                if (timeframe === '1m' && latestCandle) {
+                    marketData.current_price = latestCandle.close || latestCandle[4];
+                }
+
+                // Calculate indicators if we have enough data
+                let indicators = {};
+                if (candles.length >= 50) {
+                    indicators = calculateTechnicalIndicators(candles);
+                    console.log(`📊 [TRIGGER ADAPTER] ${timeframe}: ${Object.keys(indicators).length} indicators calculated`);
+                } else {
+                    console.log(`⚠️  [TRIGGER ADAPTER] ${timeframe}: Only ${candles.length} candles (need 50+ for indicators)`);
+                }
+
+                // Format latest candle
+                const formattedCandle = {
+                    timestamp: latestCandle.timestamp || latestCandle[0],
+                    open: latestCandle.open || latestCandle[1],
+                    high: latestCandle.high || latestCandle[2],
+                    low: latestCandle.low || latestCandle[3],
+                    close: latestCandle.close || latestCandle[4],
+                    volume: latestCandle.volume || latestCandle[5]
+                };
+
+                // Merge candle data with indicators
+                marketData.timeframes[timeframe] = { ...formattedCandle, ...indicators };
+                marketData.indicators[timeframe] = indicators;
+            }
+
+            // Fallback for current price
+            if (!marketData.current_price && Object.keys(marketData.timeframes).length > 0) {
+                const firstTimeframe = Object.values(marketData.timeframes)[0];
+                marketData.current_price = firstTimeframe.close;
+            }
+
+            console.log(`✅ [TRIGGER ADAPTER] Market data ready: ${Object.keys(marketData.timeframes).length} timeframes, Price: ₹${marketData.current_price}\n`);
+
+            return marketData;
+
+        } catch (error) {
+            console.error(`❌ [TRIGGER ADAPTER] Failed: ${error.message}`);
+            throw error;
+        }
     }
 }
 

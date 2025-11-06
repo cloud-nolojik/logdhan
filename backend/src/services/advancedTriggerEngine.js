@@ -87,10 +87,25 @@ class AdvancedTriggerEngine {
      */
     async checkTriggers(analysisId, strategy, marketData) {
         const sessionKey = `${analysisId}_${strategy.id}`;
-        
+
+        console.log(`\n${'◆'.repeat(80)}`);
+        console.log(`🎯 [ADVANCED ENGINE] checkTriggers() - START`);
+        console.log(`${'◆'.repeat(80)}`);
+        console.log(`📋 Engine Details:`);
+        console.log(`   ├─ Session Key: ${sessionKey}`);
+        console.log(`   ├─ Strategy ID: ${strategy.id}`);
+        console.log(`   ├─ Triggers Count: ${strategy.triggers?.length || 0}`);
+        console.log(`   └─ Market Data Timeframes: ${Object.keys(marketData).join(', ')}\n`);
+
         // Validate session
+        console.log(`🔍 [ENGINE STEP 1] Validating monitoring session...`);
         const sessionCheck = this.isSessionValid(analysisId, strategy.id);
+
         if (!sessionCheck.valid) {
+            console.log(`❌ [ENGINE STEP 1] Session INVALID`);
+            console.log(`   ├─ Reason: ${sessionCheck.reason}`);
+            console.log(`   └─ Action: cancel_monitoring\n`);
+            console.log(`${'◆'.repeat(80)}\n`);
             return {
                 success: false,
                 reason: sessionCheck.reason,
@@ -98,29 +113,67 @@ class AdvancedTriggerEngine {
             };
         }
 
+        console.log(`✅ [ENGINE STEP 1] Session valid`);
+        console.log(`   ├─ Current Session: ${sessionCheck.session.currentSession}/${sessionCheck.session.maxSessions}`);
+        console.log(`   ├─ Started At: ${sessionCheck.session.startedAt}`);
+        console.log(`   └─ Status: ${sessionCheck.session.isActive ? 'ACTIVE' : 'INACTIVE'}\n`);
+
         // Check invalidations first (can cancel monitoring)
+        console.log(`🔍 [ENGINE STEP 2] Checking invalidation conditions...`);
         const invalidationResult = await this.checkInvalidations(strategy, marketData, sessionKey);
+
         if (invalidationResult.action === 'cancel_entry' || invalidationResult.action === 'close_position') {
+            console.log(`❌ [ENGINE STEP 2] Invalidation triggered!`);
+            console.log(`   ├─ Action: ${invalidationResult.action}`);
+            console.log(`   └─ Reason: ${invalidationResult.reason}\n`);
+            console.log(`${'◆'.repeat(80)}\n`);
             return invalidationResult;
         }
 
+        console.log(`✅ [ENGINE STEP 2] No invalidations triggered\n`);
+
         // Check warnings
+        console.log(`🔍 [ENGINE STEP 3] Checking warning conditions...`);
         const warnings = await this.checkWarnings(strategy, marketData);
+        console.log(`✅ [ENGINE STEP 3] Warnings checked: ${warnings.length} active warnings\n`);
+
+        if (warnings.length > 0) {
+            warnings.forEach((w, idx) => {
+                console.log(`   ⚠️  Warning ${idx + 1}: [${w.severity}] ${w.code} - ${w.text}`);
+            });
+            console.log(``);
+        }
 
         // Check individual triggers
+        console.log(`🔍 [ENGINE STEP 4] Evaluating individual triggers...`);
+        console.log(`   └─ Total Triggers to Evaluate: ${strategy.triggers?.length || 0}\n`);
+
         const triggerResults = [];
         let allTriggersValid = true;
 
-        for (const trigger of strategy.triggers || []) {
+        for (const [index, trigger] of (strategy.triggers || []).entries()) {
+            console.log(`   🔹 Trigger ${index + 1}/${strategy.triggers.length}: ${trigger.id}`);
             const result = await this.evaluateTrigger(trigger, marketData, sessionKey);
             triggerResults.push(result);
-            
+
+            console.log(`      ├─ Satisfied: ${result.satisfied ? 'YES ✅' : 'NO ❌'}`);
+            console.log(`      ├─ Condition Met: ${result.conditionMet ? 'YES' : 'NO'}`);
+            console.log(`      ├─ Occurrences OK: ${result.occurrencesSatisfied ? 'YES' : 'NO'}`);
+            console.log(`      ├─ Bars Checked: ${result.barsChecked}/${result.maxBars}`);
+            console.log(`      └─ Expired: ${result.expired ? 'YES ❌' : 'NO ✅'}\n`);
+
             if (!result.satisfied) {
                 allTriggersValid = false;
             }
-            
+
             // Check if trigger has expired
             if (result.expired) {
+                console.log(`❌ [ENGINE STEP 4] Trigger ${trigger.id} EXPIRED!`);
+                console.log(`   ├─ Bars Checked: ${result.barsChecked}`);
+                console.log(`   ├─ Max Bars: ${trigger.expiry_bars}`);
+                console.log(`   └─ Action: cancel_monitoring\n`);
+                console.log(`${'◆'.repeat(80)}\n`);
+
                 this.expireSession(sessionKey, `Trigger ${trigger.id} expired`);
                 return {
                     success: false,
@@ -131,12 +184,26 @@ class AdvancedTriggerEngine {
             }
         }
 
+        console.log(`✅ [ENGINE STEP 4] All triggers evaluated`);
+        console.log(`   ├─ Total Triggers: ${triggerResults.length}`);
+        console.log(`   ├─ Satisfied: ${triggerResults.filter(t => t.satisfied).length}`);
+        console.log(`   ├─ Failed: ${triggerResults.filter(t => !t.satisfied).length}`);
+        console.log(`   └─ All Valid: ${allTriggersValid ? 'YES ✅' : 'NO ❌'}\n`);
+
+        const finalAction = allTriggersValid ? 'execute_order' : 'continue_monitoring';
+        console.log(`📊 [ENGINE FINAL] Returning result`);
+        console.log(`   ├─ Success: ${allTriggersValid ? 'YES ✅' : 'NO ❌'}`);
+        console.log(`   ├─ Action: ${finalAction}`);
+        console.log(`   ├─ Triggers: ${triggerResults.length}`);
+        console.log(`   └─ Warnings: ${warnings.length}\n`);
+        console.log(`${'◆'.repeat(80)}\n`);
+
         return {
             success: allTriggersValid,
             triggers: triggerResults,
             warnings: warnings,
             session: sessionCheck.session,
-            action: allTriggersValid ? 'execute_order' : 'continue_monitoring'
+            action: finalAction
         };
     }
 
@@ -432,7 +499,8 @@ class AdvancedTriggerEngine {
                 'ema20_1m': 'ema20',
                 'ema50_1h': 'ema50',
                 'ema50_15m': 'ema50',
-                'ema50_1m': 'ema50'
+                'ema50_1m': 'ema50',
+                'price': 'close'
             };
             
             const fallbackRef = fallbacks[reference.ref];
