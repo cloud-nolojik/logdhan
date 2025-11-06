@@ -7,12 +7,16 @@ import AnalysisSession from '../models/analysisSession.js';
 import MonitoringSubscription from '../models/monitoringSubscription.js';
 import { messagingService } from './messaging/messaging.service.js';
 import { User } from '../models/user.js';
+import batchManager from './batchManager.js';
 
 class AgendaMonitoringService {
     constructor() {
         this.agenda = null;
         this.isInitialized = false;
         this.activeJobs = new Map(); // Track active monitoring jobs
+        this.activeBatches = new Map(); // Track active batch jobs
+        this.batchPerformanceMetrics = new Map(); // Track batch performance
+        this.useBatchMode = true; // Enable hybrid batch architecture
     }
 
     async initialize() {
@@ -34,10 +38,10 @@ class AgendaMonitoringService {
                 defaultConcurrency: 5
             });
 
-            // Define the monitoring job
-            this.agenda.define('check-triggers', async (job) => {
-                const { analysisId, strategyId } = job.attrs.data;
-                await this.executeMonitoringCheck(analysisId, strategyId);
+            // Define the batch monitoring job (hybrid architecture)
+            this.agenda.define('check-triggers-batch', async (job) => {
+                const { batchId, analysisIds } = job.attrs.data;
+                await this.executeBatchMonitoringCheck(batchId, analysisIds);
             });
             
             // Define cleanup job for stale order processing locks
@@ -73,6 +77,18 @@ class AgendaMonitoringService {
 
             this.isInitialized = true;
             console.log('🚀 Agenda monitoring service initialized successfully');
+
+            // Initialize batch monitoring architecture
+            if (this.useBatchMode) {
+                // Schedule batch initialization after a short delay to ensure database is ready
+                setTimeout(async () => {
+                    try {
+                        await this.initializeBatchMonitoring();
+                    } catch (batchError) {
+                        console.error('❌ Error initializing batch monitoring during startup:', batchError);
+                    }
+                }, 3000);
+            }
 
             // Note: Job cleanup is now handled by MongoDB TTL indexes and Agenda's built-in cleanup mechanisms
 
@@ -610,15 +626,383 @@ class AgendaMonitoringService {
         }
     }
 
-    async startMonitoring(analysisId, strategyId, userId, frequency = { seconds: 60 }, stockSymbol = null, instrumentKey = null) {
+    /**
+     * NEW HYBRID BATCH ARCHITECTURE
+     * Execute monitoring check for multiple analyses in parallel
+     * Each analysis processes ALL strategies (S1, S2, S3, S4...)
+     */
+    async executeBatchMonitoringCheck(batchId, analysisIds) {
+        const batchStartTime = Date.now();
+        
+        try {
+            console.log(`\n${'='.repeat(120)}`);
+            console.log(`🚀 [BATCH MONITORING] Starting batch execution - ${batchId}`);
+            console.log(`${'='.repeat(120)}`);
+            console.log(`📋 Batch Details:`);
+            console.log(`   ├─ Batch ID: ${batchId}`);
+            console.log(`   ├─ Analyses Count: ${analysisIds.length}`);
+            console.log(`   ├─ Started At: ${new Date().toISOString()}`);
+            console.log(`   └─ Analyses: ${analysisIds.map(id => id.slice(-8)).join(', ')}`);
+            console.log(`${'='.repeat(120)}\n`);
+
+            // Track batch performance
+            const batchMetrics = {
+                batchId,
+                analysisIds,
+                startTime: batchStartTime,
+                successCount: 0,
+                errorCount: 0,
+                totalStrategiesProcessed: 0,
+                errors: []
+            };
+
+            // Process all analyses in parallel with Promise.allSettled for fault isolation
+            const analysisPromises = analysisIds.map(async (analysisId) => {
+                try {
+                    const result = await this.processAnalysisAllStrategies(analysisId, batchId);
+                    batchMetrics.successCount++;
+                    batchMetrics.totalStrategiesProcessed += result.strategiesProcessed;
+                    return { analysisId, success: true, result };
+                } catch (error) {
+                    batchMetrics.errorCount++;
+                    batchMetrics.errors.push({ analysisId, error: error.message });
+                    console.error(`❌ [BATCH ${batchId}] Error processing analysis ${analysisId}:`, error.message);
+                    return { analysisId, success: false, error: error.message };
+                }
+            });
+
+            const results = await Promise.allSettled(analysisPromises);
+            
+            // Calculate batch performance metrics
+            const processingTime = Date.now() - batchStartTime;
+            const successRate = (batchMetrics.successCount / analysisIds.length) * 100;
+            
+            console.log(`\n${'='.repeat(120)}`);
+            console.log(`✅ [BATCH MONITORING] Batch ${batchId} completed`);
+            console.log(`${'='.repeat(120)}`);
+            console.log(`📊 Batch Results:`);
+            console.log(`   ├─ Processing Time: ${(processingTime / 1000).toFixed(2)}s`);
+            console.log(`   ├─ Analyses Processed: ${analysisIds.length}`);
+            console.log(`   ├─ Success Count: ${batchMetrics.successCount}`);
+            console.log(`   ├─ Error Count: ${batchMetrics.errorCount}`);
+            console.log(`   ├─ Success Rate: ${successRate.toFixed(1)}%`);
+            console.log(`   ├─ Total Strategies: ${batchMetrics.totalStrategiesProcessed}`);
+            console.log(`   └─ Avg Time per Analysis: ${(processingTime / analysisIds.length).toFixed(0)}ms`);
+            
+            if (batchMetrics.errors.length > 0) {
+                console.log(`\n⚠️ [BATCH ${batchId}] Errors encountered:`);
+                batchMetrics.errors.forEach((err, idx) => {
+                    console.log(`   ${idx + 1}. Analysis ${err.analysisId.slice(-8)}: ${err.error}`);
+                });
+            }
+            console.log(`${'='.repeat(120)}\n`);
+
+            // Store batch performance metrics for optimization
+            this.batchPerformanceMetrics.set(batchId, {
+                ...batchMetrics,
+                processingTime,
+                successRate,
+                completedAt: new Date()
+            });
+
+            // Update batch manager configuration based on performance
+            const avgProcessingTime = processingTime;
+            const errorRate = batchMetrics.errorCount / analysisIds.length;
+            batchManager.updateBatchConfiguration({
+                avgProcessingTime,
+                errorRate,
+                memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024 // MB
+            });
+
+            return {
+                success: true,
+                batchId,
+                processingTime,
+                analysesProcessed: analysisIds.length,
+                successCount: batchMetrics.successCount,
+                errorCount: batchMetrics.errorCount,
+                strategiesProcessed: batchMetrics.totalStrategiesProcessed
+            };
+
+        } catch (error) {
+            console.error(`❌ [BATCH ${batchId}] Critical batch error:`, error);
+            return {
+                success: false,
+                batchId,
+                error: error.message,
+                processingTime: Date.now() - batchStartTime
+            };
+        }
+    }
+
+    /**
+     * Process a single analysis with ALL its strategies in parallel
+     * This ensures we handle S1, S2, S3, S4... not just S1
+     */
+    async processAnalysisAllStrategies(analysisId, batchId = 'unknown') {
+        const analysisStartTime = Date.now();
+        
+        try {
+            console.log(`🔍 [BATCH ${batchId}] Processing analysis ${analysisId.slice(-8)} with ALL strategies...`);
+
+            // Get analysis with all strategies
+            const analysis = await StockAnalysis.findById(analysisId);
+            if (!analysis) {
+                console.log(`❌ [BATCH ${batchId}] Analysis ${analysisId.slice(-8)} not found - skipping`);
+                return { strategiesProcessed: 0 };
+            }
+
+            const strategies = analysis.analysis_data?.strategies || [];
+            if (strategies.length === 0) {
+                console.log(`⚠️ [BATCH ${batchId}] Analysis ${analysisId.slice(-8)} (${analysis.stock_symbol}) has no strategies - skipping`);
+                return { strategiesProcessed: 0 };
+            }
+
+            console.log(`📈 [BATCH ${batchId}] ${analysis.stock_symbol} (${analysisId.slice(-8)}): Processing ${strategies.length} strategies...`);
+
+            // Process ALL strategies in parallel (not just S1!)
+            const strategyPromises = strategies.map(async (strategy) => {
+                try {
+                    // Check if this strategy has active monitoring subscriptions
+                    const subscription = await MonitoringSubscription.findOne({
+                        analysis_id: analysisId,
+                        strategy_id: strategy.id,
+                        monitoring_status: 'active',
+                        expires_at: { $gt: new Date() }
+                    });
+
+                    if (!subscription) {
+                        console.log(`🔕 [BATCH ${batchId}] No active subscription for ${analysis.stock_symbol} strategy ${strategy.id} - skipping`);
+                        return { strategy: strategy.id, skipped: true };
+                    }
+
+                    console.log(`🎯 [BATCH ${batchId}] Checking ${analysis.stock_symbol} strategy ${strategy.id} (${subscription.subscribed_users.length} users subscribed)`);
+                    
+                    // Execute the actual monitoring check
+                    await this.executeMonitoringCheck(analysisId, strategy.id);
+                    
+                    return { strategy: strategy.id, success: true };
+                } catch (strategyError) {
+                    console.error(`❌ [BATCH ${batchId}] Error processing ${analysis.stock_symbol} strategy ${strategy.id}:`, strategyError.message);
+                    return { strategy: strategy.id, success: false, error: strategyError.message };
+                }
+            });
+
+            const strategyResults = await Promise.allSettled(strategyPromises);
+            
+            const processedResults = strategyResults.map(result => 
+                result.status === 'fulfilled' ? result.value : { success: false, error: result.reason }
+            );
+
+            const successfulStrategies = processedResults.filter(r => r.success).length;
+            const skippedStrategies = processedResults.filter(r => r.skipped).length;
+            const failedStrategies = processedResults.filter(r => !r.success && !r.skipped).length;
+
+            const processingTime = Date.now() - analysisStartTime;
+            console.log(`✅ [BATCH ${batchId}] ${analysis.stock_symbol} completed: ${successfulStrategies} successful, ${skippedStrategies} skipped, ${failedStrategies} failed (${processingTime}ms)`);
+
+            return {
+                analysisId,
+                stock_symbol: analysis.stock_symbol,
+                strategiesProcessed: strategies.length,
+                successfulStrategies,
+                skippedStrategies,
+                failedStrategies,
+                processingTime
+            };
+
+        } catch (error) {
+            console.error(`❌ [BATCH ${batchId}] Error processing analysis ${analysisId}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Initialize and manage batch monitoring jobs
+     * Creates optimal batches and schedules them with Agenda
+     */
+    async initializeBatchMonitoring() {
+        try {
+            if (!this.useBatchMode) {
+                console.log('📝 [BATCH MONITORING] Batch mode disabled - using individual jobs');
+                return;
+            }
+
+            console.log('🚀 [BATCH MONITORING] Initializing hybrid batch architecture...');
+
+            // Get optimal batches from BatchManager
+            const batches = await batchManager.createOptimalBatches();
+            
+            if (batches.length === 0) {
+                console.log('📭 [BATCH MONITORING] No active subscriptions - no batches to create');
+                return;
+            }
+
+            // Cancel any existing batch jobs
+            await this.agenda.cancel({ name: 'check-triggers-batch' });
+            console.log('🧹 [BATCH MONITORING] Cancelled existing batch jobs');
+
+            // Create new batch jobs
+            let createdJobs = 0;
+            for (const batch of batches) {
+                try {
+                    // Determine cron expression based on fastest frequency needed
+                    // DEFAULT: Every 15 minutes for production monitoring
+                    let cronExpression;
+                    if (batch.max_frequency_seconds <= 60) {
+                        cronExpression = '*/15 * * * *'; // Every 15 minutes (changed from 1 minute)
+                    } else if (batch.max_frequency_seconds <= 300) {
+                        cronExpression = '*/15 * * * *'; // Every 15 minutes 
+                    } else if (batch.max_frequency_seconds <= 900) {
+                        cronExpression = '*/15 * * * *'; // Every 15 minutes
+                    } else {
+                        cronExpression = '*/30 * * * *'; // Every 30 minutes for slower frequencies
+                    }
+
+                    console.log(`📅 [BATCH MONITORING] Creating batch job ${batch.batchId}: ${batch.analysisIds.length} analyses, ${cronExpression}`);
+
+                    // Schedule the batch job
+                    await this.agenda.every(cronExpression, 'check-triggers-batch', {
+                        batchId: batch.batchId,
+                        analysisIds: batch.analysisIds,
+                        createdAt: new Date()
+                    }, {
+                        _id: `batch-job-${batch.batchId}`,
+                        timezone: 'Asia/Kolkata'
+                    });
+
+                    // Track in local map
+                    this.activeBatches.set(batch.batchId, {
+                        ...batch,
+                        jobId: `batch-job-${batch.batchId}`,
+                        status: 'active',
+                        createdAt: new Date()
+                    });
+
+                    createdJobs++;
+                } catch (jobError) {
+                    console.error(`❌ [BATCH MONITORING] Error creating batch job ${batch.batchId}:`, jobError);
+                }
+            }
+
+            console.log(`✅ [BATCH MONITORING] Successfully created ${createdJobs} batch jobs`);
+            console.log(`📊 [BATCH MONITORING] Total analyses covered: ${batches.reduce((sum, b) => sum + b.analysisIds.length, 0)}`);
+            console.log(`📊 [BATCH MONITORING] Estimated strategies: ${batches.reduce((sum, b) => sum + b.estimated_total_strategies, 0)}`);
+            
+            return {
+                success: true,
+                batchesCreated: createdJobs,
+                totalAnalysesCovered: batches.reduce((sum, b) => sum + b.analysisIds.length, 0)
+            };
+
+        } catch (error) {
+            console.error('❌ [BATCH MONITORING] Error initializing batch monitoring:', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Refresh batch configuration - call this when monitoring subscriptions change
+     */
+    async refreshBatchConfiguration() {
+        console.log('🔄 [BATCH MONITORING] Refreshing batch configuration...');
+        return await this.initializeBatchMonitoring();
+    }
+
+    /**
+     * Get batch monitoring statistics and performance metrics
+     */
+    async getBatchMonitoringStats() {
+        try {
+            const batchStats = await batchManager.getBatchStatistics();
+            const performanceMetrics = Array.from(this.batchPerformanceMetrics.values());
+            
+            return {
+                batch_mode_enabled: this.useBatchMode,
+                batch_statistics: batchStats,
+                active_batches: this.activeBatches.size,
+                performance_metrics: performanceMetrics.slice(-10), // Last 10 batch executions
+                performance_summary: {
+                    avg_processing_time: performanceMetrics.length > 0 ? 
+                        Math.round(performanceMetrics.reduce((sum, m) => sum + m.processingTime, 0) / performanceMetrics.length) : 0,
+                    avg_success_rate: performanceMetrics.length > 0 ? 
+                        Math.round(performanceMetrics.reduce((sum, m) => sum + m.successRate, 0) / performanceMetrics.length) : 0,
+                    total_batches_executed: performanceMetrics.length
+                }
+            };
+        } catch (error) {
+            console.error('❌ [BATCH MONITORING] Error getting batch stats:', error);
+            return {
+                batch_mode_enabled: this.useBatchMode,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Switch between batch mode and individual job mode
+     */
+    async setBatchMode(enabled) {
+        try {
+            console.log(`🔄 [BATCH MONITORING] Switching batch mode: ${enabled ? 'ON' : 'OFF'}`);
+            
+            if (enabled && !this.useBatchMode) {
+                // Switching to batch mode
+                this.useBatchMode = true;
+                
+                // Cancel existing individual jobs
+                await this.agenda.cancel({ name: 'check-triggers' });
+                console.log('🧹 [BATCH MONITORING] Cancelled individual monitoring jobs');
+                
+                // Initialize batch monitoring
+                await this.initializeBatchMonitoring();
+                
+            } else if (!enabled && this.useBatchMode) {
+                // Switching to individual mode
+                this.useBatchMode = false;
+                
+                // Cancel batch jobs
+                await this.agenda.cancel({ name: 'check-triggers-batch' });
+                console.log('🧹 [BATCH MONITORING] Cancelled batch monitoring jobs');
+                
+                this.activeBatches.clear();
+                
+                // Note: Individual jobs will be recreated when users start new monitoring
+            }
+            
+            return {
+                success: true,
+                batch_mode_enabled: this.useBatchMode,
+                message: `Batch mode ${enabled ? 'enabled' : 'disabled'} successfully`
+            };
+            
+        } catch (error) {
+            console.error(`❌ [BATCH MONITORING] Error switching batch mode:`, error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    async startMonitoring(analysisId, strategyId, userId, frequency = { seconds: 900 }, stockSymbol = null, instrumentKey = null) {
         try {
             if (!this.isInitialized) {
                 await this.initialize();
             }
 
+            // Force batch mode - no more individual jobs
+            if (!this.useBatchMode) {
+                console.log(`🔄 [MONITORING] Enabling batch mode for optimal performance`);
+                this.useBatchMode = true;
+            }
+
             const jobId = `monitor_${analysisId}_${strategyId}`;
 
-            console.log(`🚀 Starting monitoring for ${jobId} with ${frequency.seconds}s frequency`);
+            console.log(`🚀 [BATCH MODE] Starting monitoring for ${jobId} - will be processed in optimal batches every 15 minutes`);
             console.log(`📅 OPTIMAL: Start monitoring after 4:30 PM when fresh analysis with EOD data is available`);
 
             // Check if user can start monitoring (not already met conditions recently)
@@ -666,69 +1050,31 @@ class AgendaMonitoringService {
             console.log(`   ├─ Subscribed Users: ${subscription.subscribed_users.length}`);
             console.log(`   └─ Expires At: ${subscription.expires_at.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
 
-            // Check if job already exists (shared monitoring)
-            const existingJobs = await this.agenda.jobs({ name: 'check-triggers', 'data.analysisId': analysisId, 'data.strategyId': strategyId });
+            // 🆕 BATCH ARCHITECTURE: No individual jobs - everything goes through batch processing
+            console.log(`📦 [BATCH MODE] Subscription created - monitoring will be handled by batch jobs every 15 minutes`);
 
-            if (existingJobs.length > 0) {
-                console.log(`♻️ Job already exists - user ${userId} joined existing monitoring job`);
-                return {
-                    success: true,
-                    jobId,
-                    frequency,
-                    message: `Monitoring started for strategy ${strategyId} (joined existing job)`,
-                    subscription_id: subscription._id,
-                    subscribed_users_count: subscription.subscribed_users.length
-                };
+            // 🆕 BATCH ARCHITECTURE: Trigger batch refresh when new monitoring starts
+            if (this.useBatchMode) {
+                // Schedule batch refresh in background (non-blocking)
+                setTimeout(async () => {
+                    try {
+                        console.log(`🔄 [BATCH] Refreshing batches due to new monitoring: ${jobId}`);
+                        await this.refreshBatchConfiguration();
+                    } catch (batchError) {
+                        console.error('❌ [BATCH] Error refreshing batch configuration:', batchError);
+                    }
+                }, 5000); // 5-second delay to allow subscription to settle
             }
-
-            // Create new job if it doesn't exist
-            // Create cron expression based on frequency - market timing is checked inside executeMonitoringCheck
-            let cronExpression;
-            if (frequency.seconds === 60) {
-                cronExpression = '*/1 * * * *'; // Every minute
-            } else if (frequency.seconds === 300) {
-                cronExpression = '*/5 * * * *'; // Every 5 minutes
-            } else if (frequency.seconds === 900) {
-                cronExpression = '*/15 * * * *'; // Every 15 minutes
-            } else if (frequency.seconds === 3600) {
-                cronExpression = '0 * * * *'; // Every hour
-            } else {
-                // For custom intervals, use every minute as base
-                cronExpression = '*/1 * * * *';
-            }
-
-            console.log(`📅 Creating new job with cron: ${cronExpression} (${frequency.seconds}s frequency)`);
-
-            // Schedule the recurring job (NO userId in job data - use subscription instead)
-            const job = await this.agenda.every(cronExpression, 'check-triggers', {
-                analysisId,
-                strategyId,
-                frequency
-            }, {
-                _id: jobId,
-                timezone: 'Asia/Kolkata'
-            });
-
-            // Track in our local map
-            this.activeJobs.set(`${analysisId}_${strategyId}`, {
-                jobId,
-                analysisId,
-                strategyId,
-                frequency,
-                startedAt: new Date(),
-                status: 'active',
-                subscribedUsersCount: subscription.subscribed_users.length
-            });
-
-            console.log(`✅ Monitoring job created successfully for ${jobId}`);
 
             return {
                 success: true,
-                jobId,
-                frequency,
-                message: `Monitoring started for strategy ${strategyId}`,
+                jobId: `batch-processing-${analysisId}_${strategyId}`,
+                frequency: { seconds: 900 }, // 15 minutes
+                message: `🎯 Smart batch monitoring activated for strategy ${strategyId}! We'll check every 15 minutes for optimal performance.`,
                 subscription_id: subscription._id,
-                subscribed_users_count: subscription.subscribed_users.length
+                subscribed_users_count: subscription.subscribed_users.length,
+                batch_mode: true,
+                monitoring_frequency: '15 minutes'
             };
 
         } catch (error) {
@@ -760,17 +1106,17 @@ class AgendaMonitoringService {
                 if (subscription) {
                     if (userId) {
                         // Remove specific user from subscription
-                        await subscription.removeUser(userId);
-                        console.log(`✅ Removed user ${userId} from subscription ${subscription._id}`);
-
-                        // If no users left, subscription is auto-marked as cancelled by removeUser()
-                        if (subscription.subscribed_users.length === 0) {
-                            console.log(`🗑️ No users left in subscription ${subscription._id}, marked as cancelled`);
+                        const result = await subscription.removeUser(userId);
+                        if (result === null) {
+                            console.log(`🗑️ No users left - subscription document deleted for ${analysisId}_${strategyId}`);
+                        } else {
+                            console.log(`✅ Removed user ${userId} from subscription ${subscription._id}`);
                         }
                     } else {
-                        // Stop monitoring for all users
-                        await subscription.stopMonitoring('user_cancelled');
-                        console.log(`✅ Updated subscription ${subscription._id} status to cancelled`);
+                        // Stop monitoring for all users - delete the subscription entirely
+                        console.log(`🗑️ Deleting subscription document ${subscription._id} for all users`);
+                        await subscription.deleteOne();
+                        console.log(`✅ Subscription document deleted for ${analysisId}_${strategyId}`);
                     }
                 }
             } else {
@@ -781,13 +1127,17 @@ class AgendaMonitoringService {
 
                 for (const subscription of subscriptions) {
                     if (userId) {
-                        await subscription.removeUser(userId);
+                        const result = await subscription.removeUser(userId);
+                        if (result === null) {
+                            console.log(`🗑️ No users left - subscription document deleted for ${subscription._id}`);
+                        }
                     } else {
-                        await subscription.stopMonitoring('user_cancelled');
+                        console.log(`🗑️ Deleting subscription document ${subscription._id} for all users`);
+                        await subscription.deleteOne();
                     }
                 }
 
-                console.log(`✅ Updated ${subscriptions.length} subscription(s) to cancelled`);
+                console.log(`✅ Processed ${subscriptions.length} subscription(s) - removed/deleted as appropriate`);
             }
 
             // Cancel jobs in Agenda
@@ -895,6 +1245,30 @@ class AgendaMonitoringService {
                 const isExpired = subscription.expires_at <= new Date();
                 const isActive = subscription.monitoring_status === 'active' && !isExpired;
 
+                // Check if Agenda job is paused
+                let isPaused = false;
+                let pausedReason = null;
+                if (isActive) {
+                    try {
+                        const jobs = await this.agenda.jobs({
+                            name: 'check-triggers',
+                            'data.analysisId': analysisId,
+                            'data.strategyId': strategyId
+                        });
+                        if (jobs.length > 0) {
+                            const job = jobs[0];
+                            isPaused = job.attrs.disabled === true;
+                            if (isPaused) {
+                                // Check local tracking for pause reason
+                                const localJob = this.activeJobs.get(`${analysisId}_${strategyId}`);
+                                pausedReason = localJob?.pauseReason || 'manual';
+                            }
+                        }
+                    } catch (jobError) {
+                        console.error('Error checking job pause status:', jobError);
+                    }
+                }
+
                 // Map backend status to app state
                 const appState = this.mapSubscriptionStateToAppState(
                     subscription.monitoring_status,
@@ -911,6 +1285,8 @@ class AgendaMonitoringService {
                     message = 'Monitoring stopped by user';
                 } else if (subscription.monitoring_status === 'invalidated') {
                     message = 'Setup invalidated';
+                } else if (isPaused) {
+                    message = `⏸️ Monitoring paused (${pausedReason})`;
                 } else if (isActive && isUserSubscribed) {
                     message = '👁️ AI is watching the market';
                 } else if (isActive && !isUserSubscribed) {
@@ -920,7 +1296,7 @@ class AgendaMonitoringService {
                 }
 
                 return {
-                    isMonitoring: isActive && isUserSubscribed,
+                    isMonitoring: isActive && isUserSubscribed && !isPaused,
                     state: appState,
                     subscription_id: subscription._id,
                     subscribed_users_count: subscription.subscribed_users.length,
@@ -930,8 +1306,8 @@ class AgendaMonitoringService {
                     expires_at: subscription.expires_at,
                     jobId: subscription.job_id,
                     startedAt: userSubscriptionData?.subscribed_at || subscription.createdAt,
-                    isPaused: false, // We don't have pause functionality in current implementation
-                    pausedReason: null,
+                    isPaused: isPaused,
+                    pausedReason: pausedReason,
                     message
                 };
 

@@ -197,12 +197,13 @@ router.post('/start', authenticateToken, async (req, res) => {
         console.log(`   ├─ Current Price: ₹${triggerCheck.data?.current_price || 'N/A'}`);
         console.log(`   └─ Should Monitor: ${triggerCheck.data?.should_monitor !== false ? 'YES' : 'NO'}\n`);
 
-        // If triggers are already met, suggest immediate order placement
-        if (!triggerCheck.triggersConditionsMet) {
+        // If triggers are already met, return error with user-friendly message
+        if (triggerCheck.triggersConditionsMet) {
             // During market hours, this is more critical
             if (isMarketHours) {
                 return res.status(200).json({
-                    success: true,
+                    success: false,
+                    error: 'conditions_already_met',
                     message: 'Entry conditions already met! Price has reached your trigger point.',
                     data: {
                         triggers_met: true,
@@ -210,25 +211,34 @@ router.post('/start', authenticateToken, async (req, res) => {
                         triggers: triggerCheck.data.triggers,
                         market_status: 'open',
                         suggestion: 'Place order immediately or wait for price to come back',
+                        conditions_met_at: new Date().toISOString(),
                         user_message: {
                             title: '🎯 Entry Point Reached!',
-                            description: `The conditions for entry have already been met. Current price: ₹${triggerCheck.data.current_price}`,
+                            description: `Entry conditions were already met. Current price: ₹${triggerCheck.data.current_price}`,
                             action_button: 'Place Order Now',
                             skip_button: 'Wait for Next Opportunity'
                         }
                     }
                 });
             } else {
-                // Outside market hours, we can still start monitoring
+                // Outside market hours - still return error since monitoring won't start
                 return res.status(200).json({
-                    success: true,
-                    message: 'Triggers conditions met. Will place order when market opens.',
+                    success: false,
+                    error: 'conditions_already_met',
+                    message: 'Entry conditions already met. Order will be placed when market opens.',
                     data: {
                         triggers_met: true,
                         current_price: triggerCheck.data.current_price,
                         triggers: triggerCheck.data.triggers,
                         market_status: 'closed',
-                        suggestion: 'Monitoring will execute order at market open if conditions still valid'
+                        suggestion: 'Order will be placed automatically when market opens',
+                        conditions_met_at: new Date().toISOString(),
+                        user_message: {
+                            title: '⚠️ Conditions Already Met',
+                            description: 'Entry conditions were already satisfied. Order will be placed when market opens.',
+                            action_button: 'Check Order Status',
+                            skip_button: 'Generate Fresh Analysis'
+                        }
                     }
                 });
             }
@@ -953,6 +963,166 @@ router.post('/cleanup-stale-locks', authenticateToken, async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to cleanup stale locks',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * NEW BATCH MONITORING ENDPOINTS
+ */
+
+/**
+ * @route GET /api/monitoring/batch-stats
+ * @desc Get batch monitoring statistics and performance metrics
+ * @access Private (Admin recommended)
+ */
+router.get('/batch-stats', authenticateToken, async (req, res) => {
+    try {
+        console.log(`📊 Batch monitoring stats requested by user ${req.user.id}`);
+        
+        const stats = await agendaMonitoringService.getBatchMonitoringStats();
+        
+        res.json({
+            success: true,
+            message: 'Batch monitoring statistics retrieved successfully',
+            data: stats,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('❌ Failed to get batch monitoring stats:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get batch monitoring statistics',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route POST /api/monitoring/batch-refresh
+ * @desc Manually refresh batch configuration
+ * @access Private (Admin recommended)
+ */
+router.post('/batch-refresh', authenticateToken, async (req, res) => {
+    try {
+        console.log(`🔄 Manual batch refresh triggered by user ${req.user.id}`);
+        
+        const result = await agendaMonitoringService.refreshBatchConfiguration();
+        
+        res.json({
+            success: true,
+            message: 'Batch configuration refreshed successfully',
+            data: result,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('❌ Manual batch refresh failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to refresh batch configuration',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route POST /api/monitoring/batch-mode
+ * @desc Enable or disable batch monitoring mode
+ * @access Private (Admin only)
+ */
+router.post('/batch-mode', authenticateToken, async (req, res) => {
+    try {
+        const { enabled } = req.body;
+        
+        if (typeof enabled !== 'boolean') {
+            return res.status(400).json({
+                success: false,
+                error: 'invalid_request',
+                message: 'enabled parameter must be a boolean'
+            });
+        }
+        
+        console.log(`⚙️ Batch mode switch requested by user ${req.user.id}: ${enabled ? 'ENABLE' : 'DISABLE'}`);
+        
+        const result = await agendaMonitoringService.setBatchMode(enabled);
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: result.message,
+                data: {
+                    batch_mode_enabled: result.batch_mode_enabled,
+                    timestamp: new Date().toISOString()
+                }
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: 'batch_mode_switch_failed',
+                message: result.error
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Batch mode switch failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to switch batch mode',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route GET /api/monitoring/architecture-info
+ * @desc Get current monitoring architecture information
+ * @access Private
+ */
+router.get('/architecture-info', authenticateToken, async (req, res) => {
+    try {
+        const stats = await agendaMonitoringService.getBatchMonitoringStats();
+        const activeJobs = await agendaMonitoringService.getActiveJobs();
+        
+        // Get job distribution
+        const individualJobs = activeJobs.filter(job => job.jobId && job.jobId.startsWith('monitor_'));
+        const batchJobs = activeJobs.filter(job => job.jobId && job.jobId.startsWith('batch-job-'));
+        
+        res.json({
+            success: true,
+            data: {
+                current_architecture: stats.batch_mode_enabled ? 'hybrid_batch' : 'individual_jobs',
+                batch_mode_enabled: stats.batch_mode_enabled,
+                individual_jobs_count: individualJobs.length,
+                batch_jobs_count: batchJobs.length,
+                total_active_batches: stats.active_batches || 0,
+                performance_summary: stats.performance_summary,
+                architecture_comparison: {
+                    individual_jobs: {
+                        description: 'One job per analysis+strategy',
+                        pros: ['Simple management', 'Fine-grained control'],
+                        cons: ['Job explosion with scale', 'Resource intensive']
+                    },
+                    hybrid_batch: {
+                        description: 'Batched jobs processing multiple analyses with ALL strategies',
+                        pros: ['Scalable to 1000+ stocks', 'Handles ALL strategies', 'Resource efficient'],
+                        cons: ['More complex management', 'Batch-level fault isolation']
+                    }
+                },
+                recommendation: stats.batch_mode_enabled ? 
+                    '✅ Currently using optimal hybrid batch architecture' : 
+                    '⚠️ Consider enabling batch mode for better scalability'
+            },
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('❌ Failed to get architecture info:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get architecture information',
             message: error.message
         });
     }

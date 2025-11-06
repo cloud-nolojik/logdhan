@@ -415,11 +415,11 @@ monitoringSubscriptionSchema.methods.removeUser = async function(userId) {
         sub => sub.user_id.toString() !== userId.toString()
     );
 
-    // If no users left, mark as cancelled
+    // If no users left, remove the entire subscription document
     if (this.subscribed_users.length === 0) {
-        this.monitoring_status = 'cancelled';
-        this.stopped_at = new Date();
-        this.stop_reason = 'user_cancelled';
+        console.log(`🗑️ [SUBSCRIPTION] No users left - removing subscription document ${this._id}`);
+        await this.deleteOne();
+        return null; // Document deleted
     }
 
     return await this.save();
