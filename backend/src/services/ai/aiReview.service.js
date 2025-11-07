@@ -1526,11 +1526,11 @@ async buildCandleUrls(tradeData) {
   const { instrument_key, term } = tradeData;
   const t = (term || '').toLowerCase();
 
-  // SMART DATA SELECTION: Current day intraday data after 4:00 PM, historical data before
+  // SMART DATA SELECTION: Current day intraday data after 5.00 PM, historical data before
   const now = this.getCurrentIST('date');         // IST Date object
   const { hours, minutes } = this.getCurrentIST('object');
   const currentTimeMinutes = hours * 60 + minutes;
-  const ANALYSIS_ALLOWED_AFTER = 16 * 60; // 4:00 PM (16:00)
+  const ANALYSIS_ALLOWED_AFTER = 16 * 60; // 5.00 PM (16:00)
   
   // Determine if we should use current day intraday data or historical data
   const isAfter4PM = currentTimeMinutes >= ANALYSIS_ALLOWED_AFTER;
@@ -1544,14 +1544,14 @@ async buildCandleUrls(tradeData) {
     todayISO = this.isoIST(now);                    // Current day
     yesterdayISO = this.isoIST(this.addDays(now, -1));
     live = true;                                    // Enable intraday endpoints
-    console.log(`📊 [CANDLE URLs] Using CURRENT DAY intraday data (after 4:00 PM): ${todayISO}`);
+    console.log(`📊 [CANDLE URLs] Using CURRENT DAY intraday data (after 5.00 PM): ${todayISO}`);
   } else {
-    // Use historical data only (for morning runs or before 4:00 PM)
+    // Use historical data only (for morning runs or before 5.00 PM)
     const previousDay = this.addDays(now, -1);     // Force previous day
     todayISO = this.isoIST(previousDay);            // Use previous day as "today"
     yesterdayISO = this.isoIST(this.addDays(previousDay, -1));
     live = false;                                   // Force not live to avoid intraday endpoints
-    console.log(`📊 [CANDLE URLs] Using HISTORICAL data only (before 4:00 PM or non-business day): ${todayISO}`);
+    console.log(`📊 [CANDLE URLs] Using HISTORICAL data only (before 5.00 PM or non-business day): ${todayISO}`);
   }
   
   const frames = this.termToFrames[t] || [];
@@ -1575,7 +1575,7 @@ async buildCandleUrls(tradeData) {
 
       if (target > 0) {
         if (useCurrentDayData && (f === '5m' || f === '15m' || f === '1h')) {
-          // Use V3 Intraday API for current day data (after 4:00 PM)
+          // Use V3 Intraday API for current day data (after 5.00 PM)
           const intradayUrl = this.buildIntradayV3Url(instrument_key, f);
           
           endpoints.push({
@@ -1605,7 +1605,7 @@ async buildCandleUrls(tradeData) {
             console.log(`📊 [HISTORICAL CONTEXT] ${f}: ${historicalUrl}`);
           }
         } else {
-          // Use Historical API (before 4:00 PM, non-business day, or daily data)
+          // Use Historical API (before 5.00 PM, non-business day, or daily data)
           if (perDay > 0) {
             const businessDaysNeeded = Math.ceil(target / perDay);
             const referenceDate = useCurrentDayData ? yesterdayISO : todayISO;
@@ -1940,16 +1940,36 @@ getTradingMinutesElapsedIST() {
 
   routeToTradingAgent(tradeData, candleSets, newsData) {
     const t = (tradeData.term || '').toLowerCase();
-  
+
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`🎯 [ROUTE TO AGENT] Starting data routing for term: ${t}`);
+    console.log(`${'='.repeat(80)}`);
+
     // candleSets is now clean: { '15m': [candles], '1h': [candles], '1d': [candles] }
-    console.log(`🔍 [ROUTE DEBUG] candleSets type: ${typeof candleSets}, value:`, candleSets);
+    console.log(`\n🔍 [ROUTE INPUT] candleSets received:`);
+    console.log(`   ├─ Type: ${typeof candleSets}`);
+    console.log(`   ├─ Is null/undefined: ${candleSets == null}`);
+    console.log(`   ├─ Keys present: ${candleSets ? Object.keys(candleSets).join(', ') : 'none'}`);
+
+    if (candleSets) {
+      Object.keys(candleSets).forEach(key => {
+        const value = candleSets[key];
+        console.log(`   ├─ [${key}] type: ${Array.isArray(value) ? 'array' : typeof value}, length: ${value?.length || 0}`);
+        if (Array.isArray(value) && value.length > 0) {
+          console.log(`   │   └─ Sample[0]:`, value[0]);
+        }
+      });
+    }
+
     const timeframeData = candleSets || {};
-    console.log(`🔍 [ROUTE DEBUG] timeframeData keys: ${Object.keys(timeframeData)}`);
-    
+    console.log(`\n📋 [ROUTE] timeframeData keys after assignment: ${Object.keys(timeframeData).join(', ')}`);
+
     // Create labeled data from our clean timeframe structure
+    console.log(`\n🏗️  [ROUTE] Creating labeledData structure...`);
     const labeledData = Object.keys(timeframeData).map((timeframe) => {
       const candles = timeframeData[timeframe] || [];
-      
+      console.log(`   ├─ Processing ${timeframe}: ${candles.length} candles`);
+
       return {
         frame: timeframe,
         candles: candles,  // Direct candle array
@@ -1960,6 +1980,8 @@ getTradingMinutesElapsedIST() {
         }
       };
     });
+
+    console.log(`\n✅ [ROUTE] Created labeledData with ${labeledData.length} items`);
 
     // Filter out endpoints with no valid candle data for debugging
     const validData = labeledData.filter(item => 
@@ -2051,14 +2073,18 @@ async runIntradayAgent(labeledData, tradeData = {}, newsData = null) {
     if (!candles.length) return null;
 
     // Convert to our standard format and sort (standardize timestamp -> time)
-    const rawCandles = candles.map(candle => ({
-      time: candle.timestamp || candle.time,
-      open: +candle.open,
-      high: +candle.high,
-      low: +candle.low,
-      close: +candle.close,
-      volume: +candle.volume
-    }));
+    // Support both array format [timestamp, open, high, low, close, volume] and object format
+    const rawCandles = candles.map(candle => {
+      const isArray = Array.isArray(candle);
+      return {
+        time: isArray ? candle[0] : (candle.timestamp || candle.time),
+        open: isArray ? +candle[1] : +candle.open,
+        high: isArray ? +candle[2] : +candle.high,
+        low: isArray ? +candle[3] : +candle.low,
+        close: isArray ? +candle[4] : +candle.close,
+        volume: isArray ? +candle[5] : +candle.volume
+      };
+    });
     
     // trim to limit + buffer, then compute indicators on trimmed
     const trimmed = take(rawCandles, frame);
@@ -2136,35 +2162,74 @@ async  runShortTermAgent(labeledData, tradeData = {}, newsData = null) {
   };
 
   // ---------- build byFrame = { '15m': [candles], '1h': [candles], ... } ----------
-  // Simplified structure with direct candle arrays per timeframe  
+  // Simplified structure with direct candle arrays per timeframe
+  console.log(`\n🔍 [DATA FLOW DEBUG] Starting byFrame construction...`);
+  console.log(`   ├─ labeledData is Array: ${Array.isArray(labeledData)}`);
+  console.log(`   ├─ labeledData length: ${labeledData?.length || 0}`);
+
+  if (labeledData && Array.isArray(labeledData)) {
+    labeledData.forEach((item, idx) => {
+      console.log(`   ├─ [${idx}] frame: ${item.frame}, has data: ${!!item.data}, has candles in data: ${!!item.data?.candles}, candles is array: ${Array.isArray(item.data?.candles)}, candles count: ${item.data?.candles?.length || 0}`);
+      console.log(`   │   └─ has direct candles: ${!!item.candles}, direct candles is array: ${Array.isArray(item.candles)}, direct candles count: ${item.candles?.length || 0}`);
+    });
+  }
+
   const byFrame = (labeledData && Array.isArray(labeledData)) ? labeledData.reduce((acc, x) => {
     const frame = x.frame; // '15m'|'1h'|'1d'
-    if (!frame) return acc;
+    if (!frame) {
+      console.log(`   ⚠️  [byFrame] Skipping item with no frame property`);
+      return acc;
+    }
 
     const arr = Array.isArray(x.data?.candles) ? x.data.candles : x.candles;
     if (Array.isArray(arr)) {
       acc[frame] = arr; // Direct assignment - no intraday/historical complexity
+      console.log(`   ✅ [byFrame] Added ${frame}: ${arr.length} candles`);
+    } else {
+      console.log(`   ⚠️  [byFrame] ${frame}: No valid candle array found (data.candles type: ${typeof x.data?.candles}, direct candles type: ${typeof x.candles})`);
     }
     return acc;
   }, {}) : {};
+
+  console.log(`\n📊 [byFrame RESULT] Available timeframes: ${Object.keys(byFrame).join(', ')}`);
+  Object.keys(byFrame).forEach(tf => {
+    console.log(`   └─ ${tf}: ${byFrame[tf].length} candles`);
+  });
 
   const out = { term: 'short', frames: {}, overlays: {}, news: newsData, meta: {} };
 
   // simplified builder for a frame
   const buildFrame = (frame) => {
+    console.log(`\n🔨 [BUILD FRAME] Starting build for ${frame}...`);
     const candles = byFrame[frame] || [];
-    
-    if (!candles.length) return null;
+    console.log(`   ├─ Found ${candles.length} candles in byFrame[${frame}]`);
+
+    if (!candles.length) {
+      console.log(`   └─ ❌ No candles available, returning null`);
+      return null;
+    }
 
     // Convert to our standard format and sort (standardize timestamp -> time)
-    const rawCandles = candles.map(candle => ({
-      time: candle.timestamp || candle.time,
-      open: +candle.open,
-      high: +candle.high,
-      low: +candle.low,
-      close: +candle.close,
-      volume: +candle.volume
-    }));
+    // Support both array format [timestamp, open, high, low, close, volume] and object format
+    console.log(`   ├─ Sample candle[0] type: ${Array.isArray(candles[0]) ? 'array' : 'object'}`);
+    console.log(`   ├─ Sample candle[0] keys:`, candles[0] ? Object.keys(candles[0]) : 'none');
+    console.log(`   ├─ Sample candle[0] values:`, candles[0]);
+
+    const rawCandles = candles.map(candle => {
+      const isArray = Array.isArray(candle);
+      return {
+        time: isArray ? candle[0] : (candle.timestamp || candle.time),
+        open: isArray ? +candle[1] : +candle.open,
+        high: isArray ? +candle[2] : +candle.high,
+        low: isArray ? +candle[3] : +candle.low,
+        close: isArray ? +candle[4] : +candle.close,
+        volume: isArray ? +candle[5] : +candle.volume
+      };
+    });
+
+    console.log(`   ├─ Converted ${rawCandles.length} candles to standard format`);
+    console.log(`   ├─ Sample converted[0].time: ${rawCandles[0]?.time}`);
+    console.log(`   ├─ Sample converted[0].close: ${rawCandles[0]?.close}`);
    
     
     // trim to limit + buffer, then compute indicators on trimmed
@@ -2317,14 +2382,18 @@ async runMediumTermAgent(labeledData, tradeData = {}, newsData = null) {
     if (!candles.length) return null;
 
     // Convert to our standard format and sort (standardize timestamp -> time)
-    const rawCandles = candles.map(candle => ({
-      time: candle.timestamp || candle.time,
-      open: +candle.open,
-      high: +candle.high,
-      low: +candle.low,
-      close: +candle.close,
-      volume: +candle.volume
-    }));
+    // Support both array format [timestamp, open, high, low, close, volume] and object format
+    const rawCandles = candles.map(candle => {
+      const isArray = Array.isArray(candle);
+      return {
+        time: isArray ? candle[0] : (candle.timestamp || candle.time),
+        open: isArray ? +candle[1] : +candle.open,
+        high: isArray ? +candle[2] : +candle.high,
+        low: isArray ? +candle[3] : +candle.low,
+        close: isArray ? +candle[4] : +candle.close,
+        volume: isArray ? +candle[5] : +candle.volume
+      };
+    });
     
     // trim to limit + buffer, then compute indicators on trimmed
     const trimmed = take(rawCandles, frame);

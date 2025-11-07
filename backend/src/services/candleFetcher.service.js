@@ -1,13 +1,15 @@
 import axios from 'axios';
 import { aiReviewService } from './ai/aiReview.service.js';
 import dailyDataPrefetchService from './dailyDataPrefetch.service.js';
+import incrementalUpdaterService from './incrementalUpdater.service.js';
+import intradayDailyMergeService from './intradayDailyMerge.service.js';
 import dateCalculator from '../utils/dateCalculator.js';
 import PreFetchedData from '../models/preFetchedData.js';
 import MarketHoursUtil from '../utils/marketHours.js';
+import { formatCandles } from '../utils/candleFormatter.js';
+import { TIMEFRAME_TO_UPSTOX } from '../constants/timeframeMap.js';
 // Import indicator calculation function
 const { calculateTechnicalIndicators } = await import('../utils/indicatorCalculator.js');
-
-            
 
 /**
  * Dedicated service for candle data fetching and storage
@@ -42,58 +44,59 @@ class CandleFetcherService {
             }
             
             if (preFetchedResult.success && preFetchedResult.data?.length > 0) {
-                // CRITICAL: Check data freshness first (trading_date must be recent)
-                const freshnessCheck = this.checkDataFreshness(preFetchedResult.data);
 
-                if (!freshnessCheck.fresh) {
-                    console.log(`⚠️ [CANDLE FETCHER] Stale data detected: ${freshnessCheck.reason}`);
-                    console.log(`🔄 [INCREMENTAL FETCH] Fetching missing data and merging with DB...`);
-
-                    // Perform incremental fetch for stale timeframes
-                    const incrementalResult = await this.fetchIncrementalDataAndMerge(
-                        instrumentKey,
-                        preFetchedResult.data,
-                        freshnessCheck.staleTimeframes
-                    );
-
-                    if (incrementalResult.success) {
-                        console.log(`✅ [INCREMENTAL FETCH] Successfully updated stale data`);
-                        return {
-                            success: true,
-                            source: 'database+api (incremental)',
-                            data: incrementalResult.data
-                        };
-                    } else {
-                        console.log(`⚠️ [INCREMENTAL FETCH] Failed, falling back to full API fetch`);
-                        // Fall through to full API fetch
-                    }
-                } else {
-                    // Data is fresh, now check sufficiency
-                    const sufficientData = this.checkDataSufficiency(preFetchedResult.data);
-
-                    if (sufficientData.sufficient) {
-                        console.log(`✅ [CANDLE FETCHER] Using pre-fetched data: ${preFetchedResult.data.length} timeframes`);
-
-                        return {
+                const freshnessCheck = await this.checkDataFreshness(preFetchedResult.data);
+                if(!freshnessCheck.fresh){
+                    const incrementalResult = await incrementalUpdaterService.fetchIncrementalDataAndMerge(
+                            instrumentKey,
+                            preFetchedResult.data,
+                            freshnessCheck.staleTimeframes,
+                            this.fetchCandlesFromAPI.bind(this)
+                        );
+                     if (incrementalResult.success) {
+                            // Refresh DB data
+                            const refreshed = await dailyDataPrefetchService.constructor.getDataForAnalysis(instrumentKey, term);
+                            preFetchedResult.data = refreshed.data;
+                        } else {
+                            console.log(`⚠️ [HISTORICAL FETCH] Failed to fetch historical data`);
+                        }
+                }  
+                const sufficientData = this.checkDataSufficiency(preFetchedResult.data);
+                if (sufficientData.sufficient) {
+                    console.log(`✅ [FRESHNESS] Data is fresh and sufficient`);
+                    console.log(`✅ [CANDLE FETCHER] Using DB data: ${preFetchedResult.data.length} timeframes\n`);
+                    return {
                             success: true,
                             source: 'database',
                             data: this.formatDatabaseData(preFetchedResult.data)
-                        };
-                    } else {
-                        console.log(`⚠️ [CANDLE FETCHER] Insufficient data: ${sufficientData.reason}. Fetching from API.`);
-                    }
+                    };
+                } else {
+                    console.log(`⚠️ [INSUFFICIENT] ${sufficientData.reason}`);
+                    throw new Error(`Insufficient data - canceling the analysis: ${sufficientData.reason}`);
                 }
+                
+                 
+            }
+            else{
+
+                console.log(`🔄 [CANDLE FETCHER] Fetching fresh data from API`);
+                const apiResult = await this.fetchFromAPI(instrumentKey, term);
+            
+                return {
+                    success: true,
+                    source: 'api',
+                    data: apiResult
+                };
             }
 
-            // Step 2: Fallback to API fetching
-            console.log(`🔄 [CANDLE FETCHER] Fetching fresh data from API`);
-            const apiResult = await this.fetchFromAPI(instrumentKey, term);
+
+           
+
+
             
-            return {
-                success: true,
-                source: 'api',
-                data: apiResult
-            };
+
+            // Step 2: Fallback to API fetching
+            
             
         } catch (error) {
             console.error(`❌ [CANDLE FETCHER] Failed to get data: ${error.message}`);
@@ -101,87 +104,70 @@ class CandleFetcherService {
         }
     }
 
-    /**
-     * Check if pre-fetched data is fresh (trading_date is recent)
-     * @param {Array} preFetchedData - Array of pre-fetched data records
-     * @returns {Object} - { fresh: boolean, reason: string, staleTimeframes: [] }
-     */
-    checkDataFreshness(preFetchedData) {
+    async checkDataFreshness(preFetchedData) {
         console.log(`\n${'='.repeat(80)}`);
         console.log(`🔍 [FRESHNESS CHECK] Starting data freshness validation`);
         console.log(`${'='.repeat(80)}`);
-
-        const today = new Date();
-        today.setHours(0, 0, 0, 0); // Start of today
-        console.log(`📅 [FRESHNESS CHECK] Today's date (normalized): ${today.toISOString().split('T')[0]}`);
-        console.log(`📊 [FRESHNESS CHECK] Total timeframes to check: ${preFetchedData.length}\n`);
+        console.log(`📊 Total timeframes to check: ${preFetchedData.length}\n`);
 
         const staleTimeframes = [];
 
         for (const timeframeData of preFetchedData) {
-            console.log(`🔹 [FRESHNESS CHECK] Checking timeframe: ${timeframeData.timeframe}`);
+            const timeframe = timeframeData.timeframe;
+            const lastBarTime = timeframeData.data_quality?.last_bar_time
+                ? new Date(timeframeData.data_quality.last_bar_time)
+                : null;
 
-            const tradingDate = new Date(timeframeData.trading_date);
-            tradingDate.setHours(0, 0, 0, 0); // Normalize to start of day for comparison
-            const daysDiff = Math.floor((today - tradingDate) / (1000 * 60 * 60 * 24));
+            console.log(`🔹 Checking ${timeframe}:`);
 
-            // CRITICAL FIX: For intraday timeframes, data MUST be from TODAY (not yesterday)
-            // For daily timeframe, allow 3-day gap (weekend buffer)
-            const isToday = tradingDate.getTime() === today.getTime();
-            let isStale = false;
-
-            console.log(`   ├─ Trading date: ${tradingDate.toISOString().split('T')[0]}`);
-            console.log(`   ├─ Age: ${daysDiff} days`);
-            console.log(`   ├─ Is today: ${isToday}`);
-            console.log(`   ├─ Bars in DB: ${timeframeData.bars_count || timeframeData.candle_data?.length || 0}`);
-
-            if (timeframeData.timeframe === '1d') {
-                // Daily timeframe: Allow 3-day gap (accounts for weekends)
-                if (daysDiff > 3) {
-                    isStale = true;
-                    console.log(`   └─ Status: ❌ STALE (${daysDiff} days > 3 days for daily)\n`);
-                } else {
-                    console.log(`   └─ Status: ✅ FRESH (${daysDiff} days <= 3 days for daily)\n`);
-                }
-            } else {
-                // Intraday timeframes (15m, 1h): MUST be from TODAY
-                if (!isToday) {
-                    isStale = true;
-                    console.log(`   └─ Status: ❌ STALE (intraday data not from today - ${daysDiff} days old)\n`);
-                } else {
-                    console.log(`   └─ Status: ✅ FRESH (intraday data from today)\n`);
-                }
+            if (!lastBarTime) {
+                console.log(`   └─ Status: ❌ STALE (no last_bar_time found)\n`);
+                staleTimeframes.push({ timeframe, reason: 'no_last_bar_time' });
+                continue;
             }
+
+            // Get effective time for this specific timeframe
+            // This already handles market open/closed logic internally
+            const expectedTime = await MarketHoursUtil.getEffectiveTradingTime(new Date(), timeframe);
+
+            console.log(`   ├─ Last bar time: ${lastBarTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+            console.log(`   ├─ Expected time: ${expectedTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+
+            // Calculate time difference
+            const timeDiffMs = expectedTime - lastBarTime;
+            const timeDiffHours = (timeDiffMs / (1000 * 60 * 60)).toFixed(2);
+            const daysDiff = Math.floor(timeDiffMs / (1000 * 60 * 60 * 24));
+
+            console.log(`   ├─ Time diff: ${timeDiffHours} hours (${daysDiff} days)`);
+
+            // Simple freshness check: Allow up to 3 days old (handles weekends/holidays)
+            const isStale = (lastBarTime < expectedTime);
+
+            console.log(`   └─ Status: ${isStale ? '❌ STALE' : '✅ FRESH'}\n`);
 
             if (isStale) {
                 staleTimeframes.push({
-                    timeframe: timeframeData.timeframe,
-                    trading_date: tradingDate,
-                    age_days: daysDiff
+                    timeframe,
+                    last_bar_time: lastBarTime,
+                    time_diff_hours: parseFloat(timeDiffHours)
                 });
             }
         }
 
         if (staleTimeframes.length > 0) {
             console.log(`${'='.repeat(80)}`);
-            console.log(`⚠️  [FRESHNESS CHECK RESULT] ${staleTimeframes.length}/${preFetchedData.length} timeframe(s) are STALE`);
-            console.log(`${'='.repeat(80)}`);
-            staleTimeframes.forEach((st, idx) => {
-                console.log(`   ${idx + 1}. ${st.timeframe}: ${st.age_days} days old (trading_date: ${st.trading_date.toISOString().split('T')[0]})`);
-            });
-            console.log(`\n🔄 [DECISION] Will trigger incremental data fetch for stale timeframes\n`);
-
+            console.log(`⚠️  [RESULT] ${staleTimeframes.length}/${preFetchedData.length} timeframe(s) are STALE`);
+            console.log(`${'='.repeat(80)}\n`);
             return {
                 fresh: false,
-                reason: `${staleTimeframes.length} timeframe(s) have stale data (older than max age)`,
-                staleTimeframes: staleTimeframes
+                reason: `${staleTimeframes.length} timeframe(s) have stale data`,
+                staleTimeframes
             };
         }
 
         console.log(`${'='.repeat(80)}`);
-        console.log(`✅ [FRESHNESS CHECK RESULT] All ${preFetchedData.length} timeframes have FRESH data`);
-        console.log(`${'='.repeat(80)}`);
-        console.log(`🎯 [DECISION] No incremental fetch needed, using DB data as-is\n`);
+        console.log(`✅ [RESULT] All ${preFetchedData.length} timeframes have FRESH data`);
+        console.log(`${'='.repeat(80)}\n`);
         return { fresh: true, staleTimeframes: [] };
     }
 
@@ -230,7 +216,7 @@ class CandleFetcherService {
             const tradeData = { instrument_key: instrumentKey, term: term };
             const endpoints = await this.buildEndpoints(tradeData);
             
-            console.log(`🔄 [API FETCH] Processing ${endpoints.length} endpoints`);
+           // console.log(`🔄 [API FETCH] Processing ${endpoints.length} endpoints`);
             
             // Fetch data from all endpoints
             const candleResults = [];
@@ -261,109 +247,63 @@ class CandleFetcherService {
             for (const timeframe of timeframes) {
                 console.log(`🔍 [ENDPOINT DEBUG] ================================`);
                 console.log(`🔍 [ENDPOINT DEBUG] Processing timeframe: ${timeframe}`);
-                
+
                 const params = await dateCalculator.getTimeframeParams(timeframe);
-                console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - params.useIntraday:`, params.useIntraday);
-                console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - params.barsNeeded:`, params.barsNeeded);
-                
-                if (params.useIntraday && (timeframe === '15m' || timeframe === '1h' || timeframe === '1d')) {
-                    console.log(`✅ [ENDPOINT DEBUG] ${timeframe} - Using HYBRID APPROACH (intraday + historical)`);
-                    // HYBRID APPROACH: Get both intraday (today) + historical (past days)
-                    
-                    // 1. Intraday endpoint for today's data
-                    const intradayUrl = this.buildIntradayUrl(tradeData.instrument_key, timeframe);
-                    console.log(`📊 [INTRADAY] ${timeframe}: ${intradayUrl}`);
-                    
-                    endpoints.push({
-                        frame: timeframe,
-                        kind: 'intraday',
-                        url: intradayUrl,
-                        params: params
-                    });
-                    
-                    // 2. Historical endpoints for remaining bars (may be multiple chunks)
-                    // Use yesterday as the ending point for historical data (excluding today)
-                    // Create yesterday date using local date arithmetic (avoid timezone issues)
-                    const today = new Date();
-                    const todayDateStr = today.getFullYear() + '-' + 
-                                       String(today.getMonth() + 1).padStart(2, '0') + '-' + 
-                                       String(today.getDate()).padStart(2, '0');
-                    
-                    const yesterdayDate = new Date(today);
-                    yesterdayDate.setDate(today.getDate() - 1);
-                    const yesterdayDateStr = yesterdayDate.getFullYear() + '-' + 
-                                           String(yesterdayDate.getMonth() + 1).padStart(2, '0') + '-' + 
-                                           String(yesterdayDate.getDate()).padStart(2, '0');
-                    
-                    // Create clean date objects for yesterday (avoid timezone conversion)
-                    const yesterday = new Date(yesterdayDateStr + 'T12:00:00'); // Use noon to avoid timezone edge cases
-                    
-                    console.log(`📅 [HYBRID] Today: ${todayDateStr}, Yesterday: ${yesterdayDateStr}`);
-                    console.log(`📅 [HYBRID DEBUG] Yesterday object: ${yesterday.toISOString()}, formatDateISO: ${dateCalculator.formatDateISO(yesterday)}`);
-                    
-                    const historicalParams = await dateCalculator.getHistoricalDateRange(timeframe, yesterday, params.barsNeeded);
-                    console.log(`📅 [HISTORICAL PARAMS] toDate: ${dateCalculator.formatDateISO(historicalParams.toDate)}, fromDate: ${dateCalculator.formatDateISO(historicalParams.fromDate)}`);
-                    
-                    // Create endpoints for each chunk
-                    console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - historicalParams.chunks:`, historicalParams.chunks ? `${historicalParams.chunks.length} chunks` : 'null/undefined');
-                    
-                    if (historicalParams.chunks && historicalParams.chunks.length > 0) {
-                        console.log(`✅ [ENDPOINT DEBUG] ${timeframe} - Using chunked approach with ${historicalParams.chunks.length} chunks`);
-                        
-                        historicalParams.chunks.forEach((chunk, index) => {
-                            const chunkUrl = this.buildHistoricalUrlFromDates(
-                                tradeData.instrument_key, 
-                                timeframe, 
-                                chunk.fromDate, 
-                                chunk.toDate
-                            );
-                            console.log(`📊 [HISTORICAL CHUNK ${index + 1}/${historicalParams.chunks.length}] ${timeframe}: ${chunkUrl}`);
-                            
+
+                // Check if we need to use chunks (multiple API calls)
+                if (params.chunks && params.chunks.length > 1) {
+                    console.log(`📦 [CHUNKS] ${timeframe} requires ${params.chunks.length} API calls due to Upstox limits`);
+
+                    // Create endpoint for each chunk (need to await async buildHistoricalUrlFromDates)
+                    for (let index = 0; index < params.chunks.length; index++) {
+                        const chunk = params.chunks[index];
+                        const chunkUrls = await this.buildHistoricalUrlFromDates(
+                            tradeData.instrument_key,
+                            timeframe,
+                            chunk.fromDate,
+                            chunk.toDate
+                        );
+
+                        console.log(`📊 [CHUNK ${index + 1}/${params.chunks.length}] ${timeframe}: ${chunkUrls.length} URL(s) generated`);
+
+                        // Handle array of URLs (historical + intraday if needed)
+                        chunkUrls.forEach((url, urlIndex) => {
+                            const kind = url.includes('/intraday/') ? 'intraday' : 'historical';
+                            console.log(`   ${urlIndex === 0 ? '├─' : '└─'} [${kind.toUpperCase()}] ${url}`);
+
                             endpoints.push({
                                 frame: timeframe,
-                                kind: 'historical',
-                                url: chunkUrl,
-                                params: { ...historicalParams, chunk: chunk, chunkIndex: index }
+                                kind: kind,
+                                url: url,
+                                params: { ...params, chunk: chunk, chunkIndex: index, urlIndex }
                             });
                         });
-                    } else {
-                        console.log(`⚠️ [ENDPOINT DEBUG] ${timeframe} - No chunks found, using fallback single call`);
-                        
-                        // Fallback: single historical call
-                        console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - Building fallback URL with params:`, {
-                            fromDate: dateCalculator.formatDateISO(historicalParams.fromDate),
-                            toDate: dateCalculator.formatDateISO(historicalParams.toDate),
-                            tradingDaysFound: historicalParams.tradingDaysFound,
-                            calendarDaysNeeded: historicalParams.calendarDaysNeeded
-                        });
-                        
-                        const historicalUrl = this.buildHistoricalUrl(tradeData.instrument_key, timeframe, historicalParams);
-                        console.log(`📊 [HISTORICAL FALLBACK] ${timeframe}: ${historicalUrl}`);
-                        
+                    }
+                } else {
+                    // Single API call is sufficient
+                    const urls = await this.buildHistoricalUrlFromDates(
+                        tradeData.instrument_key,
+                        timeframe,
+                        params.fromDate,
+                        params.toDate
+                    );
+
+                    console.log(`📊 [SINGLE CALL] ${timeframe}: ${urls.length} URL(s) generated`);
+
+                    // Handle array of URLs (historical + intraday if needed)
+                    urls.forEach((url, urlIndex) => {
+                        const kind = url.includes('/intraday/') ? 'intraday' : 'historical';
+                        console.log(`   ${urlIndex === 0 ? '├─' : '└─'} [${kind.toUpperCase()}] ${url}`);
+
                         endpoints.push({
                             frame: timeframe,
-                            kind: 'historical',
-                            url: historicalUrl,
-                            params: historicalParams
+                            kind: kind,
+                            url: url,
+                            params: { ...params, urlIndex }
                         });
-                    }
-                    
-                } else {
-                    console.log(`⚠️ [ENDPOINT DEBUG] ${timeframe} - Using HISTORICAL ONLY approach`);
-                    console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - Reason: useIntraday=${params.useIntraday}, timeframe in list=${timeframe === '15m' || timeframe === '1h' || timeframe === '1d'}`);
-                    
-                    // Use only historical API for daily timeframe or when market is closed
-                    const historicalUrl = this.buildHistoricalUrl(tradeData.instrument_key, timeframe, params);
-                    console.log(`📊 [HISTORICAL] ${timeframe}: ${historicalUrl}`);
-                    
-                    endpoints.push({
-                        frame: timeframe,
-                        kind: 'historical',
-                        url: historicalUrl,
-                        params: params
                     });
                 }
-                
+
                 console.log(`🔍 [ENDPOINT DEBUG] ${timeframe} - Endpoints added for this timeframe: ${endpoints.filter(e => e.frame === timeframe).length}`);
                 console.log(`🔍 [ENDPOINT DEBUG] ================================`);
             }
@@ -380,18 +320,11 @@ class CandleFetcherService {
      * Build intraday URL for current day data
      */
     buildIntradayUrl(instrumentKey, timeframe) {
-        const timeframeMapping = {
-            '1m': { unit: 'minutes', interval: '1' },
-            '15m': { unit: 'minutes', interval: '15' },
-            '1h': { unit: 'hours', interval: '1' },
-            '1d': { unit: 'days', interval: '1' }
-        };
-        
-        const mapping = timeframeMapping[timeframe];
+        const mapping = TIMEFRAME_TO_UPSTOX[timeframe];
         if (!mapping) {
             throw new Error(`Unsupported timeframe for intraday API: ${timeframe}`);
         }
-        
+
         return `https://api.upstox.com/v3/historical-candle/intraday/${instrumentKey}/${mapping.unit}/${mapping.interval}`;
     }
 
@@ -399,42 +332,64 @@ class CandleFetcherService {
      * Build historical URL with proper date range
      */
     buildHistoricalUrl(instrumentKey, timeframe, params) {
-        const timeframeMapping = {
-            '15m': { unit: 'minutes', interval: '15' },
-            '1h': { unit: 'hours', interval: '1' },
-            '1d': { unit: 'days', interval: '1' }
-        };
-        
-        const mapping = timeframeMapping[timeframe];
+        const mapping = TIMEFRAME_TO_UPSTOX[timeframe];
         if (!mapping) {
             throw new Error(`Unsupported timeframe for historical API: ${timeframe}`);
         }
-        
+
         const fromDate = dateCalculator.formatDateISO(params.fromDate);
         const toDate = dateCalculator.formatDateISO(params.toDate);
-        
+
         return `https://api.upstox.com/v3/historical-candle/${instrumentKey}/${mapping.unit}/${mapping.interval}/${toDate}/${fromDate}`;
     }
 
     /**
      * Build historical URL from specific from/to dates (for chunks)
+     * Smart routing: Returns array of URLs
+     * - If toDate is current trading day: Returns [historical_url_up_to_yesterday, intraday_url_for_today]
+     * - Otherwise: Returns [historical_url]
+     *
+     * @returns {Promise<Array<string>>} Array of URLs to fetch
      */
-    buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate) {
-        const timeframeMapping = {
-            '15m': { unit: 'minutes', interval: '15' },
-            '1h': { unit: 'hours', interval: '1' },
-            '1d': { unit: 'days', interval: '1' }
-        };
-        
-        const mapping = timeframeMapping[timeframe];
+    async buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate) {
+        const mapping = TIMEFRAME_TO_UPSTOX[timeframe];
         if (!mapping) {
             throw new Error(`Unsupported timeframe for historical API: ${timeframe}`);
         }
+
+        if( fromDate instanceof Date && toDate instanceof Date){
+            fromDate = dateCalculator.formatDateISO(fromDate);
+            toDate = dateCalculator.formatDateISO(toDate);
+        }
+
+      
+
         
-        const fromDateStr = dateCalculator.formatDateISO(fromDate);
-        const toDateStr = dateCalculator.formatDateISO(toDate);
-        
-        return `https://api.upstox.com/v3/historical-candle/${instrumentKey}/${mapping.unit}/${mapping.interval}/${toDateStr}/${fromDateStr}`;
+
+        // Get effective trading time for this timeframe
+        const effectiveTime = await MarketHoursUtil.getEffectiveTradingTime(new Date(), timeframe);
+        const effectiveDate = MarketHoursUtil.normalizeDateToMidnight(effectiveTime);
+        const toDateNormalized = MarketHoursUtil.normalizeDateToMidnight(new Date(toDate));
+        const today = MarketHoursUtil.normalizeDateToMidnight(new Date());
+
+        // Check if toDate matches effective trading date (current trading day)
+        const isCurrentTradingDay = toDateNormalized.getTime() === effectiveDate.getTime();
+        const toDateIsToday = toDateNormalized.getTime() === today.getTime();
+
+        const urls = [];
+         if (isCurrentTradingDay || toDateIsToday) {
+            let intradayUrl = this.buildIntradayUrl(instrumentKey, timeframe);
+            console.log(`   └─ Intraday (today): ${intradayUrl}`);
+            urls.push(intradayUrl);
+         }
+        const historicalUrl = `https://api.upstox.com/v3/historical-candle/${instrumentKey}/${mapping.unit}/${mapping.interval}/${toDate}/${fromDate}`;
+        console.log(`   └─ Historical: ${historicalUrl}`);
+        urls.push(historicalUrl);  
+
+
+      
+
+        return urls;
     }
 
     /**
@@ -529,16 +484,9 @@ class CandleFetcherService {
     async storeCandlesInDB(instrumentKey, timeframe, candles) {
         try {
             console.log(`💾 [STORE] Merging ${candles.length} ${timeframe} candles with existing data`);
-            
+
             // Convert to standard format
-            const formattedCandles = candles.map(candle => ({
-                timestamp: Array.isArray(candle) ? candle[0] : candle.time || candle.timestamp,
-                open: Array.isArray(candle) ? candle[1] : candle.open,
-                high: Array.isArray(candle) ? candle[2] : candle.high,
-                low: Array.isArray(candle) ? candle[3] : candle.low,
-                close: Array.isArray(candle) ? candle[4] : candle.close,
-                volume: Array.isArray(candle) ? candle[5] : candle.volume
-            }));
+            const formattedCandles = formatCandles(candles);
 
             // Use dailyDataPrefetchService to handle the merge properly
             const stockInfo = {
@@ -546,9 +494,8 @@ class CandleFetcherService {
                 stock_symbol: instrumentKey.split('|')[2] || instrumentKey,
                 stock_name: instrumentKey.split('|')[2] || instrumentKey
             };
-            
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+
+            const today = MarketHoursUtil.normalizeDateToMidnight(new Date());
 
             // Check if existing data exists
             const existingData = await PreFetchedData.findOne({
@@ -610,6 +557,11 @@ class CandleFetcherService {
             existingData.bars_count = finalCandles.length;
             existingData.trading_date = tradingDate;
             existingData.updated_at = new Date();
+
+            // Ensure stock_symbol is set (may be missing in old records)
+            if (!existingData.stock_symbol && existingData.instrument_key) {
+                existingData.stock_symbol = existingData.instrument_key.split('|')[2] || existingData.instrument_key;
+            }
 
             await existingData.save();
 
@@ -704,196 +656,6 @@ class CandleFetcherService {
     }
 
     /**
-     * Fetch incremental data for stale timeframes and merge with DB
-     * @param {string} instrumentKey - The instrument key
-     * @param {Array} dbData - Existing database records
-     * @param {Array} staleTimeframes - List of stale timeframes to update
-     * @returns {Object} - { success: boolean, data: formattedData }
-     */
-    async fetchIncrementalDataAndMerge(instrumentKey, dbData, staleTimeframes) {
-        console.log(`\n${'█'.repeat(80)}`);
-        console.log(`📡 [INCREMENTAL MERGE] Starting incremental data fetch and merge`);
-        console.log(`${'█'.repeat(80)}`);
-        console.log(`📋 [INCREMENTAL MERGE] Job details:`);
-        console.log(`   ├─ Instrument: ${instrumentKey}`);
-        console.log(`   ├─ Total timeframes: ${dbData.length}`);
-        console.log(`   ├─ Stale timeframes: ${staleTimeframes.length}`);
-        console.log(`   └─ Fresh timeframes: ${dbData.length - staleTimeframes.length}\n`);
-
-        try {
-            const updatedData = {};
-            let successCount = 0;
-            let errorCount = 0;
-
-            // Process each timeframe
-            for (let i = 0; i < dbData.length; i++) {
-                const dbRecord = dbData[i];
-                const timeframe = dbRecord.timeframe;
-                const isStale = staleTimeframes.some(st => st.timeframe === timeframe);
-
-                console.log(`${'─'.repeat(80)}`);
-                console.log(`📊 [TIMEFRAME ${i + 1}/${dbData.length}] Processing: ${timeframe}`);
-                console.log(`${'─'.repeat(80)}`);
-
-                if (isStale) {
-                    console.log(`⚠️  [${timeframe}] Status: STALE - Needs incremental fetch`);
-                    console.log(`🔄 [${timeframe}] Starting API fetch for missing data...\n`);
-
-                    // Get last bar time from DB
-                    console.log(`📍 [${timeframe}] Step 1: Determining last bar time from DB...`);
-                    const lastBarTime = dbRecord.data_quality?.last_bar_time
-                        ? new Date(dbRecord.data_quality.last_bar_time)
-                        : new Date(dbRecord.candle_data[dbRecord.candle_data.length - 1].timestamp);
-
-                    const now = new Date();
-                    const fromDate = lastBarTime.toISOString().split('T')[0];
-                    const toDate = now.toISOString().split('T')[0];
-                    const timeDiffDays = Math.floor((now - lastBarTime) / (1000 * 60 * 60 * 24));
-
-                    console.log(`   ├─ Last bar time: ${lastBarTime.toISOString()}`);
-                    console.log(`   ├─ Current time: ${now.toISOString()}`);
-                    console.log(`   ├─ Time gap: ${timeDiffDays} days`);
-                    console.log(`   ├─ Fetch range: ${fromDate} → ${toDate}`);
-                    console.log(`   └─ Existing bars in DB: ${dbRecord.candle_data?.length || 0}\n`);
-
-                    // Map timeframe to Upstox interval
-                    const intervalMap = { '15m': '15minute', '1h': '60minute', '1d': 'day' };
-                    const upstoxInterval = intervalMap[timeframe] || timeframe;
-                    console.log(`📡 [${timeframe}] Step 2: Fetching from Upstox API (interval: ${upstoxInterval})...`);
-
-                    try {
-                        // Fetch missing candles
-                        const apiCandles = await this.fetchCandlesFromAPI(
-                            instrumentKey,
-                            upstoxInterval,
-                            fromDate,
-                            toDate
-                        );
-
-                        console.log(`\n📥 [${timeframe}] Step 3: API fetch completed`);
-                        if (apiCandles && apiCandles.length > 0) {
-                            console.log(`   ✅ Received ${apiCandles.length} candles from API`);
-                            console.log(`   ├─ First candle: ${apiCandles[0].timestamp}`);
-                            console.log(`   └─ Last candle: ${apiCandles[apiCandles.length - 1].timestamp}\n`);
-
-                            console.log(`🔀 [${timeframe}] Step 4: Merging API data with existing DB data...`);
-                            // Merge: Keep all DB candles + append only NEW candles
-                            const existingCandles = dbRecord.candle_data || [];
-                            const existingTimestamps = new Set(
-                                existingCandles.map(c => c.timestamp.toString())
-                            );
-
-                            console.log(`   ├─ Building timestamp index from ${existingCandles.length} existing candles...`);
-                            const newCandles = apiCandles.filter(apiCandle => {
-                                const apiTimestamp = apiCandle.timestamp.toString();
-                                return !existingTimestamps.has(apiTimestamp);
-                            });
-
-                            console.log(`   ├─ Existing candles in DB: ${existingCandles.length}`);
-                            console.log(`   ├─ API candles: ${apiCandles.length}`);
-                            console.log(`   ├─ Duplicate candles: ${apiCandles.length - newCandles.length}`);
-                            console.log(`   └─ New unique candles: ${newCandles.length}\n`);
-
-                            if (newCandles.length > 0) {
-                                console.log(`✨ [${timeframe}] Step 5: Appending ${newCandles.length} new candles...`);
-                                // Append and sort
-                                const mergedCandles = [...existingCandles, ...newCandles]
-                                    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-                                // Keep only required number of bars (trim oldest if necessary)
-                                const maxBars = dateCalculator.requiredBars[timeframe] || 400;
-                                const finalCandles = mergedCandles.slice(-maxBars);
-                                const trimmedCount = mergedCandles.length - finalCandles.length;
-
-                                console.log(`   ├─ After merge: ${mergedCandles.length} total candles`);
-                                console.log(`   ├─ Max bars allowed: ${maxBars}`);
-                                console.log(`   ├─ Trimmed oldest: ${trimmedCount} candles`);
-                                console.log(`   └─ Final dataset: ${finalCandles.length} candles\n`);
-
-                                // Update DB
-                                console.log(`💾 [${timeframe}] Step 6: Updating MongoDB...`);
-                                const newLastBarTime = new Date(finalCandles[finalCandles.length - 1].timestamp);
-                                const updateResult = await PreFetchedData.updateOne(
-                                    { instrument_key: instrumentKey, timeframe: timeframe },
-                                    {
-                                        $set: {
-                                            candle_data: finalCandles,
-                                            bars_count: finalCandles.length,
-                                            trading_date: now,
-                                            updated_at: now,
-                                            'data_quality.last_bar_time': newLastBarTime
-                                        }
-                                    }
-                                );
-
-                                console.log(`   ├─ MongoDB update result: ${updateResult.modifiedCount} document(s) modified`);
-                                console.log(`   ├─ New bars_count: ${finalCandles.length}`);
-                                console.log(`   ├─ New trading_date: ${now.toISOString().split('T')[0]}`);
-                                console.log(`   └─ New last_bar_time: ${newLastBarTime.toISOString()}\n`);
-
-                                updatedData[timeframe] = finalCandles;
-                                successCount++;
-                                console.log(`✅ [${timeframe}] SUCCESS - Incremental update completed!\n`);
-                            } else {
-                                console.log(`ℹ️  [${timeframe}] Step 5: No new unique candles to add`);
-                                console.log(`   └─ All ${apiCandles.length} API candles already exist in DB\n`);
-                                // No new candles, use existing
-                                updatedData[timeframe] = existingCandles;
-                                successCount++;
-                                console.log(`✅ [${timeframe}] SUCCESS - Using existing data (no updates needed)\n`);
-                            }
-                        } else {
-                            console.log(`   ⚠️  API returned 0 candles (market closed or no data available)`);
-                            console.log(`   └─ Reason: Likely market closed or no trading data for date range\n`);
-                            // API returned no data, use existing
-                            updatedData[timeframe] = dbRecord.candle_data || [];
-                            successCount++;
-                            console.log(`✅ [${timeframe}] SUCCESS - Using existing DB data\n`);
-                        }
-                    } catch (apiError) {
-                        console.log(`\n❌ [${timeframe}] ERROR during API fetch or merge!`);
-                        console.error(`   ├─ Error type: ${apiError.name}`);
-                        console.error(`   ├─ Error message: ${apiError.message}`);
-                        if (apiError.stack) {
-                            console.error(`   └─ Stack trace: ${apiError.stack.split('\n')[0]}\n`);
-                        }
-                        // On error, use existing DB data
-                        updatedData[timeframe] = dbRecord.candle_data || [];
-                        errorCount++;
-                        console.log(`⚠️  [${timeframe}] FALLBACK - Continuing with existing DB data (${updatedData[timeframe].length} bars)\n`);
-                    }
-                } else {
-                    // Not stale, use as-is
-                    console.log(`✅ [${timeframe}] Status: FRESH - No fetch needed`);
-                    updatedData[timeframe] = dbRecord.candle_data || [];
-                    successCount++;
-                    console.log(`   └─ Using existing ${updatedData[timeframe].length} bars from DB\n`);
-                }
-            }
-
-            console.log(`${'█'.repeat(80)}`);
-            console.log(`📊 [INCREMENTAL MERGE] Job Summary`);
-            console.log(`${'█'.repeat(80)}`);
-            console.log(`✅ Success: ${successCount}/${dbData.length} timeframes`);
-            console.log(`❌ Errors: ${errorCount}/${dbData.length} timeframes`);
-            console.log(`📦 Total data ready: ${Object.keys(updatedData).length} timeframes`);
-            Object.keys(updatedData).forEach(tf => {
-                console.log(`   - ${tf}: ${updatedData[tf].length} bars`);
-            });
-            console.log(`${'█'.repeat(80)}\n`);
-
-            return {
-                success: true,
-                data: updatedData
-            };
-
-        } catch (error) {
-            console.error(`❌ [INCREMENTAL MERGE] Failed: ${error.message}`);
-            return { success: false, error: error.message };
-        }
-    }
-
-    /**
      * Utility delay function
      */
     delay(ms) {
@@ -910,17 +672,9 @@ class CandleFetcherService {
      * @returns {Array} - Array of candle objects
      */
     async fetchCandlesFromAPI(instrumentKey, interval, fromDate, toDate) {
-        console.log(`\n${'▼'.repeat(80)}`);
-        console.log(`📡 [API FETCH] Starting Upstox Historical API call`);
-        console.log(`${'▼'.repeat(80)}`);
-
+       
         try {
-            console.log(`📋 [API FETCH] Request parameters:`);
-            console.log(`   ├─ Instrument: ${instrumentKey}`);
-            console.log(`   ├─ Interval: ${interval}`);
-            console.log(`   ├─ From date: ${fromDate}`);
-            console.log(`   └─ To date: ${toDate}`);
-
+            
             // Map Upstox interval to standard timeframe for URL builder
             const intervalToTimeframeMap = {
                 '15minute': '15m',
@@ -933,78 +687,82 @@ class CandleFetcherService {
                 throw new Error(`Unsupported interval: ${interval}. Expected one of: 15minute, 60minute, day`);
             }
 
-            console.log(`   └─ Mapped to timeframe: ${timeframe}`);
+            const urls = await this.buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate);
+            let allCandles = [];
 
-            // Convert date strings to Date objects if needed
-            console.log(`\n🔧 [API FETCH] Preparing dates for URL builder...`);
-            const fromDateObj = typeof fromDate === 'string' ? new Date(fromDate) : fromDate;
-            const toDateObj = typeof toDate === 'string' ? new Date(toDate) : toDate;
-            console.log(`   ├─ From Date Object: ${fromDateObj.toISOString()}`);
-            console.log(`   └─ To Date Object: ${toDateObj.toISOString()}`);
+            // Fetch data from each URL
+            for (let i = 0; i < urls.length; i++) {
+                const url = urls[i];
+                const urlType = url.includes('/intraday/') ? 'INTRADAY' : 'HISTORICAL';
 
-            // Use existing method to build URL (avoids code duplication)
-            console.log(`\n🔧 [API FETCH] Building URL using buildHistoricalUrlFromDates()...`);
-            const url = this.buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDateObj, toDateObj);
-            console.log(`🔗 [API FETCH] URL: ${url}`);
-            console.log(`⏳ [API FETCH] Sending HTTP request...\n`);
+              
+                const startTime = Date.now();
+                const response = await this.fetchCandleData(url);
+                const duration = Date.now() - startTime;
 
-            const startTime = Date.now();
-            const response = await this.fetchCandleData(url);
-            const duration = Date.now() - startTime;
+             
+                if (!response) {
+                    console.log(`⚠️  [API FETCH ${i + 1}/${urls.length}] Response is null or undefined`);
+                    continue;
+                }
 
-            console.log(`✅ [API FETCH] HTTP response received in ${duration}ms`);
+                if (!response.data) {
+                     continue;
+                }
 
-            if (!response) {
-                console.log(`❌ [API FETCH] Response is null or undefined`);
+                if (!response.data.candles) {
+                     continue;
+                }
+
+                const candles = response.data.candles;
+                if (candles.length === 0) {
+                    console.log(`⚠️  [API FETCH ${i + 1}/${urls.length}] API returned 0 candles`);
+                    console.log(`   └─ Possible reasons: Market closed, no trading data, weekend/holiday`);
+                    continue;
+                }
+
+                // Show sample of raw data
+                if (candles.length > 1) {
+                    console.log(`📋 [SAMPLE] Last candle: [${candles[candles.length - 1].join(', ')}]`);
+                }
+
+                // Add to collection
+                allCandles.push(...candles);
+            }
+            if (allCandles.length === 0) {
+                console.log(`\n❌ [API FETCH] No candles collected from any URL`);
                 console.log(`${'▲'.repeat(80)}\n`);
                 return [];
             }
 
-            if (!response.data) {
-                console.log(`❌ [API FETCH] Response has no 'data' field`);
-                console.log(`   └─ Response keys: ${Object.keys(response).join(', ')}`);
-                console.log(`${'▲'.repeat(80)}\n`);
-                return [];
-            }
+            // Remove duplicates and sort by timestamp
+            console.log(`\n🔄 [MERGE] Removing duplicates from ${allCandles.length} candles...`);
+            const uniqueCandles = new Map();
+            allCandles.forEach(candle => {
+                const timestamp = candle[0]; // First element is timestamp
+                uniqueCandles.set(timestamp, candle);
+            });
 
-            if (!response.data.candles) {
-                console.log(`❌ [API FETCH] Response.data has no 'candles' field`);
-                console.log(`   └─ Response.data keys: ${Object.keys(response.data).join(', ')}`);
-                console.log(`${'▲'.repeat(80)}\n`);
-                return [];
-            }
+            const dedupedCandles = Array.from(uniqueCandles.values());
+            console.log(`✅ [MERGE] After deduplication: ${dedupedCandles.length} unique candles`);
 
-            const candles = response.data.candles;
-            console.log(`\n📊 [API FETCH] Candles received: ${candles.length}`);
-
-            if (candles.length === 0) {
-                console.log(`⚠️  [API FETCH] API returned 0 candles`);
-                console.log(`   └─ Possible reasons: Market closed, no trading data, weekend/holiday`);
-                console.log(`${'▲'.repeat(80)}\n`);
-                return [];
-            }
-
-            // Show sample of raw data
-            console.log(`📋 [API FETCH] Sample raw candle (first): [${candles[0].join(', ')}]`);
-            if (candles.length > 1) {
-                console.log(`📋 [API FETCH] Sample raw candle (last): [${candles[candles.length - 1].join(', ')}]`);
-            }
+            // Sort by timestamp
+            const sortedCandles = dedupedCandles.sort((a, b) => {
+                const timeA = a[0];
+                const timeB = b[0];
+                return new Date(timeA) - new Date(timeB);
+            });
 
             // Convert array format to object format
-            console.log(`\n🔄 [API FETCH] Converting ${candles.length} candles from array to object format...`);
-            const formattedCandles = candles.map(c => ({
-                timestamp: c[0],
-                open: c[1],
-                high: c[2],
-                low: c[3],
-                close: c[4],
-                volume: c[5]
-            }));
+            console.log(`\n🔄 [FORMAT] Converting ${sortedCandles.length} candles to object format...`);
+            const formattedCandles = formatCandles(sortedCandles);
 
-            console.log(`✅ [API FETCH] Conversion complete`);
+            console.log(`✅ [API FETCH] Complete`);
+            console.log(`   ├─ Total URLs fetched: ${urls.length}`);
+            console.log(`   ├─ Raw candles collected: ${allCandles.length}`);
+            console.log(`   ├─ After deduplication: ${formattedCandles.length}`);
             console.log(`   ├─ First timestamp: ${formattedCandles[0].timestamp}`);
-            console.log(`   ├─ Last timestamp: ${formattedCandles[formattedCandles.length - 1].timestamp}`);
-            console.log(`   └─ Total formatted: ${formattedCandles.length} candles`);
+            console.log(`   └─ Last timestamp: ${formattedCandles[formattedCandles.length - 1].timestamp}`);
             console.log(`${'▲'.repeat(80)}\n`);
 
             return formattedCandles;
@@ -1036,19 +794,25 @@ class CandleFetcherService {
         console.log(`🔍 [TRIGGER ADAPTER] Getting market data for ${instrumentKey}`);
 
         try {
-            // Extract unique timeframes from triggers
-            const timeframesNeeded = new Set(['1m']); // Always get current price (1m)
+            // Extract unique timeframes from triggers (only DB-available timeframes: 15m, 1h, 1d)
+            // Note: Current price (1m) is fetched separately via API below
+            const timeframesNeeded = new Set();
             triggers.forEach(trigger => {
                 if (trigger.timeframe) {
                     let normalized = trigger.timeframe.toLowerCase();
                     if (normalized === '1d' || normalized === 'day' || normalized === '1day') {
                         normalized = '1d';
                     }
-                    timeframesNeeded.add(normalized);
+                    // Only add timeframes that exist in our storage pipeline (15m, 1h, 1d)
+                    if (['15m', '1h', '1d'].includes(normalized)) {
+                        timeframesNeeded.add(normalized);
+                    } else {
+                        console.log(`⚠️  [TRIGGER ADAPTER] Skipping unsupported timeframe: ${normalized} (only 15m/1h/1d available in DB)`);
+                    }
                 }
             });
 
-            console.log(`📊 Required timeframes: ${Array.from(timeframesNeeded).join(', ')}`);
+            console.log(`📊 Required timeframes from DB: ${Array.from(timeframesNeeded).join(', ')}`);
 
             // Get candle data using existing service (DB-first strategy)
             const result = await this.getCandleDataForAnalysis(instrumentKey, 'swing');
@@ -1088,8 +852,8 @@ class CandleFetcherService {
 
                 if (dbRecord) {
                     const tradingDate = new Date(dbRecord.trading_date);
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0); // Start of today
+                    const now = new Date();
+
 
                     const lastBarTime = dbRecord.data_quality?.last_bar_time
                         ? new Date(dbRecord.data_quality.last_bar_time)
@@ -1100,13 +864,18 @@ class CandleFetcherService {
                     console.log(`   ├─ Bars in DB: ${dbRecord.bars_count}`);
                     console.log(`   └─ Updated at: ${new Date(dbRecord.updated_at).toISOString()}`);
 
-                    // Check if data is from previous day(s)
-                    if (tradingDate < today) {
-                        console.log(`   ⚠️  DB has data from ${tradingDate.toDateString()}, today is ${today.toDateString()}`);
+                    // Determine staleness based on last bar time, not trading date
+                    // Add buffer time based on timeframe to avoid unnecessary API calls during non-trading hours
+                    const bufferMinutes = timeframe === '15m' ? 15 : timeframe === '1h' ? 60 : 1440;
+                    const bufferMs = bufferMinutes * 60 * 1000;
+                    const timeSinceLastBar = now - lastBarTime;
+
+                    // Check if data is stale (last bar is older than buffer time)
+                    if (timeSinceLastBar > bufferMs) {
+                        console.log(`   ⚠️  Data is stale. Last bar: ${lastBarTime.toISOString()} (${Math.floor(timeSinceLastBar / (60 * 1000))} minutes ago)`);
                         console.log(`   🔄 Fetching missing candles from API...`);
 
                         // Calculate how many candles we need to fetch
-                        const now = new Date();
                         const timeDiffMs = now - lastBarTime;
                         const timeDiffHours = timeDiffMs / (1000 * 60 * 60);
 
@@ -1137,14 +906,7 @@ class CandleFetcherService {
                                         console.log(`   ✅ Fetched ${todayCandles.length} ${timeframe} candles from intraday API`);
 
                                         // Convert to standard format
-                                        const formattedCandles = todayCandles.map(candle => ({
-                                            timestamp: Array.isArray(candle) ? candle[0] : candle.time || candle.timestamp,
-                                            open: Array.isArray(candle) ? candle[1] : candle.open,
-                                            high: Array.isArray(candle) ? candle[2] : candle.high,
-                                            low: Array.isArray(candle) ? candle[3] : candle.low,
-                                            close: Array.isArray(candle) ? candle[4] : candle.close,
-                                            volume: Array.isArray(candle) ? candle[5] : candle.volume
-                                        }));
+                                        const formattedCandles = formatCandles(todayCandles);
 
                                         // Merge: Keep all DB candles + append only NEW candles
                                         const existingTimestamps = new Set(
@@ -1165,15 +927,18 @@ class CandleFetcherService {
                                             // Update DB with merged data
                                             const newLastBarTime = new Date(candles[candles.length - 1].timestamp || candles[candles.length - 1][0]);
 
+                                            // Extract trading date (date only, normalized to midnight)
+                                            const tradingDate = MarketHoursUtil.normalizeDateToMidnight(newLastBarTime);
+
                                             await PreFetchedData.updateOne(
                                                 { instrument_key: instrumentKey, timeframe: timeframe },
                                                 {
                                                     $set: {
                                                         candle_data: candles,
                                                         bars_count: candles.length,
-                                                        trading_date: today,
+                                                        trading_date: tradingDate, // Date only (for queries & TTL)
                                                         updated_at: new Date(),
-                                                        'data_quality.last_bar_time': newLastBarTime
+                                                        'data_quality.last_bar_time': newLastBarTime // Full timestamp (for staleness)
                                                     }
                                                 }
                                             );
@@ -1275,6 +1040,7 @@ class CandleFetcherService {
             throw error;
         }
     }
+
 }
 
 const candleFetcherService = new CandleFetcherService();

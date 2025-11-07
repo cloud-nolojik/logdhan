@@ -49,6 +49,11 @@ class AgendaMonitoringService {
                 await this.cleanupStaleOrderProcessingLocks();
             });
 
+            // Define cleanup job for expired monitoring subscriptions
+            this.agenda.define('cleanup-expired-subscriptions', async (job) => {
+                await this.cleanupExpiredSubscriptions();
+            });
+
             // Handle job events
             this.agenda.on('ready', () => {
                 console.log('🎯 Agenda monitoring service ready');
@@ -72,6 +77,12 @@ class AgendaMonitoringService {
             // Schedule periodic cleanup of stale order processing locks (every 5 minutes)
             await this.agenda.every('5 minutes', 'cleanup-stale-locks', {}, {
                 _id: 'stale-lock-cleanup',
+                timezone: 'Asia/Kolkata'
+            });
+
+            // Schedule periodic cleanup of expired monitoring subscriptions (every 30 minutes)
+            await this.agenda.every('30 minutes', 'cleanup-expired-subscriptions', {}, {
+                _id: 'expired-subscription-cleanup',
                 timezone: 'Asia/Kolkata'
             });
 
@@ -1492,18 +1503,62 @@ class AgendaMonitoringService {
     async cleanupStaleOrderProcessingLocks() {
         try {
             console.log('🧹 Running cleanup of stale order processing locks...');
-            
+
             const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
             const result = await StockAnalysis.cleanupStaleOrderProcessingLocks();
-            
+
             if (result && result.modifiedCount > 0) {
                 console.log(`✅ Cleaned up ${result.modifiedCount} stale order processing locks`);
             }
-            
+
             return result;
         } catch (error) {
             console.error('❌ Error in stale lock cleanup job:', error);
             return null;
+        }
+    }
+
+    /**
+     * Clean up expired monitoring subscriptions
+     * Updates status to 'expired' for subscriptions past their expiry time
+     */
+    async cleanupExpiredSubscriptions() {
+        try {
+            console.log('🧹 [EXPIRY CLEANUP] Running cleanup of expired monitoring subscriptions...');
+
+            const now = new Date();
+
+            // Update expired subscriptions to 'expired' status
+            const result = await MonitoringSubscription.updateMany(
+                {
+                    monitoring_status: 'active',
+                    expires_at: { $lte: now }
+                },
+                {
+                    $set: {
+                        monitoring_status: 'expired',
+                        stopped_at: now,
+                        stop_reason: 'expired'
+                    }
+                }
+            );
+
+            if (result && result.modifiedCount > 0) {
+                console.log(`✅ [EXPIRY CLEANUP] Marked ${result.modifiedCount} subscriptions as expired`);
+            } else {
+                console.log(`ℹ️ [EXPIRY CLEANUP] No expired subscriptions found`);
+            }
+
+            return {
+                success: true,
+                expired_count: result.modifiedCount
+            };
+        } catch (error) {
+            console.error('❌ [EXPIRY CLEANUP] Error in expired subscription cleanup job:', error);
+            return {
+                success: false,
+                error: error.message
+            };
         }
     }
 

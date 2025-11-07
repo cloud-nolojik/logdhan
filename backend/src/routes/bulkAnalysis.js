@@ -39,13 +39,13 @@ async function sendBulkAnalysisCompletionNotification(session) {
 // Helper function to get user-friendly bulk analysis messages
 function getBulkAnalysisMessage(reason) {
     const messages = {
-        before_session: "🕐 Analysis can be started only from 4:00 PM on market close till next 8:45 AM.",
-        session_ended: "⏰ Today's analysis session has ended. Analysis available from 4:00 PM to 8:45 AM.",
-        weekend_session: "📈 Weekend analysis session is active! Analysis available till Monday 8:45 AM.",
-        holiday: "🏖️Analysis can be started only from 4:00 PM on market close till next 8:45 AM.",
-        outside_window: "🚫 Analysis can be started only from 4:00 PM on market close till next 8:45 AM.",
-        weekday_session: "✅ Evening analysis session is active! Available till tomorrow 8:45 AM.",
-        monday_morning: "🌅 Monday morning session - analysis available till 8:45 AM before market opens."
+        before_session: "🕐 Analysis can be started only from 5.00 PM on market close till next 8.59 AM.",
+        session_ended: "⏰ Today's analysis session has ended. Analysis available from 5.00 PM to 8.59 AM.",
+        weekend_session: "📈 Weekend analysis session is active! Analysis available till Monday 8.59 AM.",
+        holiday: "🏖️Analysis can be started only from 5.00 PM on market close till next 8.59 AM.",
+        outside_window: "🚫 Analysis can be started only from 5.00 PM on market close till next 8.59 AM.",
+        weekday_session: "✅ Evening analysis session is active! Available till tomorrow 8.59 AM.",
+        monday_morning: "🌅 Monday morning session - analysis available till 8.59 AM before market opens."
     };
     
     return messages[reason] || "Bulk analysis is currently not available. Please try again during the allowed window.";
@@ -90,7 +90,7 @@ router.post('/analyze-all', auth, async (req, res) => {
         });
         //console.log(`🗑️ [ANALYZE-ALL] Deleted ${sessionDeleteResult.deletedCount} existing sessions`);
         
-        // Check if bulk analysis is allowed (4:00 PM on market close till next 8:45 AM)
+        // Check if bulk analysis is allowed (5.00 PM on market close till next 8.59 AM)
         const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
         
         if (!analysisPermission.allowed) {

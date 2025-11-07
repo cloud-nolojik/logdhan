@@ -3,7 +3,7 @@
  * Centralizes all date-related calculations for candle data fetching
  */
 
-import dailyDataPrefetchService from '../services/dailyDataPrefetch.service.js';
+import MarketHoursUtil from './marketHours.js';
 
 class DateCalculator {
     constructor() {
@@ -44,7 +44,7 @@ class DateCalculator {
         let holidaysFound = 0;
         while (tradingDaysFound < tradingDaysNeeded && calendarDaysChecked < maxDaysToCheck) {
             // Check if current date is a trading day using database
-            const isTradingDay = await dailyDataPrefetchService.isTradingDay(currentDate);
+            const isTradingDay = await MarketHoursUtil.isTradingDay(currentDate);
             if (isTradingDay) {
                 tradingDaysFound++;
                 if (tradingDaysFound <= 5 || tradingDaysFound >= tradingDaysNeeded - 5) {
@@ -178,34 +178,65 @@ class DateCalculator {
     }
 
     /**
-     * Get date range for fetching historical data using real trading days
+     * Get date range for fetching historical data using calendar days
+     * Upstox API automatically filters out non-trading days, so we just need to request
+     * enough calendar days to ensure we get the required number of bars
      */
     async getHistoricalDateRange(timeframe, referenceDate = null, targetBars = null) {
-        const toDate = referenceDate ? new Date(referenceDate) : new Date();
-        console.log(`📅 [DEBUG] Input referenceDate: ${referenceDate ? this.formatDateISO(referenceDate) : 'null'}`);
-        
-        // Don't modify the reference date if it's already set correctly
+        // ✅ FIX: Convert to IST timezone to ensure dates are in Indian market timezone
+        let toDate;
         if (referenceDate) {
-            // Keep the original date as-is to avoid timezone issues
-            console.log(`📅 [DEBUG] Using original referenceDate as toDate: ${this.formatDateISO(toDate)}`);
+            // Convert the provided reference date to IST
+            toDate = MarketHoursUtil.toIST(new Date(referenceDate));
         } else {
+            // Get current time in IST
+            toDate = MarketHoursUtil.toIST(new Date());
+            // Set to midnight IST for today
             toDate.setHours(0, 0, 0, 0);
-            console.log(`📅 [DEBUG] After setHours toDate: ${this.formatDateISO(toDate)}`);
         }
 
-        const tradingDayResult = await this.calculateActualTradingDays(timeframe, toDate, targetBars);
-        
-        console.log(`📅 [DATE RANGE] ${timeframe}: ${this.formatDateISO(tradingDayResult.fromDate)} to ${this.formatDateISO(toDate)} (${tradingDayResult.totalCalendarDays} calendar days, ${tradingDayResult.tradingDaysFound} trading days)`);
-        
-        // Split into chunks if needed
-        const chunks = await this.splitDateRangeIntoChunks(timeframe, tradingDayResult.fromDate, toDate);
-        
+        console.log(`📅 [DEBUG] Input referenceDate: ${referenceDate ? this.formatDateISO(referenceDate) : 'null'}`);
+        console.log(`📅 [DEBUG] Converted to IST toDate: ${this.formatDateISO(toDate)}`);
+
+        // Simple calendar day calculation (no DB queries needed!)
+        const barsNeeded = targetBars || this.requiredBars[timeframe] || 100;
+        const barsPerDay = this.barsPerTradingDay[timeframe] || 1;
+
+        // Calculate trading days needed
+        const tradingDaysNeeded = Math.ceil(barsNeeded / barsPerDay);
+
+        // Add buffer and convert to calendar days (trading days * 1.4 accounts for weekends/holidays)
+        // Formula: ~5 trading days per 7 calendar days, so multiply by 1.4
+        let calendarDaysNeeded = Math.ceil(tradingDaysNeeded * 1.4) + 10; // Extra 10 day buffer
+
+        // Respect Upstox API limits per timeframe
+        const limits = this.getUpstoxLimits(timeframe);
+        if (calendarDaysNeeded > limits.maxCalendarDays) {
+            console.log(`⚠️  [DATE CALC] Calculated ${calendarDaysNeeded} days exceeds Upstox limit of ${limits.maxCalendarDays} days for ${timeframe}`);
+            console.log(`   └─ Will be automatically chunked into multiple API calls`);
+            // Don't cap it - let the chunking logic handle it
+        }
+
+        console.log(`📅 [DATE CALC] ${timeframe}: need ${barsNeeded} bars`);
+        console.log(`   ├─ Bars per trading day: ${barsPerDay}`);
+        console.log(`   ├─ Trading days needed: ${tradingDaysNeeded}`);
+        console.log(`   ├─ Calendar days needed (with buffer): ${calendarDaysNeeded}`);
+        console.log(`   └─ Upstox API limit: ${limits.maxCalendarDays} days (${limits.maxCalendarDays === 30 ? '1 month' : limits.maxCalendarDays === 90 ? '1 quarter' : '1 decade'})`);
+
+        // Calculate fromDate by subtracting calendar days
+        const fromDate = new Date(toDate);
+        fromDate.setDate(fromDate.getDate() - calendarDaysNeeded);
+
+        console.log(`📅 [DATE RANGE] ${timeframe}: ${this.formatDateISO(fromDate)} to ${this.formatDateISO(toDate)} (${calendarDaysNeeded} calendar days)`);
+
+        // Split into chunks if needed (based on Upstox API limits)
+        const chunks = await this.splitDateRangeIntoChunks(timeframe, fromDate, toDate);
+
         return {
-            fromDate: tradingDayResult.fromDate,
+            fromDate,
             toDate,
-            tradingDaysNeeded: tradingDayResult.tradingDaysNeeded,
-            tradingDaysFound: tradingDayResult.tradingDaysFound,
-            calendarDaysNeeded: tradingDayResult.totalCalendarDays,
+            tradingDaysNeeded,
+            calendarDaysNeeded,
             chunks: chunks  // Add chunks for API calls
         };
     }
@@ -221,7 +252,7 @@ class DateCalculator {
      * Check if a date is a trading day using database
      */
     async isTradingDay(date) {
-        return await dailyDataPrefetchService.isTradingDay(date);
+        return await MarketHoursUtil.isTradingDay(date);
     }
 
     /**
@@ -238,33 +269,59 @@ class DateCalculator {
     }
 
     /**
-     * Check if current time is after market close (4:00 PM IST)
+     * Check if current time is in post-market window for intraday data
+     * Post-market window: After 5.00 PM but before 9:00 AM next day (pre-market)
      */
     isAfterMarketClose() {
-        const now = new Date();
+        // ✅ FIX: Use IST timezone instead of server timezone
+        const now = MarketHoursUtil.toIST(new Date());
         const hours = now.getHours();
         const minutes = now.getMinutes();
         const currentTimeMinutes = hours * 60 + minutes;
-        const marketCloseTime = 16 * 60; // 4:00 PM in minutes
-        
-        return currentTimeMinutes >= marketCloseTime;
+
+        const marketCloseTime = 16 * 60; // 5.00 PM IST (960 minutes)
+        const nextDayPreMarketStart = 9 * 60; // 9:00 AM IST (540 minutes)
+
+        // Valid post-market window:
+        // 1. After 5.00 PM same day (16:00 - 23:59)
+        // 2. OR Before 9:00 AM next day (00:00 - 08:59)
+        const afterClose = currentTimeMinutes >= marketCloseTime; // 5.00 PM - 11:59 PM
+        const beforePreMarket = currentTimeMinutes < nextDayPreMarketStart; // 12:00 AM - 8:59 AM
+
+        return afterClose || beforePreMarket;
     }
 
     /**
      * Determine if we should use intraday (current day) or historical data
      */
     async shouldUseIntradayData() {
-        // Use intraday data if:
-        // 1. It's after 4:00 PM on a trading day
-        // 2. Today is a trading day
-        const now = new Date();
-        const isTradingDay = await this.isTradingDay(now);
+        // ✅ FIX: Get current time in IST timezone
+        const now = MarketHoursUtil.toIST(new Date());
         const afterMarketClose = this.isAfterMarketClose();
-        
+
+        // Determine which trading day to check:
+        // - Before 9:00 AM: Check YESTERDAY (we're in post-market window of previous day)
+        // - After 5.00 PM: Check TODAY (we're in post-market window of current day)
+        let tradingDateToCheck;
+        const hours = now.getHours();
+        const minutes = now.getMinutes();
+        const currentTimeMinutes = hours * 60 + minutes;
+        const preMarketStart = 9 * 60; // 9:00 AM IST
+
+        if (currentTimeMinutes < preMarketStart) {
+            // Before 9:00 AM → Check if YESTERDAY was a trading day
+            tradingDateToCheck = new Date(now);
+            tradingDateToCheck.setDate(tradingDateToCheck.getDate() - 1);
+        } else {
+            // After 9:00 AM → Check if TODAY is a trading day
+            tradingDateToCheck = now;
+        }
+
+        const isTradingDay = await this.isTradingDay(tradingDateToCheck);
         const useIntraday = isTradingDay && afterMarketClose;
-        
-        console.log(`📊 [DATA SELECTION] Trading Day: ${isTradingDay}, After 4PM: ${afterMarketClose} → ${useIntraday ? 'INTRADAY' : 'HISTORICAL'}`);
-        
+
+        console.log(`📊 [DATA SELECTION] Now: ${this.formatDateISO(now)} ${hours}:${minutes.toString().padStart(2, '0')} IST, Checking: ${this.formatDateISO(tradingDateToCheck)}, Trading Day: ${isTradingDay}, After Market Close: ${afterMarketClose} → ${useIntraday ? 'INTRADAY' : 'HISTORICAL'}`);
+
         return useIntraday;
     }
 
@@ -272,11 +329,25 @@ class DateCalculator {
      * Get the appropriate reference date for data fetching
      */
     async getReferenceDate() {
-        const now = new Date();
-        
+        // ✅ FIX: Get current time in IST timezone
+        const now = MarketHoursUtil.toIST(new Date());
+
         if (await this.shouldUseIntradayData()) {
-            // Use today for intraday data
-            return now;
+            // Use intraday data - need to determine which day's data to fetch
+            const hours = now.getHours();
+            const minutes = now.getMinutes();
+            const currentTimeMinutes = hours * 60 + minutes;
+            const preMarketStart = 9 * 60; // 9:00 AM IST
+
+            if (currentTimeMinutes < preMarketStart) {
+                // Before 9:00 AM → Fetch YESTERDAY's intraday data
+                const yesterday = new Date(now);
+                yesterday.setDate(yesterday.getDate() - 1);
+                return yesterday;
+            } else {
+                // After 5.00 PM → Fetch TODAY's intraday data
+                return now;
+            }
         } else {
             // Use previous trading day for historical data
             return await this.getPreviousTradingDay(now);
@@ -290,7 +361,7 @@ class DateCalculator {
         const referenceDate = await this.getReferenceDate();
         const dateRange = await this.getHistoricalDateRange(timeframe, referenceDate, targetBars);
         const useIntraday = await this.shouldUseIntradayData();
-        
+
         return {
             timeframe,
             referenceDate,
@@ -299,8 +370,8 @@ class DateCalculator {
             useIntraday,
             barsNeeded: targetBars || this.requiredBars[timeframe] || 100,
             tradingDaysNeeded: dateRange.tradingDaysNeeded,
-            tradingDaysFound: dateRange.tradingDaysFound,
-            calendarDaysNeeded: dateRange.calendarDaysNeeded
+            calendarDaysNeeded: dateRange.calendarDaysNeeded,
+            chunks: dateRange.chunks  // ✅ Include chunks for multi-call API support
         };
     }
 }

@@ -64,6 +64,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Request logging middleware - logs URL and body for all requests
+app.use((req, res, next) => {
+  console.log('\n📍 Incoming Request:');
+  console.log('Method:', req.method);
+  console.log('URL:', req.originalUrl);
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  console.log('Query:', JSON.stringify(req.query, null, 2));
+  console.log('---');
+  next();
+});
+
 // Serve static files from public directory with proper headers
 app.use(express.static('public', {
   setHeaders: (res, path) => {

@@ -411,7 +411,7 @@ class UpstoxMarketTimingService {
 
     /**
      * Check if bulk analysis is allowed based on market timing and your requirements
-     * Allowed: After 4 PM till 8:45 AM on trading days, anytime on holidays/weekends
+     * Allowed: After 4 PM till 8.59 AM on trading days, anytime on holidays/weekends
      * @param {string} accessToken - Upstox access token
      * @returns {Promise<Object>}
      */
@@ -439,33 +439,33 @@ class UpstoxMarketTimingService {
             const currentTime = hours * 60 + minutes; // Convert to minutes
             
             // Define time windows
-            const marketClose = 16 * 60;     // 4:00 PM (market closes at 3:30 PM, allow from 4:00 PM)
-            const nextDayStart = 8 * 60 + 45; // 8:45 AM next day
+            const marketClose = 16 * 60;     // 5.00 PM (market closes at 3:30 PM, allow from 5.00 PM)
+            const nextDayStart = 8 * 60 + 45; // 8.59 AM next day
             const endOfDay = 24 * 60;        // Midnight
             
-            // Allow after 4:00 PM till midnight
+            // Allow after 5.00 PM till midnight
             if (currentTime >= marketClose) {
                 return {
                     allowed: true,
-                    reason: 'Post-market analysis window (after 4:00 PM)',
+                    reason: 'Post-market analysis window (after 5.00 PM)',
                     marketStatus: marketStatus
                 };
             }
             
-            // Allow from midnight till 8:45 AM
+            // Allow from midnight till 8.59 AM
             if (currentTime <= nextDayStart) {
                 return {
                     allowed: true,
-                    reason: 'Pre-market analysis window (before 8:45 AM)',
+                    reason: 'Pre-market analysis window (before 8.59 AM)',
                     marketStatus: marketStatus
                 };
             }
             
-            // Blocked during restricted hours (8:45 AM - 4:00 PM on trading days)
+            // Blocked during restricted hours (8.59 AM - 5.00 PM on trading days)
             return {
                 allowed: false,
-                reason: 'Bulk analysis is not available during market hours (8:45 AM - 4:00 PM on trading days)',
-                nextAllowedTime: 'Today at 4:00 PM',
+                reason: 'Bulk analysis is not available during market hours (8.59 AM - 5.00 PM on trading days)',
+                nextAllowedTime: 'Today at 5.00 PM',
                 marketStatus: marketStatus
             };
             

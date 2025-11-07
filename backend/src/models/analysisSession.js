@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import MarketHoursUtil from '../utils/marketHours.js';
 
 const analysisSessionSchema = new mongoose.Schema({
     session_id: {
@@ -194,74 +195,13 @@ analysisSessionSchema.methods.timeoutCurrentStock = function() {
     return this.save();
 };
 
-// Static method to get expiry time (same logic as stock analysis)
+/**
+ * Calculate expiry time using common utility
+ * ALL sessions expire at 3:55 PM IST on NEXT trading day
+ * Stored in DB as UTC (10:25 AM UTC)
+ */
 analysisSessionSchema.statics.getExpiryTime = async function() {
-    try {
-        const now = new Date();
-        // FIXED: Proper IST timezone handling
-        const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000)); // Add 5.5 hours for IST
-        
-        // Import MarketTiming for holiday checking
-        const MarketTiming = (await import('./marketTiming.js')).default;
-        
-        // Helper function to check if a date is a trading day
-        const isTradingDay = async (date) => {
-            // Format date as YYYY-MM-DD using UTC methods on IST-adjusted time
-            const year = date.getUTCFullYear();
-            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-            const day = String(date.getUTCDate()).padStart(2, '0');
-            const dateStr = `${year}-${month}-${day}`; // YYYY-MM-DD format
-            const marketTiming = await MarketTiming.findOne({ date: dateStr });
-            
-            // If no record exists, assume it's a trading day if it's a weekday
-            if (!marketTiming) {
-                const dayOfWeek = date.getUTCDay();
-                return dayOfWeek >= 1 && dayOfWeek <= 5; // Monday to Friday
-            }
-            
-            return marketTiming.isMarketOpen;
-        };
-        
-        // Helper function to find next trading day
-        const findNextTradingDay = async (fromDate) => {
-            let checkDate = new Date(fromDate);
-            checkDate.setUTCDate(checkDate.getUTCDate() + 1); // Start from next day
-            
-            let maxDays = 10; // Prevent infinite loop
-            while (maxDays > 0) {
-                if (await isTradingDay(checkDate)) {
-                    return checkDate;
-                }
-                checkDate.setUTCDate(checkDate.getUTCDate() + 1);
-                maxDays--;
-            }
-            
-            // Fallback: return next Monday if can't find trading day
-            const nextMonday = new Date(fromDate);
-            nextMonday.setUTCDate(nextMonday.getUTCDate() + ((1 + 7 - nextMonday.getUTCDay()) % 7 || 7));
-            return nextMonday;
-        };
-        
-        // Current date for checking if it's a trading day (using IST-adjusted time)
-        const currentDate = new Date(istTime);
-        currentDate.setUTCHours(0, 0, 0, 0); // Reset to start of day
-        
-        // Find next trading day and set expiry to 3:30 PM IST (market close)
-        // FIXED: Match StockAnalysis expiry time for consistency
-        const nextTradingDay = await findNextTradingDay(currentDate);
-        const expiryTime = new Date(nextTradingDay);
-        expiryTime.setHours(15, 30, 0, 0); // 3:30 PM IST (market close)
-
-        console.log(`📅 [ANALYSIS SESSION EXPIRY] Session expires at next trading day market close 3:30 PM IST: ${expiryTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
-        
-        return expiryTime;
-    } catch (error) {
-        console.error('❌ [ANALYSIS SESSION EXPIRY] Error calculating expiry time:', error);
-        // Fallback: expire in 24 hours
-        const fallbackExpiry = new Date();
-        fallbackExpiry.setHours(fallbackExpiry.getHours() + 24);
-        return fallbackExpiry;
-    }
+    return await MarketHoursUtil.getExpiryTime();
 };
 
 // Static method to create new session

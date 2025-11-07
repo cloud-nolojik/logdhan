@@ -62,7 +62,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
             return res.status(423).json({
                 success: false,
                 error: 'stock_analysis_not_allowed',
-                message: `Analysis can be started only from 4:00 PM on market close till next 8:45 AM. ${analysisPermission.reason}`,
+                message: `Analysis can be started only from 5.00 PM on market close till next 8.59 AM. ${analysisPermission.reason}`,
                 reason: analysisPermission.reason,
                 nextAllowed: analysisPermission.nextAllowed,
                 validUntil: analysisPermission.validUntil
@@ -363,11 +363,13 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         }
 
         if (!anyAnalysis) {
-            console.log(`❌ [ANALYSIS BY INSTRUMENT] No analysis found for instrument: ${instrumentKey}`);
-            return res.status(404).json({
-                success: false,
-                error: 'Analysis not found',
-                message: 'No analysis found for this instrument'
+            console.log(`📭 [ANALYSIS BY INSTRUMENT] No analysis found for instrument: ${instrumentKey}`);
+            return res.status(200).json({
+                success: true,
+                status: 'not_analyzed',
+                error: 'not_analyzed',
+                message: 'This stock has not been analyzed yet',
+                call_to_action: 'Click Analyze to get AI-powered trading strategies'
             });
         }
 

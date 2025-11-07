@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import MarketHoursUtil from '../utils/marketHours.js';
 
 /**
  * MonitoringSubscription Model
@@ -187,34 +188,12 @@ monitoringSubscriptionSchema.index({
 // Static Methods
 
 /**
- * Calculate expiry time - SAME day 3:30 PM IST (market close)
- * Jobs expire at 3:30 PM same trading day OR when conditions met (whichever first)
+ * Calculate expiry time using common utility
+ * ALL subscriptions expire at 3:55 PM IST on NEXT trading day
+ * Stored in DB as UTC (10:25 AM UTC)
  */
 monitoringSubscriptionSchema.statics.getExpiryTime = async function() {
-    try {
-        const now = new Date();
-        const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000)); // Add 5.5 hours for IST
-
-        // Set expiry to 3:30 PM IST SAME day
-        const expiryTime = new Date(istTime);
-        expiryTime.setHours(15, 30, 0, 0); // 3:30 PM IST
-
-        // If current time is already past 3:30 PM IST today, set expiry to now (immediate expiry)
-        if (istTime.getHours() >= 15 && istTime.getMinutes() >= 30) {
-            console.log(`⚠️ [MONITORING EXPIRY] Current time (${istTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}) is past market close. Setting immediate expiry.`);
-            return now; // Expire immediately
-        }
-
-        console.log(`📅 [MONITORING EXPIRY] Job expires at same day market close 3:30 PM IST: ${expiryTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
-
-        return expiryTime;
-    } catch (error) {
-        console.error('❌ [MONITORING EXPIRY] Error calculating expiry time:', error);
-        // Fallback: expire in 6 hours
-        const fallbackExpiry = new Date();
-        fallbackExpiry.setHours(fallbackExpiry.getHours() + 6);
-        return fallbackExpiry;
-    }
+    return await MarketHoursUtil.getExpiryTime();
 };
 
 /**

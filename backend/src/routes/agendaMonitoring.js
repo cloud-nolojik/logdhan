@@ -446,10 +446,23 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
         const { analysisId } = req.params;
-        
-        // Verify analysis belongs to user
-        const analysis = await StockAnalysis.findById(analysisId);
-        
+
+        // Check if this is a bulk analysis ID (format: "bulk-{instrument_key}")
+        let analysis;
+        if (analysisId.startsWith('bulk-')) {
+            const instrumentKey = analysisId.replace('bulk-', '');
+            console.log(`🔍 [MONITORING STATUS] Bulk analysis ID detected, querying by instrument_key: ${instrumentKey}`);
+
+            // For bulk analysis, find the most recent analysis for this instrument
+            analysis = await StockAnalysis.findOne({
+                instrument_key: instrumentKey,
+                analysis_type: 'swing'
+            }).sort({ created_at: -1 });
+        } else {
+            // Regular analysis ID (MongoDB ObjectId)
+            analysis = await StockAnalysis.findById(analysisId);
+        }
+
         if (!analysis) {
             return res.status(404).json({
                 success: false,
@@ -470,7 +483,9 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
         let conditionsMetCount = 0;
         if (strategies.length > 0) {
             const topStrategy = strategies[0]; // Consider only the first/top strategy
-            const strategyStatus = await agendaMonitoringService.getMonitoringStatus(analysisId, topStrategy.id, userId);
+            // Use the actual analysis ObjectId instead of bulk ID for MonitoringSubscription queries
+            const realAnalysisId = analysis._id.toString();
+            const strategyStatus = await agendaMonitoringService.getMonitoringStatus(realAnalysisId, topStrategy.id, userId);
             strategyStatuses[topStrategy.id] = strategyStatus;
 
             if (strategyStatus.isMonitoring) {

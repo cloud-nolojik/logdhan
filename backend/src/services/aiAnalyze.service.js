@@ -168,7 +168,7 @@ class AIAnalyzeService {
                         analysis_type,
                         current_price: validPrice, // Ensure this is always updated
                         status: 'in_progress',
-                        expires_at: await StockAnalysis.getExpiryTime(), // Market-aware expiry
+                        expires_at: await StockAnalysis.getExpiryTime(analysis_type), // Market-aware expiry with analysis type
                         progress: {
                             percentage: 0,
                             current_step: 'Starting analysis...',

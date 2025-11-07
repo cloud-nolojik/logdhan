@@ -2,7 +2,7 @@ import { User } from '../models/user.js';
 import Stock from '../models/stock.js';
 import PreFetchedData from '../models/preFetchedData.js';
 import DailyJobStatus from '../models/dailyJobStatus.js';
-import MarketTiming from '../models/marketTiming.js';
+import MarketHoursUtil from '../utils/marketHours.js';
 import upstoxMarketTimingService from './upstoxMarketTiming.service.js';
 import candleFetcherService from './candleFetcher.service.js';
 
@@ -32,13 +32,12 @@ class DailyDataPrefetchService {
      * Main entry point for daily data pre-fetch
      */
     async runDailyPrefetch(targetDate = null) {
-        const tradingDate = targetDate || new Date();
-        tradingDate.setHours(0, 0, 0, 0);
+        const tradingDate = MarketHoursUtil.normalizeDateToMidnight(targetDate || new Date());
 
         console.log(`🚀 [PREFETCH] Starting daily data pre-fetch for ${tradingDate.toDateString()}`);
 
         // Check if this is a trading day
-        const isTradingDay = await this.isTradingDay(tradingDate);
+        const isTradingDay = await MarketHoursUtil.isTradingDay(tradingDate);
         if (!isTradingDay) {
             console.log(`📅 [PREFETCH] ${tradingDate.toDateString()} is not a trading day, skipping`);
             return { success: false, reason: 'not_trading_day' };
@@ -259,18 +258,17 @@ class DailyDataPrefetchService {
         const hours = now.getHours();
         const minutes = now.getMinutes();
         const currentTimeMinutes = hours * 60 + minutes;
-        const PREFETCH_AFTER = 16 * 60; // 4:00 PM
+        const PREFETCH_AFTER = 16 * 60; // 5.00 PM
 
         if (currentTimeMinutes < PREFETCH_AFTER) {
-            console.log(`⏰ [CURRENT DAY PREFETCH] Too early to fetch current day data (${hours}:${String(minutes).padStart(2, '0')}). Will run after 4:00 PM.`);
+            console.log(`⏰ [CURRENT DAY PREFETCH] Too early to fetch current day data (${hours}:${String(minutes).padStart(2, '0')}). Will run after 5.00 PM.`);
             return { success: false, reason: 'too_early' };
         }
 
         // Check if today is a trading day
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        const isTradingDay = await this.isTradingDay(today);
+        const today = MarketHoursUtil.normalizeDateToMidnight(new Date());
+
+        const isTradingDay = await MarketHoursUtil.isTradingDay(today);
         if (!isTradingDay) {
             console.log(`📅 [CURRENT DAY PREFETCH] ${today.toDateString()} is not a trading day, skipping`);
             return { success: false, reason: 'not_trading_day' };
@@ -454,30 +452,6 @@ class DailyDataPrefetchService {
     }
 
     /**
-     * Check if date is a trading day
-     */
-    async isTradingDay(date) {
-        try {
-            const dateStr = date.toISOString().split('T')[0];
-            const marketTiming = await MarketTiming.findOne({ date: dateStr });
-            
-            if (marketTiming) {
-                return marketTiming.isMarketOpen;
-            }
-            
-            // Fallback: weekdays are trading days
-            const dayOfWeek = date.getDay();
-            return dayOfWeek >= 1 && dayOfWeek <= 5;
-            
-        } catch (error) {
-            console.error(`❌ [PREFETCH] Error checking trading day:`, error);
-            // Fallback to weekday check
-            const dayOfWeek = date.getDay();
-            return dayOfWeek >= 1 && dayOfWeek <= 5;
-        }
-    }
-
-    /**
      * Get count of users with watchlists
      */
     async getUserWatchlistCount() {
@@ -497,8 +471,7 @@ class DailyDataPrefetchService {
      * Get pre-fetched data for analysis
      */
     static async getDataForAnalysis(instrumentKey, analysisType = 'swing') {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = MarketHoursUtil.normalizeDateToMidnight(new Date());
         
         console.log(`🔍 [PREFETCH SERVICE] getDataForAnalysis called:`);
         console.log(`   - instrumentKey: "${instrumentKey}"`);
