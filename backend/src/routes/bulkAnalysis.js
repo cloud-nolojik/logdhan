@@ -94,15 +94,15 @@ router.post('/analyze-all', auth, async (req, res) => {
         const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
         
         if (!analysisPermission.allowed) {
-            // console.log(`❌ [BULK TIMING] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
-            // return res.status(423).json({
-            //     success: false,
-            //     error: 'bulk_analysis_not_allowed',
-            //     message: getBulkAnalysisMessage(analysisPermission.reason),
-            //     reason: analysisPermission.reason,
-            //     nextAllowed: analysisPermission.nextAllowed,
-            //     validUntil: analysisPermission.validUntil
-            // });
+            console.log(`❌ [BULK TIMING] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+            return res.status(423).json({
+                success: false,
+                error: 'bulk_analysis_not_allowed',
+                message: getBulkAnalysisMessage(analysisPermission.reason),
+                reason: analysisPermission.reason,
+                nextAllowed: analysisPermission.nextAllowed,
+                validUntil: analysisPermission.validUntil
+            });
         }
         
         console.log(`✅ [BULK TIMING] Analysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);

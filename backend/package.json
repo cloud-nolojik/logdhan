@@ -12,6 +12,7 @@
     "test:live": "node src/scripts/testLiveBulkAnalysis.js",
     "test:gap-fill": "node src/scripts/testGapFilling.js",
     "test:indexes": "node src/scripts/testIndexFixes.js",
+    "test:notification": "node test-bulk-notification.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

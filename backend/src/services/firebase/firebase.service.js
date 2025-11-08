@@ -88,20 +88,11 @@ class FirebaseService {
         };
   
         try {
-
-      const res = await this.messaging.send(message)
-        .then((response) => {
-          // Response is a message ID string.
+          const response = await this.messaging.send(message);
           console.log('Successfully sent message:', response);
-        })
-        .catch((error) => {
-          console.log('Error sending message:', error);
-        });
-          
-    
-          sentMessages.push(res);
-        } catch (err) {
-          console.error(`Failed to send to token: ${token}`, err);
+          sentMessages.push(response);
+        } catch (error) {
+          console.error(`Failed to send to token: ${token}`, error);
           failedTokens.push(token);
         }
       }

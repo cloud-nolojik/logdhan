@@ -201,16 +201,25 @@ router.delete('/:id', auth, async (req, res) => {
 
 router.post('/send-notification', auth, async (req, res) => {
   try {
-    //CALL FIEREBASE.SERVICE 
-    firebaseService.sendToUser(
+    const result = await firebaseService.sendToUser(
       req.user.id,
       'Test Notification',
-      'This is a test notification'
+      'This is a test notification',
+      { type: 'test' }
     );
 
-
+    res.json({
+      success: true,
+      message: 'Notification sent successfully',
+      result
+    });
   } catch (error) {
     console.error('Error sending notification:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send notification',
+      message: error.message
+    });
   }
 });
 

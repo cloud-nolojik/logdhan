@@ -3,6 +3,8 @@ import { auth as authenticateToken } from '../middleware/auth.js';
 import agendaMonitoringService from '../services/agendaMonitoringService.js';
 import agendaDailyReminderService from '../services/agendaDailyReminderService.js';
 import agendaDataPrefetchService from '../services/agendaDataPrefetchService.js';
+import agendaBulkAnalysisNotificationService from '../services/agendaBulkAnalysisNotificationService.js';
+import agendaBulkAnalysisReminderService from '../services/agendaBulkAnalysisReminderService.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import triggerOrderService from '../services/triggerOrderService.js';
 
@@ -1138,6 +1140,118 @@ router.get('/architecture-info', authenticateToken, async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to get architecture information',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route POST /api/monitoring/bulk-notification/trigger
+ * @desc Manually trigger bulk analysis notification to all users (for testing)
+ * @access Private (authenticated users only)
+ */
+router.post('/bulk-notification/trigger', authenticateToken, async (req, res) => {
+    try {
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`🚀 [BULK NOTIFICATION] Manual trigger requested`);
+        console.log(`${'='.repeat(80)}`);
+        console.log(`📋 Request Details:`);
+        console.log(`   ├─ User ID: ${req.user.id}`);
+        console.log(`   └─ Timestamp: ${new Date().toISOString()}`);
+        console.log(`${'='.repeat(80)}\n`);
+
+        await agendaBulkAnalysisNotificationService.triggerManualNotification();
+
+        res.json({
+            success: true,
+            message: 'Bulk analysis notification job triggered successfully',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Failed to trigger bulk notification:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to trigger bulk notification',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route GET /api/monitoring/bulk-notification/status
+ * @desc Get status of bulk analysis notification job
+ * @access Private (authenticated users only)
+ */
+router.get('/bulk-notification/status', authenticateToken, async (req, res) => {
+    try {
+        const status = await agendaBulkAnalysisNotificationService.getJobStatus();
+
+        res.json({
+            success: true,
+            data: status,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Failed to get bulk notification status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get bulk notification status',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route POST /api/monitoring/bulk-reminder/trigger
+ * @desc Manually trigger bulk analysis expiry reminder to all users (for testing)
+ * @access Private (authenticated users only)
+ */
+router.post('/bulk-reminder/trigger', authenticateToken, async (req, res) => {
+    try {
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`⏰ [BULK REMINDER] Manual trigger requested`);
+        console.log(`${'='.repeat(80)}`);
+        console.log(`📋 Request Details:`);
+        console.log(`   ├─ User ID: ${req.user.id}`);
+        console.log(`   └─ Timestamp: ${new Date().toISOString()}`);
+        console.log(`${'='.repeat(80)}\n`);
+
+        await agendaBulkAnalysisReminderService.triggerManualReminder();
+
+        res.json({
+            success: true,
+            message: 'Bulk analysis expiry reminder job triggered successfully',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Failed to trigger bulk reminder:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to trigger bulk reminder',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * @route GET /api/monitoring/bulk-reminder/status
+ * @desc Get status of bulk analysis expiry reminder job
+ * @access Private (authenticated users only)
+ */
+router.get('/bulk-reminder/status', authenticateToken, async (req, res) => {
+    try {
+        const status = await agendaBulkAnalysisReminderService.getJobStatus();
+
+        res.json({
+            success: true,
+            data: status,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Failed to get bulk reminder status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get bulk reminder status',
             message: error.message
         });
     }

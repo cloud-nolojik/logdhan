@@ -31,6 +31,8 @@ import { messagingService } from './services/messaging/messaging.service.js';
 import agendaDailyReminderService from './services/agendaDailyReminderService.js'; // Using Agenda instead of BullMQ
 import agendaMonitoringService from './services/agendaMonitoringService.js';
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // Using Agenda for data pre-fetching
+import agendaBulkAnalysisNotificationService from './services/agendaBulkAnalysisNotificationService.js'; // Daily 5 PM bulk analysis notifications
+import agendaBulkAnalysisReminderService from './services/agendaBulkAnalysisReminderService.js'; // Daily 8 AM bulk analysis expiry reminder
 // Removed condition monitoring - direct order placement only
 
 import authRoutes from './routes/auth.js';
@@ -243,12 +245,34 @@ async function initializeAgendaDataPrefetchService() {
   }
 }
 
+// Initialize Agenda bulk analysis notification service
+async function initializeAgendaBulkAnalysisNotificationService() {
+  try {
+    console.log('🔄 Initializing Agenda bulk analysis notification service...');
+    await agendaBulkAnalysisNotificationService.initialize();
+    console.log('✅ Agenda bulk analysis notification service initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize Agenda bulk analysis notification service:', error);
+  }
+}
+
+// Initialize Agenda bulk analysis reminder service (8 AM expiry reminder)
+async function initializeAgendaBulkAnalysisReminderService() {
+  try {
+    console.log('🔄 Initializing Agenda bulk analysis reminder service...');
+    await agendaBulkAnalysisReminderService.initialize();
+    console.log('✅ Agenda bulk analysis reminder service initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize Agenda bulk analysis reminder service:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  
+
   // Initialize all services
   await initializeAzureStorage();
   // await initializeSubscriptionSystem();
@@ -256,29 +280,33 @@ app.listen(PORT, async () => {
   await initializeAgendaDailyReminderService();
   await initializeAgendaMonitoringService();
   await initializeAgendaDataPrefetchService();
+  await initializeAgendaBulkAnalysisNotificationService();
+  await initializeAgendaBulkAnalysisReminderService();
   // BullMQ condition monitoring removed - now using Agenda
-  
+
   console.log('🚀 All services initialized successfully');
 });
 
 // Graceful shutdown handling
 process.on('SIGINT', async () => {
   console.log('\n🛑 SIGINT received, shutting down gracefully...');
-  
+
   try {
     // Stop all Agenda services gracefully
     console.log('🛑 Stopping Agenda services...');
     await Promise.all([
       agendaDataPrefetchService.stop(),
       agendaDailyReminderService.agenda?.stop?.(),
-      agendaMonitoringService.agenda?.stop?.()
+      agendaMonitoringService.agenda?.stop?.(),
+      agendaBulkAnalysisNotificationService.shutdown(),
+      agendaBulkAnalysisReminderService.shutdown()
     ]);
     console.log('✅ All Agenda services stopped');
-    
+
     // Close MongoDB connection
     await mongoose.connection.close();
     console.log('✅ MongoDB connection closed');
-    
+
     console.log('✅ Graceful shutdown completed');
     process.exit(0);
   } catch (error) {
@@ -289,21 +317,23 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 SIGTERM received, shutting down gracefully...');
-  
+
   try {
     // Stop all Agenda services gracefully
     console.log('🛑 Stopping Agenda services...');
     await Promise.all([
       agendaDataPrefetchService.stop(),
       agendaDailyReminderService.agenda?.stop?.(),
-      agendaMonitoringService.agenda?.stop?.()
+      agendaMonitoringService.agenda?.stop?.(),
+      agendaBulkAnalysisNotificationService.shutdown(),
+      agendaBulkAnalysisReminderService.shutdown()
     ]);
     console.log('✅ All Agenda services stopped');
-    
+
     // Close MongoDB connection
     await mongoose.connection.close();
     console.log('✅ MongoDB connection closed');
-    
+
     console.log('✅ Graceful shutdown completed');
     process.exit(0);
   } catch (error) {

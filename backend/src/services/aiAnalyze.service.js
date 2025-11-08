@@ -13,6 +13,8 @@ import { User } from '../models/user.js';
 import modelSelectorService from './ai/modelSelector.service.js';
 import AnalysisSession from '../models/analysisSession.js';
 import { buildStage1Prompt, buildStage2Prompt, buildStage3Prompt } from '../prompts/swingPrompts.js';
+import Notification from '../models/notification.js';
+import { firebaseService } from './firebase/firebase.service.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -2389,38 +2391,69 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     }
 
     /**
-     * Send WhatsApp notification when analysis is complete
+     * Send in-app notification + Firebase push when analysis is complete
      */
     async sendAnalysisCompleteNotification(userId, analysisRecord) {
         try {
-            // Get user details for WhatsApp notification
+            // Get user details
             const user = await User.findById(userId);
-            if (!user || !user.mobile_number) {
-                console.log(`⚠️ User ${userId} not found or missing mobile number for analysis complete notification`);
+            if (!user) {
+                console.log(`⚠️ User ${userId} not found for analysis complete notification`);
                 return;
             }
 
             // Count strategies found in the analysis
             const strategiesCount = analysisRecord.analysis_data?.strategies?.length || 0;
+            const userName = user.name || user.email?.split('@')[0] || 'User';
+            const stockName = analysisRecord.stock_name || analysisRecord.stock_symbol;
 
-            // Prepare WhatsApp analysis complete data
-            const analysisData = {
-                stock_name: analysisRecord.stock_name || analysisRecord.stock_symbol,
-                strategies_count: strategiesCount.toString(),
-                analysis_type: analysisRecord.analysis_type || 'swing'
-            };
+            // Create in-app notification
+            await Notification.createNotification({
+                userId: userId,
+                title: 'Analysis Complete',
+                message: `${stockName} analysis is ready! Found ${strategiesCount} ${strategiesCount === 1 ? 'strategy' : 'strategies'}.`,
+                type: 'ai_review',
+                relatedStock: {
+                    trading_symbol: analysisRecord.stock_symbol,
+                    instrument_key: analysisRecord.instrument_key
+                },
+                metadata: {
+                    analysisId: analysisRecord._id.toString(),
+                    analysisType: analysisRecord.analysis_type,
+                    strategiesCount: strategiesCount
+                }
+            });
 
-            // Send WhatsApp notification
-            const whatsappResult = await messagingService.sendAnalysisComplete(
-                user.mobile_number,
-                analysisData
-            );
+            console.log(`✅ [NOTIFICATION] In-app notification created for ${stockName}`);
 
-            console.log(`📱 WhatsApp analysis complete notification sent for ${analysisRecord.stock_symbol}`);
-            return whatsappResult;
+            // Send Firebase push notification if user has FCM tokens
+            if (user.fcmTokens && user.fcmTokens.length > 0) {
+                await firebaseService.sendToUser(
+                    userId,
+                    'Analysis Complete',
+                    `${stockName} analysis ready with ${strategiesCount} ${strategiesCount === 1 ? 'strategy' : 'strategies'}!`,
+                    {
+                        type: 'AI_ANALYSIS_COMPLETE',
+                        stockSymbol: analysisRecord.stock_symbol,
+                        analysisId: analysisRecord._id.toString(),
+                        route: '/analysis'
+                    }
+                );
+
+                console.log(`📱 [NOTIFICATION] Firebase push sent for ${stockName} to ${user.fcmTokens.length} device(s)`);
+            } else {
+                console.log(`⚠️ [NOTIFICATION] No FCM tokens for user ${userId}, skipping Firebase push`);
+            }
+
+            // WhatsApp notification removed - using in-app + Firebase instead
+            // Old WhatsApp code commented out for reference:
+            // const whatsappResult = await messagingService.sendAnalysisComplete(
+            //     user.mobile_number,
+            //     analysisData
+            // );
 
         } catch (error) {
-            console.error(`❌ Error sending analysis complete WhatsApp notification:`, error);
+            console.error(`❌ Error sending analysis complete notification:`, error);
             // Don't throw error - notification failure shouldn't break analysis
         }
     }
@@ -2487,8 +2520,11 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                 activeSession.completed_at = now;
                 activeSession.current_stock_key = null;
                 activeSession.current_stock_index = totalStocks;
-                
+
                 console.log(`🎉 [SESSION UPDATE] Bulk session completed! ${totalProcessed}/${totalStocks} stocks processed`);
+
+                // Send completion notification (in-app + Firebase push)
+                await this.sendBulkSessionCompleteNotification(activeSession);
             }
 
             await activeSession.save();
@@ -2497,6 +2533,68 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         } catch (error) {
             console.error(`❌ [SESSION UPDATE] Failed to update bulk session progress:`, error.message);
             // Don't throw error - session update failure shouldn't break analysis
+        }
+    }
+
+    /**
+     * Send in-app notification + Firebase push when bulk analysis session completes
+     */
+    async sendBulkSessionCompleteNotification(session) {
+        try {
+            const userId = session.user_id;
+            const user = await User.findById(userId);
+
+            if (!user) {
+                console.log(`⚠️ User ${userId} not found for bulk session completion notification`);
+                return;
+            }
+
+            const userName = user.name || user.email?.split('@')[0] || 'User';
+            const totalStocks = session.total_stocks || 0;
+            const successfulStocks = session.successful_stocks || 0;
+            const failedStocks = session.failed_stocks || 0;
+
+            // Create in-app notification
+            await Notification.createNotification({
+                userId: userId,
+                title: 'Bulk Analysis Complete',
+                message: `Hello ${userName}! Your bulk analysis is complete. Successfully analyzed ${successfulStocks} out of ${totalStocks} stocks.`,
+                type: 'alert',
+                metadata: {
+                    sessionId: session._id.toString(),
+                    totalStocks: totalStocks,
+                    successfulStocks: successfulStocks,
+                    failedStocks: failedStocks,
+                    analysisType: session.analysis_type,
+                    completedAt: session.completed_at
+                }
+            });
+
+            console.log(`✅ [NOTIFICATION] In-app notification created for bulk session completion`);
+
+            // Send Firebase push notification if user has FCM tokens
+            if (user.fcmTokens && user.fcmTokens.length > 0) {
+                await firebaseService.sendToUser(
+                    userId,
+                    'Bulk Analysis Complete',
+                    `Your bulk analysis is complete! ${successfulStocks}/${totalStocks} stocks analyzed successfully.`,
+                    {
+                        type: 'BULK_ANALYSIS_COMPLETE',
+                        sessionId: session._id.toString(),
+                        route: '/bulk-analysis'
+                    }
+                );
+
+                console.log(`📱 [NOTIFICATION] Firebase push sent for bulk session completion to ${user.fcmTokens.length} device(s)`);
+            } else {
+                console.log(`⚠️ [NOTIFICATION] No FCM tokens for user ${userId}, skipping Firebase push`);
+            }
+
+            // WhatsApp notification removed - using in-app + Firebase instead
+
+        } catch (error) {
+            console.error(`❌ Error sending bulk session completion notification:`, error);
+            // Don't throw error - notification failure shouldn't break analysis
         }
     }
 }

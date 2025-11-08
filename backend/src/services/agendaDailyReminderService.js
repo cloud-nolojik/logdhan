@@ -234,21 +234,17 @@ class AgendaDailyReminderService {
             }
 
             // Send Firebase notification
-            if (user.fcm_token) {
-                await firebaseService.sendNotification(user.fcm_token, {
-                    title,
-                    body,
-                    data: {
-                        type: 'daily_reminder',
-                        reason,
-                        active_strategies: userJobs.length.toString(),
-                        stocks_count: analyses.length.toString()
-                    }
+            if (user.fcmTokens && user.fcmTokens.length > 0) {
+                await firebaseService.sendToUser(userId, title, body, {
+                    type: 'daily_reminder',
+                    reason,
+                    active_strategies: userJobs.length.toString(),
+                    stocks_count: analyses.length.toString()
                 });
 
                 console.log(`✅ Daily reminder sent to user ${userId} (${type})`);
             } else {
-                console.log(`⚠️ No FCM token for user ${userId}, skipping notification`);
+                console.log(`⚠️ No FCM tokens for user ${userId}, skipping notification`);
             }
 
         } catch (error) {
@@ -270,20 +266,16 @@ class AgendaDailyReminderService {
                 return;
             }
 
-            if (user.fcm_token) {
-                await firebaseService.sendNotification(user.fcm_token, {
-                    title: '🔐 Upstox Session Expired',
-                    body: 'Your Upstox session has expired. All monitoring has been paused. Please log in again to resume trade monitoring.',
-                    data: {
-                        type: 'session_expired',
-                        reason,
-                        action_required: 'reauth_upstox'
-                    }
+            if (user.fcmTokens && user.fcmTokens.length > 0) {
+                await firebaseService.sendToUser(userId, '🔐 Upstox Session Expired', 'Your Upstox session has expired. All monitoring has been paused. Please log in again to resume trade monitoring.', {
+                    type: 'session_expired',
+                    reason,
+                    action_required: 'reauth_upstox'
                 });
 
                 console.log(`✅ Session expired notification sent to user ${userId}`);
             } else {
-                console.log(`⚠️ No FCM token for user ${userId}, skipping session expiry notification`);
+                console.log(`⚠️ No FCM tokens for user ${userId}, skipping session expiry notification`);
             }
 
         } catch (error) {

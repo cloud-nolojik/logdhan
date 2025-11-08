@@ -8,6 +8,8 @@ import MonitoringSubscription from '../models/monitoringSubscription.js';
 import { messagingService } from './messaging/messaging.service.js';
 import { User } from '../models/user.js';
 import batchManager from './batchManager.js';
+import Notification from '../models/notification.js';
+import { firebaseService } from './firebase/firebase.service.js';
 
 class AgendaMonitoringService {
     constructor() {
@@ -390,8 +392,8 @@ class AgendaMonitoringService {
                             const userId = userSubscription.user_id;
                             const user = await User.findById(userId);
 
-                            if (!user || !user.mobile_number) {
-                                console.log(`⚠️ User ${userId} not found or missing mobile number - skipping notification`);
+                            if (!user) {
+                                console.log(`⚠️ User ${userId} not found - skipping notification`);
                                 failedNotifications++;
 
                                 // Create history entry
@@ -401,33 +403,63 @@ class AgendaMonitoringService {
                                     user_id: userId,
                                     stock_symbol: analysis.stock_symbol,
                                     status: 'error',
-                                    reason: 'User mobile number not found',
-                                    details: { error_message: 'Cannot send WhatsApp notification - user mobile number missing' },
+                                    reason: 'User not found',
+                                    details: { error_message: 'Cannot send notification - user not found' },
                                     monitoring_duration_ms: Date.now() - startTime
                                 });
                                 continue;
                             }
 
-                            // Check if user wants WhatsApp notifications
-                            if (!userSubscription.notification_preferences?.whatsapp) {
-                                console.log(`🔕 User ${userId} has disabled WhatsApp notifications - skipping`);
+                            // Check if user wants push notifications (optional - can be removed if all users should get alerts)
+                            if (userSubscription.notification_preferences?.push_disabled) {
+                                console.log(`🔕 User ${userId} has disabled push notifications - skipping`);
                                 continue;
                             }
 
-                            // Prepare monitoring conditions met alert data
-                            const alertData = {
-                                userName: user.name || user.email?.split('@')[0] || 'logdhanuser',
-                                stockSymbol: analysis.stock_symbol || analysis.stock_name,
-                                instrumentKey: analysis.instrument_key || analysis.stock_symbol || ''
-                            };
+                            // Prepare notification data
+                            const userName = user.name || user.email?.split('@')[0] || 'User';
+                            const stockSymbol = analysis.stock_symbol || analysis.stock_name;
+                            const strategyName = strategy.name || 'Unnamed Strategy';
 
-                            // Send WhatsApp monitoring alert
-                            const whatsappResult = await messagingService.sendMonitoringConditionsMet(
-                                user.mobile_number,
-                                alertData
-                            );
+                            // Create in-app notification
+                            await Notification.createNotification({
+                                userId: userId,
+                                title: 'Monitoring Alert - Conditions Met!',
+                                message: `${stockSymbol} - ${strategyName}: Entry conditions have been met! Check your app for details.`,
+                                type: 'trade_alert',
+                                relatedStock: {
+                                    trading_symbol: stockSymbol,
+                                    instrument_key: analysis.instrument_key
+                                },
+                                metadata: {
+                                    analysisId: analysisId,
+                                    strategyId: strategyId,
+                                    strategyName: strategyName,
+                                    currentPrice: triggerResult.data?.current_price,
+                                    triggersSatisfied: triggerResult.data?.triggers?.map(t => t.condition || t.name)
+                                }
+                            });
 
-                            console.log(`📱 Notification sent to user ${userId} (${user.name})`);
+                            // Send Firebase push notification
+                            if (user.fcmTokens && user.fcmTokens.length > 0) {
+                                await firebaseService.sendToUser(
+                                    userId,
+                                    'Monitoring Alert - Conditions Met!',
+                                    `${stockSymbol} - ${strategyName}: Entry conditions met!`,
+                                    {
+                                        type: 'MONITORING_CONDITIONS_MET',
+                                        analysisId: analysisId,
+                                        strategyId: strategyId,
+                                        stockSymbol: stockSymbol,
+                                        route: '/monitoring'
+                                    }
+                                );
+                            }
+
+                            // WhatsApp notification removed - using in-app + Firebase instead
+                            // Old code: await messagingService.sendMonitoringConditionsMet(user.mobile_number, alertData)
+
+                            console.log(`📱 In-app + Firebase notification sent to user ${userId} (${user.name})`);
                             successfulNotifications++;
 
                             // Create success history entry for this user
@@ -437,10 +469,11 @@ class AgendaMonitoringService {
                                 user_id: userId,
                                 stock_symbol: analysis.stock_symbol,
                                 status: 'conditions_met',
-                                reason: 'Monitoring conditions met alert sent successfully',
+                                reason: 'Monitoring conditions met alert sent successfully (in-app + Firebase)',
                                 details: {
-                                    whatsapp_result: whatsappResult,
-                                    alert_data: alertData,
+                                    notification_type: 'in_app_firebase',
+                                    stock_symbol: stockSymbol,
+                                    strategy_name: strategyName,
                                     current_price: triggerResult.data?.current_price,
                                     triggers_satisfied: triggerResult.data?.triggers?.map(t => t.condition || t.name)
                                 },
@@ -1606,40 +1639,74 @@ class AgendaMonitoringService {
     }
 
     /**
-     * Send WhatsApp notification when monitoring fails or stops
+     * Send in-app notification + Firebase push when monitoring fails or stops
      */
     async sendMonitoringFailureNotification(userId, analysisId, stockSymbol, reason, details = {}) {
         try {
             const user = await User.findById(userId);
-            if (!user || !user.mobile_number) {
-                console.log(`⚠️ No mobile number for user ${userId}, skipping WhatsApp notification`);
+            if (!user) {
+                console.log(`⚠️ User ${userId} not found, skipping notification`);
                 return;
             }
 
-            let message = `🛑 *MONITORING STOPPED* 🛑\n\n`;
-            message += `*Stock:* ${stockSymbol || 'Unknown'}\n`;
-            message += `*Reason:* ${reason}\n\n`;
+            const userName = user.name || user.email?.split('@')[0] || 'User';
+            let notificationTitle = 'Monitoring Stopped';
+            let notificationMessage = `${stockSymbol}: Monitoring has stopped - ${reason}`;
+            let detailedMessage = '';
 
-            // Add specific details based on reason
+            // Build detailed message based on reason
             if (reason.includes('expired')) {
-                message += `⏰ The analysis validity period has ended. Please generate a new analysis to continue monitoring.\n\n`;
+                detailedMessage = `The analysis validity period has ended. Please generate a new analysis to continue monitoring.`;
+                notificationMessage = `${stockSymbol}: Monitoring expired. Generate new analysis to continue.`;
             } else if (reason.includes('trigger') && reason.includes('expired')) {
-                message += `⏳ Entry conditions did not occur within the expected timeframe (${details.bars_checked || 'N/A'} bars checked).\n\n`;
-                message += `*Suggestion:* Market conditions may have changed. Consider running a fresh analysis.\n\n`;
+                detailedMessage = `Entry conditions did not occur within the expected timeframe (${details.bars_checked || 'N/A'} bars checked). Market conditions may have changed. Consider running a fresh analysis.`;
+                notificationMessage = `${stockSymbol}: Entry conditions not met within timeframe.`;
             } else if (reason.includes('invalidation')) {
-                message += `❌ A cancel condition was triggered:\n`;
-                message += `${details.invalidation_details || 'Price moved against the setup'}\n\n`;
-                message += `*This is good risk management* - the setup is no longer valid.\n\n`;
+                detailedMessage = `A cancel condition was triggered: ${details.invalidation_details || 'Price moved against the setup'}. This is good risk management - the setup is no longer valid.`;
+                notificationMessage = `${stockSymbol}: Cancel condition triggered (risk management).`;
             } else if (reason.includes('not found')) {
-                message += `📋 Analysis data was not found. This may have been deleted or expired.\n\n`;
+                detailedMessage = `Analysis data was not found. This may have been deleted or expired.`;
+                notificationMessage = `${stockSymbol}: Analysis not found.`;
             }
 
-            message += `Analysis ID: ${analysisId}\n`;
-            message += `Time: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}\n\n`;
-            message += `ℹ️ You can start a new monitoring session anytime from the app.`;
+            // Create in-app notification
+            await Notification.createNotification({
+                userId: userId,
+                title: notificationTitle,
+                message: notificationMessage,
+                type: 'system',
+                relatedStock: {
+                    trading_symbol: stockSymbol,
+                    instrument_key: details.instrument_key || ''
+                },
+                metadata: {
+                    analysisId: analysisId,
+                    reason: reason,
+                    details: detailedMessage,
+                    barsChecked: details.bars_checked,
+                    timestamp: new Date().toISOString()
+                }
+            });
 
-            await messagingService.sendWhatsAppMessage(user.mobile_number, message);
-            console.log(`📱 Monitoring failure notification sent to ${user.mobile_number}`);
+            // Send Firebase push notification
+            if (user.fcmTokens && user.fcmTokens.length > 0) {
+                await firebaseService.sendToUser(
+                    userId,
+                    notificationTitle,
+                    notificationMessage,
+                    {
+                        type: 'MONITORING_STOPPED',
+                        analysisId: analysisId,
+                        stockSymbol: stockSymbol,
+                        reason: reason,
+                        route: '/monitoring'
+                    }
+                );
+            }
+
+            // WhatsApp notification removed - using in-app + Firebase instead
+
+            console.log(`📱 Monitoring stopped notification sent to user ${userId} (in-app + Firebase)`);
 
         } catch (error) {
             console.error(`❌ Error sending monitoring failure notification:`, error);

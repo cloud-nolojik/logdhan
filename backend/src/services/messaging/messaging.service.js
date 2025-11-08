@@ -108,6 +108,30 @@ export class MessagingService {
   }
 
   /**
+   * Send bulk analysis available notification via WhatsApp
+   */
+  async sendBulkAnalysisAvailable(mobileNumber, notificationData) {
+    if (!this.infobipProvider) {
+      console.warn('⚠️ Infobip provider not initialized. Bulk analysis notification not sent.');
+      return null;
+    }
+
+    try {
+      return await this.infobipProvider.sendMessage({
+        to: mobileNumber,
+        templateName: 'bulk_analysis_available',
+        templateData: {
+          userName: notificationData.userName || 'User',
+          time: notificationData.time || '5:00 PM'
+        }
+      });
+    } catch (error) {
+      console.error('❌ Failed to send bulk analysis available notification:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get message delivery status
    */
   async getMessageStatus(messageId) {

@@ -595,12 +595,16 @@ class AIReviewService {
 
     const stockLogUser = await StockLog.findById(tradeData.logId).select('user');
 
-
-    firebaseService.sendAIReviewNotification(
+    try {
+      await firebaseService.sendAIReviewNotification(
         stockLogUser.user,
         tradeData.stock,
-        tradeData.logId,
+        tradeData.logId
       );
+    } catch (error) {
+      console.error('❌ Failed to send AI review notification:', error);
+      // Don't throw - notification failure shouldn't break the review
+    }
    
 
       // // Step 2: Fetch all data in parallel (replaces HTTP Request nodes)
