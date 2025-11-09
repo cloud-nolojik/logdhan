@@ -3,6 +3,10 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import axios from 'axios';
 
+// DEPRECATED: This file uses static JSON data and hard-coded API keys
+// All new code should import from '../utils/stockDb.js' instead
+// This file is kept only for backward compatibility
+
 const API_KEY = '5d2c7442-7ce9-44b3-a0df-19c110d72262';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -103,8 +107,9 @@ export async function validateStock(instrumentKey) {
 }
 
 export async function getCurrentPrice(instrumentKey,sendCandles = false) {
+  console.warn('⚠️  DEPRECATED: utils/stock.js getCurrentPrice() is deprecated. Please use stockDb.js instead.');
   const currentDate = new Date();
-  const previousDay = new Date(currentDate); 
+  const previousDay = new Date(currentDate);
   previousDay.setDate(currentDate.getDate() - 3);
   const currentDayFormattedDate = getFormattedDate(currentDate);
   const previousDayFormattedDate = getFormattedDate(previousDay);

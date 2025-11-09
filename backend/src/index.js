@@ -33,6 +33,7 @@ import agendaMonitoringService from './services/agendaMonitoringService.js';
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // Using Agenda for data pre-fetching
 import agendaBulkAnalysisNotificationService from './services/agendaBulkAnalysisNotificationService.js'; // Daily 5 PM bulk analysis notifications
 import agendaBulkAnalysisReminderService from './services/agendaBulkAnalysisReminderService.js'; // Daily 8 AM bulk analysis expiry reminder
+import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // Daily 4 PM pre-analysis of all watchlist stocks (Agenda)
 // Removed condition monitoring - direct order placement only
 
 import authRoutes from './routes/auth.js';
@@ -267,6 +268,17 @@ async function initializeAgendaBulkAnalysisReminderService() {
   }
 }
 
+// Initialize Agenda scheduled bulk analysis service (4 PM pre-analysis)
+async function initializeAgendaScheduledBulkAnalysisService() {
+  try {
+    console.log('🔄 Initializing Agenda scheduled bulk analysis service...');
+    await agendaScheduledBulkAnalysisService.initialize();
+    console.log('✅ Agenda scheduled bulk analysis service initialized (runs at 4:00 PM IST on trading days)');
+  } catch (error) {
+    console.error('❌ Failed to initialize Agenda scheduled bulk analysis service:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -282,6 +294,7 @@ app.listen(PORT, async () => {
   await initializeAgendaDataPrefetchService();
   await initializeAgendaBulkAnalysisNotificationService();
   await initializeAgendaBulkAnalysisReminderService();
+  await initializeAgendaScheduledBulkAnalysisService();
   // BullMQ condition monitoring removed - now using Agenda
 
   console.log('🚀 All services initialized successfully');
@@ -299,7 +312,8 @@ process.on('SIGINT', async () => {
       agendaDailyReminderService.agenda?.stop?.(),
       agendaMonitoringService.agenda?.stop?.(),
       agendaBulkAnalysisNotificationService.shutdown(),
-      agendaBulkAnalysisReminderService.shutdown()
+      agendaBulkAnalysisReminderService.shutdown(),
+      agendaScheduledBulkAnalysisService.stop()
     ]);
     console.log('✅ All Agenda services stopped');
 
@@ -326,7 +340,8 @@ process.on('SIGTERM', async () => {
       agendaDailyReminderService.agenda?.stop?.(),
       agendaMonitoringService.agenda?.stop?.(),
       agendaBulkAnalysisNotificationService.shutdown(),
-      agendaBulkAnalysisReminderService.shutdown()
+      agendaBulkAnalysisReminderService.shutdown(),
+      agendaScheduledBulkAnalysisService.stop()
     ]);
     console.log('✅ All Agenda services stopped');
 

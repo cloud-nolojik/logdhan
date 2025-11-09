@@ -8,7 +8,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { aiReviewService } from '../services/ai/aiReview.service.js';
-import { getExactStock } from '../utils/stock.js';
+import { getExactStock } from '../utils/stockDb.js';
 import { firebaseService } from '../services/firebase/firebase.service.js';
 import { User } from '../models/user.js';
 import { emailService } from '../services/email/email.service.js';

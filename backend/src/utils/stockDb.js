@@ -182,9 +182,11 @@ export async function validateStock(instrumentKey) {
 }
 
 // Get current price from Upstox API
-export async function getCurrentPrice(instrumentKey) {
+// @param {string} instrumentKey - The instrument key to fetch price for
+// @param {boolean} sendCandles - If true, returns full candle array; if false, returns only price
+export async function getCurrentPrice(instrumentKey, sendCandles = false) {
   const currentDate = new Date();
-  const previousDay = new Date(currentDate); 
+  const previousDay = new Date(currentDate);
   previousDay.setDate(currentDate.getDate() - 3);
   const currentDayFormattedDate = getFormattedDate(currentDate);
   const previousDayFormattedDate = getFormattedDate(previousDay);
@@ -194,7 +196,7 @@ export async function getCurrentPrice(instrumentKey) {
       'Accept': 'application/json',
       'x-api-key': API_KEY
     },
-    timeout: 10000 // 10 second timeout
+    timeout: 15000 // 15 second timeout for better reliability
   };
 
   try {
@@ -215,17 +217,28 @@ export async function getCurrentPrice(instrumentKey) {
     for (const format of apiFormats) {
       try {
     //    console.log(`Trying ${format.name} API for ${instrumentKey}...`);
-        
+
         const response = await axios.get(format.url, axiosConfig);
         const candles = response.data?.data?.candles || [];
-        
+
         if (candles.length > 0) {
-          const latest = candles[0]; // last candle
-          const currentPrice = latest ? latest[4] : null; // close price
+          if (sendCandles) {
+            // Return full candle array for market route and other use cases
+         // console.log(`✅ Success with ${format.name} - Returning ${candles.length} candles for ${instrumentKey}`);
+            return candles;
+          } else {
+            // Return only price for simple price queries
+            const latest = candles[0]; // last candle
+            const currentPrice = latest ? latest[4] : null; // close price
          // console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
-          return currentPrice;
+            return currentPrice;
+          }
         }
       } catch (apiError) {
+        // Only log significant errors
+        if (apiError.response?.status !== 400) {
+          console.log(`${format.name} failed for ${instrumentKey}: ${apiError.response?.status || apiError.message}`);
+        }
         // Continue to next format
         continue;
       }
@@ -235,6 +248,9 @@ export async function getCurrentPrice(instrumentKey) {
 
   } catch (error) {
     console.error(`Error fetching current price for ${instrumentKey}:`, error.message);
+    if (error.code === 'ECONNABORTED') {
+      console.error(`Request timeout for ${instrumentKey}`);
+    }
     return null;
   }
 }

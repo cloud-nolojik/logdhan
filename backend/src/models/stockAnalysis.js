@@ -403,8 +403,49 @@ stockAnalysisSchema.methods.markCompleted = function() {
 
 stockAnalysisSchema.methods.markFailed = function(error = 'Analysis failed') {
     this.status = 'failed';
-    this.progress.current_step = error;
+    this.progress.current_step = `Failed: ${error}`;
     this.progress.last_updated = new Date();
+
+    // Ensure analysis_data has minimum required fields to pass validation
+    if (!this.analysis_data) {
+        this.analysis_data = {};
+    }
+
+    // Set required overall_sentiment field
+    if (!this.analysis_data.overall_sentiment) {
+        this.analysis_data.overall_sentiment = 'NEUTRAL';
+    }
+
+    // Ensure strategies array exists and has at least one valid strategy
+    if (!this.analysis_data.strategies || this.analysis_data.strategies.length === 0) {
+        this.analysis_data.strategies = [{
+            id: 'failed-analysis',
+            type: 'NO_TRADE',
+            title: 'Analysis Failed',
+            confidence: 0,
+            entry: 0,
+            target: 0,
+            stopLoss: 0,
+            riskReward: 0,
+            timeframe: 'N/A',
+            indicators: [],
+            reasoning: [error],
+            warnings: ['Analysis could not be completed'],
+            triggers: [],
+            invalidations: []
+        }];
+    } else {
+        // Fix existing strategies that might be missing required fields
+        this.analysis_data.strategies = this.analysis_data.strategies.map(strategy => ({
+            ...strategy,
+            id: strategy.id || 'strategy-incomplete',
+            title: strategy.title || 'Incomplete Strategy',
+            confidence: strategy.confidence ?? 0,
+            type: strategy.type || 'NO_TRADE',
+            timeframe: strategy.timeframe || 'N/A'
+        }));
+    }
+
     return this.save();
 };
 

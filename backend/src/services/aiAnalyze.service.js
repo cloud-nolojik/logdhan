@@ -15,6 +15,7 @@ import AnalysisSession from '../models/analysisSession.js';
 import { buildStage1Prompt, buildStage2Prompt, buildStage3Prompt } from '../prompts/swingPrompts.js';
 import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
+import FineTuneData from '../models/fineTuneData.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -35,8 +36,48 @@ class AIAnalyzeService {
         };
     }
 
+    /**
+     * Save prompt-response pair for fine-tuning dataset
+     */
+    async saveFineTuneData({
+        instrument_key,
+        stock_symbol,
+        stock_name,
+        analysis_type,
+        current_price,
+        stage,
+        prompt,
+        response,
+        model_used,
+        token_usage,
+        analysis_status,
+        analysis_id = null,
+        market_context = {}
+    }) {
+        try {
+            await FineTuneData.create({
+                instrument_key,
+                stock_symbol,
+                stock_name,
+                analysis_type,
+                current_price,
+                stage,
+                prompt: typeof prompt === 'string' ? prompt : JSON.stringify(prompt),
+                response: typeof response === 'string' ? response : JSON.stringify(response),
+                model_used,
+                token_usage,
+                analysis_status,
+                analysis_id,
+                market_context
+            });
+            console.log(`💾 [FINE-TUNE] Saved ${stage} data for ${stock_symbol}`);
+        } catch (error) {
+            console.error(`❌ [FINE-TUNE] Failed to save ${stage} data for ${stock_symbol}:`, error.message);
+            // Don't throw - fine-tune logging failure shouldn't break analysis
+        }
+    }
 
- 
+
     /**
      * Helper function to format messages based on model type
      * o1 models don't support system role, so we merge system into user message
@@ -112,6 +153,7 @@ class AIAnalyzeService {
      * @param {number} params.current_price - Current stock price
      * @param {string} params.analysis_type - Analysis type (swing/intraday)
      * @param {string} params.user_id - User ID for caching
+     * @param {boolean} params.skipNotification - Skip sending in-app/Firebase notifications (for scheduled bulk analysis)
      * @returns {Promise<Object>} Analysis result
      */
     async analyzeStock({
@@ -121,6 +163,7 @@ class AIAnalyzeService {
         current_price,
         analysis_type = 'swing',
         user_id,
+        skipNotification = false,
     }) {
 
         
@@ -244,8 +287,8 @@ class AIAnalyzeService {
                         });
                     }
 
-                    // Send WhatsApp notification for analysis completion (only for individual user analysis)
-                    if (user_id) {
+                    // Send notification for analysis completion (only if not skipped - scheduled bulk analysis skips this)
+                    if (user_id && !skipNotification) {
                         await this.sendAnalysisCompleteNotification(user_id, pendingAnalysis);
                     }
                 }
@@ -348,6 +391,34 @@ class AIAnalyzeService {
                     return null;
                 })
             ]);
+
+            // Check for insufficient data from candle fetcher
+            if (candleData.insufficientData) {
+                console.log(`⚠️ [INSUFFICIENT DATA] ${candleData.reason} - Returning NO_TRADE response`);
+
+                // Return minimal v1.4-shaped NO_TRADE response
+                return {
+                    schema_version: "1.4",
+                    symbol: stock_symbol,
+                    analysis_type: "swing",
+                    generated_at_ist: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + "+05:30",
+                    insufficientData: true,
+                    market_summary: {
+                        last: Number(current_price) || null,
+                        trend: "NEUTRAL",
+                        volatility: "MEDIUM",
+                        volume: "UNKNOWN"
+                    },
+                    strategies: [{
+                        type: "NO_TRADE",
+                        action: {
+                            now: "wait_for_data",
+                            why_not: `Insufficient historical data: ${candleData.reason}`
+                        },
+                        beginner_explanation: "We need more historical price data to provide reliable trading recommendations. Please try again later when more data becomes available."
+                    }]
+                };
+            }
 
             // Log data source for monitoring
             console.log(`📊 [DATA SOURCE] ${stock_symbol}: ${candleData.source} (${candleData.fetchTime}ms)`);
@@ -479,6 +550,7 @@ class AIAnalyzeService {
 
             // Generate analysis with real market data and sector context using 3-stage process
             const analysisResult = await this.generateStockAnalysis3Call({
+                instrument_key,
                 stock_name,
                 stock_symbol,
                 current_price,
@@ -506,27 +578,35 @@ class AIAnalyzeService {
      */
     async fetchOptimizedMarketData(tradeData) {
         const startTime = Date.now();
-        
+
         try {
             // Use dedicated candle fetcher service (handles DB first, API fallback, storage)
             const candleResult = await candleFetcherService.getCandleDataForAnalysis(
                 tradeData.instrument_key,
                 tradeData.term
             );
-            
+
             if (candleResult.success) {
                 console.log(`✅ [MARKET DATA] Got data from ${candleResult.source}: ${Object.keys(candleResult.data).length} timeframes`);
-                
+
                 // Pass clean data directly to AI analysis - no conversions needed
                 return {
                     candleSets: candleResult.data, // Clean: { '15m': [candles], '1h': [candles], '1d': [candles] }
                     source: candleResult.source,
                     fetchTime: Date.now() - startTime
                 };
+            } else if (candleResult.error === 'insufficient_data') {
+                // Return insufficient data marker instead of throwing error
+                console.log(`⚠️ [MARKET DATA] Insufficient data: ${candleResult.reason}`);
+                return {
+                    insufficientData: true,
+                    reason: candleResult.reason,
+                    source: candleResult.source
+                };
             } else {
                 throw new Error('Failed to get candle data');
             }
-            
+
         } catch (error) {
             console.error(`❌ [MARKET DATA] Failed to get data: ${error.message}`);
             throw error;
@@ -1367,7 +1447,7 @@ class AIAnalyzeService {
     /**
      * Generate stock analysis using market payload
      */
-    async generateStockAnalysisWithPayload({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo }) {
+    async generateStockAnalysisWithPayload({ instrument_key, stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo }) {
         const analysisStartTime = Date.now();
         const stepTimes = { start: analysisStartTime };
         
@@ -1913,7 +1993,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
      * NEW ORCHESTRATOR (3-call) - Generates stock analysis using 3-stage process
      * Includes token tracking for cost calculation
      */
-    async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo }) {
+    async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo, instrument_key }) {
         const t0 = Date.now();
 
         // Initialize token tracking
@@ -1925,8 +2005,32 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         };
 
         // STAGE 1
+        const stage1Prompts = buildStage1Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
         const s1r = await this.stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
         tokenTracking.stage1 = s1r.tokenUsage;
+
+        // Save Stage 1 fine-tune data
+        if (instrument_key) {
+            this.saveFineTuneData({
+                instrument_key,
+                stock_symbol,
+                stock_name,
+                analysis_type,
+                current_price,
+                stage: 'stage1',
+                prompt: stage1Prompts.user,
+                response: s1r.s1,
+                model_used: this.analysisModel,
+                token_usage: tokenTracking.stage1,
+                analysis_status: s1r.ok ? 'completed' : 'insufficient_data',
+                market_context: {
+                    trend: marketPayload?.market_summary?.trend,
+                    volatility: marketPayload?.market_summary?.volatility,
+                    volume: marketPayload?.market_summary?.volume,
+                    sentiment: marketPayload?.sentimentContext?.basicSentiment
+                }
+            }).catch(err => console.error('Failed to save stage1 fine-tune data:', err));
+        }
 
         if (!s1r.ok) {
             // Calculate totals
@@ -2041,15 +2145,62 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         }
 
         // STAGE 2
+        const stage2Prompts = buildStage2Prompt({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
         const s2r = await this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
         tokenTracking.stage2 = s2r.tokenUsage;
 
-        // STAGE 3
+        // Save Stage 2 fine-tune data
+        if (instrument_key) {
+            this.saveFineTuneData({
+                instrument_key,
+                stock_symbol,
+                stock_name,
+                analysis_type,
+                current_price,
+                stage: 'stage2',
+                prompt: stage2Prompts.user,
+                response: s2r.s2,
+                model_used: this.analysisModel,
+                token_usage: tokenTracking.stage2,
+                analysis_status: s2r.ok ? 'completed' : 'insufficient_data',
+                market_context: {
+                    trend: marketPayload?.market_summary?.trend,
+                    volatility: marketPayload?.market_summary?.volatility,
+                    volume: marketPayload?.market_summary?.volume,
+                    sentiment: marketPayload?.sentimentContext?.basicSentiment
+                }
+            }).catch(err => console.error('Failed to save stage2 fine-tune data:', err));
+        }
 
+        // STAGE 3
+        const stage3Prompts = buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2 });
         const s3result = await this.stage3Finalize({
             stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2
         });
         tokenTracking.stage3 = s3result.tokenUsage;
+
+        // Save Stage 3 fine-tune data
+        if (instrument_key) {
+            this.saveFineTuneData({
+                instrument_key,
+                stock_symbol,
+                stock_name,
+                analysis_type,
+                current_price,
+                stage: 'stage3',
+                prompt: stage3Prompts.user,
+                response: s3result.data,
+                model_used: this.analysisModel,
+                token_usage: tokenTracking.stage3,
+                analysis_status: 'completed',
+                market_context: {
+                    trend: marketPayload?.market_summary?.trend,
+                    volatility: marketPayload?.market_summary?.volatility,
+                    volume: marketPayload?.market_summary?.volume,
+                    sentiment: marketPayload?.sentimentContext?.basicSentiment
+                }
+            }).catch(err => console.error('Failed to save stage3 fine-tune data:', err));
+        }
 
         const finalOut = s3result.data;
 

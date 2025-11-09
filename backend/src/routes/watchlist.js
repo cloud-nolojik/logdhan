@@ -2,6 +2,8 @@ import express from 'express';
 import { auth } from '../middleware/auth.js';
 import { User } from '../models/user.js';
 import { Subscription } from '../models/subscription.js';
+import StockAnalysis from '../models/stockAnalysis.js';
+import MonitoringSubscription from '../models/monitoringSubscription.js';
 // Use database version instead of JSON file version
 import { getExactStock, getCurrentPrice } from '../utils/stockDb.js';
 import pLimit from 'p-limit'; 
@@ -90,35 +92,74 @@ router.get('/', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     const watchlist = user.watchlist || [];
-    
+
     //console.log(`Fetching prices for ${watchlist.length} items in watchlist...`);
     const startTime = Date.now();
-    
+
     const watchlistWithPrices = await Promise.all(
       watchlist.map((item, index) =>
         limit(async () => {
           try {
            // console.log(`Processing watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol}`);
-            const currentPrice = await getCurrentPrice(item.instrument_key);
+            const current_price = await getCurrentPrice(item.instrument_key);
+
+            // Fetch analysis status for this stock
+            const analysis = await StockAnalysis.findOne({
+              instrument_key: item.instrument_key,
+            }).sort({ created_at: -1 }).lean();
+
+            // Check if stock is being monitored by this user
+            const activeMonitoring = await MonitoringSubscription.findOne({
+              instrument_key: item.instrument_key,
+              'subscribed_users.user_id': req.user._id,
+              monitoring_status: 'active' // Only active monitoring jobs
+            }).lean();
+
+            // Calculate AI confidence from strategies
+            let ai_confidence = null;
+            if (analysis && analysis.analysis_data && analysis.analysis_data.strategies) {
+              const strategies = analysis.analysis_data.strategies;
+              if (strategies.length > 0) {
+                // Get average confidence from all strategies
+                const confidences = strategies
+                  .filter(s => s.confidence != null)
+                  .map(s => s.confidence);
+                if (confidences.length > 0) {
+                  ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
+                }
+              }
+            }
+
             //console.log(`Completed watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol} = ${currentPrice}`);
-            
+
             return {
               instrument_key: item.instrument_key,
               trading_symbol: item.trading_symbol,
               name: item.name,
               exchange: item.exchange,
               addedAt: item.addedAt,
-              currentPrice
+              current_price,
+              // Analysis status fields
+              has_analysis: !!analysis,
+              analysis_status: analysis?.status || null,
+              ai_confidence,
+              is_monitoring: !!activeMonitoring,
+              monitoring_strategy_id: activeMonitoring?.strategy_id || null
             };
           } catch (err) {
-            console.warn(`Error fetching price for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
+            console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
             return {
               instrument_key: item.instrument_key,
               trading_symbol: item.trading_symbol,
               name: item.name,
               exchange: item.exchange,
               addedAt: item.addedAt,
-              currentPrice: null
+              current_price: null,
+              has_analysis: false,
+              analysis_status: null,
+              ai_confidence: null,
+              is_monitoring: false,
+              monitoring_strategy_id: null
             };
           }
         })
@@ -126,7 +167,7 @@ router.get('/', auth, async (req, res) => {
     );
 
     const endTime = Date.now();
-    console.log(`Watchlist pricing completed in ${endTime - startTime}ms`);
+    console.log(`Watchlist with analysis data completed in ${endTime - startTime}ms`);
 
     // Get subscription info for stock limits
     let stockLimitInfo = null;

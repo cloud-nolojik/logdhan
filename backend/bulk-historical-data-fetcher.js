@@ -55,7 +55,7 @@ class BulkHistoricalDataFetcher {
         this.timeframes = [
             { name: '15m', upstoxInterval: '15minute', bars: 400 },
             { name: '1h', upstoxInterval: '1hour', bars: 900 },
-            { name: '1d', upstoxInterval: 'day', bars: 250 }
+            { name: '1d', upstoxInterval: 'day', bars: 240 }
         ];
         
         // Resume capability

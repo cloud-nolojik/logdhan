@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import { auth } from '../middleware/auth.js';
-import { getCurrentPrice } from '../utils/stock.js';
+import { getCurrentPrice } from '../utils/stockDb.js';
 
 const router = express.Router();
 

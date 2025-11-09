@@ -72,16 +72,22 @@ class CandleFetcherService {
                     };
                 } else {
                     console.log(`⚠️ [INSUFFICIENT] ${sufficientData.reason}`);
-                    throw new Error(`Insufficient data - canceling the analysis: ${sufficientData.reason}`);
+                    // Return error response instead of falling through
+                    return {
+                        success: false,
+                        error: 'insufficient_data',
+                        reason: sufficientData.reason,
+                        source: 'database'
+                    };
                 }
-                
-                 
+
+
             }
             else{
 
                 console.log(`🔄 [CANDLE FETCHER] Fetching fresh data from API`);
                 const apiResult = await this.fetchFromAPI(instrumentKey, term);
-            
+
                 return {
                     success: true,
                     source: 'api',

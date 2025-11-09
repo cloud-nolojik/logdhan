@@ -5,7 +5,7 @@ import AnalysisSession from '../models/analysisSession.js';
 import aiAnalyzeService from '../services/aiAnalyze.service.js';
 import { User } from '../models/user.js';
 import { Subscription } from '../models/subscription.js';
-import { getCurrentPrice } from '../utils/stock.js';
+import { getCurrentPrice } from '../utils/stockDb.js';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
 import { messagingService } from '../services/messaging/messaging.service.js';
 

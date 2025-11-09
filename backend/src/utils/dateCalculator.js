@@ -11,7 +11,7 @@ class DateCalculator {
         this.requiredBars = {
             '15m': 400,
             '1h': 900,
-            '1d': 250
+            '1d': 240
         };
 
         // Approximate bars per trading day for each timeframe

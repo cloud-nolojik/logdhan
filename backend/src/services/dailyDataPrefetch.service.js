@@ -22,7 +22,7 @@ class DailyDataPrefetchService {
         this.barsRequired = {
   '15m': 400,
   '1h': 900,
-  '1d': 250
+  '1d': 240
         };
         this.maxConcurrentFetches = 5; // Rate limiting
         this.delayBetweenFetches = 1000; // 1 second delay

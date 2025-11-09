@@ -2,7 +2,7 @@ import axios from 'axios';
 // COMMENTED OUT: Upstox service import - using WhatsApp notifications instead
 // import * as upstoxService from './upstox.service.js';
 import { decrypt } from '../utils/encryption.js';
-import { getCurrentPrice } from '../utils/stock.js';
+import { getCurrentPrice } from '../utils/stockDb.js';
 // UPDATED: Using candleFetcher.service.js for better DB+API merge strategy
 import candleFetcherService from './candleFetcher.service.js';
 import advancedTriggerEngine from './advancedTriggerEngine.js';
