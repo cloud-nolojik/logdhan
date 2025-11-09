@@ -295,6 +295,12 @@ const stockAnalysisSchema = new mongoose.Schema({
         required: true
         // Index removed - using explicit schema.index() below with TTL
     },
+    // Release time for scheduled analyses (only visible after this time)
+    scheduled_release_time: {
+        type: Date,
+        default: null,
+        index: true
+    },
     // Order tracking fields - consolidated bracket orders
     placed_orders: [{
         tag: {
@@ -360,11 +366,17 @@ stockAnalysisSchema.statics.findActive = function(limit = 10) {
 };
 
 stockAnalysisSchema.statics.findByInstrument = function(instrumentKey, analysisType) {
+    const now = new Date();
     return this.findOne({
         instrument_key: instrumentKey,
         analysis_type: analysisType,
         status: { $in: ['completed', 'in_progress'] },
-        expires_at: { $gt: new Date() }
+        expires_at: { $gt: now },
+        // Only show if scheduled_release_time is null OR has passed
+        $or: [
+            { scheduled_release_time: null },
+            { scheduled_release_time: { $lte: now } }
+        ]
     })
     .sort({ created_at: -1 });
 };

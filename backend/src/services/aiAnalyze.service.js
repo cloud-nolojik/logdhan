@@ -154,6 +154,7 @@ class AIAnalyzeService {
      * @param {string} params.analysis_type - Analysis type (swing/intraday)
      * @param {string} params.user_id - User ID for caching
      * @param {boolean} params.skipNotification - Skip sending in-app/Firebase notifications (for scheduled bulk analysis)
+     * @param {Date} params.scheduled_release_time - Release time for scheduled analyses (null for immediate visibility)
      * @returns {Promise<Object>} Analysis result
      */
     async analyzeStock({
@@ -164,6 +165,7 @@ class AIAnalyzeService {
         analysis_type = 'swing',
         user_id,
         skipNotification = false,
+        scheduled_release_time = null,
     }) {
 
         
@@ -214,6 +216,7 @@ class AIAnalyzeService {
                         current_price: validPrice, // Ensure this is always updated
                         status: 'in_progress',
                         expires_at: await StockAnalysis.getExpiryTime(analysis_type), // Market-aware expiry with analysis type
+                        scheduled_release_time: scheduled_release_time, // Set release time for scheduled analyses (null for immediate)
                         progress: {
                             percentage: 0,
                             current_step: 'Starting analysis...',
