@@ -76,15 +76,23 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
                 const watchlistItem = user.watchlist.find(item => item.instrument_key === instrument_key);
 
                 if (watchlistItem && watchlistItem.addedAt) {
-                    // Check if stock was added after 5:00 PM today
-                    const today = new Date();
-                    today.setHours(17, 0, 0, 0); // 5:00 PM today
+                    // Check if stock was added after 5:00 PM IST today
+                    // Convert 5:00 PM IST to UTC for comparison with MongoDB timestamps
+                    const now = new Date();
+                    const todayIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+                    const fivePmIST = new Date(todayIST);
+                    fivePmIST.setHours(17, 0, 0, 0);
+
+                    // Convert back to UTC for comparison
+                    const fivePmUTC = new Date(fivePmIST.toLocaleString('en-US', { timeZone: 'UTC' }));
                     const addedAt = new Date(watchlistItem.addedAt);
 
-                    if (addedAt > today) {
-                        // Added after 5 PM - must wait for next bulk run
+                    console.log(`⏰ [FRESH ANALYSIS] Comparing times - addedAt: ${addedAt.toISOString()}, 5PM IST in UTC: ${fivePmUTC.toISOString()}`);
+
+                    if (addedAt > fivePmUTC) {
+                        // Added after 5 PM IST - must wait for next bulk run
                         canAnalyzeManually = false;
-                        console.log(`❌ [FRESH ANALYSIS] Stock added after 5 PM (${addedAt.toISOString()}), must wait for bulk run`);
+                        console.log(`❌ [FRESH ANALYSIS] Stock added after 5 PM IST (${addedAt.toISOString()}), must wait for bulk run`);
                         return res.status(423).json({
                             success: false,
                             error: 'stock_added_after_bulk_run',
@@ -92,9 +100,9 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
                             reason: 'stock_added_after_bulk_run'
                         });
                     } else {
-                        // Added before 5 PM - should have been in bulk run, allow manual
+                        // Added before 5 PM IST - should have been in bulk run, allow manual
                         canAnalyzeManually = true;
-                        console.log(`✅ [FRESH ANALYSIS] Stock added before 5 PM, allowing manual analysis`);
+                        console.log(`✅ [FRESH ANALYSIS] Stock added before 5 PM IST, allowing manual analysis`);
                     }
                 }
             }
@@ -398,145 +406,152 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         const anyAnalysis = await StockAnalysis.findOne({
             instrument_key: instrumentKey,
             analysis_type: analysis_type,
-            expires_at: { $gt: new Date() } // Only return non-expired analyses
         }).sort({ created_at: -1 }); // Get most recent analysis
 
-        if(!anyAnalysis){
-            //chck for market timrtig if no analysis found
-            if (!analysisPermission.allowed) {    
-                console.log(`❌ [ANALYSIS BY INSTRUMENT] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
-                return res.status(423).json({
-                    success: false,
-                    error: 'stock_analysis_not_allowed',
-                    message: `Analysis can be accessed only from 5:00 PM after market close, until the next trading day at 8:59 AM.`,
-                    reason: analysisPermission.reason,
-                    nextAllowed: analysisPermission.nextAllowed,
-                    validUntil: analysisPermission.validUntil
-                });
-            }
-        } 
+        // if(!anyAnalysis){
+        //     //chck for market timrtig if no analysis found
+        //     // if (!analysisPermission.allowed) {    
+        //     //     console.log(`❌ [ANALYSIS BY INSTRUMENT] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+        //     //     return res.status(423).json({
+        //     //         success: false,
+        //     //         error: 'stock_analysis_not_allowed',
+        //     //         message: `Analysis can be accessed only from 5:00 PM after market close, until the next trading day at 8:59 AM.`,
+        //     //         reason: analysisPermission.reason,
+        //     //         nextAllowed: analysisPermission.nextAllowed,
+        //     //         validUntil: analysisPermission.validUntil
+        //     //     });
+        //     // }
+        // } 
 
-        // Auto-fail analyses stuck for more than 10 minutes
-        if (anyAnalysis && anyAnalysis.status === 'in_progress') {
-            const now = new Date();
-            const analysisAge = now - anyAnalysis.created_at;
-            const maxAge = 10 * 60 * 1000; // 10 minutes
+        // // Auto-fail analyses stuck for more than 10 minutes
+        // if (anyAnalysis && anyAnalysis.status === 'in_progress') {
+        //     const now = new Date();
+        //     const analysisAge = now - anyAnalysis.created_at;
+        //     const maxAge = 10 * 60 * 1000; // 10 minutes
             
-            if (analysisAge > maxAge) {
-                console.log(`⏰ [ANALYSIS TIMEOUT] Auto-failing stuck analysis: ${anyAnalysis._id}, age: ${Math.round(analysisAge/1000/60)}min`);
-                anyAnalysis.status = 'failed';
-                anyAnalysis.progress.current_step = 'Analysis timed out';
-                anyAnalysis.progress.percentage = 100;
-                await anyAnalysis.save();
-            }
-        }
+        //     if (analysisAge > maxAge) {
+        //         console.log(`⏰ [ANALYSIS TIMEOUT] Auto-failing stuck analysis: ${anyAnalysis._id}, age: ${Math.round(analysisAge/1000/60)}min`);
+        //         anyAnalysis.status = 'failed';
+        //         anyAnalysis.progress.current_step = 'Analysis timed out';
+        //         anyAnalysis.progress.percentage = 100;
+        //         await anyAnalysis.save();
+        //     }
+        // }
 
-        if (!anyAnalysis) {
-            // Check if there's a scheduled analysis waiting to be released
-            const scheduledAnalysis = await StockAnalysis.findOne({
-                instrument_key: instrumentKey,
-                analysis_type: analysis_type,
-                expires_at: { $gt: new Date() },
-                scheduled_release_time: { $gt: new Date() } // Has a future release time
-            }).sort({ created_at: -1 });
+        // if (!anyAnalysis) {
+        //     // Check if there's a scheduled analysis waiting to be released
+        //     const scheduledAnalysis = await StockAnalysis.findOne({
+        //         instrument_key: instrumentKey,
+        //         analysis_type: analysis_type,
+        //         expires_at: { $gt: new Date() },
+        //         scheduled_release_time: { $gt: new Date() } // Has a future release time
+        //     }).sort({ created_at: -1 });
 
-            // if (scheduledAnalysis) {
-            //     const releaseTime = scheduledAnalysis.scheduled_release_time;
-            //     const releaseTimeIST = releaseTime.toLocaleString('en-IN', {
-            //         timeZone: 'Asia/Kolkata',
-            //         hour: '2-digit',
-            //         minute: '2-digit',
-            //         hour12: true
-            //     });
+        //     if (scheduledAnalysis) {
+        //         const releaseTime = scheduledAnalysis.scheduled_release_time;
+        //         const releaseTimeIST = releaseTime.toLocaleString('en-IN', {
+        //             timeZone: 'Asia/Kolkata',
+        //             hour: '2-digit',
+        //             minute: '2-digit',
+        //             hour12: true
+        //         });
 
-            //     console.log(`⏰ [ANALYSIS BY INSTRUMENT] Scheduled analysis found but not released yet. Release at: ${releaseTimeIST}`);
-            //     return res.status(200).json({
-            //         success: true,
-            //         status: 'scheduled',
-            //         error: 'scheduled',
-            //         message: `Analysis will be available after ${releaseTimeIST} today`,
-            //         call_to_action: 'Check back after the scheduled release time',
-            //         scheduled_release_time: releaseTime,
-            //         can_analyze_manually: false // Scheduled analysis means bulk run happened, no manual override
-            //     });
-            // }
+        //         console.log(`⏰ [ANALYSIS BY INSTRUMENT] Scheduled analysis found but not released yet. Release at: ${releaseTimeIST}`);
+        //         return res.status(200).json({
+        //             success: true,
+        //             status: 'scheduled',
+        //             error: 'scheduled',
+        //             message: `Analysis will be available after ${releaseTimeIST} today`,
+        //             call_to_action: 'Check back after the scheduled release time',
+        //             scheduled_release_time: releaseTime,
+        //             can_analyze_manually: false // Scheduled analysis means bulk run happened, no manual override
+        //         });
+        //     }
 
-            console.log(`📭 [ANALYSIS BY INSTRUMENT] No analysis found for instrument: ${instrumentKey}`);
+        //     console.log(`📭 [ANALYSIS BY INSTRUMENT] No analysis found for instrument: ${instrumentKey}`);
 
-            // Check if user can manually analyze this stock
-            const userId = req.user.id;
-            const user = await User.findById(userId);
-            const subscription = await Subscription.findActiveForUser(userId);
+        //     // Check if user can manually analyze this stock
+        //     const userId = req.user.id;
+        //     const user = await User.findById(userId);
+        //     const subscription = await Subscription.findActiveForUser(userId);
 
-            console.log(`🔍 [DEBUG] Checking manual analysis permission for ${instrumentKey}`);
-            console.log(`🔍 [DEBUG] User found: ${!!user}, Subscription found: ${!!subscription}`);
+        //     console.log(`🔍 [DEBUG] Checking manual analysis permission for ${instrumentKey}`);
+        //     console.log(`🔍 [DEBUG] User found: ${!!user}, Subscription found: ${!!subscription}`);
 
-            let canAnalyzeManually = false;
-            let messageToUser = 'This stock will be analyzed in the next daily run';
-            let callToActionToUser = 'Analysis will be available at 5:00 PM on the next trading day';
+        //     let canAnalyzeManually = false;
+        //     let messageToUser = 'This stock will be analyzed in the next daily run';
+        //     let callToActionToUser = 'Analysis will be available at 5:00 PM on the next trading day';
 
-            if (user && subscription) {
-                const currentWatchlistCount = user.watchlist.length;
-                const stockLimit = subscription.stockLimit;
+        //     if (user && subscription) {
+        //         const currentWatchlistCount = user.watchlist.length;
+        //         const stockLimit = subscription.stockLimit;
 
-                console.log(`📊 [ANALYSIS CHECK] User watchlist: ${currentWatchlistCount}/${stockLimit}`);
-                console.log(`📊 [ANALYSIS CHECK] Watchlist items:`, user.watchlist.map(item => ({
-                    symbol: item.trading_symbol,
-                    addedAt: item.addedAt
-                })));
+        //         console.log(`📊 [ANALYSIS CHECK] User watchlist: ${currentWatchlistCount}/${stockLimit}`);
+        //         console.log(`📊 [ANALYSIS CHECK] Watchlist items:`, user.watchlist.map(item => ({
+        //             symbol: item.trading_symbol,
+        //             addedAt: item.addedAt
+        //         })));
 
-                // If user hasn't filled their watchlist quota, allow manual analysis
-                if (currentWatchlistCount < stockLimit) {
-                    canAnalyzeManually = true;
-                    messageToUser = 'This stock has not been analyzed yet';
-                    callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
-                    console.log(`✅ [ANALYSIS CHECK] User can analyze manually (quota not filled)`);
-                } else {
-                    // User has filled quota - check when this stock was added
-                    const watchlistItem = user.watchlist.find(item => item.instrument_key === instrumentKey);
+        //         // If user hasn't filled their watchlist quota, allow manual analysis
+        //         if (currentWatchlistCount < stockLimit) {
+        //             canAnalyzeManually = true;
+        //             messageToUser = 'This stock has not been analyzed yet';
+        //             callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
+        //             console.log(`✅ [ANALYSIS CHECK] User can analyze manually (quota not filled)`);
+        //         } else {
+        //             // User has filled quota - check when this stock was added
+        //             const watchlistItem = user.watchlist.find(item => item.instrument_key === instrumentKey);
 
-                    if (watchlistItem && watchlistItem.addedAt) {
-                        // Check if stock was added after 5:00 PM today
-                        const today = new Date();
-                        today.setHours(17, 0, 0, 0); // 5:00 PM today
-                        const addedAt = new Date(watchlistItem.addedAt);
+        //             if (watchlistItem && watchlistItem.addedAt) {
+        //                 // Check if stock was added after 5:00 PM IST today
+        //                 // Convert 5:00 PM IST to UTC for comparison with MongoDB timestamps
+        //                 const now = new Date();
+        //                 const todayIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        //                 const fivePmIST = new Date(todayIST);
+        //                 fivePmIST.setHours(17, 0, 0, 0);
 
-                        if (addedAt > today) {
-                            // Added after 5 PM - must wait for next bulk run
-                            canAnalyzeManually = false;
-                            messageToUser = 'Stock added after bulk analysis. Will be analyzed in next daily run';
-                            callToActionToUser = 'Analysis will be available at 5:00 PM on the next trading day';
-                            console.log(`⏰ [ANALYSIS CHECK] Stock added after 5 PM (${addedAt.toISOString()}), must wait`);
-                        } else {
-                            // Added before 5 PM - should have been in bulk run, allow manual
-                            canAnalyzeManually = true;
-                            messageToUser = 'This stock has not been analyzed yet';
-                            callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
-                            console.log(`✅ [ANALYSIS CHECK] Stock added before 5 PM, allow manual analysis`);
-                        }
-                    } else {
-                        // No addedAt timestamp, allow manual analysis as fallback
-                        canAnalyzeManually = true;
-                        console.log(`⚠️ [ANALYSIS CHECK] No addedAt found, allowing manual analysis`);
-                    }
-                }
-            }
+        //                 // Convert back to UTC for comparison
+        //                 const fivePmUTC = new Date(fivePmIST.toLocaleString('en-US', { timeZone: 'UTC' }));
+        //                 const addedAt = new Date(watchlistItem.addedAt);
 
-            console.log(`🎯 [FINAL DECISION] can_analyze_manually: ${canAnalyzeManually}`);
-            console.log(`🎯 [FINAL DECISION] message: ${messageToUser}`);
-            console.log(`🎯 [FINAL DECISION] call_to_action: ${callToActionToUser}`);
+        //                 console.log(`⏰ [ANALYSIS CHECK] Comparing times - addedAt: ${addedAt.toISOString()}, 5PM IST in UTC: ${fivePmUTC.toISOString()}`);
 
-            return res.status(200).json({
-                success: true,
-                status: 'not_analyzed',
-                error: 'not_analyzed',
-                message: messageToUser,
-                call_to_action: callToActionToUser,
-                can_analyze_manually: canAnalyzeManually
-            });
+        //                 if (addedAt > fivePmUTC) {
+        //                     // Added after 5 PM IST - must wait for next bulk run
+        //                     canAnalyzeManually = false;
+        //                     messageToUser = 'Stock added after bulk analysis. Will be analyzed in next daily run';
+        //                     callToActionToUser = 'Analysis will be available at 5:00 PM on the next trading day';
+        //                     console.log(`⏰ [ANALYSIS CHECK] Stock added after 5 PM IST (${addedAt.toISOString()}), must wait`);
+        //                 } else {
+        //                     // Added before 5 PM IST - should have been in bulk run, allow manual
+        //                     canAnalyzeManually = true;
+        //                     messageToUser = 'This stock has not been analyzed yet';
+        //                     callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
+        //                     console.log(`✅ [ANALYSIS CHECK] Stock added before 5 PM IST, allow manual analysis`);
+        //                 }
+        //             } else {
+        //                 // No addedAt timestamp, allow manual analysis as fallback
+        //                 canAnalyzeManually = true;
+        //                 console.log(`⚠️ [ANALYSIS CHECK] No addedAt found, allowing manual analysis`);
+        //             }
+        //         }
+        //     }
+
+        //     console.log(`🎯 [FINAL DECISION] can_analyze_manually: ${canAnalyzeManually}`);
+        //     console.log(`🎯 [FINAL DECISION] message: ${messageToUser}`);
+        //     console.log(`🎯 [FINAL DECISION] call_to_action: ${callToActionToUser}`);
+
+        //     return res.status(200).json({
+        //         success: true,
+        //         status: 'not_analyzed',
+        //         error: 'not_analyzed',
+        //         message: messageToUser,
+        //         call_to_action: callToActionToUser,
+        //         can_analyze_manually: canAnalyzeManually
+        //     });
 
            
-        }
+        // }
 
         // If analysis is not completed, return in_progress status (unless failed)
         if (anyAnalysis.status !== 'completed') {
