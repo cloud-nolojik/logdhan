@@ -48,7 +48,15 @@ class MarketHoursUtil {
             // Dynamic import to avoid circular dependency
             const MarketTiming = (await import('../models/marketTiming.js')).default;
 
-            const dateStr = date.toISOString().split('T')[0];
+            // Convert to IST first, then get date string
+            // This ensures we get the correct IST date, not UTC date
+            const istDate = this.toIST(date);
+            // Format as YYYY-MM-DD in IST timezone
+            const year = istDate.getFullYear();
+            const month = String(istDate.getMonth() + 1).padStart(2, '0');
+            const day = String(istDate.getDate()).padStart(2, '0');
+            const dateStr = `${year}-${month}-${day}`;
+
             const marketTiming = await MarketTiming.findOne({ date: dateStr });
 
             // If we have cached data in DB, use it
@@ -56,8 +64,8 @@ class MarketHoursUtil {
                 return marketTiming.isMarketOpen;
             }
 
-            // No cached data - check if weekend
-            const dayOfWeek = date.getUTCDay(); // 0=Sunday, 6=Saturday
+            // No cached data - check if weekend (use IST day, not UTC)
+            const dayOfWeek = istDate.getDay(); // 0=Sunday, 6=Saturday
             if (dayOfWeek === 0 || dayOfWeek === 6) {
                 return false;
             }
@@ -379,6 +387,10 @@ class MarketHoursUtil {
             const bulkStartTime = 17 * 60; // 5.00 PM
             const bulkEndTime = 8 * 60 + 45; // 8.59 AM
 
+            // Scheduled window (not allowed)
+            const scheduledWindowStart = 16 * 60; // 4.00 PM
+            const scheduledWindowEnd = 16 * 60 + 59; // 4.45 PM
+
             // Current date for checking if it's a trading day
             const currentDate = new Date(istNow);
             currentDate.setHours(0, 0, 0, 0);
@@ -421,6 +433,15 @@ class MarketHoursUtil {
                     allowed: true,
                     reason: "weekend_session",
                     validUntil: nextTradingDayEnd.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})
+                };
+            }
+
+            // Check if we're in the scheduled window (4:00 PM - 4:45 PM)
+            if (currentTime >= scheduledWindowStart && currentTime < scheduledWindowEnd) {
+                return {
+                    allowed: false,
+                    reason: "scheduled_window",
+                    nextAllowed: "Today 4.45 PM IST"
                 };
             }
 

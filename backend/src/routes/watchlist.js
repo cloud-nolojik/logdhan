@@ -4,6 +4,7 @@ import { User } from '../models/user.js';
 import { Subscription } from '../models/subscription.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import MonitoringSubscription from '../models/monitoringSubscription.js';
+import MarketHoursUtil from '../utils/marketHours.js';
 // Use database version instead of JSON file version
 import { getExactStock, getCurrentPrice } from '../utils/stockDb.js';
 import pLimit from 'p-limit'; 
@@ -96,6 +97,14 @@ router.get('/', auth, async (req, res) => {
     //console.log(`Fetching prices for ${watchlist.length} items in watchlist...`);
     const startTime = Date.now();
 
+    // Check if we're currently in the scheduled window using MarketHoursUtil
+    const bulkAnalysisCheck = await MarketHoursUtil.isBulkAnalysisAllowed();
+    const isInScheduledWindow = bulkAnalysisCheck.reason === 'scheduled_window';
+
+    if (isInScheduledWindow) {
+      console.log('⏰ Currently in scheduled window (4:00 PM - 4:59 PM IST) - hiding all analyses');
+    }
+
     const watchlistWithPrices = await Promise.all(
       watchlist.map((item, index) =>
         limit(async () => {
@@ -103,10 +112,13 @@ router.get('/', auth, async (req, res) => {
            // console.log(`Processing watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol}`);
             const current_price = await getCurrentPrice(item.instrument_key);
 
-            // Fetch analysis status for this stock
-            const analysis = await StockAnalysis.findOne({
-              instrument_key: item.instrument_key,
-            }).sort({ created_at: -1 }).lean();
+            // Fetch analysis status for this stock (hide if in scheduled window)
+            let analysis = null;
+            if (!isInScheduledWindow) {
+              analysis = await StockAnalysis.findOne({
+                instrument_key: item.instrument_key,
+              }).sort({ created_at: -1 }).lean();
+            }
 
             // Check if stock is being monitored by this user
             const activeMonitoring = await MonitoringSubscription.findOne({
@@ -166,8 +178,8 @@ router.get('/', auth, async (req, res) => {
       )
     );
 
-    const endTime = Date.now();
-    console.log(`Watchlist with analysis data completed in ${endTime - startTime}ms`);
+    //const endTime = Date.now();
+   // console.log(`Watchlist with analysis data completed in ${endTime - startTime}ms`);
 
     // Get subscription info for stock limits
     let stockLimitInfo = null;
@@ -185,11 +197,12 @@ router.get('/', auth, async (req, res) => {
       console.warn('Error fetching subscription for stock limits:', error);
     }
 
-    res.json({ 
-      data: watchlistWithPrices, 
+    res.json({
+      data: watchlistWithPrices,
       stockLimitInfo,
-      success: true, 
-      message: "Watchlist fetched successfully" 
+      isInScheduledWindow,
+      success: true,
+      message: "Watchlist fetched successfully"
     });
 
   } catch (error) {

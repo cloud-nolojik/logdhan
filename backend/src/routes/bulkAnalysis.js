@@ -39,7 +39,7 @@ async function sendBulkAnalysisCompletionNotification(session) {
 // Helper function to get user-friendly bulk analysis messages
 function getBulkAnalysisMessage(reason) {
     const messages = {
-        before_session: "🕐 Analysis can be started only from 5.00 PM on market close till next 8.59 AM.",
+        before_session: "🕐Analysis can be accessed only from 5:00 PM after market close, until the next trading day at 8:59 AM.",
         session_ended: "⏰ Today's analysis session has ended. Analysis available from 5.00 PM to 8.59 AM.",
         weekend_session: "📈 Weekend analysis session is active! Analysis available till Monday 8.59 AM.",
         holiday: "🏖️Analysis can be started only from 5.00 PM on market close till next 8.59 AM.",

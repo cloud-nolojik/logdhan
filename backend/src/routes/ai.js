@@ -341,6 +341,10 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         const userId = req.user.id;
 
         console.log(`🔍 [ANALYSIS BY INSTRUMENT] Fetching analysis for instrument: ${instrumentKey}, type: ${analysis_type}, user: ${userId}`);
+        const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
+          
+
+
 
         // First check for any analysis (completed or in progress)
         const anyAnalysis = await StockAnalysis.findOne({
@@ -348,6 +352,21 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
             analysis_type: analysis_type,
             expires_at: { $gt: new Date() } // Only return non-expired analyses
         }).sort({ created_at: -1 }); // Get most recent analysis
+
+        if(!anyAnalysis){
+            //chck for market timrtig if no analysis found
+            if (!analysisPermission.allowed) {    
+                console.log(`❌ [ANALYSIS BY INSTRUMENT] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+                return res.status(423).json({
+                    success: false,
+                    error: 'stock_analysis_not_allowed',
+                    message: `Analysis can be accessed only from 5:00 PM after market close, until the next trading day at 8:59 AM.`,
+                    reason: analysisPermission.reason,
+                    nextAllowed: analysisPermission.nextAllowed,
+                    validUntil: analysisPermission.validUntil
+                });
+            }
+        } 
 
         // Auto-fail analyses stuck for more than 10 minutes
         if (anyAnalysis && anyAnalysis.status === 'in_progress') {
