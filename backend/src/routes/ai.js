@@ -440,26 +440,26 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
                 scheduled_release_time: { $gt: new Date() } // Has a future release time
             }).sort({ created_at: -1 });
 
-            if (scheduledAnalysis) {
-                const releaseTime = scheduledAnalysis.scheduled_release_time;
-                const releaseTimeIST = releaseTime.toLocaleString('en-IN', {
-                    timeZone: 'Asia/Kolkata',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true
-                });
+            // if (scheduledAnalysis) {
+            //     const releaseTime = scheduledAnalysis.scheduled_release_time;
+            //     const releaseTimeIST = releaseTime.toLocaleString('en-IN', {
+            //         timeZone: 'Asia/Kolkata',
+            //         hour: '2-digit',
+            //         minute: '2-digit',
+            //         hour12: true
+            //     });
 
-                console.log(`⏰ [ANALYSIS BY INSTRUMENT] Scheduled analysis found but not released yet. Release at: ${releaseTimeIST}`);
-                return res.status(200).json({
-                    success: true,
-                    status: 'scheduled',
-                    error: 'scheduled',
-                    message: `Analysis will be available after ${releaseTimeIST} today`,
-                    call_to_action: 'Check back after the scheduled release time',
-                    scheduled_release_time: releaseTime,
-                    can_analyze_manually: false // Scheduled analysis means bulk run happened, no manual override
-                });
-            }
+            //     console.log(`⏰ [ANALYSIS BY INSTRUMENT] Scheduled analysis found but not released yet. Release at: ${releaseTimeIST}`);
+            //     return res.status(200).json({
+            //         success: true,
+            //         status: 'scheduled',
+            //         error: 'scheduled',
+            //         message: `Analysis will be available after ${releaseTimeIST} today`,
+            //         call_to_action: 'Check back after the scheduled release time',
+            //         scheduled_release_time: releaseTime,
+            //         can_analyze_manually: false // Scheduled analysis means bulk run happened, no manual override
+            //     });
+            // }
 
             console.log(`📭 [ANALYSIS BY INSTRUMENT] No analysis found for instrument: ${instrumentKey}`);
 
