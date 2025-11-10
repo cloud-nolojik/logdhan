@@ -1442,18 +1442,18 @@ router.get('/debug/sessions', auth, async (req, res) => {
 router.get('/timing-check', auth, async (req, res) => {
     try {
         const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
-        
+
         const response = {
             success: true,
             data: {
-                allowed: true,
-                reason: null,
-                message: null,
+                allowed: analysisPermission.allowed,
+                reason: analysisPermission.reason || null,
+                message: analysisPermission.allowed ? null : getBulkAnalysisMessage(analysisPermission.reason),
                 nextAllowed: analysisPermission.nextAllowed || null,
                 validUntil: analysisPermission.validUntil || null
             }
         };
-        
+
         res.json(response);
     } catch (error) {
         console.error('❌ Error checking bulk analysis timing:', error);
