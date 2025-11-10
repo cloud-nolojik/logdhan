@@ -232,7 +232,9 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
             stock_symbol,
             current_price,
             analysis_type,
-            userId});
+            userId,
+            forceFresh: forceFresh  // Use forceFresh if requested via query param
+        });
 
         if (result.success) {
             const responseData = {
@@ -363,13 +365,41 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         }
 
         if (!anyAnalysis) {
+            // Check if there's a scheduled analysis waiting to be released
+            const scheduledAnalysis = await StockAnalysis.findOne({
+                instrument_key: instrumentKey,
+                analysis_type: analysis_type,
+                expires_at: { $gt: new Date() },
+                scheduled_release_time: { $gt: new Date() } // Has a future release time
+            }).sort({ created_at: -1 });
+
+            if (scheduledAnalysis) {
+                const releaseTime = scheduledAnalysis.scheduled_release_time;
+                const releaseTimeIST = releaseTime.toLocaleString('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                });
+
+                console.log(`⏰ [ANALYSIS BY INSTRUMENT] Scheduled analysis found but not released yet. Release at: ${releaseTimeIST}`);
+                return res.status(200).json({
+                    success: true,
+                    status: 'scheduled',
+                    error: 'scheduled',
+                    message: `Analysis will be available after ${releaseTimeIST} today`,
+                    call_to_action: 'Check back after the scheduled release time',
+                    scheduled_release_time: releaseTime
+                });
+            }
+
             console.log(`📭 [ANALYSIS BY INSTRUMENT] No analysis found for instrument: ${instrumentKey}`);
             return res.status(200).json({
                 success: true,
                 status: 'not_analyzed',
                 error: 'not_analyzed',
-                message: 'This stock has not been analyzed yet',
-                call_to_action: 'Click Analyze to get AI-powered trading strategies'
+                message: 'This stock will be analyzed in the next daily run',
+                call_to_action: 'Analysis will be available at 5:00 PM on the next trading day'
             });
         }
 

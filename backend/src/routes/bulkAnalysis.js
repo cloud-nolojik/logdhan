@@ -1084,7 +1084,8 @@ async function processSessionBasedBulkAnalysis(session) {
                         analysis_type: session.analysis_type,
                         user_id:session.user_id,
                         // user_id: removed for bulk analysis to make results shareable across users
-                        forceFresh: true
+                        forceFresh: false,
+                        skipNotification: true  // Skip per-stock notifications in bulk analysis
                     });
                     
                     // 10-minute timeout per stock

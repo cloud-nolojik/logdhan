@@ -215,6 +215,11 @@ class AgendaScheduledBulkAnalysisService {
 
             console.log(`🔄 [SCHEDULED BULK] Starting analysis for ${uniqueStocks.length} stocks...`);
 
+            // Set release time to 5:00 PM IST today
+            const releaseTime = new Date(today);
+            releaseTime.setHours(17, 0, 0, 0); // 5:00 PM IST
+            console.log(`📅 [SCHEDULED BULK] Analysis will be released at: ${releaseTime.toISOString()}`);
+
             for (const stock of uniqueStocks) {
                 console.log(`\n📊 [SCHEDULED BULK] Analyzing ${stock.trading_symbol} for ${stock.users.length} user(s)...`);
 
@@ -258,7 +263,9 @@ class AgendaScheduledBulkAnalysisService {
                             current_price: current_price,
                             analysis_type: 'swing',
                             user_id: userId.toString(),
-                            skipNotification: true  // Skip notifications for scheduled bulk pre-analysis
+                            skipNotification: true,  // Skip notifications for scheduled bulk pre-analysis
+                            scheduled_release_time: releaseTime,  // Release at 5:00 PM
+                            forceFresh: false  // Always get fresh daily analysis, no cache
                         });
 
                         if (result.success) {
