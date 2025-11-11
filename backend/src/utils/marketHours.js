@@ -316,9 +316,9 @@ class MarketHoursUtil {
      * COMMON EXPIRY TIME FUNCTION
      * Calculate expiry time for ALL analyses, monitoring, sessions
      * Rules:
-     * - If today is a trading day and current time is before 3:55 PM IST: Expires TODAY at 3:55 PM IST
-     * - Otherwise: Expires on NEXT trading day at 3:55 PM IST
-     * Stored in DB as UTC (3:55 PM IST - 5:30 = 10:25 AM UTC)
+     * - If today is a trading day and current time is before 3:59 PM IST: Expires TODAY at 3:59 PM IST
+     * - Otherwise: Expires on NEXT trading day at 3:59 PM IST
+     * Stored in DB as UTC (3:59 PM IST - 5:30 = 10:25 AM UTC)
      *
      * @param {Date} fromDate - Starting date (defaults to now)
      * @returns {Date} - Expiry time in UTC for database storage
@@ -335,29 +335,33 @@ class MarketHoursUtil {
             const currentHour = istNow.getHours();
             const currentMinute = istNow.getMinutes();
             const currentTimeInMinutes = currentHour * 60 + currentMinute;
-            const expiryTimeInMinutes = 15 * 60 + 55; // 3:55 PM = 15:55
+            const expiryTimeInMinutes = 15 * 60 + 59; // 3:59 PM = 15:55
 
             let expiryDate;
 
-            // If today is a trading day and we're before 3:55 PM, expire today
+            // If today is a trading day and we're before 3:59 PM, expire today
             if (isTodayTradingDay && currentTimeInMinutes < expiryTimeInMinutes) {
-                console.log(`📅 [EXPIRY CALC] Today is a trading day and before 3:55 PM - expiring TODAY`);
+                console.log(`📅 [EXPIRY CALC] Today is a trading day and before 3:59 PM - expiring TODAY`);
                 expiryDate = new Date(istNow);
             } else {
                 // Otherwise, get next trading day
-                console.log(`📅 [EXPIRY CALC] ${!isTodayTradingDay ? 'Today is not a trading day' : 'Already past 3:55 PM'} - expiring NEXT trading day`);
+                console.log(`📅 [EXPIRY CALC] ${!isTodayTradingDay ? 'Today is not a trading day' : 'Already past 3.59 PM'} - expiring NEXT trading day`);
                 expiryDate = await this.getNextTradingDay(istNow);
             }
 
             console.log(`📅 [EXPIRY CALC] Expiry trading day: ${expiryDate.toISOString()}`);
 
             // Create expiry time in UTC directly
-            // We want 3:55 PM IST = 10:25 AM UTC
-            // So we set the UTC date to the expiry day, then set UTC hours to 10:25
-            const expiryUTC = new Date(expiryDate);
-            expiryUTC.setUTCHours(10, 25, 0, 0); // 10:25 AM UTC = 3:55 PM IST
+            // We want 3:59 PM IST = 10:25 AM UTC
+            // expiryDate is in IST, so we need to extract the IST date components
+            const istYear = expiryDate.getFullYear();
+            const istMonth = expiryDate.getMonth();
+            const istDay = expiryDate.getDate();
 
-            console.log(`📅 [EXPIRY CALC] Expiry IST: ${expiryUTC.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})} (should be 3:55 PM IST)`);
+            // Create a new UTC date for the same calendar day, then set to 10:25 AM UTC (3:59 PM IST)
+            const expiryUTC = new Date(Date.UTC(istYear, istMonth, istDay, 10, 29, 0, 0));
+
+            console.log(`📅 [EXPIRY CALC] Expiry IST: ${expiryUTC.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})} (should be 3:59 PM IST)`);
             console.log(`📅 [EXPIRY CALC] Expiry UTC (DB): ${expiryUTC.toISOString()} (should be 10:25 AM UTC)`);
 
             return expiryUTC;

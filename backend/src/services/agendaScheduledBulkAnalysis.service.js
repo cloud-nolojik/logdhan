@@ -212,6 +212,7 @@ class AgendaScheduledBulkAnalysisService {
             let successCount = 0;
             let failureCount = 0;
             let skippedCount = 0;
+            const limitReachedUsers = new Set();
 
             console.log(`🔄 [SCHEDULED BULK] Starting analysis for ${uniqueStocks.length} stocks...`);
 
@@ -253,6 +254,12 @@ class AgendaScheduledBulkAnalysisService {
 
                 // Analyze this stock for each user who has it
                 for (const userId of stock.users) {
+                    const userKey = userId.toString();
+                    if (limitReachedUsers.has(userKey)) {
+                        skippedCount++;
+                        continue;
+                    }
+
                     analysisCount++;
 
                     try {
@@ -276,6 +283,13 @@ class AgendaScheduledBulkAnalysisService {
                                 successCount++;
                                 console.log(`  ✅ [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} analyzed for user ${userId}`);
                             }
+                        } else if (result.error === 'daily_stock_limit_reached') {
+                            skippedCount++;
+                            limitReachedUsers.add(userKey);
+                            const limitInfo = result.limitInfo || {};
+                            const used = limitInfo.usedCount ?? 'unknown';
+                            const limit = limitInfo.stockLimit ?? 'unknown';
+                            console.log(`  ⚖️  [${analysisCount}/${totalWatchlistItems}] Daily limit reached for user ${userId} (${used}/${limit})`);
                         } else {
                             failureCount++;
                             console.log(`  ❌ [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} failed for user ${userId} - ${result.error || 'Unknown error'}`);

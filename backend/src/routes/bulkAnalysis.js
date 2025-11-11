@@ -709,6 +709,7 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
     ////console.log((`🔄 [BULK ANALYSIS] Starting background processing for user ${userId} with ${stocks.length} stocks, type: ${analysisType}`);
     let completed = 0;
     let failed = 0;
+    let dailyLimitReached = false;
     
     // Process stocks in smaller batches to avoid overwhelming Upstox API
     const batchSize = 3; // Reduced from 5 to 3 to prevent rate limiting
@@ -725,6 +726,9 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
         const batchPromises = batch.map(async (stock, index) => {
             try {
                 ////console.log((`🔍 [BULK ANALYSIS] Analyzing ${stock.trading_symbol} (${stock.name})`);
+                if (dailyLimitReached) {
+                    return;
+                }
                 
                 // Fetch real current price
                 let currentPrice = null;
@@ -840,7 +844,7 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                     return; // Skip to next stock
                 }
                 
-                await aiAnalyzeService.analyzeStock({
+                const analysisResult = await aiAnalyzeService.analyzeStock({
                     instrument_key: stock.instrument_key,
                     stock_symbol: stock.trading_symbol, // Use trading_symbol for display
                     stock_name: stock.name,
@@ -849,6 +853,18 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
                     user_id: userId,
                 });
                 
+                if (!analysisResult.success) {
+                    if (analysisResult.error === 'daily_stock_limit_reached') {
+                        dailyLimitReached = true;
+                        const limitInfo = analysisResult.limitInfo || {};
+                        const used = limitInfo.usedCount ?? 'unknown';
+                        const limit = limitInfo.stockLimit ?? 'unknown';
+                        console.log(`⚖️ [BULK ANALYSIS] Daily AI limit reached for user ${userId} after ${used}/${limit} stocks`);
+                        return;
+                    }
+                    throw new Error(analysisResult.message || analysisResult.error || 'Analysis failed');
+                }
+
                 completed++;
                 ////console.log((`✅ [BULK ANALYSIS] Completed ${stock.trading_symbol} (${completed}/${stocks.length})`);
                 
@@ -905,6 +921,11 @@ async function processBulkAnalysis(userId, stocks, analysisType) {
         });
         
         await Promise.all(batchPromises);
+        
+        if (dailyLimitReached) {
+            console.log(`⚖️ [BULK ANALYSIS] Stopping further batches for user ${userId} after hitting daily limit`);
+            break;
+        }
         
         // Add progressively longer delays between batches to avoid rate limiting
         if (i < totalBatches - 1) {
@@ -1100,6 +1121,13 @@ async function processSessionBasedBulkAnalysis(session) {
                         // Mark stock as successfully processed
                         await markStockAsSuccessful(session, stock);
                         //console.log(`✅ [SESSION ANALYSIS] Successfully completed ${stock.trading_symbol}`);
+                    } else if (analysisResult && analysisResult.error === 'daily_stock_limit_reached') {
+                        console.log(`⚖️ [SESSION ANALYSIS] Daily limit reached for user ${session.user_id}, pausing session`);
+                        session.status = 'paused';
+                        session.error_message = 'daily_stock_limit_reached';
+                        session.last_updated = new Date();
+                        await session.save();
+                        return;
                     } else {
                         // Analysis failed - mark as failed
                         const errorMsg = analysisResult?.message || analysisResult?.error || 'Analysis returned failure status';

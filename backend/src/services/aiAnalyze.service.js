@@ -1,6 +1,7 @@
 import axios from 'axios';
 import Parser from 'rss-parser';
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import StockAnalysis from '../models/stockAnalysis.js';
 import { aiReviewService } from './ai/aiReview.service.js';
 import { subscriptionService } from './subscription/subscriptionService.js';
@@ -16,6 +17,7 @@ import { buildStage1Prompt, buildStage2Prompt, buildStage3Prompt } from '../prom
 import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
 import FineTuneData from '../models/fineTuneData.js';
+import { getIstDayRange } from '../utils/tradingDay.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -193,6 +195,22 @@ class AIAnalyzeService {
                         success: true,
                         data: existing,
                         inProgress: true
+                    };
+                }
+            }
+
+            if (user_id && stock_symbol) {
+                const quotaCheck = await this.checkDailyStockLimit(user_id, stock_symbol);
+                if (!quotaCheck.allowed) {
+                    console.log(`⚖️ [DAILY LIMIT] ${stock_symbol} blocked for ${user_id} (${quotaCheck.uniqueCount}/${quotaCheck.stockLimit})`);
+                    return {
+                        success: false,
+                        error: 'daily_stock_limit_reached',
+                        message: 'You’ve used today’s AI analysis limit for your plan. New stocks will be analyzed from the next daily run after 5:00 PM.',
+                        limitInfo: {
+                            stockLimit: quotaCheck.stockLimit,
+                            usedCount: quotaCheck.uniqueCount
+                        }
                     };
                 }
             }
@@ -2545,6 +2563,92 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     }
 
     /**
+     * Enforce per-user daily slot limit before analyzing a new stock.
+     */
+    async checkDailyStockLimit(userId, stockSymbol) {
+        if (!userId || !stockSymbol) {
+            return { allowed: true };
+        }
+
+        const normalizedSymbol = normalizeStockSymbol(stockSymbol);
+        if (!normalizedSymbol) {
+            return { allowed: true };
+        }
+
+        const subscription = await Subscription.findActiveForUser(userId);
+        if (!subscription) {
+            return { allowed: true };
+        }
+
+        const stockLimit = Number.isFinite(subscription.stockLimit)
+            ? subscription.stockLimit
+            : Number(subscription.stockLimit) || 0;
+
+        if (stockLimit <= 0) {
+            return { allowed: true };
+        }
+
+        const userObjectId = mongoose.Types.ObjectId.isValid(userId)
+            ? mongoose.Types.ObjectId(userId)
+            : userId;
+
+        const { startUtc, endUtc } = getIstDayRange();
+        const { default: UserAnalyticsUsage } = await import('../models/userAnalyticsUsage.js');
+
+        const usage = await UserAnalyticsUsage.aggregate([
+            {
+                $match: {
+                    user_id: userObjectId,
+                    createdAt: { $gte: startUtc, $lt: endUtc },
+                    stock_symbol: { $exists: true, $ne: null }
+                }
+            },
+            {
+                $group: {
+                    _id: '$stock_symbol'
+                }
+            }
+        ]);
+
+        const uniqueSymbols = new Set();
+        for (const entry of usage) {
+            const normalized = normalizeStockSymbol(entry?._id);
+            if (normalized) {
+                uniqueSymbols.add(normalized);
+            }
+        }
+
+        const usedCount = uniqueSymbols.size;
+        const alreadyUsed = uniqueSymbols.has(normalizedSymbol);
+
+        if (alreadyUsed) {
+            return {
+                allowed: true,
+                uniqueCount: usedCount,
+                stockLimit,
+                symbol: normalizedSymbol,
+                alreadyUsed: true
+            };
+        }
+
+        if (usedCount >= stockLimit) {
+            return {
+                allowed: false,
+                uniqueCount: usedCount,
+                stockLimit,
+                symbol: normalizedSymbol
+            };
+        }
+
+        return {
+            allowed: true,
+            uniqueCount: usedCount,
+            stockLimit,
+            symbol: normalizedSymbol
+        };
+    }
+
+    /**
      * Send in-app notification + Firebase push when analysis is complete
      */
     async sendAnalysisCompleteNotification(userId, analysisRecord) {
@@ -2754,3 +2858,10 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
 }
 
 export default new AIAnalyzeService();
+
+function normalizeStockSymbol(symbol) {
+    if (!symbol) {
+        return '';
+    }
+    return symbol.toString().trim().toUpperCase();
+}

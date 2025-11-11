@@ -730,7 +730,7 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
 
 /**
  * Calculate expiry time using common utility
- * ALL analyses expire at 3:55 PM IST on NEXT trading day
+ * ALL analyses expire at 3:59 PM IST on NEXT trading day
  * Stored in DB as UTC (10:25 AM UTC)
  */
 stockAnalysisSchema.statics.getExpiryTime = async function() {

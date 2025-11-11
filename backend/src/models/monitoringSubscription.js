@@ -189,7 +189,7 @@ monitoringSubscriptionSchema.index({
 
 /**
  * Calculate expiry time using common utility
- * ALL subscriptions expire at 3:55 PM IST on NEXT trading day
+ * ALL subscriptions expire at 3:59 PM IST on NEXT trading day
  * Stored in DB as UTC (10:25 AM UTC)
  */
 monitoringSubscriptionSchema.statics.getExpiryTime = async function() {
