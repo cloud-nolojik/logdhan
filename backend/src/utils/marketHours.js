@@ -516,6 +516,383 @@ class MarketHoursUtil {
             };
         }
     }
+
+    /**
+     * Check if current time is in downtime window (4:00-5:00 PM IST)
+     * During downtime, NO manual analysis is allowed - bulk processing runs
+     *
+     * @param {Date} now - Current date (defaults to now)
+     * @returns {{isDowntime: boolean, message?: string, nextAllowed?: string}}
+     */
+    static isDowntimeWindow(now = new Date()) {
+        const istNow = this.toIST(now);
+        const hours = istNow.getHours();
+        const minutes = hours * 60 + istNow.getMinutes();
+
+        // Downtime: 4:00 PM - 5:00 PM IST (16:00 - 17:00)
+        if (minutes >= 16 * 60 && minutes < 17 * 60) {
+            return {
+                isDowntime: true,
+                message: 'Analysis is temporarily unavailable (4:00-5:00 PM IST). Bulk processing is running. Please try again after 5:00 PM.',
+                nextAllowed: '5:00 PM IST'
+            };
+        }
+
+        return { isDowntime: false };
+    }
+
+    /**
+     * Get the current quota date in IST
+     * Quota window: 5:00 PM (Day T) → 4:00 PM (Day T+1)
+     * During 4:00-5:00 PM (downtime), quota_date is still the previous trading day
+     *
+     * @param {Date} now - Current date (defaults to now)
+     * @returns {Promise<string>} Quota date in YYYY-MM-DD format (IST)
+     */
+    static async getCurrentQuotaDate(now = new Date()) {
+        try {
+            const istNow = this.toIST(now);
+            const hours = istNow.getHours();
+            const minutes = hours * 60 + istNow.getMinutes();
+
+            // Downtime: 4:00 PM - 5:00 PM (16:00 - 17:00)
+            if (minutes >= 16 * 60 && minutes < 17 * 60) {
+                // During downtime, quota_date is still the previous trading day
+                const lastTradingDay = await this.getLastTradingDay(istNow);
+                return this.formatDateIST(lastTradingDay);
+            }
+
+            // After 5:00 PM (>= 17:00)
+            if (minutes >= 17 * 60) {
+                // If today is a trading day, quota_date is today
+                // Otherwise, quota_date is last trading day
+                const isTodayTrading = await this.isTradingDay(istNow);
+                if (isTodayTrading) {
+                    return this.formatDateIST(istNow);
+                } else {
+                    const lastTradingDay = await this.getLastTradingDay(istNow);
+                    return this.formatDateIST(lastTradingDay);
+                }
+            }
+
+            // Before 4:00 PM (< 16:00)
+            // Quota_date is last trading day
+            const lastTradingDay = await this.getLastTradingDay(istNow);
+            return this.formatDateIST(lastTradingDay);
+
+        } catch (error) {
+            console.error('❌ [QUOTA DATE] Error getting current quota date:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get last trading day before a given date
+     * @param {Date} date - Reference date
+     * @returns {Promise<Date>} Last trading day
+     */
+    static async getLastTradingDay(date) {
+        let checkDate = new Date(date);
+
+        // Go back one day at a time until we find a trading day
+        for (let i = 0; i < 30; i++) {  // Max 30 days back (safety limit)
+            checkDate.setDate(checkDate.getDate() - 1);
+            const isTrading = await this.isTradingDay(checkDate);
+            if (isTrading) {
+                return checkDate;
+            }
+        }
+
+        // Fallback: return date from 1 day ago (shouldn't happen)
+        const fallback = new Date(date);
+        fallback.setDate(fallback.getDate() - 1);
+        return fallback;
+    }
+
+    /**
+     * Format date as YYYY-MM-DD in IST
+     * @param {Date} date - Date to format
+     * @returns {string} Formatted date string
+     */
+    static formatDateIST(date) {
+        const istDate = this.toIST(date);
+        const year = istDate.getFullYear();
+        const month = String(istDate.getMonth() + 1).padStart(2, '0');
+        const day = String(istDate.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+
+    /**
+     * Get quota window start and end times in UTC
+     * Quota window: 5:00 PM IST (Day T) → 4:00 PM IST (Day T+1)
+     *
+     * @param {Date} now - Current date (defaults to now)
+     * @returns {Promise<{startUtc: Date, endUtc: Date, quotaDate: string}>}
+     */
+    static async getQuotaWindowUTC(now = new Date()) {
+        try {
+            const quotaDate = await this.getCurrentQuotaDate(now);
+
+            // Parse quota_date
+            const [year, month, day] = quotaDate.split('-').map(Number);
+
+            // Create start time: quotaDate 5:00 PM IST → convert to UTC
+            // IST is UTC+5:30, so 5:00 PM IST = 11:30 AM UTC (same day)
+            const startUtc = new Date(Date.UTC(
+                year,
+                month - 1,
+                day,
+                11,  // 17:00 IST - 5.5 hours = 11:30 UTC
+                30,
+                0,
+                0
+            ));
+
+            // Get next trading day for end time
+            const quotaDateObj = new Date(year, month - 1, day);
+            const nextTradingDay = await this.getNextTradingDay(quotaDateObj);
+
+            // Create end time: next trading day 4:00 PM IST → convert to UTC
+            // 4:00 PM IST = 10:30 AM UTC (same day)
+            const endUtc = new Date(Date.UTC(
+                nextTradingDay.getFullYear(),
+                nextTradingDay.getMonth(),
+                nextTradingDay.getDate(),
+                10,  // 16:00 IST - 5.5 hours = 10:30 UTC
+                30,
+                0,
+                0
+            ));
+
+            console.log(`📅 [QUOTA WINDOW] quota_date=${quotaDate}, UTC window: ${startUtc.toISOString()} → ${endUtc.toISOString()}`);
+
+            return {
+                startUtc,
+                endUtc,
+                quotaDate
+            };
+
+        } catch (error) {
+            console.error('❌ [QUOTA WINDOW] Error getting quota window:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Check if user can analyze a stock (both watchlist quota and daily limit)
+     *
+     * @param {string} userId - User ID
+     * @param {string} instrumentKey - Instrument key being analyzed
+     * @param {Object} options - Additional options
+     * @returns {Promise<Object>} - {allowed, reason, message, limitInfo}
+     */
+    static async checkUserAnalysisLimits(userId, instrumentKey, options = {}) {
+        try {
+            const now = new Date(); // Current time for checks
+
+            const mongoose = (await import('mongoose')).default;
+            const { User } = await import('../models/user.js');
+            const { Subscription } = await import('../models/subscription.js');
+            const { default: Stock } = await import('../models/stock.js');
+            const UserAnalyticsUsageModule = await import('../models/userAnalyticsUsage.js');
+            const UserAnalyticsUsage = UserAnalyticsUsageModule.default;
+
+            // Get stock symbol from instrument_key
+            const stockInfo = await Stock.getByInstrumentKey(instrumentKey);
+            const stockSymbol = stockInfo?.trading_symbol || instrumentKey;
+
+            // Get user and subscription
+            const user = await User.findById(userId);
+            if (!user) {
+                return {
+                    allowed: false,
+                    reason: 'user_not_found',
+                    message: 'User not found',
+                    limitInfo: {}
+                };
+            }
+
+            const subscription = await Subscription.findActiveForUser(userId);
+            if (!subscription) {
+                return {
+                    allowed: true,
+                    reason: null,
+                    message: 'No active subscription - analysis allowed',
+                    limitInfo: {}
+                };
+            }
+
+            const stockLimit = Number.isFinite(subscription.stockLimit)
+                ? subscription.stockLimit
+                : Number(subscription.stockLimit) || 0;
+
+            if (stockLimit <= 0) {
+                return {
+                    allowed: true,
+                    reason: null,
+                    message: 'No stock limit configured',
+                    limitInfo: { stockLimit: 0 }
+                };
+            }
+
+            // Check 1: Watchlist Quota (can analyze if not filled)
+            const currentWatchlistCount = user.watchlist.length;
+            console.log(`📊 [USER LIMITS] Watchlist: ${currentWatchlistCount}/${stockLimit}`);
+
+            if (currentWatchlistCount < stockLimit) {
+                console.log(`✅ [USER LIMITS] Allowed - watchlist quota not filled`);
+                return {
+                    allowed: true,
+                    reason: 'watchlist_quota_available',
+                    message: 'Analysis allowed - watchlist quota not filled',
+                    limitInfo: {
+                        watchlistCount: currentWatchlistCount,
+                        stockLimit,
+                        quotaAvailable: true
+                    }
+                };
+            }
+
+            // Check 2: Daily Limit (if watchlist is full)
+            console.log(`📊 [USER LIMITS] Watchlist full - checking daily limit for quota window`);
+
+            // Normalize stock symbol
+            const normalizeStockSymbol = (symbol) => {
+                if (!symbol || typeof symbol !== 'string') return '';
+                return symbol.replace(/[-\s]/g, '').toUpperCase();
+            };
+            const normalizedSymbol = normalizeStockSymbol(stockSymbol);
+
+            const userObjectId = mongoose.Types.ObjectId.isValid(userId)
+                ? new mongoose.Types.ObjectId(userId)
+                : userId;
+
+            // Get quota window (5 PM IST Day T → 4 PM IST Day T+1)
+            const { startUtc, endUtc, quotaDate } = await this.getQuotaWindowUTC();
+            console.log(`📊 [USER LIMITS] Quota window: ${quotaDate} (${startUtc.toISOString()} → ${endUtc.toISOString()})`);
+
+            // Query usage within quota window
+            const usage = await UserAnalyticsUsage.aggregate([
+                {
+                    $match: {
+                        user_id: userObjectId,
+                        createdAt: { $gte: startUtc, $lt: endUtc },
+                        stock_symbol: { $exists: true, $ne: null }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$stock_symbol'
+                    }
+                }
+            ]);
+
+            // Count unique symbols (normalized)
+            const uniqueSymbols = new Set();
+            for (const entry of usage) {
+                const normalized = normalizeStockSymbol(entry?._id);
+                if (normalized) {
+                    uniqueSymbols.add(normalized);
+                }
+            }
+
+            const usedCount = uniqueSymbols.size;
+            const alreadyUsed = uniqueSymbols.has(normalizedSymbol);
+
+            console.log(`📊 [USER LIMITS] Daily usage: ${usedCount}/${stockLimit} unique stocks in quota window`);
+
+            // If this stock was already analyzed today, allow re-analysis
+            if (alreadyUsed) {
+                console.log(`✅ [USER LIMITS] Stock already analyzed in current quota window - allowing`);
+                return {
+                    allowed: true,
+                    reason: 'already_analyzed_today',
+                    message: 'Stock already analyzed in current quota window',
+                    limitInfo: {
+                        watchlistCount: currentWatchlistCount,
+                        stockLimit,
+                        dailyUsage: usedCount,
+                        quotaDate,
+                        alreadyUsed: true
+                    }
+                };
+            }
+
+            // If daily limit reached
+            if (usedCount >= stockLimit) {
+                console.log(`❌ [USER LIMITS] Daily limit reached: ${usedCount}/${stockLimit}`);
+
+                // Check current time and trading day status
+                const istNow = this.toIST(now);
+                const istHours = istNow.getHours();
+                const istMinutes = istHours * 60 + istNow.getMinutes();
+
+                // Check if today is a trading day
+                const todayDateStr = this.formatDateIST(istNow);
+                const isTodayTradingDay = await this.isTradingDay(todayDateStr);
+
+                // Calculate next analysis time
+                const nextTradingDay = await this.getNextTradingDay(istNow);
+                const nextTradingDayStr = this.formatDateIST(nextTradingDay);
+
+                // Check if we're in downtime (4:00-5:00 PM)
+                const downtimeCheck = this.isDowntimeWindow(now);
+
+                let userMessage;
+
+                // Scenario 1: During downtime (4:00-5:00 PM) on a trading day
+                if (downtimeCheck.isDowntime && isTodayTradingDay) {
+                    userMessage = `You've reached your daily limit of ${stockLimit} analyses. We're processing today's bulk analysis right now! Quota resets at 5:00 PM today. 💡 Add stocks to watchlist - analysis will be ready at 5:00 PM today.`;
+                }
+                // Scenario 2: Before 5:00 PM on a trading day (but not in downtime)
+                else if (istMinutes < 17 * 60 && isTodayTradingDay) {
+                    userMessage = `You've reached your daily limit of ${stockLimit} analyses. Quota resets at 5:00 PM today. 💡 Add stocks to watchlist now - analysis will be ready at 5:00 PM today.`;
+                }
+                // Scenario 3: After 5:00 PM or non-trading day (weekend/holiday)
+                else {
+                    userMessage = `You've reached your daily limit of ${stockLimit} analyses. Quota resets on ${nextTradingDayStr} at 5:00 PM. 💡 Add stocks to watchlist now - analysis will be ready on ${nextTradingDayStr} at 5:00 PM.`;
+                }
+
+                return {
+                    allowed: false,
+                    reason: 'daily_limit_reached',
+                    message: userMessage,
+                    limitInfo: {
+                        watchlistCount: currentWatchlistCount,
+                        stockLimit,
+                        dailyUsage: usedCount,
+                        quotaDate,
+                        quotaResetsAt: endUtc.toISOString(),
+                        nextTradingDay: nextTradingDayStr,
+                        isTodayTradingDay
+                    }
+                };
+            }
+
+            // Daily limit not reached - allow analysis
+            console.log(`✅ [USER LIMITS] Daily limit OK: ${usedCount}/${stockLimit}`);
+            return {
+                allowed: true,
+                reason: 'within_daily_limit',
+                message: 'Analysis allowed - within daily limit',
+                limitInfo: {
+                    watchlistCount: currentWatchlistCount,
+                    stockLimit,
+                    dailyUsage: usedCount,
+                    quotaDate
+                }
+            };
+
+        } catch (error) {
+            console.error('❌ [USER LIMITS] Error checking user limits:', error);
+            return {
+                allowed: false,
+                reason: 'error',
+                message: `Error checking limits: ${error.message}`,
+                limitInfo: {}
+            };
+        }
+    }
 }
 
 export default MarketHoursUtil;

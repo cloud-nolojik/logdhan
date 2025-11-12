@@ -103,6 +103,12 @@ const userAnalyticsUsageSchema = new mongoose.Schema({
         is_trial: { type: Boolean, default: false },
         subscription_plan: { type: String, default: 'free' },  // free, basic, premium
         charge_user: { type: Boolean, default: false }  // Did we charge the user for this?
+    },
+    // Flag to indicate if this is a duplicated record from existing analysis
+    is_cached_analysis: {
+        type: Boolean,
+        default: false,  // false = freshly generated, true = reused existing analysis
+        index: true
     }
 }, {
     timestamps: true  // Adds createdAt and updatedAt

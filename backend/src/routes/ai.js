@@ -56,83 +56,27 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
 
         // Get user ID first to check subscription and watchlist
         const userId = req.user.id;
-        const user = await User.findById(userId);
-        const subscription = await Subscription.findActiveForUser(userId);
 
-        // Check if user can manually analyze based on quota and timing
-        let canAnalyzeManually = false;
-        if (user && subscription) {
-            const currentWatchlistCount = user.watchlist.length;
-            const stockLimit = subscription.stockLimit;
+        // ⚡ NEW: Check if we're in downtime (4:00-5:00 PM IST)
+        // During downtime, NO manual analysis is allowed - bulk processing is running
+        const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
+        const now = new Date();
+        const downtimeCheck = MarketHoursUtil.isDowntimeWindow(now);
 
-            console.log(`📊 [FRESH ANALYSIS] User watchlist: ${currentWatchlistCount}/${stockLimit}`);
-
-            // If user hasn't filled their watchlist quota, allow manual analysis anytime
-            if (currentWatchlistCount < stockLimit) {
-                canAnalyzeManually = true;
-                console.log(`✅ [FRESH ANALYSIS] User can analyze manually (quota not filled: ${currentWatchlistCount}/${stockLimit})`);
-            } else {
-                // User has filled quota - check when this stock was added
-                const watchlistItem = user.watchlist.find(item => item.instrument_key === instrument_key);
-
-                if (watchlistItem && watchlistItem.addedAt) {
-                    // Check if stock was added after 5:00 PM IST today
-                    // Convert 5:00 PM IST to UTC for comparison with MongoDB timestamps
-                    const now = new Date();
-                    const todayIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-                    const fivePmIST = new Date(todayIST);
-                    fivePmIST.setHours(17, 0, 0, 0);
-
-                    // Convert back to UTC for comparison
-                    const fivePmUTC = new Date(fivePmIST.toLocaleString('en-US', { timeZone: 'UTC' }));
-                    const addedAt = new Date(watchlistItem.addedAt);
-
-                    console.log(`⏰ [FRESH ANALYSIS] Comparing times - addedAt: ${addedAt.toISOString()}, 5PM IST in UTC: ${fivePmUTC.toISOString()}`);
-
-                    if (addedAt > fivePmUTC) {
-                        // Added after 5 PM IST - must wait for next bulk run
-                        canAnalyzeManually = false;
-                        console.log(`❌ [FRESH ANALYSIS] Stock added after 5 PM IST (${addedAt.toISOString()}), must wait for bulk run`);
-                        return res.status(423).json({
-                            success: false,
-                            error: 'stock_added_after_bulk_run',
-                            message: 'Stock added after bulk analysis. Please wait for the next daily run at 5:00 PM',
-                            reason: 'stock_added_after_bulk_run'
-                        });
-                    } else {
-                        // Added before 5 PM IST - should have been in bulk run, allow manual
-                        canAnalyzeManually = true;
-                        console.log(`✅ [FRESH ANALYSIS] Stock added before 5 PM IST, allowing manual analysis`);
-                    }
-                }
-            }
-        }
-
-        // Check if stock analysis is allowed based on market timing
-        const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
-
-        // Allow analysis if: (timing is OK) OR (user can analyze manually due to quota/timing)
-        if (!analysisPermission.allowed && !canAnalyzeManually) {
-            console.log(`❌ [STOCK ANALYSIS] Individual analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
+        if (downtimeCheck.isDowntime) {
+            console.log(`❌ [DOWNTIME] Manual analysis blocked - bulk processing window (4:00-5:00 PM IST)`);
             return res.status(423).json({
                 success: false,
-                error: 'stock_analysis_not_allowed',
-                message: `Analysis can be started only from 5.00 PM on market close till next 8.59 AM. ${analysisPermission.reason}`,
-                reason: analysisPermission.reason,
-                nextAllowed: analysisPermission.nextAllowed,
-                validUntil: analysisPermission.validUntil
+                error: 'downtime_window',
+                message: downtimeCheck.message,
+                reason: 'downtime_window',
+                nextAllowed: downtimeCheck.nextAllowed
             });
-        }
-
-        if (canAnalyzeManually) {
-            console.log(`✅ [STOCK ANALYSIS] Individual analysis allowed (user within quota or stock added before bulk run)`);
-        } else {
-            console.log(`✅ [STOCK ANALYSIS] Individual analysis allowed: ${analysisPermission.reason}, valid until: ${analysisPermission.validUntil}`);
         }
 
         // Lookup stock details from database
         const stockInfo = await Stock.getByInstrumentKey(instrument_key);
-        
+
         if (!stockInfo) {
             return res.status(404).json({
                 success: false,
@@ -144,176 +88,65 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
         const stock_name = stockInfo.name;
         const stock_symbol = stockInfo.trading_symbol;
 
+        // ⚡ Check user limits using service method (watchlist quota + daily limit)
+        const limitsCheck = await aiReviewService.checkAnalysisLimits(userId, instrument_key);
 
-        // Get current price from latest candle data using modern candleFetcher service
+        if (!limitsCheck.allowed) {
+            console.log(`❌ [USER LIMITS] Analysis blocked - ${limitsCheck.reason}: ${limitsCheck.message}`);
+            return res.status(200).json({
+                success: false,
+                status: 'limit_reached',
+                error: limitsCheck.reason,
+                message: limitsCheck.message,
+                limitInfo: limitsCheck.limitInfo
+            });
+        }
+
+        console.log(`✅ [USER LIMITS] Analysis allowed - ${limitsCheck.reason}`);
+
+        // Get current price from cache (faster than API call)
         let current_price = null;
         try {
-            console.log(`📊 [PRICE FETCH] Getting current price for ${stock_symbol} (${instrument_key})`);
-            
-            // Use candleFetcherService to get candle data (DB first, API fallback)
-            const term = analysis_type === 'swing' ? 'short' : 'intraday';
-            const candleResult = await candleFetcherService.getCandleDataForAnalysis(instrument_key, term);
-            
-            if (candleResult.success && candleResult.data) {
-                console.log(`✅ [PRICE FETCH] Got data from ${candleResult.source}: ${Object.keys(candleResult.data).length} timeframes`);
-                
-                // Try to get current price from any available timeframe (prefer shorter timeframes for latest price)
-                const timeframes = ['15m', '1h', '1d'];
-                let latestCandle = null;
-                let latestTimestamp = null;
-                
-                for (const timeframe of timeframes) {
-                    const candles = candleResult.data[timeframe];
-                    if (candles && candles.length > 0) {
-                        console.log(`📊 [PRICE FETCH] Checking ${timeframe}: ${candles.length} candles`);
-                        
-                        // Get the most recent candle from this timeframe
-                        const lastCandle = candles[candles.length - 1];
-                        const timestamp = Array.isArray(lastCandle) ? lastCandle[0] : lastCandle.timestamp;
-                        
-                        // Validate timestamp before using it
-                        if (!timestamp) {
-                            console.warn(`⚠️ [PRICE FETCH] Invalid timestamp (null/undefined) in ${timeframe} candle`);
-                            continue;
-                        }
-                        
-                        const candleTime = new Date(timestamp).getTime();
-                        
-                        // Check if the timestamp is valid
-                        if (isNaN(candleTime)) {
-                            console.warn(`⚠️ [PRICE FETCH] Invalid timestamp "${timestamp}" in ${timeframe} candle`);
-                            continue;
-                        }
-                        
-                        if (!latestTimestamp || candleTime > latestTimestamp) {
-                            latestTimestamp = candleTime;
-                            latestCandle = lastCandle;
-                            try {
-                                const timestampStr = new Date(timestamp).toISOString();
-                                console.log(`🎯 [PRICE FETCH] Found newer candle in ${timeframe}: ${timestampStr}`);
-                            } catch (e) {
-                                console.log(`🎯 [PRICE FETCH] Found newer candle in ${timeframe}: ${timestamp} (raw)`);
-                            }
-                        }
-                    }
-                }
-                
-                if (latestCandle) {
-                    current_price = Array.isArray(latestCandle) ? latestCandle[4] : latestCandle.close;
-                    const candleTime = Array.isArray(latestCandle) ? latestCandle[0] : latestCandle.timestamp;
-                    
-                    try {
-                        const candleTimeStr = new Date(candleTime).toISOString();
-                        console.log(`✅ [PRICE FETCH] Current price: ₹${current_price} (from ${candleTimeStr})`);
-                    } catch (e) {
-                        console.log(`✅ [PRICE FETCH] Current price: ₹${current_price} (from ${candleTime} - raw timestamp)`);
-                    }
-                } else {
-                    console.warn(`⚠️ [PRICE FETCH] No valid candles found in any timeframe`);
-                }
+            const priceCacheService = (await import('../services/priceCache.service.js')).default;
+            current_price = priceCacheService.getPrice(instrument_key);
+
+            if (current_price) {
+                console.log(`💰 [PRICE CACHE] Got price from cache: ${current_price} for ${instrument_key}`);
             } else {
-                console.warn(`⚠️ [PRICE FETCH] Failed to get candle data: ${candleResult.error || 'Unknown error'}`);
+                console.log(`⚠️ [PRICE CACHE] No cached price found for ${instrument_key}, will fetch from API`);
             }
-            
-            // No fallback price - if we can't get current price, we can't proceed
-            if (!current_price) {
-                console.error('❌ No current price available and no fallback allowed');
-                return res.status(400).json({
-                    success: false,
-                    error: 'Current price not available',
-                    message: 'Unable to fetch current market price. Please try again later.'
-                });
-            }
-            
         } catch (error) {
-            console.error('❌ Error fetching current price:', error);
-            return res.status(500).json({
-                success: false,
-                error: 'Failed to fetch current price',
-                message: 'Unable to get current market price for analysis'
-            });
+            console.warn(`⚠️ [PRICE CACHE] Error fetching from cache: ${error.message}`);
         }
 
-        // Validate analysis type
-        if (!['swing', 'intraday'].includes(analysis_type)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid analysis type',
-                message: 'analysis_type must be either "swing" or "intraday"'
-            });
-        }
+        // Return immediate response - analysis will happen in background
+        console.log(`🚀 [ANALYSIS START] Starting background analysis for ${stock_symbol}`);
 
-        // Validate current_price
-        const price = parseFloat(current_price);
-        if (isNaN(price) || price <= 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid price',
-                message: 'Unable to determine current market price'
-            });
-        }
-
-        // Check if user can analyze stocks (trial expiry check)
-        try {
-            const analysisPermissionCheck = await Subscription.canUserAnalyzeStock(userId);
-            
-            if (!analysisPermissionCheck.canAnalyze) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'analysis_not_allowed',
-                    message: analysisPermissionCheck.isTrialExpired 
-                        ? 'Your free trial has expired. Please subscribe to continue analyzing stocks.'
-                        : 'You need an active subscription to analyze stocks.',
-                    data: {
-                        planId: analysisPermissionCheck.planId,
-                        isTrialExpired: analysisPermissionCheck.isTrialExpired,
-                        trialExpiryDate: analysisPermissionCheck.trialExpiryDate,
-                        needsUpgrade: true
-                    }
-                });
-            }
-        } catch (subscriptionError) {
-            console.error('Error checking analysis permission:', subscriptionError);
-            return res.status(400).json({
-                success: false,
-                error: 'subscription_check_failed',
-                message: subscriptionError.message
-            });
-        }
-
-        // Start AI analysis directly
-        const result = await aiReviewService.analyzeStock({
+        // Start analysis in background (don't await)
+        aiReviewService.analyzeStock({
             instrument_key,
             stock_name,
             stock_symbol,
             current_price,
             analysis_type,
             userId,
-            forceFresh: forceFresh  // Use forceFresh if requested via query param
+            forceFresh: forceFresh,
+            sendNotification: true  // Send notification when complete
+        }).catch(error => {
+            console.error(`❌ [BACKGROUND ANALYSIS] Failed for ${stock_symbol}:`, error.message);
         });
 
-        if (result.success) {
-            const responseData = {
-                success: true,
-                data: result.data,
-                analysis_id: result.data._id
-            };
-
-            res.json(responseData);
-        } else if (result.error === 'daily_stock_limit_reached') {
-            return res.status(429).json({
-                success: false,
-                error: result.error,
-                message: result.message,
-                limitInfo: result.limitInfo
-            });
-        } else {
-            res.status(500).json({
-                success: false,
-                error: result.error,
-                message: result.message
-            });
-        }
+        // Return immediate response
+        return res.status(200).json({
+            success: true,
+            status: 'background_processing',
+            message: 'Analysis is happening in the background. We will notify you once it\'s complete.',
+            instrument_key,
+            stock_symbol,
+            stock_name,
+            estimated_time: '5-10 minutes',
+            notification_enabled: true
+        });
 
     } catch (error) {
         console.error('❌ AI Analysis API Error:', error);
@@ -407,6 +240,22 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
             
 
 
+             // ⚡ Check user limits using service method (watchlist quota + daily limit)
+                const limitsCheck = await aiReviewService.checkAnalysisLimits(userId, instrumentKey);
+
+                if (!limitsCheck.allowed) {
+                    console.log(`❌ [USER LIMITS] Analysis blocked - ${limitsCheck.reason}: ${limitsCheck.message}`);
+                    return res.status(200).json({
+                        success: true,
+                        status: 'limit_reached',
+                        error: limitsCheck.reason,
+                        message: limitsCheck.message,
+                        limitInfo: limitsCheck.limitInfo,
+                        can_analyze_manually: false
+                    });
+                }
+
+
 
             // First check for any analysis (completed or in progress)
             const anyAnalysis = await StockAnalysis.findOne({
@@ -414,108 +263,11 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
                 analysis_type: analysis_type,
             }).sort({ created_at: -1 }); // Get most recent analysis
 
-            // if(!anyAnalysis){
-            //     //chck for market timrtig if no analysis found
-            //     // if (!analysisPermission.allowed) {    
-            //     //     console.log(`❌ [ANALYSIS BY INSTRUMENT] Analysis blocked: ${analysisPermission.reason}, next allowed: ${analysisPermission.nextAllowed}`);
-            //     //     return res.status(423).json({
-            //     //         success: false,
-            //     //         error: 'stock_analysis_not_allowed',
-            //     //         message: `Analysis can be accessed only from 5:00 PM after market close, until the next trading day at 8:59 AM.`,
-            //     //         reason: analysisPermission.reason,
-            //     //         nextAllowed: analysisPermission.nextAllowed,
-            //     //         validUntil: analysisPermission.validUntil
-            //     //     });
-            //     // }
-            // } 
-
-            // // Auto-fail analyses stuck for more than 10 minutes
-            // if (anyAnalysis && anyAnalysis.status === 'in_progress') {
-            //     const now = new Date();
-            //     const analysisAge = now - anyAnalysis.created_at;
-            //     const maxAge = 10 * 60 * 1000; // 10 minutes
-                
-            //     if (analysisAge > maxAge) {
-            //         console.log(`⏰ [ANALYSIS TIMEOUT] Auto-failing stuck analysis: ${anyAnalysis._id}, age: ${Math.round(analysisAge/1000/60)}min`);
-            //         anyAnalysis.status = 'failed';
-            //         anyAnalysis.progress.current_step = 'Analysis timed out';
-            //         anyAnalysis.progress.percentage = 100;
-            //         await anyAnalysis.save();
-            //     }
-            // }
+          
 
             if (!anyAnalysis) {
-            
-            
-                const userId = req.user.id;
-                const user = await User.findById(userId);
-                const subscription = await Subscription.findActiveForUser(userId);
-
-                console.log(`🔍 [DEBUG] Checking manual analysis permission for ${instrumentKey}`);
-                console.log(`🔍 [DEBUG] User found: ${!!user}, Subscription found: ${!!subscription}`);
-
-                let canAnalyzeManually = false;
-                let messageToUser = 'This stock will be analyzed in the next daily run';
-                let callToActionToUser = 'Analysis will be available at 5:00 PM on the next trading day';
-
-                if (user && subscription) {
-                    const currentWatchlistCount = user.watchlist.length;
-                    const stockLimit = subscription.stockLimit;
-
-                    console.log(`📊 [ANALYSIS CHECK] User watchlist: ${currentWatchlistCount}/${stockLimit}`);
-                    console.log(`📊 [ANALYSIS CHECK] Watchlist items:`, user.watchlist.map(item => ({
-                        symbol: item.trading_symbol,
-                        addedAt: item.addedAt
-                    })));
-
-                    // If user hasn't filled their watchlist quota, allow manual analysis
-                    if (currentWatchlistCount < stockLimit) {
-                        canAnalyzeManually = true;
-                        messageToUser = 'This stock has not been analyzed yet';
-                        callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
-                        console.log(`✅ [ANALYSIS CHECK] User can analyze manually (quota not filled)`);
-                    } else {
-                        // User has filled quota - check when this stock was added
-                        const watchlistItem = user.watchlist.find(item => item.instrument_key === instrumentKey);
-
-                        if (watchlistItem && watchlistItem.addedAt) {
-                            // Check if stock was added after 5:00 PM IST today
-                            // Convert 5:00 PM IST to UTC for comparison with MongoDB timestamps
-                            const now = new Date();
-                            const todayIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-                            const fivePmIST = new Date(todayIST);
-                            fivePmIST.setHours(17, 0, 0, 0);
-
-                            // Convert back to UTC for comparison
-                            const fivePmUTC = new Date(fivePmIST.toLocaleString('en-US', { timeZone: 'UTC' }));
-                            const addedAt = new Date(watchlistItem.addedAt);
-
-                            console.log(`⏰ [ANALYSIS CHECK] Comparing times - addedAt: ${addedAt.toISOString()}, 5PM IST in UTC: ${fivePmUTC.toISOString()}`);
-
-                            if (addedAt > fivePmUTC) {
-                                // Added after 5 PM IST - must wait for next bulk run
-                                canAnalyzeManually = false;
-                                messageToUser = 'Stock added after bulk analysis. Will be analyzed in next daily run';
-                                callToActionToUser = 'Analysis will be available at 5:00 PM on the next trading day';
-                                console.log(`⏰ [ANALYSIS CHECK] Stock added after 5 PM IST (${addedAt.toISOString()}), must wait`);
-                            } else {
-                                // Added before 5 PM IST - should have been in bulk run, allow manual
-                                canAnalyzeManually = true;
-                                messageToUser = 'This stock has not been analyzed yet';
-                                callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
-                                    console.log(`✅ [ANALYSIS CHECK] Stock added before 5 PM IST, allow manual analysis`);
-
-                                }
-                        } else {
-                            // No addedAt timestamp, allow manual analysis as fallback
-                            canAnalyzeManually = true;
-                            console.log(`⚠️ [ANALYSIS CHECK] No addedAt found, allowing manual analysis`);
-                        }
-                    }
-                }
-                console.log(`🎯 [FINAL DECISION] can_analyze_manually: ${canAnalyzeManually}`);
-                console.log(`🎯 [FINAL DECISION] message: ${messageToUser}`);
-                console.log(`🎯 [FINAL DECISION] call_to_action: ${callToActionToUser}`);
+                const messageToUser = 'This stock has not been analyzed yet';
+                const callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
 
                 return res.status(200).json({
                     success: true,
@@ -523,11 +275,12 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
                     error: 'not_analyzed',
                     message: messageToUser,
                     call_to_action: callToActionToUser,
-                    can_analyze_manually: canAnalyzeManually
+                    can_analyze_manually: true
                 });
-
-            
             }
+
+       
+        
 
             // If analysis is not completed, return in_progress status (unless failed)
             if (anyAnalysis.status !== 'completed') {
@@ -541,41 +294,41 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
                     });
                 }
                 console.log(`🔄 [ANALYSIS BY INSTRUMENT] Analysis in progress for instrument: ${instrumentKey}, status: ${anyAnalysis.status}`);
-                
-                // Create minimal analysis_data structure with required fields
-                const defaultAnalysisData = {
-                    ...anyAnalysis.analysis_data,
-                    generated_at_ist: new Date().toISOString(), // Required field
-                    market_summary: {
-                        last: anyAnalysis.current_price || 0,
-                        trend: "NEUTRAL",
-                        volatility: "MEDIUM", 
-                        volume: "AVERAGE"
-                    },
-                    overall_sentiment: "NEUTRAL",
-                    strategies: [],
-                    disclaimer: "Analysis in progress..."
+
+                // Get progress information for user feedback
+                const progressInfo = anyAnalysis.progress || {
+                    current_step: 'Starting analysis...',
+                    percentage: 0,
+                    steps_completed: 0,
+                    total_steps: 6,
+                    estimated_time_remaining: 300 // 5 minutes default
                 };
 
-                return res.status(200).json({
+                // Calculate estimated completion time
+                const createdAt = new Date(anyAnalysis.created_at);
+                const now = new Date();
+                const elapsedSeconds = Math.floor((now - createdAt) / 1000);
+                const estimatedTotalTime = 300; // 5 minutes average
+                const remainingSeconds = Math.max(0, estimatedTotalTime - elapsedSeconds);
+                const estimatedMinutes = Math.ceil(remainingSeconds / 60);
+
+                // Return background processing message
+                return res.status(202).json({
                     success: true,
-                    data: {
-                        _id: anyAnalysis._id,
-                        instrument_key: anyAnalysis.instrument_key,
-                        stock_name: anyAnalysis.stock_name,
-                        stock_symbol: anyAnalysis.stock_symbol,
-                        analysis_type: anyAnalysis.analysis_type,
-                        current_price: anyAnalysis.current_price || 0,
-                        analysis_data: defaultAnalysisData,
-                        status: anyAnalysis.status,
-                        progress: anyAnalysis.progress,
-                        created_at: anyAnalysis.created_at,
-                        expires_at: anyAnalysis.expires_at
+                    status: 'background_processing',
+                    message: 'Analysis is happening in the background. We will notify you once it\'s complete.',
+                    stock_name: anyAnalysis.stock_name,
+                    stock_symbol: anyAnalysis.stock_symbol,
+                    instrument_key: anyAnalysis.instrument_key,
+                    progress: {
+                        current_step: progressInfo.current_step,
+                        percentage: progressInfo.percentage,
+                        steps_completed: progressInfo.steps_completed,
+                        total_steps: progressInfo.total_steps,
+                        estimated_time_remaining: `~${estimatedMinutes} min`
                     },
-                    cached: false,
-                    analysis_id: anyAnalysis._id.toString(),
-                    error: null,
-                    message: 'Analysis in progress'
+                    notification_enabled: true,
+                    created_at: anyAnalysis.created_at
                 });
             }
 

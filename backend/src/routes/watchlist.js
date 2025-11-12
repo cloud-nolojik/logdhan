@@ -6,8 +6,9 @@ import StockAnalysis from '../models/stockAnalysis.js';
 import MonitoringSubscription from '../models/monitoringSubscription.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 // Use database version instead of JSON file version
-import { getExactStock, getCurrentPrice } from '../utils/stockDb.js';
-import pLimit from 'p-limit'; 
+import { getExactStock } from '../utils/stockDb.js';
+import priceCacheService from '../services/priceCache.service.js';
+import pLimit from 'p-limit';
 // Upstox allows 50 requests/second, so 20 concurrent is safe with 10s timeouts
 const limit = pLimit(20); // Optimized for better performance while staying within rate limits
 
@@ -94,7 +95,7 @@ router.get('/', auth, async (req, res) => {
     const user = await User.findById(req.user.id);
     const watchlist = user.watchlist || [];
 
-    //console.log(`Fetching prices for ${watchlist.length} items in watchlist...`);
+    console.log(`⚡ Fetching data for ${watchlist.length} items in watchlist...`);
     const startTime = Date.now();
 
     // Check if we're currently in the scheduled window using MarketHoursUtil
@@ -105,81 +106,82 @@ router.get('/', auth, async (req, res) => {
       console.log('⏰ Currently in scheduled window (4:00 PM - 4:59 PM IST) - hiding all analyses');
     }
 
+    // ⚡ OPTIMIZATION: Fetch prices using triple-fallback pattern (DB → Memory → API)
+    const instrumentKeys = watchlist.map(item => item.instrument_key);
+    const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
+
+    // Process watchlist items in parallel (for analysis and monitoring data)
     const watchlistWithPrices = await Promise.all(
-      watchlist.map((item, index) =>
-        limit(async () => {
-          try {
-           // console.log(`Processing watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol}`);
-            const current_price = await getCurrentPrice(item.instrument_key);
+      watchlist.map(async (item) => {
+        try {
+          // Get price from database
+          const current_price = priceMap[item.instrument_key] || null;
 
-            // Fetch analysis status for this stock (hide if in scheduled window)
-            let analysis = null;
-            if (!isInScheduledWindow) {
-              analysis = await StockAnalysis.findOne({
-                instrument_key: item.instrument_key,
-              }).sort({ created_at: -1 }).lean();
-            }
-
-            // Check if stock is being monitored by this user
-            const activeMonitoring = await MonitoringSubscription.findOne({
+          // Fetch analysis status for this stock (hide if in scheduled window)
+          let analysis = null;
+          if (!isInScheduledWindow) {
+            analysis = await StockAnalysis.findOne({
               instrument_key: item.instrument_key,
-              'subscribed_users.user_id': req.user._id,
-              monitoring_status: 'active' // Only active monitoring jobs
-            }).lean();
+            }).sort({ created_at: -1 }).lean();
+          }
 
-            // Calculate AI confidence from strategies
-            let ai_confidence = null;
-            if (analysis && analysis.analysis_data && analysis.analysis_data.strategies) {
-              const strategies = analysis.analysis_data.strategies;
-              if (strategies.length > 0) {
-                // Get average confidence from all strategies
-                const confidences = strategies
-                  .filter(s => s.confidence != null)
-                  .map(s => s.confidence);
-                if (confidences.length > 0) {
-                  ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
-                }
+          // Check if stock is being monitored by this user
+          const activeMonitoring = await MonitoringSubscription.findOne({
+            instrument_key: item.instrument_key,
+            'subscribed_users.user_id': req.user._id,
+            monitoring_status: 'active' // Only active monitoring jobs
+          }).lean();
+
+          // Calculate AI confidence from strategies
+          let ai_confidence = null;
+          if (analysis && analysis.analysis_data && analysis.analysis_data.strategies) {
+            const strategies = analysis.analysis_data.strategies;
+            if (strategies.length > 0) {
+              // Get average confidence from all strategies
+              const confidences = strategies
+                .filter(s => s.confidence != null)
+                .map(s => s.confidence);
+              if (confidences.length > 0) {
+                ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
               }
             }
-
-            //console.log(`Completed watchlist item ${index + 1}/${watchlist.length}: ${item.trading_symbol} = ${currentPrice}`);
-
-            return {
-              instrument_key: item.instrument_key,
-              trading_symbol: item.trading_symbol,
-              name: item.name,
-              exchange: item.exchange,
-              addedAt: item.addedAt,
-              current_price,
-              // Analysis status fields
-              has_analysis: !!analysis,
-              analysis_status: analysis?.status || null,
-              ai_confidence,
-              is_monitoring: !!activeMonitoring,
-              monitoring_strategy_id: activeMonitoring?.strategy_id || null
-            };
-          } catch (err) {
-            console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
-            return {
-              instrument_key: item.instrument_key,
-              trading_symbol: item.trading_symbol,
-              name: item.name,
-              exchange: item.exchange,
-              addedAt: item.addedAt,
-              current_price: null,
-              has_analysis: false,
-              analysis_status: null,
-              ai_confidence: null,
-              is_monitoring: false,
-              monitoring_strategy_id: null
-            };
           }
-        })
-      )
+
+          return {
+            instrument_key: item.instrument_key,
+            trading_symbol: item.trading_symbol,
+            name: item.name,
+            exchange: item.exchange,
+            addedAt: item.addedAt,
+            current_price,
+            // Analysis status fields
+            has_analysis: !!analysis,
+            analysis_status: analysis?.status || null,
+            ai_confidence,
+            is_monitoring: !!activeMonitoring,
+            monitoring_strategy_id: activeMonitoring?.strategy_id || null
+          };
+        } catch (err) {
+          console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
+          return {
+            instrument_key: item.instrument_key,
+            trading_symbol: item.trading_symbol,
+            name: item.name,
+            exchange: item.exchange,
+            addedAt: item.addedAt,
+            current_price: null,
+            has_analysis: false,
+            analysis_status: null,
+            ai_confidence: null,
+            is_monitoring: false,
+            monitoring_strategy_id: null
+          };
+        }
+      })
     );
 
-    //const endTime = Date.now();
-   // console.log(`Watchlist with analysis data completed in ${endTime - startTime}ms`);
+    const endTime = Date.now();
+    console.log(`⚡ Total watchlist fetch completed in ${endTime - startTime}ms (${watchlist.length} stocks)`);
 
     // Get subscription info for stock limits
     let stockLimitInfo = null;
@@ -197,10 +199,19 @@ router.get('/', auth, async (req, res) => {
       console.warn('Error fetching subscription for stock limits:', error);
     }
 
+    // Get cache statistics for last update time
+    const cacheStats = priceCacheService.getStats();
+
     res.json({
       data: watchlistWithPrices,
       stockLimitInfo,
       isInScheduledWindow,
+      priceUpdate: {
+        lastUpdated: cacheStats.lastFetchTime,
+        cacheAge: cacheStats.cacheAge,
+        nextUpdateIn: cacheStats.nextFetchIn,
+        isFetching: cacheStats.isFetching
+      },
       success: true,
       message: "Watchlist fetched successfully"
     });

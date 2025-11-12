@@ -24,7 +24,7 @@ class IncrementalUpdaterService {
      * @param {Function} fetchCandlesFromAPI - Function to fetch candles from API
      * @returns {Object} - { success: boolean, data: formattedData }
      */
-    async fetchIncrementalDataAndMerge(instrumentKey, dbData, staleTimeframes, fetchCandlesFromAPI) {
+    async fetchIncrementalDataAndMerge(instrumentKey, dbData, staleTimeframes, fetchCandlesFromAPI,skipIntraday) {
         console.log(`\n${'█'.repeat(80)}`);
         console.log(`📡 [INCREMENTAL MERGE] Starting incremental data fetch and merge`);
         console.log(`${'█'.repeat(80)}`);
@@ -78,7 +78,9 @@ class IncrementalUpdaterService {
                         instrumentKey,
                         upstoxInterval,
                         fromDate,
-                        toDate
+                        toDate,
+                        skipIntraday
+
                     );
 
                     console.log(`\n📥 [${timeframe}] API fetch completed`);

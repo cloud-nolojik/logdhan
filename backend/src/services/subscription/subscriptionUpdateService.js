@@ -52,14 +52,49 @@ class SubscriptionUpdateService {
         billingCycle: plan.billingCycle
       });
       
-      // Determine if update is needed
+      // ⚡ Handle EXPIRED, CANCELLED, or terminal subscriptions - clear Cashfree ID
+      const terminalStatuses = ['EXPIRED', 'CANCELLED', 'FAILED'];
+      if (terminalStatuses.includes(cashfreeStatus.subscription_status)) {
+        console.log(`⏳ Cashfree subscription is ${cashfreeStatus.subscription_status} - clearing Cashfree subscription ID`);
+
+        // Move to old transaction IDs for history
+        if (subscription.cashfreeSubscriptionId) {
+          subscription.oldTransactionIds.push({
+            cashfreeSubscriptionId: subscription.cashfreeSubscriptionId,
+            cashfreeSubReferenceId: subscription.cashfreeSubReferenceId,
+            movedAt: new Date(),
+            reason: cashfreeStatus.subscription_status
+          });
+
+          // Clear current Cashfree IDs
+          subscription.cashfreeSubscriptionId = null;
+          subscription.cashfreeSubReferenceId = null;
+
+          // ⚡ CRITICAL: Update subscription status to EXPIRED so dashboard UI shows correctly
+         
+          await subscription.save();
+
+          console.log(`✅ Cleared ${cashfreeStatus.subscription_status} Cashfree subscription ID and marked subscription as EXPIRED - user can now create new subscription`);
+        }
+
+        return {
+          success: true,
+          updated: true,
+          message: `${cashfreeStatus.subscription_status} Cashfree subscription ID cleared`,
+          subscription,
+          action: 'TERMINAL_STATUS_CLEARED',
+          terminalStatus: cashfreeStatus.subscription_status
+        };
+      }
+
+      // Determine if update is needed for ACTIVE subscriptions
       const needsUpdate = (
         cashfreeStatus.subscription_status === 'ACTIVE' && subscription.status !== 'ACTIVE'
       ) || (
-        cashfreeStatus.authorization_details?.authorization_status === 'ACTIVE' && 
+        cashfreeStatus.authorization_details?.authorization_status === 'ACTIVE' &&
         subscription.planId !== cashfreePlanId
       );
-      
+
       if (!needsUpdate) {
         console.log('ℹ️ No update needed - status is already current');
         return {
@@ -228,17 +263,20 @@ class SubscriptionUpdateService {
       
       // Update subscription based on Cashfree status
       const updateResult = await this.updateSubscriptionFromCashfree(
-        subscription.subscriptionId, 
+        subscription.subscriptionId,
         cashfreeStatus
       );
-      
+
       if (updateResult.updated) {
-        // Move the cashfree IDs to oldTransactionIds
-        await this.moveToOldTransactionIds(subscription, 'PROCESSED_SUCCESSFULLY');
-        
+        // Only move to old transaction IDs if not already handled (e.g., terminal status)
+        if (updateResult.action !== 'TERMINAL_STATUS_CLEARED') {
+          // Move the cashfree IDs to oldTransactionIds
+          await this.moveToOldTransactionIds(subscription, 'PROCESSED_SUCCESSFULLY');
+        }
+
         // Refresh subscription data
-        const updatedSubscription = await Subscription.findOne({ 
-          subscriptionId: subscription.subscriptionId 
+        const updatedSubscription = await Subscription.findOne({
+          subscriptionId: subscription.subscriptionId
         });
         updateResult.subscription = updatedSubscription;
       }

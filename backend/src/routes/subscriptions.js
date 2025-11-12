@@ -344,12 +344,37 @@ router.post('/refresh-status', auth, async (req, res) => {
     // Check if subscription has a Cashfree ID
     if (!subscription.cashfreeSubscriptionId) {
       console.log('ℹ️ No Cashfree subscription ID found - status is current');
+      console.log(`📤 RESPONSE: Sending "No Cashfree ID" response - cashfreeSubscriptionId=${subscription.cashfreeSubscriptionId}`);
+
+      // Transform MongoDB subscription to match frontend UserSubscription model
+      const plan = await subscriptionService.getPlanById(subscription.planId);
+      const daysRemaining = Math.ceil((subscription.billing.endDate - new Date()) / (1000 * 60 * 60 * 24));
+
       return res.json({
         success: true,
         message: 'No Cashfree subscription ID - status is current',
-        data: { 
-          updated: false, 
-          subscription: subscription,
+        data: {
+          updated: false,
+          subscription: {
+            id: subscription.subscriptionId,
+            planId: subscription.planId,
+            planName: subscription.planName,
+            status: subscription.status,
+            pricing: subscription.pricing,
+            stockLimit: subscription.stockLimit,
+            billing: {
+              startDate: subscription.billing.startDate,
+              endDate: subscription.billing.endDate,
+              nextBillingDate: subscription.billing.nextBillingDate,
+              daysRemaining: Math.max(0, daysRemaining)
+            },
+            cashfreeSubscriptionId: subscription.cashfreeSubscriptionId,
+            cashfreeSessionId: subscription.cashfreeSessionId,
+            trialExpiryDate: subscription.trialExpiryDate,
+            isTrialExpired: subscription.isTrialExpired,
+            restrictions: subscription.restrictions,
+            features: plan?.features || []
+          },
           message: 'Trial subscription - no payment status to check'
         }
       });
@@ -363,11 +388,44 @@ router.post('/refresh-status', auth, async (req, res) => {
       const result = await subscriptionUpdateService.processSubscriptionUpdate(subscription.cashfreeSubscriptionId);
       
       console.log('🎉 Subscription update completed:', result.updated ? 'Updated' : 'No update needed');
-      
+      console.log(`📤 RESPONSE: Sending subscription update result - updated=${result.updated}, action=${result.action}`);
+
+      // Transform MongoDB subscription to match frontend UserSubscription model
+      const plan = await subscriptionService.getPlanById(result.subscription.planId);
+      const daysRemaining = Math.ceil((result.subscription.billing.endDate - new Date()) / (1000 * 60 * 60 * 24));
+
+      // Return the result fields directly (not wrapped in data) to match frontend model
       return res.json({
         success: true,
         message: result.message,
-        data: result
+        data: {
+          updated: result.updated,
+          subscription: {
+            id: result.subscription.subscriptionId,
+            planId: result.subscription.planId,
+            planName: result.subscription.planName,
+            status: result.subscription.status,
+            pricing: result.subscription.pricing,
+            stockLimit: result.subscription.stockLimit,
+            billing: {
+              startDate: result.subscription.billing.startDate,
+              endDate: result.subscription.billing.endDate,
+              nextBillingDate: result.subscription.billing.nextBillingDate,
+              daysRemaining: Math.max(0, daysRemaining)
+            },
+            cashfreeSubscriptionId: result.subscription.cashfreeSubscriptionId,
+            cashfreeSessionId: result.subscription.cashfreeSessionId,
+            trialExpiryDate: result.subscription.trialExpiryDate,
+            isTrialExpired: result.subscription.isTrialExpired,
+            restrictions: result.subscription.restrictions,
+            features: plan?.features || []
+          },
+          previousStatus: result.previousStatus,
+          newStatus: result.newStatus,
+          cashfreeStatus: result.cashfreeStatus,
+          action: result.action,
+          terminalStatus: result.terminalStatus
+        }
       });
       
     } catch (updateError) {

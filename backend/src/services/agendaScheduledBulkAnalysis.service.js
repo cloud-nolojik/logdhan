@@ -11,6 +11,7 @@ import aiAnalyzeService from './aiAnalyze.service.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 import Stock from '../models/stock.js';
 import { getCurrentPrice } from '../utils/stockDb.js';
+import priceCacheService from './priceCache.service.js';
 
 class AgendaScheduledBulkAnalysisService {
     constructor() {
@@ -207,22 +208,28 @@ class AgendaScheduledBulkAnalysisService {
                 return;
             }
 
-            // 3. Analyze each stock for each user who has it in their watchlist
-            let analysisCount = 0;
-            let successCount = 0;
-            let failureCount = 0;
-            let skippedCount = 0;
-            const limitReachedUsers = new Set();
-
-            console.log(`🔄 [SCHEDULED BULK] Starting analysis for ${uniqueStocks.length} stocks...`);
+            // 3. Fetch prices for all unique stocks at once
+            console.log(`💰 [SCHEDULED BULK] Fetching prices for ${uniqueStocks.length} unique stocks...`);
+            const instrumentKeys = uniqueStocks.map(stock => stock.instrument_key);
+            const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
+            console.log(`✅ [SCHEDULED BULK] Fetched ${Object.keys(priceMap).length} prices`);
 
             // Set release time to 5:00 PM IST today
-            const releaseTime = new Date(today);
-            releaseTime.setHours(17, 0, 0, 0); // 5:00 PM IST
-            console.log(`📅 [SCHEDULED BULK] Analysis will be released at: ${releaseTime.toISOString()}`);
+            const releaseTime = new Date();
+
+            // 4. Create pending analysis records for all stocks upfront
+            console.log(`📝 [SCHEDULED BULK] Creating pending analysis records for ${uniqueStocks.length} stocks...`);
+            let recordsCreated = 0;
+            let recordsSkipped = 0;
 
             for (const stock of uniqueStocks) {
-                console.log(`\n📊 [SCHEDULED BULK] Analyzing ${stock.trading_symbol} for ${stock.users.length} user(s)...`);
+                const current_price = priceMap[stock.instrument_key];
+
+                if (!current_price || isNaN(current_price) || current_price <= 0) {
+                    console.log(`  ⚠️  Skipping ${stock.trading_symbol} - no valid price available`);
+                    recordsSkipped++;
+                    continue;
+                }
 
                 // Get stock details from database
                 let stockDetails;
@@ -230,49 +237,72 @@ class AgendaScheduledBulkAnalysisService {
                     stockDetails = await Stock.findOne({ instrument_key: stock.instrument_key }).lean();
                     if (!stockDetails) {
                         console.log(`  ⚠️  Stock ${stock.instrument_key} not found in database, skipping...`);
-                        skippedCount += stock.users.length;
+                        recordsSkipped++;
                         continue;
                     }
                 } catch (error) {
                     console.error(`  ❌ Error fetching stock details for ${stock.instrument_key}:`, error.message);
-                    failureCount += stock.users.length;
+                    recordsSkipped++;
                     continue;
                 }
 
-                // Get current price
-                let current_price;
                 try {
-                    current_price = await getCurrentPrice(stock.instrument_key);
-                    if (!current_price) {
-                        console.log(`  ⚠️  Could not get price for ${stock.trading_symbol}, using 0`);
-                        current_price = 0;
-                    }
+                    // Create pending analysis record (this creates one record per stock, not per user)
+                    await aiAnalyzeService.createPendingAnalysisRecord({
+                        instrument_key: stock.instrument_key,
+                        stock_name: stockDetails.name,
+                        stock_symbol: stockDetails.trading_symbol,
+                        analysis_type: 'swing',
+                        current_price: current_price,
+                        scheduled_release_time: releaseTime
+                    });
+                    recordsCreated++;
+                    console.log(`  📝 [${recordsCreated}/${uniqueStocks.length}] Created pending record for ${stock.trading_symbol} at ₹${current_price}`);
                 } catch (error) {
-                    console.log(`  ⚠️  Error getting price for ${stock.trading_symbol}, using 0`);
-                    current_price = 0;
+                    console.error(`  ❌ Failed to create pending record for ${stock.trading_symbol}:`, error.message);
+                    recordsSkipped++;
+                }
+            }
+
+            console.log(`✅ [SCHEDULED BULK] Created ${recordsCreated} pending analysis records, skipped ${recordsSkipped}`);
+
+            // 5. Analyze each stock for each user who has it in their watchlist
+            let analysisCount = 0;
+            let successCount = 0;
+            let failureCount = 0;
+            let skippedCount = 0;
+
+            console.log(`🔄 [SCHEDULED BULK] Starting analysis for ${uniqueStocks.length} stocks...`);
+
+            for (const stock of uniqueStocks) {
+                console.log(`\n📊 [SCHEDULED BULK] Analyzing ${stock.trading_symbol} for ${stock.users.length} user(s)...`);
+
+                // Get price from our pre-fetched priceMap
+                const current_price = priceMap[stock.instrument_key];
+                if (!current_price || isNaN(current_price) || current_price <= 0) {
+                    console.log(`  ⚠️  Skipping ${stock.trading_symbol} - no valid price available`);
+                    skippedCount += stock.users.length;
+                    continue;
                 }
 
                 // Analyze this stock for each user who has it
+                // NOTE: Scheduled bulk analysis does NOT check user limits
+                // It pre-analyzes ALL watchlist stocks for ALL users during 4-5 PM window
+                // User limits only apply to manual analysis requests
                 for (const userId of stock.users) {
-                    const userKey = userId.toString();
-                    if (limitReachedUsers.has(userKey)) {
-                        skippedCount++;
-                        continue;
-                    }
-
                     analysisCount++;
 
                     try {
                         const result = await aiAnalyzeService.analyzeStock({
                             instrument_key: stock.instrument_key,
-                            stock_name: stockDetails.name,
-                            stock_symbol: stockDetails.trading_symbol,
+                            stock_name: stock.name,
+                            stock_symbol: stock.trading_symbol,
                             current_price: current_price,
                             analysis_type: 'swing',
                             user_id: userId.toString(),
                             skipNotification: true,  // Skip notifications for scheduled bulk pre-analysis
                             scheduled_release_time: releaseTime,  // Release at 5:00 PM
-                            forceFresh: false  // Always get fresh daily analysis, no cache
+                            skipIntraday: true  // Add buffer to intraday candles for end-of-day analysis
                         });
 
                         if (result.success) {
@@ -283,13 +313,6 @@ class AgendaScheduledBulkAnalysisService {
                                 successCount++;
                                 console.log(`  ✅ [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} analyzed for user ${userId}`);
                             }
-                        } else if (result.error === 'daily_stock_limit_reached') {
-                            skippedCount++;
-                            limitReachedUsers.add(userKey);
-                            const limitInfo = result.limitInfo || {};
-                            const used = limitInfo.usedCount ?? 'unknown';
-                            const limit = limitInfo.stockLimit ?? 'unknown';
-                            console.log(`  ⚖️  [${analysisCount}/${totalWatchlistItems}] Daily limit reached for user ${userId} (${used}/${limit})`);
                         } else {
                             failureCount++;
                             console.log(`  ❌ [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} failed for user ${userId} - ${result.error || 'Unknown error'}`);

@@ -28,12 +28,14 @@ console.log('✅ Environment validation passed');
 import { subscriptionService } from './services/subscription/subscriptionService.js';
 import { azureStorageService } from './services/storage/azureStorage.service.js';
 import { messagingService } from './services/messaging/messaging.service.js';
+import priceCacheService from './services/priceCache.service.js'; // In-memory price caching service
 import agendaDailyReminderService from './services/agendaDailyReminderService.js'; // Using Agenda instead of BullMQ
 import agendaMonitoringService from './services/agendaMonitoringService.js';
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // Using Agenda for data pre-fetching
 import agendaBulkAnalysisNotificationService from './services/agendaBulkAnalysisNotificationService.js'; // Daily 5 PM bulk analysis notifications
 import agendaBulkAnalysisReminderService from './services/agendaBulkAnalysisReminderService.js'; // Daily 8 AM bulk analysis expiry reminder
 import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // Daily 4 PM pre-analysis of all watchlist stocks (Agenda)
+import agendaMonitoringCleanupService from './services/agendaMonitoringCleanupService.js'; // Daily 4 AM cleanup of expired monitoring subscriptions
 // Removed condition monitoring - direct order placement only
 
 import authRoutes from './routes/auth.js';
@@ -279,6 +281,28 @@ async function initializeAgendaScheduledBulkAnalysisService() {
   }
 }
 
+// Initialize monitoring cleanup service (4 AM daily cleanup)
+async function initializeAgendaMonitoringCleanupService() {
+  try {
+    console.log('🔄 Initializing monitoring cleanup service...');
+    await agendaMonitoringCleanupService.initialize();
+    console.log('✅ Monitoring cleanup service initialized (runs at 4:00 AM IST daily)');
+  } catch (error) {
+    console.error('❌ Failed to initialize monitoring cleanup service:', error);
+  }
+}
+
+// Initialize price cache service
+async function initializePriceCacheService() {
+  try {
+    console.log('🔄 Initializing price cache service...');
+    priceCacheService.start();
+    console.log('✅ Price cache service initialized (fetches prices every 2 minutes for up to 2000 stocks)');
+  } catch (error) {
+    console.error('❌ Failed to initialize price cache service:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -289,12 +313,14 @@ app.listen(PORT, async () => {
   await initializeAzureStorage();
   // await initializeSubscriptionSystem();
   await initializeMessagingService();
+  await initializePriceCacheService(); // Start price caching for watchlist + indices
   await initializeAgendaDailyReminderService();
   await initializeAgendaMonitoringService();
   await initializeAgendaDataPrefetchService();
   await initializeAgendaBulkAnalysisNotificationService();
   await initializeAgendaBulkAnalysisReminderService();
   await initializeAgendaScheduledBulkAnalysisService();
+  await initializeAgendaMonitoringCleanupService(); // Cleanup expired monitoring subscriptions
   // BullMQ condition monitoring removed - now using Agenda
 
   console.log('🚀 All services initialized successfully');
@@ -305,6 +331,11 @@ process.on('SIGINT', async () => {
   console.log('\n🛑 SIGINT received, shutting down gracefully...');
 
   try {
+    // Stop price cache service
+    console.log('🛑 Stopping price cache service...');
+    priceCacheService.stop();
+    console.log('✅ Price cache service stopped');
+
     // Stop all Agenda services gracefully
     console.log('🛑 Stopping Agenda services...');
     await Promise.all([
@@ -313,7 +344,8 @@ process.on('SIGINT', async () => {
       agendaMonitoringService.agenda?.stop?.(),
       agendaBulkAnalysisNotificationService.shutdown(),
       agendaBulkAnalysisReminderService.shutdown(),
-      agendaScheduledBulkAnalysisService.stop()
+      agendaScheduledBulkAnalysisService.stop(),
+      agendaMonitoringCleanupService.shutdown()
     ]);
     console.log('✅ All Agenda services stopped');
 
@@ -333,6 +365,11 @@ process.on('SIGTERM', async () => {
   console.log('\n🛑 SIGTERM received, shutting down gracefully...');
 
   try {
+    // Stop price cache service
+    console.log('🛑 Stopping price cache service...');
+    priceCacheService.stop();
+    console.log('✅ Price cache service stopped');
+
     // Stop all Agenda services gracefully
     console.log('🛑 Stopping Agenda services...');
     await Promise.all([
@@ -341,7 +378,8 @@ process.on('SIGTERM', async () => {
       agendaMonitoringService.agenda?.stop?.(),
       agendaBulkAnalysisNotificationService.shutdown(),
       agendaBulkAnalysisReminderService.shutdown(),
-      agendaScheduledBulkAnalysisService.stop()
+      agendaScheduledBulkAnalysisService.stop(),
+      agendaMonitoringCleanupService.shutdown()
     ]);
     console.log('✅ All Agenda services stopped');
 

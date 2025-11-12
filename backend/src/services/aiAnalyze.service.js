@@ -18,6 +18,9 @@ import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
 import FineTuneData from '../models/fineTuneData.js';
 import { getIstDayRange } from '../utils/tradingDay.js';
+import priceCacheService from '../services/priceCache.service.js';
+import MarketHoursUtil from '../utils/marketHours.js';
+import UserAnalyticsUsage from '../models/userAnalyticsUsage.js';
 
 class AIAnalyzeService {
     constructor() {
@@ -145,78 +148,55 @@ class AIAnalyzeService {
      * @returns {Object} - Model configuration and status
      */
 
+    /**
+     * Check if user can analyze a stock (common method used by routes and scheduled tasks)
+     * @param {string} userId - User ID
+     * @param {string} instrumentKey - Stock instrument key
+     * @returns {Promise<Object>} - { allowed: boolean, reason: string, message: string, limitInfo: object }
+     */
+    async checkAnalysisLimits(userId, instrumentKey) {
+        try {
+            const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
+
+            // Check user limits (watchlist quota + daily limit)
+            const limitsCheck = await MarketHoursUtil.checkUserAnalysisLimits(userId, instrumentKey);
+
+            return limitsCheck;
+        } catch (error) {
+            console.error(`❌ [CHECK LIMITS] Error checking analysis limits:`, error.message);
+            // In case of error, allow the analysis to proceed (fail-open)
+            return {
+                allowed: true,
+                reason: 'error_checking_limits',
+                message: 'Unable to verify limits, proceeding with analysis'
+            };
+        }
+    }
 
     /**
-     * Analyze stock for trading strategies
+     * Create or update pending analysis record in database
+     * Centralized method to be used by all analysis entry points
      * @param {Object} params - Analysis parameters
      * @param {string} params.instrument_key - Stock instrument key
      * @param {string} params.stock_name - Stock name
      * @param {string} params.stock_symbol - Stock symbol
-     * @param {number} params.current_price - Current stock price
      * @param {string} params.analysis_type - Analysis type (swing/intraday)
-     * @param {string} params.user_id - User ID for caching
-     * @param {boolean} params.skipNotification - Skip sending in-app/Firebase notifications (for scheduled bulk analysis)
-     * @param {Date} params.scheduled_release_time - Release time for scheduled analyses (null for immediate visibility)
-     * @returns {Promise<Object>} Analysis result
+     * @param {number} params.current_price - Current stock price
+     * @param {Date} params.scheduled_release_time - Optional scheduled release time for bulk analysis
+     * @returns {Promise<Object>} Created/updated analysis record
      */
-    async analyzeStock({
+    async createPendingAnalysisRecord({
         instrument_key,
         stock_name,
         stock_symbol,
+        analysis_type,
         current_price,
-        analysis_type = 'swing',
-        user_id,
-        skipNotification = false,
-        scheduled_release_time = null,
+        scheduled_release_time = null
     }) {
-
-        
         try {
-            
-            const modelConfig = await modelSelectorService.determineAIModel();
-                
-               // Set the determined models
-                this.analysisModel = modelConfig.models.analysis;
-                this.sentimentalModel = modelConfig.models.sentiment;
-            
-
-            // Check for existing analysis (completed or in-progress)
-            const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
-            
-            if (existing) {
-                if (existing.status === 'completed') {
-                    return {
-                        success: true,
-                        data: existing,
-                        cached: true
-                    };
-                } else if (existing.status === 'in_progress') {
-                    return {
-                        success: true,
-                        data: existing,
-                        inProgress: true
-                    };
-                }
-            }
-
-            if (user_id && stock_symbol) {
-                const quotaCheck = await this.checkDailyStockLimit(user_id, stock_symbol);
-                if (!quotaCheck.allowed) {
-                    console.log(`⚖️ [DAILY LIMIT] ${stock_symbol} blocked for ${user_id} (${quotaCheck.uniqueCount}/${quotaCheck.stockLimit})`);
-                    return {
-                        success: false,
-                        error: 'daily_stock_limit_reached',
-                        message: 'You’ve used today’s AI analysis limit for your plan. New stocks will be analyzed from the next daily run after 5:00 PM.',
-                        limitInfo: {
-                            stockLimit: quotaCheck.stockLimit,
-                            usedCount: quotaCheck.uniqueCount
-                        }
-                    };
-                }
-            }
             const validPrice = parseFloat(current_price);
             if (!validPrice || isNaN(validPrice) || validPrice <= 0) {
-                throw new Error(`Invalid current price: ${current_price}. Cannot proceed with analysis.`);
+                throw new Error(`Invalid current price: ${current_price}. Cannot create analysis record.`);
             }
 
             // Use upsert to prevent duplicate analysis records
@@ -232,7 +212,7 @@ class AIAnalyzeService {
                         stock_symbol,
                         analysis_type,
                         current_price: validPrice, // Ensure this is always updated
-                        status: 'in_progress',
+                        status: 'pending',
                         expires_at: await StockAnalysis.getExpiryTime(analysis_type), // Market-aware expiry with analysis type
                         scheduled_release_time: scheduled_release_time, // Set release time for scheduled analyses (null for immediate)
                         progress: {
@@ -260,7 +240,153 @@ class AIAnalyzeService {
                     runValidators: true
                 }
             );
-            // console.log(`📝 Created pending analysis record: ${pendingAnalysis._id}`);
+
+            console.log(`📝 [PENDING ANALYSIS] Created/updated record for ${stock_symbol}: ${pendingAnalysis._id}`);
+            return pendingAnalysis;
+
+        } catch (error) {
+            console.error(`❌ [PENDING ANALYSIS] Failed to create record for ${stock_symbol}:`, error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Duplicate UserAnalyticsUsage record for cached analysis
+     * When returning existing analysis to a new user, create a usage record to track they accessed it
+     * @param {string} analysisId - ID of the existing analysis
+     * @param {string} userId - User ID who is accessing the cached analysis
+     * @param {string} stockSymbol - Stock symbol
+     * @param {string} analysisType - Analysis type
+     */
+    async duplicateUserAnalyticsUsage(analysisId, userId, stockSymbol, analysisType) {
+        try {
+            // Find existing UserAnalyticsUsage record for this analysis (not a cached one)
+            const existingUsage = await UserAnalyticsUsage.findOne({
+                analysis_id: analysisId,
+                is_cached_analysis: false
+            }).sort({ createdAt: -1 }).lean();
+
+            if (!existingUsage) {
+                console.log(`⚠️ [USER ANALYTICS] No existing usage record found for analysis ${analysisId}`);
+                return null;
+            }
+
+            // Create duplicate record for new user with is_cached_analysis = true
+            const duplicateUsage = new UserAnalyticsUsage({
+                ...existingUsage,
+                _id: new mongoose.Types.ObjectId(), // Generate new ID
+                user_id: userId, // Change to new user
+                is_cached_analysis: true, // Mark as cached
+                createdAt: new Date(),
+                updatedAt: new Date()
+            });
+
+            await duplicateUsage.save();
+            console.log(`✅ [USER ANALYTICS] Duplicated usage record for user ${userId}, analysis ${analysisId}, cached=true`);
+
+            return duplicateUsage;
+
+        } catch (error) {
+            console.error(`❌ [USER ANALYTICS] Failed to duplicate usage record:`, error.message);
+            // Don't throw - usage tracking failure shouldn't break analysis flow
+            return null;
+        }
+    }
+
+    /**
+     * Analyze stock for trading strategies
+     * @param {Object} params - Analysis parameters
+     * @param {string} params.instrument_key - Stock instrument key
+     * @param {string} params.stock_name - Stock name
+     * @param {string} params.stock_symbol - Stock symbol
+     * @param {number} params.current_price - Current stock price
+     * @param {string} params.analysis_type - Analysis type (swing/intraday)
+     * @param {string} params.user_id - User ID for caching
+     * @param {boolean} params.skipNotification - Skip sending in-app/Firebase notifications (for scheduled bulk analysis)
+     * @param {Date} params.scheduled_release_time - Release time for scheduled analyses (null for immediate visibility)
+     * @returns {Promise<Object>} Analysis result
+     */
+    async analyzeStock({
+        instrument_key,
+        stock_name,
+        stock_symbol,
+        current_price = null,
+        analysis_type = 'swing',
+        user_id,
+        userId,  // Accept both user_id and userId for compatibility
+        skipNotification = false,
+        scheduled_release_time = null,
+        skipIntraday= false
+
+
+    }) {
+        // Normalize user_id (accept both formats)
+        const normalizedUserId = user_id || userId;
+
+        
+        try {
+            
+            const modelConfig = await modelSelectorService.determineAIModel();
+                
+               // Set the determined models
+                this.analysisModel = modelConfig.models.analysis;
+                this.sentimentalModel = modelConfig.models.sentiment;
+            
+
+            // Check for existing analysis (completed or in-progress)
+            const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
+
+            if (existing) {
+                if (existing.status === 'completed') {
+                    // Duplicate UserAnalyticsUsage record for this user if userId is provided
+                    if (normalizedUserId) {
+                        await this.duplicateUserAnalyticsUsage(
+                            existing._id,
+                            normalizedUserId,
+                            stock_symbol,
+                            analysis_type
+                        );
+                    }
+
+                    return {
+                        success: true,
+                        data: existing,
+                        cached: true
+                    };
+                } else if (existing.status === 'in_progress') {
+                    // Don't duplicate for in_progress - no UserAnalyticsUsage record exists yet
+                    // It will be created when the analysis completes
+                    return {
+                        success: true,
+                        data: existing,
+                        inProgress: true
+                    };
+                }
+            }
+
+            // If current_price is not provided or invalid, fetch from price cache
+            if(!current_price || isNaN(current_price) || current_price <= 0) {
+                console.log(`⚡ [PRICE FETCH] No valid price provided, fetching from cache for ${instrument_key}...`);
+                const priceMap = await priceCacheService.getLatestPrices([instrument_key]);
+                current_price = priceMap[instrument_key] || null;
+
+                if (!current_price) {
+                    console.log(`❌ [PRICE FETCH] Failed to fetch price for ${instrument_key}`);
+                    throw new Error(`Unable to fetch current price for ${instrument_key}. Please try again.`);
+                }
+
+                console.log(`✅ [PRICE FETCH] Got price from cache: ${current_price}`);
+            }
+
+            // Create pending analysis record using common method
+            const pendingAnalysis = await this.createPendingAnalysisRecord({
+                instrument_key,
+                stock_name,
+                stock_symbol,
+                analysis_type,
+                current_price,
+                scheduled_release_time
+            });
 
             try {
                 // Generate AI analysis with progress tracking
@@ -270,7 +396,8 @@ class AIAnalyzeService {
                         stock_name,
                         stock_symbol,
                         current_price,
-                        analysis_type
+                        analysis_type,
+                        skipIntraday
                     },
                     pendingAnalysis // Pass analysis record for progress updates
                 );
@@ -293,9 +420,9 @@ class AIAnalyzeService {
                    // await this.updateBulkSessionProgress(instrument_key, analysis_type, 'completed');
 
                     // 💰 Save token usage for cost tracking (if we have token data)
-                    if (analysisResult._tokenTracking && user_id) {
+                    if (analysisResult._tokenTracking && normalizedUserId) {
                         await this.saveTokenUsage({
-                            userId: user_id,
+                            userId: normalizedUserId,
                             analysisId: pendingAnalysis._id,
                             stockSymbol: stock_symbol,
                             analysisType: analysis_type,
@@ -308,9 +435,15 @@ class AIAnalyzeService {
                         });
                     }
 
-                    // Send notification for analysis completion (only if not skipped - scheduled bulk analysis skips this)
-                    if (user_id && !skipNotification) {
-                        await this.sendAnalysisCompleteNotification(user_id, pendingAnalysis);
+                     // - skipNotification=true: Bulk analysis during downtime, never send notification
+                    // - Default: Send notification if user_id exists and not explicitly skipped
+
+
+                    if (normalizedUserId && !skipNotification) {
+                        console.log(`📬 [NOTIFICATION] Sending analysis complete notification for ${stock_symbol} to user ${normalizedUserId}`);
+                        await this.sendAnalysisCompleteNotification(normalizedUserId, pendingAnalysis);
+                    } else {
+                        console.log(`🔕 [NOTIFICATION] Skipping notification for ${stock_symbol} skipNotification=${skipNotification})`);
                     }
                 }
 
@@ -386,7 +519,7 @@ class AIAnalyzeService {
     /**
      * Generate AI analysis using real market data
      */
-    async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key }) {
+    async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key,skipIntraday }) {
         try {
             // console.log(`🚀 Starting real data fetch for ${stock_symbol} (${analysis_type})`);
             
@@ -396,7 +529,8 @@ class AIAnalyzeService {
                 instrument_key,
                 stock: stock_name,
                 stockSymbol: stock_symbol,
-                stockName: stock_name
+                stockName: stock_name,
+                skipIntraday
             };
 
             // Get sector information for enhanced analysis
@@ -601,10 +735,12 @@ class AIAnalyzeService {
         const startTime = Date.now();
 
         try {
-            // Use dedicated candle fetcher service (handles DB first, API fallback, storage)
+            
+            // Ensure MarketHoursUtil is loaded
             const candleResult = await candleFetcherService.getCandleDataForAnalysis(
                 tradeData.instrument_key,
-                tradeData.term
+                tradeData.term,
+                tradeData.skipIntraday || false
             );
 
             if (candleResult.success) {
@@ -2240,6 +2376,9 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         finalOut.meta.stage_chain = ["s1","s2","s3"];
         finalOut.meta.token_usage = tokenTracking;
 
+        // Add candle metadata for UI display
+        finalOut.meta.candle_info = this.extractCandleMetadata(marketPayload);
+
         console.log(`📊 [TOKEN USAGE] ${stock_symbol} - Total: ${tokenTracking.total.total_tokens} (Input: ${tokenTracking.total.input_tokens}, Output: ${tokenTracking.total.output_tokens}, Cached: ${tokenTracking.total.cached_tokens})`);
 
         // Store usage data in separate collection for persistent cost tracking
@@ -2253,11 +2392,11 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     /**
      * Save token usage data for cost tracking
      * Call this AFTER analysis is generated and you have userId
+     * If records already exist for this analysis_id (from cached/in_progress calls),
+     * update all of them with token usage data while keeping each user's user_id
      */
     async saveTokenUsage({ userId, analysisId, stockSymbol, analysisType, analysisData, tokenTracking, processingTime }) {
         try {
-            const UserAnalyticsUsage = (await import('../models/userAnalyticsUsage.js')).default;
-
             // Extract result metadata
             const strategy = analysisData?.strategies?.[0];
             const resultMeta = {
@@ -2289,12 +2428,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                 ? (tokenTracking.total.cached_tokens / (tokenTracking.total.cached_tokens + totalNonCachedTokens)) * 100
                 : 0;
 
-            // Create usage record
-            const usageRecord = await UserAnalyticsUsage.create({
-                user_id: userId,
-                analysis_id: analysisId || null,
-                stock_symbol: stockSymbol,
-                analysis_type: analysisType,
+            const usageData = {
                 token_usage: tokenTracking,
                 cost_breakdown: {
                     input_cost: inputCost,
@@ -2306,23 +2440,77 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                 pricing_model: pricing,
                 performance: {
                     total_duration_ms: processingTime,
-                    stage1_duration_ms: 0,  // TODO: Track individual stage times
+                    stage1_duration_ms: 0,
                     stage2_duration_ms: 0,
                     stage3_duration_ms: 0,
                     cache_hit_rate: cacheHitRate
                 },
-                result: resultMeta,
-                billing_context: {
-                    is_free_tier: true,  // TODO: Get from user subscription
-                    is_trial: false,
-                    subscription_plan: 'free',
-                    charge_user: false
+                result: resultMeta
+            };
+
+            // Check if records already exist for this analysis_id (from cached/duplicate calls)
+            if (analysisId) {
+                const existingRecords = await UserAnalyticsUsage.find({
+                    analysis_id: analysisId
+                }).sort({ createdAt: 1 }); // Sort by creation time (oldest first)
+
+                if (existingRecords && existingRecords.length > 0) {
+                    // Update first record (original user who triggered analysis) - set is_cached_analysis = false
+                    const firstRecordId = existingRecords[0]._id;
+                    await UserAnalyticsUsage.updateOne(
+                        { _id: firstRecordId },
+                        {
+                            $set: {
+                                ...usageData,
+                                stock_symbol: stockSymbol,
+                                analysis_type: analysisType,
+                                is_cached_analysis: false // Original user who generated it
+                            }
+                        }
+                    );
+
+                    // Update rest of the records - set is_cached_analysis = true
+                    if (existingRecords.length > 1) {
+                        const restRecordIds = existingRecords.slice(1).map(r => r._id);
+                        await UserAnalyticsUsage.updateMany(
+                            { _id: { $in: restRecordIds } },
+                            {
+                                $set: {
+                                    ...usageData,
+                                    stock_symbol: stockSymbol,
+                                    analysis_type: analysisType,
+                                    is_cached_analysis: true // Other users who accessed cached version
+                                }
+                            }
+                        );
+                    }
+
+                    console.log(`💰 [COST TRACKING] Updated ${existingRecords.length} existing usage records for ${stockSymbol}: ₹${totalCostInr.toFixed(4)} (${tokenTracking.total.total_tokens} tokens) - 1 original + ${existingRecords.length - 1} cached`);
+                    return existingRecords[0]; // Return first record
                 }
-            });
+                else{
+                    const usageRecord = await UserAnalyticsUsage.create({
+                        user_id: userId,
+                        analysis_id: analysisId || null,
+                        stock_symbol: stockSymbol,
+                        analysis_type: analysisType,
+                        ...usageData,
+                        billing_context: {
+                            is_free_tier: true,
+                            is_trial: false,
+                            subscription_plan: 'free',
+                            charge_user: false
+                        }
+                    });
 
-            console.log(`💰 [COST TRACKING] Saved usage for ${stockSymbol}: ₹${totalCostInr.toFixed(4)} (${tokenTracking.total.total_tokens} tokens)`);
+                    console.log(`💰 [COST TRACKING] Created new usage record for ${stockSymbol}: ₹${totalCostInr.toFixed(4)} (${tokenTracking.total.total_tokens} tokens)`);
 
-            return usageRecord;
+                    return usageRecord;
+                }
+            }
+
+            // No existing records - create new one for this user
+           
 
         } catch (error) {
             console.error(`❌ [COST TRACKING] Failed to save usage data:`, error);
@@ -2563,6 +2751,68 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     }
 
     /**
+     * Extract candle metadata from market payload for UI display
+     * Returns information about which timeframes were used and their last candle timestamps
+     */
+    extractCandleMetadata(marketPayload) {
+        if (!marketPayload) {
+            return null;
+        }
+
+        const candleInfo = {
+            timeframes_used: [],
+            primary_timeframe: null,
+            last_candle_time: null,
+            data_quality: {}
+        };
+
+        // Extract data from snapshots (last 30 bars)
+        const snapshots = marketPayload.snapshots || {};
+
+        // Map of timeframe keys to display names
+        const timeframeMap = {
+            'lastBars15m': { display: '15-min', key: '15m' },
+            'lastBars1h': { display: '1-hour', key: '1h' },
+            'lastBars1D': { display: 'daily', key: '1d' },
+            'lastBars1W': { display: 'weekly', key: '1w' }
+        };
+
+        // Extract last candle timestamps from each timeframe
+        for (const [snapshotKey, timeframeData] of Object.entries(timeframeMap)) {
+            const candles = snapshots[snapshotKey];
+            if (candles && candles.length > 0) {
+                // Candles are in format: [time, open, high, low, close, volume]
+                const lastCandle = candles[candles.length - 1];
+                const lastCandleTime = lastCandle[0]; // First element is timestamp
+
+                candleInfo.timeframes_used.push({
+                    timeframe: timeframeData.display,
+                    key: timeframeData.key,
+                    bars_count: candles.length,
+                    last_candle_time: lastCandleTime
+                });
+
+                // Set primary timeframe (prefer daily, then 1h, then 15m)
+                if (timeframeData.key === '1d' || !candleInfo.primary_timeframe) {
+                    candleInfo.primary_timeframe = timeframeData.display;
+                    candleInfo.last_candle_time = lastCandleTime;
+                }
+            }
+        }
+
+        // Add data health info if available
+        if (marketPayload.meta && marketPayload.meta.dataHealth) {
+            candleInfo.data_quality = {
+                bars_15m: marketPayload.meta.dataHealth.bars15m || 0,
+                bars_1h: marketPayload.meta.dataHealth.bars1h || 0,
+                bars_1d: marketPayload.meta.dataHealth.bars1D || 0
+            };
+        }
+
+        return candleInfo;
+    }
+
+    /**
      * Enforce per-user daily slot limit before analyzing a new stock.
      */
     async checkDailyStockLimit(userId, stockSymbol) {
@@ -2592,7 +2842,12 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
             ? mongoose.Types.ObjectId(userId)
             : userId;
 
-        const { startUtc, endUtc } = getIstDayRange();
+        // ⚡ NEW: Use quota window (5 PM IST Day T → 4 PM IST Day T+1) instead of IST day range
+        const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
+        const { startUtc, endUtc, quotaDate } = await MarketHoursUtil.getQuotaWindowUTC();
+
+        console.log(`📊 [DAILY LIMIT] Checking quota window: ${quotaDate} (${startUtc.toISOString()} → ${endUtc.toISOString()})`);
+
         const { default: UserAnalyticsUsage } = await import('../models/userAnalyticsUsage.js');
 
         const usage = await UserAnalyticsUsage.aggregate([
@@ -2632,11 +2887,14 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         }
 
         if (usedCount >= stockLimit) {
+            console.log(`❌ [DAILY LIMIT] User ${userId} has reached limit: ${usedCount}/${stockLimit} (quota_date: ${quotaDate})`);
             return {
                 allowed: false,
                 uniqueCount: usedCount,
                 stockLimit,
-                symbol: normalizedSymbol
+                symbol: normalizedSymbol,
+                quotaDate,
+                quotaResetsAt: endUtc.toISOString()
             };
         }
 

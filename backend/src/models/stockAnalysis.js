@@ -237,6 +237,17 @@ const stockAnalysisSchema = new mongoose.Schema({
             data_as_of_ist: String,
             stalePrice: Boolean,
             generated_at_ist: String,
+            candle_info: {
+                timeframes_used: [{
+                    timeframe: String,  // "15-min", "1-hour", "daily"
+                    key: String,        // "15m", "1h", "1d"
+                    bars_count: Number,
+                    last_candle_time: String  // ISO timestamp
+                }],
+                primary_timeframe: String,     // "daily", "1-hour", "15-min"
+                last_candle_time: String,      // ISO timestamp
+                data_quality: mongoose.Schema.Types.Mixed  // { bars_15m, bars_1h, bars_1d }
+            },
             debug: {
                 ai_request: {
                     model: String,

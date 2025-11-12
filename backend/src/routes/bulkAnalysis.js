@@ -705,238 +705,248 @@ router.get('/strategies', auth, async (req, res) => {
 });
 
 // Background function to process bulk analysis
-async function processBulkAnalysis(userId, stocks, analysisType) {
-    ////console.log((`🔄 [BULK ANALYSIS] Starting background processing for user ${userId} with ${stocks.length} stocks, type: ${analysisType}`);
-    let completed = 0;
-    let failed = 0;
-    let dailyLimitReached = false;
+// async function processBulkAnalysis(userId, stocks, analysisType) {
+//     ////console.log((`🔄 [BULK ANALYSIS] Starting background processing for user ${userId} with ${stocks.length} stocks, type: ${analysisType}`);
+//     let completed = 0;
+//     let failed = 0;
+//     let dailyLimitReached = false;
     
-    // Process stocks in smaller batches to avoid overwhelming Upstox API
-    const batchSize = 3; // Reduced from 5 to 3 to prevent rate limiting
-    const totalBatches = Math.ceil(stocks.length / batchSize);
+//     // Process stocks in smaller batches to avoid overwhelming Upstox API
+//     const batchSize = 3; // Reduced from 5 to 3 to prevent rate limiting
+//     const totalBatches = Math.ceil(stocks.length / batchSize);
     
-    for (let i = 0; i < totalBatches; i++) {
-        const batchStart = i * batchSize;
-        const batchEnd = Math.min(batchStart + batchSize, stocks.length);
-        const batch = stocks.slice(batchStart, batchEnd);
+//     for (let i = 0; i < totalBatches; i++) {
+//         const batchStart = i * batchSize;
+//         const batchEnd = Math.min(batchStart + batchSize, stocks.length);
+//         const batch = stocks.slice(batchStart, batchEnd);
         
-        ////console.log((`📦 [BULK ANALYSIS] Processing batch ${i + 1}/${totalBatches} (stocks ${batchStart + 1}-${batchEnd})`);
+//         ////console.log((`📦 [BULK ANALYSIS] Processing batch ${i + 1}/${totalBatches} (stocks ${batchStart + 1}-${batchEnd})`);
         
-        // Process batch in parallel
-        const batchPromises = batch.map(async (stock, index) => {
-            try {
-                ////console.log((`🔍 [BULK ANALYSIS] Analyzing ${stock.trading_symbol} (${stock.name})`);
-                if (dailyLimitReached) {
-                    return;
-                }
+//         // Process batch in parallel
+//         const batchPromises = batch.map(async (stock, index) => {
+//             try {
+//                 ////console.log((`🔍 [BULK ANALYSIS] Analyzing ${stock.trading_symbol} (${stock.name})`);
+//                 if (dailyLimitReached) {
+//                     return;
+//                 }
                 
-                // Fetch real current price
-                let currentPrice = null;
-                try {
-                    currentPrice = await getCurrentPrice(stock.instrument_key);
-                    ////console.log((`💰 [BULK ANALYSIS] Price fetched for ${stock.trading_symbol}: ₹${currentPrice}`);
-                } catch (priceError) {
-                    console.error(`❌ [BULK ANALYSIS] Price fetch failed for ${stock.trading_symbol}:`, priceError.message);
-                    // Skip this stock if we can't get the price
-                    failed++;
+//                 // Fetch real current price
+//                 let currentPrice = null;
+//                 try {
+//                     currentPrice = await getCurrentPrice(stock.instrument_key);
+//                     ////console.log((`💰 [BULK ANALYSIS] Price fetched for ${stock.trading_symbol}: ₹${currentPrice}`);
+//                 } catch (priceError) {
+//                     console.error(`❌ [BULK ANALYSIS] Price fetch failed for ${stock.trading_symbol}:`, priceError.message);
+//                     // Skip this stock if we can't get the price
+//                     failed++;
                     
-                    // Create a failed analysis record
-                    try {
-                        const failedAnalysis = await StockAnalysis.findOneAndUpdate(
-                            {
-                                instrument_key: stock.instrument_key,
-                                analysis_type: analysisType
-                            },
-                            {
-                                instrument_key: stock.instrument_key,
-                                stock_name: stock.name,
-                                stock_symbol: stock.trading_symbol,
-                                analysis_type: analysisType,
-                                // current_price: undefined (omitted for failed analysis)
-                                status: 'failed',
-                                expires_at: await StockAnalysis.getExpiryTime(),
-                                progress: {
-                                    percentage: 0,
-                                    current_step: `Price fetch failed: ${priceError.message}`,
-                                    steps_completed: 0,
-                                    total_steps: 8,
-                                    estimated_time_remaining: 0,
-                                    last_updated: new Date()
-                                },
-                                analysis_data: {
-                                    schema_version: '1.3',
-                                    symbol: stock.trading_symbol,
-                                    analysis_type: analysisType,
-                                    insufficientData: true,
-                                    strategies: [],
-                                    overall_sentiment: 'NEUTRAL',
-                                    error_reason: `Price fetch failed: ${priceError.message}`,
-                                    failed_at: new Date().toISOString()
-                                },
-                                created_at: new Date()
-                            },
-                            {
-                                upsert: true,
-                                new: true,
-                                runValidators: true
-                            }
-                        );
-                        ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol} (price fetch failed)`);
-                    } catch (saveError) {
-                        console.error(`❌ Failed to save failed analysis record for ${stock.trading_symbol}:`, saveError.message);
-                    }
+//                     // Create a failed analysis record
+//                     try {
+//                         const failedAnalysis = await StockAnalysis.findOneAndUpdate(
+//                             {
+//                                 instrument_key: stock.instrument_key,
+//                                 analysis_type: analysisType
+//                             },
+//                             {
+//                                 instrument_key: stock.instrument_key,
+//                                 stock_name: stock.name,
+//                                 stock_symbol: stock.trading_symbol,
+//                                 analysis_type: analysisType,
+//                                 // current_price: undefined (omitted for failed analysis)
+//                                 status: 'failed',
+//                                 expires_at: await StockAnalysis.getExpiryTime(),
+//                                 progress: {
+//                                     percentage: 0,
+//                                     current_step: `Price fetch failed: ${priceError.message}`,
+//                                     steps_completed: 0,
+//                                     total_steps: 8,
+//                                     estimated_time_remaining: 0,
+//                                     last_updated: new Date()
+//                                 },
+//                                 analysis_data: {
+//                                     schema_version: '1.3',
+//                                     symbol: stock.trading_symbol,
+//                                     analysis_type: analysisType,
+//                                     insufficientData: true,
+//                                     strategies: [],
+//                                     overall_sentiment: 'NEUTRAL',
+//                                     error_reason: `Price fetch failed: ${priceError.message}`,
+//                                     failed_at: new Date().toISOString()
+//                                 },
+//                                 created_at: new Date()
+//                             },
+//                             {
+//                                 upsert: true,
+//                                 new: true,
+//                                 runValidators: true
+//                             }
+//                         );
+//                         ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol} (price fetch failed)`);
+//                     } catch (saveError) {
+//                         console.error(`❌ Failed to save failed analysis record for ${stock.trading_symbol}:`, saveError.message);
+//                     }
                     
-                    return; // Skip to next stock
-                }
+//                     return; // Skip to next stock
+//                 }
                 
-                // Convert price to number and validate
-                const numericPrice = parseFloat(currentPrice);
-                if (!currentPrice || isNaN(numericPrice) || numericPrice <= 0) {
-                    ////console.log((`⚠️ [BULK ANALYSIS] Invalid price for ${stock.trading_symbol} (${currentPrice}), skipping`);
-                    failed++;
+//                 // Convert price to number and validate
+//                 const numericPrice = parseFloat(currentPrice);
+//                 if (!currentPrice || isNaN(numericPrice) || numericPrice <= 0) {
+//                     ////console.log((`⚠️ [BULK ANALYSIS] Invalid price for ${stock.trading_symbol} (${currentPrice}), skipping`);
+//                     failed++;
                     
-                    // Create failed record for invalid price
-                    try {
-                        const failedAnalysis = await StockAnalysis.findOneAndUpdate(
-                            {
-                                instrument_key: stock.instrument_key,
-                                analysis_type: analysisType
-                            },
-                            {
-                            instrument_key: stock.instrument_key,
-                            stock_name: stock.name,
-                            stock_symbol: stock.trading_symbol,
-                            analysis_type: analysisType,
-                            // current_price: undefined (omitted for failed analysis)
-                            status: 'failed',
-                            expires_at: await StockAnalysis.getExpiryTime(),
-                            progress: {
-                                percentage: 0,
-                                current_step: `Invalid price: ${currentPrice}`,
-                                steps_completed: 0,
-                                total_steps: 8,
-                                estimated_time_remaining: 0,
-                                last_updated: new Date()
-                            },
-                            analysis_data: {
-                                schema_version: '1.3',
-                                symbol: stock.trading_symbol,
-                                analysis_type: analysisType,
-                                insufficientData: true,
-                                strategies: [],
-                                overall_sentiment: 'NEUTRAL',
-                                error_reason: `Invalid or missing price data: ${currentPrice}`,
-                                failed_at: new Date().toISOString()
-                            },
-                            created_at: new Date()
-                        },
-                        {
-                            upsert: true,
-                            new: true,
-                            runValidators: true
-                        }
-                    );
-                        ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol} (invalid price)`);
-                    } catch (saveError) {
-                        console.error(`❌ Failed to save failed analysis for invalid price ${stock.trading_symbol}:`, saveError.message);
-                    }
+//                     // Create failed record for invalid price
+//                     try {
+//                         const failedAnalysis = await StockAnalysis.findOneAndUpdate(
+//                             {
+//                                 instrument_key: stock.instrument_key,
+//                                 analysis_type: analysisType
+//                             },
+//                             {
+//                             instrument_key: stock.instrument_key,
+//                             stock_name: stock.name,
+//                             stock_symbol: stock.trading_symbol,
+//                             analysis_type: analysisType,
+//                             // current_price: undefined (omitted for failed analysis)
+//                             status: 'failed',
+//                             expires_at: await StockAnalysis.getExpiryTime(),
+//                             progress: {
+//                                 percentage: 0,
+//                                 current_step: `Invalid price: ${currentPrice}`,
+//                                 steps_completed: 0,
+//                                 total_steps: 8,
+//                                 estimated_time_remaining: 0,
+//                                 last_updated: new Date()
+//                             },
+//                             analysis_data: {
+//                                 schema_version: '1.3',
+//                                 symbol: stock.trading_symbol,
+//                                 analysis_type: analysisType,
+//                                 insufficientData: true,
+//                                 strategies: [],
+//                                 overall_sentiment: 'NEUTRAL',
+//                                 error_reason: `Invalid or missing price data: ${currentPrice}`,
+//                                 failed_at: new Date().toISOString()
+//                             },
+//                             created_at: new Date()
+//                         },
+//                         {
+//                             upsert: true,
+//                             new: true,
+//                             runValidators: true
+//                         }
+//                     );
+//                         ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol} (invalid price)`);
+//                     } catch (saveError) {
+//                         console.error(`❌ Failed to save failed analysis for invalid price ${stock.trading_symbol}:`, saveError.message);
+//                     }
                     
-                    return; // Skip to next stock
-                }
-                
-                const analysisResult = await aiAnalyzeService.analyzeStock({
-                    instrument_key: stock.instrument_key,
-                    stock_symbol: stock.trading_symbol, // Use trading_symbol for display
-                    stock_name: stock.name,
-                    current_price: numericPrice, // Use validated numeric price
-                    analysis_type: analysisType,
-                    user_id: userId,
-                });
-                
-                if (!analysisResult.success) {
-                    if (analysisResult.error === 'daily_stock_limit_reached') {
-                        dailyLimitReached = true;
-                        const limitInfo = analysisResult.limitInfo || {};
-                        const used = limitInfo.usedCount ?? 'unknown';
-                        const limit = limitInfo.stockLimit ?? 'unknown';
-                        console.log(`⚖️ [BULK ANALYSIS] Daily AI limit reached for user ${userId} after ${used}/${limit} stocks`);
-                        return;
-                    }
-                    throw new Error(analysisResult.message || analysisResult.error || 'Analysis failed');
-                }
+//                     return; // Skip to next stock
+//                 }
 
-                completed++;
-                ////console.log((`✅ [BULK ANALYSIS] Completed ${stock.trading_symbol} (${completed}/${stocks.length})`);
+//                 // ⚡ Check user limits before analyzing (using centralized method)
+//                 const limitsCheck = await aiAnalyzeService.checkAnalysisLimits(userId, stock.instrument_key);
+
+//                 if (!limitsCheck.allowed) {
+//                     // User has reached their daily limit
+//                     if (limitsCheck.reason === 'daily_limit_reached') {
+//                         dailyLimitReached = true;
+//                         const limitInfo = limitsCheck.limitInfo || {};
+//                         const used = limitInfo.usedCount ?? 'unknown';
+//                         const limit = limitInfo.stockLimit ?? 'unknown';
+//                         console.log(`⚖️ [BULK ANALYSIS] Daily AI limit reached for user ${userId} after ${used}/${limit} stocks`);
+//                         return; // Stop processing more stocks for this user
+//                     }
+//                     // Other limit reasons (e.g., watchlist quota)
+//                     console.log(`⚠️ [BULK ANALYSIS] Skipping ${stock.trading_symbol} - ${limitsCheck.reason}: ${limitsCheck.message}`);
+//                     return; // Skip this stock
+//                 }
+
+//                 const analysisResult = await aiAnalyzeService.analyzeStock({
+//                     instrument_key: stock.instrument_key,
+//                     stock_symbol: stock.trading_symbol, // Use trading_symbol for display
+//                     stock_name: stock.name,
+//                     current_price: numericPrice, // Use validated numeric price
+//                     analysis_type: analysisType,
+//                     user_id: userId,
+//                 });
+
+//                 if (!analysisResult.success) {
+//                     throw new Error(analysisResult.message || analysisResult.error || 'Analysis failed');
+//                 }
+
+//                 completed++;
+//                 ////console.log((`✅ [BULK ANALYSIS] Completed ${stock.trading_symbol} (${completed}/${stocks.length})`);
                 
-            } catch (error) {
-                failed++;
-                console.error(`❌ [BULK ANALYSIS] Failed to analyze ${stock.trading_symbol}:`, error.message);
+//             } catch (error) {
+//                 failed++;
+//                 console.error(`❌ [BULK ANALYSIS] Failed to analyze ${stock.trading_symbol}:`, error.message);
                 
-                // Create a failed analysis record so it's tracked properly
-                try {
-                    const failedAnalysis = await StockAnalysis.findOneAndUpdate(
-                        {
-                            instrument_key: stock.instrument_key,
-                            analysis_type: analysisType
-                        },
-                        {
-                            instrument_key: stock.instrument_key,
-                            stock_name: stock.name,
-                            stock_symbol: stock.trading_symbol,
-                            analysis_type: analysisType,
-                            // current_price: undefined (omitted for failed analysis)
-                            status: 'failed',
-                            expires_at: await StockAnalysis.getExpiryTime(),
-                            progress: {
-                                percentage: 0,
-                                current_step: `Failed: ${error.message}`,
-                                steps_completed: 0,
-                                total_steps: 8,
-                                estimated_time_remaining: 0,
-                                last_updated: new Date()
-                            },
-                            analysis_data: {
-                                schema_version: '1.3',
-                                symbol: stock.trading_symbol,
-                                analysis_type: analysisType,
-                                insufficientData: true,
-                                strategies: [],
-                                overall_sentiment: 'NEUTRAL',
-                                error_reason: error.message,
-                                failed_at: new Date().toISOString()
-                            },
-                            created_at: new Date()
-                        },
-                        {
-                            upsert: true,
-                            new: true,
-                            runValidators: true
-                        }
-                    );
-                    ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol}: ${failedAnalysis._id}`);
-                } catch (saveError) {
-                    console.error(`❌ Failed to save failed analysis record for ${stock.trading_symbol}:`, saveError.message);
-                }
-            }
-        });
+//                 // Create a failed analysis record so it's tracked properly
+//                 try {
+//                     const failedAnalysis = await StockAnalysis.findOneAndUpdate(
+//                         {
+//                             instrument_key: stock.instrument_key,
+//                             analysis_type: analysisType
+//                         },
+//                         {
+//                             instrument_key: stock.instrument_key,
+//                             stock_name: stock.name,
+//                             stock_symbol: stock.trading_symbol,
+//                             analysis_type: analysisType,
+//                             // current_price: undefined (omitted for failed analysis)
+//                             status: 'failed',
+//                             expires_at: await StockAnalysis.getExpiryTime(),
+//                             progress: {
+//                                 percentage: 0,
+//                                 current_step: `Failed: ${error.message}`,
+//                                 steps_completed: 0,
+//                                 total_steps: 8,
+//                                 estimated_time_remaining: 0,
+//                                 last_updated: new Date()
+//                             },
+//                             analysis_data: {
+//                                 schema_version: '1.3',
+//                                 symbol: stock.trading_symbol,
+//                                 analysis_type: analysisType,
+//                                 insufficientData: true,
+//                                 strategies: [],
+//                                 overall_sentiment: 'NEUTRAL',
+//                                 error_reason: error.message,
+//                                 failed_at: new Date().toISOString()
+//                             },
+//                             created_at: new Date()
+//                         },
+//                         {
+//                             upsert: true,
+//                             new: true,
+//                             runValidators: true
+//                         }
+//                     );
+//                     ////console.log((`📝 Created failed analysis record for ${stock.trading_symbol}: ${failedAnalysis._id}`);
+//                 } catch (saveError) {
+//                     console.error(`❌ Failed to save failed analysis record for ${stock.trading_symbol}:`, saveError.message);
+//                 }
+//             }
+//         });
         
-        await Promise.all(batchPromises);
+//         await Promise.all(batchPromises);
         
-        if (dailyLimitReached) {
-            console.log(`⚖️ [BULK ANALYSIS] Stopping further batches for user ${userId} after hitting daily limit`);
-            break;
-        }
+//         if (dailyLimitReached) {
+//             console.log(`⚖️ [BULK ANALYSIS] Stopping further batches for user ${userId} after hitting daily limit`);
+//             break;
+//         }
         
-        // Add progressively longer delays between batches to avoid rate limiting
-        if (i < totalBatches - 1) {
-            const delayMs = Math.min(2000 + (i * 1000), 10000); // Start at 2s, increase by 1s per batch, max 10s
-            ////console.log((`⏱️ [BULK ANALYSIS] Waiting ${delayMs/1000}s before next batch to avoid rate limiting...`);
-            await new Promise(resolve => setTimeout(resolve, delayMs));
-        }
-    }
+//         // Add progressively longer delays between batches to avoid rate limiting
+//         if (i < totalBatches - 1) {
+//             const delayMs = Math.min(2000 + (i * 1000), 10000); // Start at 2s, increase by 1s per batch, max 10s
+//             ////console.log((`⏱️ [BULK ANALYSIS] Waiting ${delayMs/1000}s before next batch to avoid rate limiting...`);
+//             await new Promise(resolve => setTimeout(resolve, delayMs));
+//         }
+//     }
     
-    ////console.log((`🏁 [BULK ANALYSIS] Completed for user ${userId}. Success: ${completed}, Failed: ${failed}, Total processed: ${completed + failed}/${stocks.length}`);
-}
+//     ////console.log((`🏁 [BULK ANALYSIS] Completed for user ${userId}. Success: ${completed}, Failed: ${failed}, Total processed: ${completed + failed}/${stocks.length}`);
+// }
 
 // Session-based bulk analysis processing with cancellation and timeout support
 async function processSessionBasedBulkAnalysis(session) {
@@ -1063,71 +1073,58 @@ async function processSessionBasedBulkAnalysis(session) {
                 // Continue processing even if session update fails
             }
             
-            //console.log(`🔍 [SESSION ANALYSIS] Starting analysis for: ${stock.trading_symbol}`);
-            
-            try {
-                // Fetch current price with timeout
-                let currentPrice = null;
-                //console.log(`💰 [SESSION ANALYSIS] Fetching price for ${stock.trading_symbol}...`);
-                try {
-                    const pricePromise = getCurrentPrice(stock.instrument_key);
-                    const timeoutPromise = new Promise((_, reject) => 
-                        setTimeout(() => reject(new Error('Price fetch timeout')), 30000) // 30 second timeout
-                    );
-                    
-                    currentPrice = await Promise.race([pricePromise, timeoutPromise]);
-                    //console.log(`💰 [SESSION ANALYSIS] Price fetched for ${stock.trading_symbol}: ₹${currentPrice}`);
-                    
-                } catch (priceError) {
-                    console.error(`❌ [SESSION ANALYSIS] Price fetch failed for ${stock.trading_symbol}:`, priceError.message);
-                    await markStockAsFailed(session, stock, `Price fetch failed: ${priceError.message}`);
-                    continue; // Skip to next stock
-                }
-                
-                // Validate price
-                const numericPrice = parseFloat(currentPrice);
-                if (!currentPrice || isNaN(numericPrice) || numericPrice <= 0) {
-                    //console.log(`⚠️ [SESSION ANALYSIS] Invalid price for ${stock.trading_symbol}: ${currentPrice}`);
-                    await markStockAsFailed(session, stock, `Invalid price data: ${currentPrice}`);
-                    continue; // Skip to next stock
-                }
+
                 
                 //console.log(`✅ [SESSION ANALYSIS] Valid price ₹${numericPrice} for ${stock.trading_symbol}, starting AI analysis...`);
-                
+
+                // ⚡ Check user limits before analyzing (using centralized method)
+                const limitsCheck = await aiAnalyzeService.checkAnalysisLimits(session.user_id, stock.instrument_key);
+
+                if (!limitsCheck.allowed) {
+                    // User has reached their daily limit
+                    if (limitsCheck.reason === 'daily_limit_reached') {
+                        console.log(`⚖️ [SESSION ANALYSIS] Daily limit reached for user ${session.user_id}, pausing session`);
+                        session.status = 'paused';
+                        session.error_message = 'daily_limit_reached';
+                        session.last_updated = new Date();
+                        await session.save();
+                        return; // Stop processing session
+                    }
+                    // Other limit reasons - skip this stock
+                    console.log(`⚠️ [SESSION ANALYSIS] Skipping ${stock.trading_symbol} - ${limitsCheck.reason}: ${limitsCheck.message}`);
+                    await markStockAsFailed(session, stock, limitsCheck.message);
+                    continue; // Skip to next stock
+                }
+
                 // Start analysis (single attempt, no retries)
                 try {
                     //console.log(`🤖 [SESSION ANALYSIS] Calling aiAnalyzeService.analyzeStock for ${stock.trading_symbol}...`);
                     const analysisPromise = aiAnalyzeService.analyzeStock({
                         instrument_key: stock.instrument_key,
-                        stock_symbol: stock.trading_symbol,
                         stock_name: stock.stock_name,
-                        current_price: numericPrice,
+                        stock_symbol: stock.trading_symbol,
+                     
+                        current_price: null,
                         analysis_type: session.analysis_type,
                         user_id:session.user_id,
                         // user_id: removed for bulk analysis to make results shareable across users
                         forceFresh: false,
+                        scheduled_release_time:new Date(),
                         skipNotification: true  // Skip per-stock notifications in bulk analysis
                     });
-                    
+
                     // 10-minute timeout per stock
-                    const timeoutPromise = new Promise((_, reject) => 
+                    const timeoutPromise = new Promise((_, reject) =>
                         setTimeout(() => reject(new Error('Stock analysis timeout after 10 minutes')), session.timeout_threshold)
                     );
-                    
+
                     const analysisResult = await Promise.race([analysisPromise, timeoutPromise]);
                     //console.log(`🎯 [SESSION ANALYSIS] AI analysis completed for ${stock.trading_symbol}, result:`, analysisResult?.success ? 'SUCCESS' : 'FAILED');
-                    
+
                     if (analysisResult && analysisResult.success) {
                         // Mark stock as successfully processed
                         await markStockAsSuccessful(session, stock);
                         //console.log(`✅ [SESSION ANALYSIS] Successfully completed ${stock.trading_symbol}`);
-                    } else if (analysisResult && analysisResult.error === 'daily_stock_limit_reached') {
-                        console.log(`⚖️ [SESSION ANALYSIS] Daily limit reached for user ${session.user_id}, pausing session`);
-                        session.status = 'paused';
-                        session.error_message = 'daily_stock_limit_reached';
-                        session.last_updated = new Date();
-                        await session.save();
-                        return;
                     } else {
                         // Analysis failed - mark as failed
                         const errorMsg = analysisResult?.message || analysisResult?.error || 'Analysis returned failure status';
@@ -1139,11 +1136,6 @@ async function processSessionBasedBulkAnalysis(session) {
                     console.error(`❌ [SESSION ANALYSIS] Analysis error for ${stock.trading_symbol}:`, analysisError.message);
                     await markStockAsFailed(session, stock, analysisError.message);
                 }
-                
-            } catch (stockError) {
-                console.error(`❌ [SESSION ANALYSIS] Unexpected error processing ${stock.trading_symbol}:`, stockError.message);
-                await markStockAsFailed(session, stock, stockError.message);
-            }
             
             // Update session heartbeat
             await session.updateHeartbeat();

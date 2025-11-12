@@ -484,8 +484,15 @@ class AIReviewService {
     const userExperience = userId ? await this.getUserExperience(userId) : 'intermediate';
 
     // Use candleFetcherService as single source of truth for data fetching
+   
+     let isMarketOpen = false;
+                try {
+                    isMarketOpen = await MarketHoursUtil.isMarketOpen();
+                } catch (mhError) {
+                    console.error('❌ Error checking market hours:', mhError.message);
+                }
     const [candleResult, newsData] = await Promise.all([
-      candleFetcherService.getCandleDataForAnalysis(tradeData.instrument_key, tradeData.term),
+      candleFetcherService.getCandleDataForAnalysis(tradeData.instrument_key, tradeData.term, !isMarketOpen),
       this.fetchNewsData(tradeData.stock).catch(e => ({ error: e?.message || String(e) }))
     ]);
 

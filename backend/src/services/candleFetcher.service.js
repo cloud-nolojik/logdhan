@@ -23,10 +23,12 @@ class CandleFetcherService {
 
     /**
      * Main method: Get candle data for analysis (DB first, API fallback)
+     * Automatically excludes intraday candles during market hours to avoid incomplete data
+     * @param {string} instrumentKey - Stock instrument key
+     * @param {string} term - Analysis term (short/long)
      */
-    async getCandleDataForAnalysis(instrumentKey, term) {
-        console.log(`📊 [CANDLE FETCHER] Getting data for ${instrumentKey} (${term})`);
-        
+    async getCandleDataForAnalysis(instrumentKey, term, skipIntraday = false) {
+        // Check if market is currently open - if yes, exclude incomplete intraday candles
         try {
             // Step 1: Try to get pre-fetched data from database
             console.log(`🔍 [DB QUERY] Looking for instrument_key: "${instrumentKey}", term: "${term}"`);
@@ -51,7 +53,8 @@ class CandleFetcherService {
                             instrumentKey,
                             preFetchedResult.data,
                             freshnessCheck.staleTimeframes,
-                            this.fetchCandlesFromAPI.bind(this)
+                            this.fetchCandlesFromAPI.bind(this),
+                            skipIntraday
                         );
                      if (incrementalResult.success) {
                             // Refresh DB data
@@ -86,7 +89,7 @@ class CandleFetcherService {
             else{
 
                 console.log(`🔄 [CANDLE FETCHER] Fetching fresh data from API`);
-                const apiResult = await this.fetchFromAPI(instrumentKey, term);
+                const apiResult = await this.fetchFromAPI(instrumentKey, term,skipIntraday);
 
                 return {
                     success: true,
@@ -216,10 +219,10 @@ class CandleFetcherService {
     /**
      * Fetch candle data from API and store in database
      */
-    async fetchFromAPI(instrumentKey, term) {
+    async fetchFromAPI(instrumentKey, term,skipIntraday) {
         try {
             // Build endpoints using existing smart API selection
-            const tradeData = { instrument_key: instrumentKey, term: term };
+            const tradeData = { instrument_key: instrumentKey, term: term,skipIntraday };
             const endpoints = await this.buildEndpoints(tradeData);
             
            // console.log(`🔄 [API FETCH] Processing ${endpoints.length} endpoints`);
@@ -249,6 +252,9 @@ class CandleFetcherService {
         try {
             const timeframes = ['15m', '1h', '1d']; // Standard timeframes for analysis
             const endpoints = [];
+
+            // Check if market is open (for AI analysis, skip intraday during market hours)
+            
             
             for (const timeframe of timeframes) {
                 console.log(`🔍 [ENDPOINT DEBUG] ================================`);
@@ -267,7 +273,8 @@ class CandleFetcherService {
                             tradeData.instrument_key,
                             timeframe,
                             chunk.fromDate,
-                            chunk.toDate
+                            chunk.toDate,
+                            tradeData.skipIntraday // Skip intraday if market is open
                         );
 
                         console.log(`📊 [CHUNK ${index + 1}/${params.chunks.length}] ${timeframe}: ${chunkUrls.length} URL(s) generated`);
@@ -291,7 +298,8 @@ class CandleFetcherService {
                         tradeData.instrument_key,
                         timeframe,
                         params.fromDate,
-                        params.toDate
+                        params.toDate,
+                        isMarketOpen // Skip intraday if market is open
                     );
 
                     console.log(`📊 [SINGLE CALL] ${timeframe}: ${urls.length} URL(s) generated`);
@@ -355,9 +363,10 @@ class CandleFetcherService {
      * - If toDate is current trading day: Returns [historical_url_up_to_yesterday, intraday_url_for_today]
      * - Otherwise: Returns [historical_url]
      *
+     * @param {boolean} skipIntraday - Skip intraday URLs (for AI analysis during market hours)
      * @returns {Promise<Array<string>>} Array of URLs to fetch
      */
-    async buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate) {
+    async buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate, skipIntraday = false) {
         const mapping = TIMEFRAME_TO_UPSTOX[timeframe];
         if (!mapping) {
             throw new Error(`Unsupported timeframe for historical API: ${timeframe}`);
@@ -383,17 +392,17 @@ class CandleFetcherService {
         const toDateIsToday = toDateNormalized.getTime() === today.getTime();
 
         const urls = [];
-         if (isCurrentTradingDay || toDateIsToday) {
+         if ((isCurrentTradingDay || toDateIsToday) && !skipIntraday) {
             let intradayUrl = this.buildIntradayUrl(instrumentKey, timeframe);
             console.log(`   └─ Intraday (today): ${intradayUrl}`);
-            urls.push(intradayUrl);
-         }
+           
+        }
         const historicalUrl = `https://api.upstox.com/v3/historical-candle/${instrumentKey}/${mapping.unit}/${mapping.interval}/${toDate}/${fromDate}`;
-        console.log(`   └─ Historical: ${historicalUrl}`);
+       
         urls.push(historicalUrl);  
 
 
-      
+        console.log("buildHistoricalUrlFromDates",JSON.stringify(urls));
 
         return urls;
     }
@@ -677,7 +686,7 @@ class CandleFetcherService {
      * @param {string} toDate - End date (YYYY-MM-DD or Date object)
      * @returns {Array} - Array of candle objects
      */
-    async fetchCandlesFromAPI(instrumentKey, interval, fromDate, toDate) {
+    async fetchCandlesFromAPI(instrumentKey, interval, fromDate, toDate,skipIntraday = false) {
        
         try {
             
@@ -693,7 +702,7 @@ class CandleFetcherService {
                 throw new Error(`Unsupported interval: ${interval}. Expected one of: 15minute, 60minute, day`);
             }
 
-            const urls = await this.buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate);
+            const urls = await this.buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate,skipIntraday);
             let allCandles = [];
 
             // Fetch data from each URL
