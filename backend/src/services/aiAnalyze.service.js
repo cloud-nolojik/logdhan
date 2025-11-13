@@ -2415,13 +2415,22 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
                 }
             }).catch(err => console.error('Failed to save stage2 fine-tune data:', err));
         }
-
-        // STAGE 3
-        const s3result = await this.stage3Finalize({
+        let s3result;
+        
+           let game_mode = "badminton";
+        
+        try{
+            s3result = await this.stage3Finalize({
             stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2, instrument_key, game_mode
         });
         tokenTracking.stage3 = s3result.tokenUsage;
 
+        }
+        catch(err){
+            console.error("Error in stage 3 fine-tune data saving:", err);
+        }
+        // STAGE 3
+        
         // Generate Stage 3 prompts for fine-tune data
         const stage3Prompts = await buildStage3Prompt({
             stock_name,
