@@ -1,0 +1,473 @@
+{
+  "stock_symbol": "RELAXO",
+  "timestamp": "2025-11-13T12:29:34.084Z",
+  "output": {
+    "schema_version": "1.4",
+    "symbol": "RELAXO",
+    "analysis_type": "swing",
+    "generated_at_ist": "2025-11-13T18:30:00+05:30",
+    "insufficientData": false,
+    "market_summary": {
+      "last": 428,
+      "trend": "BEARISH",
+      "volatility": "HIGH",
+      "volume": "AVERAGE"
+    },
+    "overall_sentiment": "BEARISH",
+    "sentiment_analysis": {
+      "confidence": 75,
+      "strength": "medium",
+      "reasoning": "News tone is negative and mentions profit decline; this supports a bearish bias for the next few sessions.",
+      "key_factors": [
+        "Q4 net profit decline for Relaxo",
+        "Sector tone weak despite isolated positive moves"
+      ],
+      "sector_specific": false,
+      "market_alignment": "neutral",
+      "trading_bias": "bearish",
+      "risk_level": "medium",
+      "position_sizing": "standard",
+      "entry_strategy": "moderate",
+      "news_count": 5,
+      "recent_news_count": 5,
+      "sector_news_weight": 0
+    },
+    "runtime": {
+      "triggers_evaluated": [
+        {
+          "id": "T1",
+          "timeframe": "15m",
+          "left_ref": "close",
+          "left_value": null,
+          "op": "crosses_below",
+          "right_ref": "value",
+          "right_value": 428,
+          "passed": false,
+          "evaluable": false
+        },
+        {
+          "id": "T2",
+          "timeframe": "1h",
+          "left_ref": "rsi14_1h",
+          "left_value": 55.14,
+          "op": "<=",
+          "right_ref": "value",
+          "right_value": 50,
+          "passed": false,
+          "evaluable": true
+        },
+        {
+          "id": "T3",
+          "timeframe": "1d",
+          "left_ref": "ema20_1D",
+          "left_value": 437.22,
+          "op": "<",
+          "right_ref": "ema50_1D",
+          "right_value": 446.44,
+          "passed": true,
+          "evaluable": true
+        }
+      ],
+      "pre_entry_invalidations_hit": false
+    },
+    "order_gate": {
+      "all_triggers_true": false,
+      "no_pre_entry_invalidations": true,
+      "actionability_status": "actionable_on_trigger",
+      "entry_type_sane": true,
+      "can_place_order": false
+    },
+    "strategies": [
+      {
+        "id": "S1",
+        "type": "SELL",
+        "archetype": "breakout",
+        "alignment": "with_trend",
+        "title": "[Adjusted] With-trend breakdown below 428 toward 416.41; risk capped at 434.01",
+        "confidence": 0.62,
+        "why_best": "Bearish trend, negative news tone, and a clean breakdown plan with 1.83 risk-reward.",
+        "entryType": "stop",
+        "entry": 427.8,
+        "entryRange": null,
+        "target": 416.41,
+        "stopLoss": 434.01,
+        "riskReward": 1.83,
+        "timeframe": "3-7 days",
+        "indicators": [
+          {
+            "name": "ema20_1D",
+            "value": "437.22",
+            "signal": "SELL"
+          },
+          {
+            "name": "ema50_1D",
+            "value": "446.44",
+            "signal": "SELL"
+          },
+          {
+            "name": "sma200_1D",
+            "value": "452.48",
+            "signal": "SELL"
+          },
+          {
+            "name": "rsi14_1h",
+            "value": "55.14",
+            "signal": "NEUTRAL"
+          },
+          {
+            "name": "atr14_1D",
+            "value": "10.35",
+            "signal": "NEUTRAL"
+          }
+        ],
+        "reasoning": [
+          {
+            "because": "Price is below the 20, 50, and 200-day averages at 437.22, 446.44, and 452.48, showing a bearish backdrop."
+          },
+          {
+            "because": "RSI 1h at 55.14 is not weak yet, so waiting for a break under 428 adds confirmation."
+          },
+          {
+            "because": "Risk is 6.21 from 427.8 to 434.01, reward is 11.39 to 416.41, giving a 1.83 risk-reward."
+          }
+        ],
+        "warnings": [
+          {
+            "code": "GAP_RISK",
+            "severity": "medium",
+            "text": "Gaps can skip the entry or jump over the stop, causing slippage.",
+            "applies_when": [
+              {
+                "timeframe": "1d",
+                "left": {
+                  "ref": "price"
+                },
+                "op": "crosses_below",
+                "right": {
+                  "ref": "entry",
+                  "value": 427.8,
+                  "offset": 0
+                }
+              }
+            ],
+            "mitigation": [
+              "reduce_qty",
+              "wider_stop",
+              "skip_on_news",
+              "wait_for_confirmation"
+            ]
+          },
+          {
+            "code": "NEWS_EVENT",
+            "severity": "medium",
+            "text": "Negative or surprise news can accelerate moves and increase volatility.",
+            "applies_when": [
+              {
+                "timeframe": "1h",
+                "left": {
+                  "ref": "rsi14_1h"
+                },
+                "op": ">=",
+                "right": {
+                  "ref": "value",
+                  "value": 60,
+                  "offset": 0
+                }
+              }
+            ],
+            "mitigation": [
+              "reduce_qty",
+              "skip_on_news",
+              "wait_for_confirmation"
+            ]
+          },
+          {
+            "code": "SECTOR_WEAKNESS",
+            "severity": "medium",
+            "text": "Sector tone is weak, which can add drift but also headline risk.",
+            "applies_when": [
+              {
+                "timeframe": "1d",
+                "left": {
+                  "ref": "ema20_1D"
+                },
+                "op": "<",
+                "right": {
+                  "ref": "value",
+                  "value": 446.44,
+                  "offset": 0
+                }
+              }
+            ],
+            "mitigation": [
+              "reduce_qty",
+              "wait_for_confirmation"
+            ]
+          }
+        ],
+        "triggers": [
+          {
+            "id": "T1",
+            "scope": "entry",
+            "timeframe": "15m",
+            "left": {
+              "ref": "close"
+            },
+            "op": "crosses_below",
+            "right": {
+              "ref": "value",
+              "value": 428,
+              "offset": 0
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": true
+            },
+            "within_sessions": 5,
+            "expiry_bars": 20
+          },
+          {
+            "id": "T2",
+            "scope": "entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "rsi14_1h"
+            },
+            "op": "<=",
+            "right": {
+              "ref": "value",
+              "value": 50,
+              "offset": 0
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": true
+            },
+            "within_sessions": 5,
+            "expiry_bars": 20
+          },
+          {
+            "id": "T3",
+            "scope": "entry",
+            "timeframe": "1d",
+            "left": {
+              "ref": "ema20_1D"
+            },
+            "op": "<",
+            "right": {
+              "ref": "ema50_1D",
+              "value": 0,
+              "offset": 0
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": true
+            },
+            "within_sessions": 5,
+            "expiry_bars": 20
+          }
+        ],
+        "confirmation": {
+          "require": "ALL",
+          "window_bars": 8,
+          "conditions": []
+        },
+        "invalidations": [
+          {
+            "scope": "pre_entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "close"
+            },
+            "op": ">=",
+            "right": {
+              "ref": "value",
+              "value": 437.5
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "cancel_entry"
+          },
+          {
+            "scope": "pre_entry",
+            "timeframe": "15m",
+            "left": {
+              "ref": "close"
+            },
+            "op": ">=",
+            "right": {
+              "ref": "value",
+              "value": 439.85
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "cancel_entry"
+          },
+          {
+            "scope": "post_entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "close"
+            },
+            "op": "<=",
+            "right": {
+              "ref": "stopLoss"
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "close_position"
+          }
+        ],
+        "validity": {
+          "entry": {
+            "type": "GTD",
+            "bars_limit": 0,
+            "trading_sessions_soft": 5,
+            "trading_sessions_hard": 8,
+            "expire_calendar_cap_days": 10
+          },
+          "position": {
+            "time_stop_sessions": 7,
+            "gap_policy": "exit_at_open_with_slippage"
+          },
+          "non_trading_policy": "pause_clock"
+        },
+        "beginner_summary": {
+          "one_liner": "Sell only if price breaks 428, aim for 416.41, and exit if 434.01 is hit within 3–7 sessions.",
+          "steps": [
+            "Wait for all trigger conditions to be met.",
+            "Place target and stopLoss as given.",
+            "Use a position size that fits your risk comfort."
+          ],
+          "checklist": [
+            "All triggers satisfied",
+            "No invalidation hit",
+            "Order type matches entry plan"
+          ]
+        },
+        "why_in_plain_words": [
+          {
+            "point": "The broader direction is down, so a breakdown trade follows the flow.",
+            "evidence": "Price is below 20/50/200-day averages at 437.22, 446.44, and 452.48."
+          },
+          {
+            "point": "Potential reward is larger than the risk.",
+            "evidence": "Entry 427.8, target 416.41, stop 434.01 gives about 1.83 times reward to risk."
+          }
+        ],
+        "what_could_go_wrong": [
+          {
+            "risk": "A quick bounce from nearby support could trap shorts.",
+            "likelihood": "MEDIUM",
+            "impact": "HIGH",
+            "mitigation": "Respect the 434.01 stop and consider smaller size if volatility spikes."
+          }
+        ],
+        "ui_friendly": {
+          "why_smart_move": "We wait for a firm break under 428 and play the downfield shot toward 416.41 while guarding the wicket at 434.01.",
+          "ai_will_watch": [
+            "Enter only after a 15-minute close crosses below 428 and RSI 1h is 50 or lower, with the daily trend weak.",
+            "If any 1-hour close is 437.5 or higher, or a 15-minute close is 439.85 or higher before entry, we stand down.",
+            "After entry, if price closes at or below 434.01 on 1-hour, we exit to protect the wicket."
+          ],
+          "beginner_explanation": "We wait for confirmation of weakness before selling, so we act only after a clean break under 428. The stop-loss at 434.01 limits loss if the move fails. The target at 416.41 is farther than the risk, which makes the math sensible. In cricket terms, we swing only at the right delivery and keep a solid defensive guard."
+        },
+        "money_example": {
+          "per_share": {
+            "risk": 6.21,
+            "reward": 11.39,
+            "rr": 1.83
+          },
+          "position": {
+            "qty": 161,
+            "max_loss": 999.81,
+            "potential_profit": 1833.79,
+            "distance_to_stop_pct": 1.45,
+            "distance_to_target_pct": 2.66
+          }
+        },
+        "suggested_qty": {
+          "risk_budget_inr": 1000,
+          "risk_per_share": 6.21,
+          "qty": 161,
+          "alternatives": [
+            {
+              "risk_budget_inr": 500,
+              "qty": 80
+            },
+            {
+              "risk_budget_inr": 1000,
+              "qty": 161
+            },
+            {
+              "risk_budget_inr": 2500,
+              "qty": 402
+            }
+          ],
+          "note": "Sizing based only on entry to stopLoss distance."
+        },
+        "risk_meter": {
+          "label": "High",
+          "score": 0.66,
+          "drivers": [
+            "RR band",
+            "Trend alignment",
+            "Volatility vs ATR",
+            "Volume band",
+            "News/sentiment tilt"
+          ]
+        },
+        "actionability": {
+          "label": "Sell idea",
+          "status": "actionable_on_trigger",
+          "next_check_in": "15m",
+          "checklist": [
+            "All triggers satisfied",
+            "No invalidation hit",
+            "Order type matches entry plan"
+          ]
+        },
+        "glossary": {
+          "entry": {
+            "definition": "Price where the trade is planned to start.",
+            "example": "₹427.8"
+          },
+          "target": {
+            "definition": "Price where profits are planned to be booked.",
+            "example": "₹416.41"
+          },
+          "stopLoss": {
+            "definition": "Price where the trade will be closed to limit loss.",
+            "example": "₹434.01"
+          }
+        }
+      }
+    ],
+    "performance_hints": {
+      "confidence_drivers": [
+        "Price below major moving averages",
+        "EMA20 below EMA50 confirms bearish bias",
+        "Risk-reward of about 1.83"
+      ],
+      "uncertainty_factors": [
+        "RSI 1h at 55.14 not weak yet",
+        "Nearby support at 423.05",
+        "Average volume may reduce momentum"
+      ],
+      "data_quality_score": 0.86
+    },
+    "disclaimer": "AI-generated educational analysis. Not investment advice."
+  },
+  "tokenUsage": {
+    "input_tokens": 16026,
+    "output_tokens": 8912,
+    "cached_tokens": 0,
+    "total_tokens": 24938
+  }
+}

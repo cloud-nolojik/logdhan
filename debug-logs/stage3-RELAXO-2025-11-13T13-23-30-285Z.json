@@ -1,0 +1,368 @@
+{
+  "stock_symbol": "RELAXO",
+  "timestamp": "2025-11-13T13:23:30.286Z",
+  "output": {
+    "schema_version": "1.4",
+    "symbol": "RELAXO",
+    "analysis_type": "swing",
+    "generated_at_ist": "2025-11-13T18:40:00+05:30",
+    "insufficientData": false,
+    "market_summary": {
+      "last": 428,
+      "trend": "BEARISH",
+      "volatility": "HIGH",
+      "volume": "AVERAGE"
+    },
+    "overall_sentiment": "BEARISH",
+    "sentiment_analysis": {
+      "confidence": 80,
+      "strength": "high",
+      "reasoning": "News tone is negative and sector faces headwinds; this supports a cautious short bias.",
+      "key_factors": [
+        "Profit decline reported",
+        "Sector challenges and weak tone"
+      ],
+      "sector_specific": true,
+      "market_alignment": "neutral",
+      "trading_bias": "bearish",
+      "risk_level": "medium",
+      "position_sizing": "standard",
+      "entry_strategy": "moderate",
+      "news_count": 5,
+      "recent_news_count": 5,
+      "sector_news_weight": 0
+    },
+    "runtime": {
+      "triggers_evaluated": [
+        {
+          "id": "T1",
+          "timeframe": "15m",
+          "left_ref": "close",
+          "left_value": 433.6,
+          "op": "crosses_below",
+          "right_ref": "entry",
+          "right_value": 427.8,
+          "passed": false,
+          "evaluable": false
+        }
+      ],
+      "pre_entry_invalidations_hit": false
+    },
+    "order_gate": {
+      "all_triggers_true": false,
+      "no_pre_entry_invalidations": true,
+      "actionability_status": "actionable_on_trigger",
+      "entry_type_sane": true,
+      "can_place_order": false
+    },
+    "strategies": [
+      {
+        "id": "S1",
+        "type": "SELL",
+        "archetype": "breakout",
+        "alignment": "with_trend",
+        "title": "[Revalidated] With-trend breakdown below 427.8 toward 415.38, risk capped at 436.08",
+        "confidence": 0.62,
+        "why_best": "Bearish trend, negative news, and a clean breakdown plan with 1.50 risk-reward.",
+        "entryType": "stop",
+        "entry": 427.8,
+        "entryRange": null,
+        "target": 415.38,
+        "stopLoss": 436.08,
+        "riskReward": 1.5,
+        "timeframe": "3-7 days",
+        "indicators": [
+          {
+            "name": "ema20_1D",
+            "value": "437.22",
+            "signal": "SELL"
+          },
+          {
+            "name": "ema50_1D",
+            "value": "446.44",
+            "signal": "SELL"
+          },
+          {
+            "name": "sma200_1D",
+            "value": "452.48",
+            "signal": "SELL"
+          },
+          {
+            "name": "rsi14_1h",
+            "value": "55.14",
+            "signal": "NEUTRAL"
+          },
+          {
+            "name": "atr14_1D",
+            "value": "10.35",
+            "signal": "NEUTRAL"
+          }
+        ],
+        "reasoning": [
+          {
+            "because": "Price trades below the 20, 50, and 200-day averages (437.22, 446.44, 452.48), so the bigger trend is down."
+          },
+          {
+            "because": "RSI 1h at 55.14 is not weak, so waiting for a breakdown adds needed confirmation."
+          },
+          {
+            "because": "From 427.8 to stop 436.08 risk is 8.28, reward to 415.38 is 12.42, giving a 1.50 risk-reward."
+          }
+        ],
+        "warnings": [
+          {
+            "code": "GAP_RISK",
+            "severity": "medium",
+            "text": "Gaps can jump the entry or stop and cause slippage.",
+            "applies_when": [
+              {
+                "timeframe": "1d",
+                "left": {
+                  "ref": "price"
+                },
+                "op": "crosses_above",
+                "right": {
+                  "ref": "entry",
+                  "value": 427.8,
+                  "offset": 0
+                }
+              }
+            ],
+            "mitigation": [
+              "reduce_qty",
+              "wider_stop",
+              "skip_on_news",
+              "wait_for_confirmation"
+            ]
+          },
+          {
+            "code": "SECTOR_WEAKNESS",
+            "severity": "medium",
+            "text": "Weak sector news may add volatility and sharp swings.",
+            "applies_when": [
+              {
+                "timeframe": "1d",
+                "left": {
+                  "ref": "ema20_1D"
+                },
+                "op": "<=",
+                "right": {
+                  "ref": "ema50_1D",
+                  "value": 0,
+                  "offset": 0
+                }
+              }
+            ],
+            "mitigation": [
+              "reduce_qty",
+              "wait_for_confirmation"
+            ]
+          }
+        ],
+        "triggers": [
+          {
+            "id": "T1",
+            "scope": "entry",
+            "timeframe": "15m",
+            "left": {
+              "ref": "close"
+            },
+            "op": "crosses_below",
+            "right": {
+              "ref": "entry"
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": true
+            },
+            "within_sessions": 5,
+            "expiry_bars": 20
+          }
+        ],
+        "confirmation": {
+          "require": "ALL",
+          "window_bars": 8,
+          "conditions": []
+        },
+        "invalidations": [
+          {
+            "scope": "pre_entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "close"
+            },
+            "op": ">=",
+            "right": {
+              "ref": "value",
+              "value": 439.15
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "cancel_entry"
+          },
+          {
+            "scope": "post_entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "close"
+            },
+            "op": "<=",
+            "right": {
+              "ref": "stopLoss"
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "close_position"
+          }
+        ],
+        "validity": {
+          "entry": {
+            "type": "GTD",
+            "bars_limit": 0,
+            "trading_sessions_soft": 5,
+            "trading_sessions_hard": 8,
+            "expire_calendar_cap_days": 10
+          },
+          "position": {
+            "time_stop_sessions": 7,
+            "gap_policy": "exit_at_open_with_slippage"
+          },
+          "non_trading_policy": "pause_clock"
+        },
+        "beginner_summary": {
+          "one_liner": "Sell only if price breaks 427.8, aim for 415.38, and cut loss at 436.08 within 3–7 sessions.",
+          "steps": [
+            "Wait for the 15m close to cross below 427.8.",
+            "Place target at 415.38 and stopLoss at 436.08.",
+            "Use a position size that fits your risk comfort."
+          ],
+          "checklist": [
+            "All triggers satisfied",
+            "No invalidation hit",
+            "Order type matches entry plan"
+          ]
+        },
+        "why_in_plain_words": [
+          {
+            "point": "The trade follows the prevailing downtrend.",
+            "evidence": "Price is below the 20, 50, and 200-day moving averages at 437.22, 446.44, and 452.48."
+          },
+          {
+            "point": "The potential gain is larger than the risk.",
+            "evidence": "Risk is 8.28 to stop 436.08, reward is 12.42 to target 415.38 (RR 1.50)."
+          }
+        ],
+        "what_could_go_wrong": [
+          {
+            "risk": "A strong bounce from support near 423.05 could trap shorts.",
+            "likelihood": "MEDIUM",
+            "impact": "HIGH",
+            "mitigation": "Respect the stop-loss and consider smaller size if volatility increases."
+          }
+        ],
+        "ui_friendly": {
+          "why_smart_move": "Like a patient batsman, we sell on a clean drop below 427.8, aiming for 415.38 with guard at 436.08.",
+          "ai_will_watch": [
+            "Enter only when a 15-minute close crosses below 427.8; then we take the shot.",
+            "If any 1-hour close is 439.15 or higher before entry, we walk off and reset the field.",
+            "After entry, if a 1-hour close is at or below 436.08, we retire the innings to protect the wicket."
+          ],
+          "beginner_explanation": "We wait for proof of weakness, shown by a 15-minute close below 427.8, before selling. The stop-loss at 436.08 limits damage if the idea fails. The target at 415.38 offers more potential profit than the risk, which makes the maths sensible. In cricket terms, we wait for the right ball, keep a tight guard, and look for a safe scoring shot."
+        },
+        "money_example": {
+          "per_share": {
+            "risk": 8.28,
+            "reward": 12.42,
+            "rr": 1.5
+          },
+          "position": {
+            "qty": 120,
+            "max_loss": 993.6,
+            "potential_profit": 1490.4,
+            "distance_to_stop_pct": 1.94,
+            "distance_to_target_pct": 2.9
+          }
+        },
+        "suggested_qty": {
+          "risk_budget_inr": 1000,
+          "risk_per_share": 8.28,
+          "qty": 120,
+          "alternatives": [
+            {
+              "risk_budget_inr": 500,
+              "qty": 60
+            },
+            {
+              "risk_budget_inr": 1000,
+              "qty": 120
+            },
+            {
+              "risk_budget_inr": 2500,
+              "qty": 302
+            }
+          ],
+          "note": "Sizing based only on entry to stopLoss distance."
+        },
+        "risk_meter": {
+          "label": "High",
+          "score": 0.66,
+          "drivers": [
+            "RR band",
+            "Trend alignment",
+            "Volatility vs ATR",
+            "Volume band",
+            "News/sentiment tilt"
+          ]
+        },
+        "actionability": {
+          "label": "Sell idea",
+          "status": "actionable_on_trigger",
+          "next_check_in": "15m",
+          "checklist": [
+            "All triggers satisfied",
+            "No invalidation hit",
+            "Order type matches entry plan"
+          ]
+        },
+        "glossary": {
+          "entry": {
+            "definition": "Price where the trade is planned to start.",
+            "example": "₹427.8"
+          },
+          "target": {
+            "definition": "Price where profits are planned to be booked.",
+            "example": "₹415.38"
+          },
+          "stopLoss": {
+            "definition": "Price where the trade will be closed to limit loss.",
+            "example": "₹436.08"
+          }
+        }
+      }
+    ],
+    "performance_hints": {
+      "confidence_drivers": [
+        "Price below all key moving averages",
+        "With-trend breakdown setup",
+        "Clear trigger below 427.8",
+        "Acceptable 1.50 risk-reward"
+      ],
+      "uncertainty_factors": [
+        "RSI 1h at 55.14 is not weak",
+        "Nearby supports at 431.9 and 423.05"
+      ],
+      "data_quality_score": 0.86
+    },
+    "disclaimer": "AI-generated educational analysis. Not investment advice."
+  },
+  "tokenUsage": {
+    "input_tokens": 15992,
+    "output_tokens": 8799,
+    "cached_tokens": 0,
+    "total_tokens": 24791
+  }
+}

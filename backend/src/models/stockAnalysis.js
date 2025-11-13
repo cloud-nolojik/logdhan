@@ -301,16 +301,22 @@ const stockAnalysisSchema = new mongoose.Schema({
         default: Date.now,
         index: true
     },
-    expires_at: {
-        type: Date,
-        required: true
-        // Index removed - using explicit schema.index() below with TTL
-    },
     // Release time for scheduled analyses (only visible after this time)
     scheduled_release_time: {
         type: Date,
         default: null,
         index: true
+    },
+    // Valid until next market close - strategy should be revalidated after this time
+    valid_until: {
+        type: Date,
+        default: null,
+        index: true
+    },
+    // Track when strategy was last validated by AI
+    last_validated_at: {
+        type: Date,
+        default: null
     },
     // Order tracking fields - consolidated bracket orders
     placed_orders: [{
@@ -357,20 +363,19 @@ const stockAnalysisSchema = new mongoose.Schema({
 });
 
 // Compound index for efficient queries - shared across all users
-stockAnalysisSchema.index({ 
-    instrument_key: 1, 
-    analysis_type: 1, 
-    expires_at: 1 
+stockAnalysisSchema.index({
+    instrument_key: 1,
+    analysis_type: 1,
+    created_at: 1
 });
 
-// Auto-delete expired analyses
-stockAnalysisSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 });
+// TTL index removed - strategies no longer auto-expire
+// Validation and cleanup handled by bulk analysis service
 
 // Static methods
 stockAnalysisSchema.statics.findActive = function(limit = 10) {
     return this.find({
-        status: 'completed',
-        expires_at: { $gt: new Date() }
+        status: 'completed'
     })
     .sort({ created_at: -1 })
     .limit(limit);
@@ -382,7 +387,6 @@ stockAnalysisSchema.statics.findByInstrument = function(instrumentKey, analysisT
         instrument_key: instrumentKey,
         analysis_type: analysisType,
         status: { $in: ['completed', 'in_progress'] },
-        expires_at: { $gt: now },
         // Only show if scheduled_release_time is null OR has passed
         $or: [
             { scheduled_release_time: null },
@@ -396,8 +400,7 @@ stockAnalysisSchema.statics.findInProgressAnalysis = function(instrumentKey, ana
     return this.findOne({
         instrument_key: instrumentKey,
         analysis_type: analysisType,
-        status: 'in_progress',
-        expires_at: { $gt: new Date() }
+        status: 'in_progress'
     })
     .sort({ created_at: -1 });
 };
@@ -415,12 +418,17 @@ stockAnalysisSchema.methods.updateProgress = function(step, percentage, estimate
     return this.save();
 };
 
-stockAnalysisSchema.methods.markCompleted = function() {
+stockAnalysisSchema.methods.markCompleted = async function() {
     this.status = 'completed';
     this.progress.percentage = 100;
     this.progress.current_step = 'Analysis completed';
     this.progress.estimated_time_remaining = 0;
     this.progress.last_updated = new Date();
+
+    // Set valid_until to next market close (3:59:59 PM IST)
+    const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
+    this.valid_until = await MarketHoursUtil.getValidUntilTime();
+
     return this.save();
 };
 
@@ -739,18 +747,9 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
 
 // Removed old canRunBulkAnalysis - now using upstoxMarketTimingService.canRunBulkAnalysis()
 
-/**
- * Calculate expiry time using common utility
- * ALL analyses expire at 3:59 PM IST on NEXT trading day
- * Stored in DB as UTC (10:25 AM UTC)
- */
-stockAnalysisSchema.statics.getExpiryTime = async function() {
-    return await MarketHoursUtil.getExpiryTime();
-};
-
 stockAnalysisSchema.statics.getAnalysisStats = function() {
     return this.aggregate([
-        { $match: { status: 'completed', expires_at: { $gt: new Date() } } },
+        { $match: { status: 'completed' } },
         {
             $group: {
                 _id: '$analysis_type',

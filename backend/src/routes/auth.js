@@ -201,18 +201,28 @@ router.get('/profile', auth, async (req, res) => {
 // PUT /auth/profile - Update user profile
 router.put('/profile', auth, async (req, res) => {
   try {
-    const { firstName, lastName,email } = req.body;
-    const { errors, isValid } = validateUser({ firstName, lastName,email });
+    const { firstName, lastName, email, favorite_sport } = req.body;
+    const { errors, isValid } = validateUser({ firstName, lastName, email });
 
     if (!isValid) {
       return res.status(400).json(errors);
     }
 
-    
+    // Validate favorite_sport if provided
+    const validSports = ['cricket', 'football', 'kabaddi', 'badminton', 'chess', 'racing', 'battle_royale', 'basketball', 'tennis', 'boxing', 'carrom', 'hockey', 'volleyball', 'none'];
+    if (favorite_sport && !validSports.includes(favorite_sport)) {
+      return res.status(400).json({ error: 'Invalid sport selected. Please choose from supported sports.' });
+    }
+
+    // Build update object (only include favorite_sport if provided)
+    const updateData = { firstName, lastName, email };
+    if (favorite_sport !== undefined) {
+      updateData.favorite_sport = favorite_sport;
+    }
 
     const user = await User.findByIdAndUpdate(
       req.user.id,
-      { firstName, lastName,email },
+      updateData,
       { new: true }
     ).select('-otp -otpExpiry');
 

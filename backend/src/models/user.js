@@ -33,11 +33,16 @@ const userSchema = new mongoose.Schema({
     minlength: 2,
     maxlength: 50
   },
-  lastName: {   
+  lastName: {
     type: String,
     trim: true,
     minlength: 2,
     maxlength: 50
+  },
+  favorite_sport: {
+    type: String,
+    enum: ['cricket', 'football', 'kabaddi', 'badminton', 'chess', 'racing', 'battle_royale', 'basketball', 'tennis', 'boxing', 'carrom', 'hockey', 'volleyball', 'none'],
+    default: null
   },
   mobileNumber: {
     type: String,

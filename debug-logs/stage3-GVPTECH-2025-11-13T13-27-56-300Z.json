@@ -1,0 +1,421 @@
+{
+  "stock_symbol": "GVPTECH",
+  "timestamp": "2025-11-13T13:27:56.300Z",
+  "output": {
+    "schema_version": "1.4",
+    "symbol": "GVPTECH",
+    "analysis_type": "swing",
+    "generated_at_ist": "2025-11-13T18:30:00+05:30",
+    "insufficientData": false,
+    "market_summary": {
+      "last": 9.12,
+      "trend": "BEARISH",
+      "volatility": "HIGH",
+      "volume": "BELOW_AVERAGE"
+    },
+    "overall_sentiment": "BEARISH",
+    "sentiment_analysis": {
+      "confidence": 90,
+      "strength": "high",
+      "reasoning": "News tone is negative with a reported net loss; bias aligns with the bearish chart.",
+      "key_factors": [
+        "Standalone net loss reported",
+        "Strong sell signal tone in news"
+      ],
+      "sector_specific": false,
+      "market_alignment": "aligned",
+      "trading_bias": "bearish",
+      "risk_level": "low",
+      "position_sizing": "increased",
+      "entry_strategy": "aggressive",
+      "news_count": 5,
+      "recent_news_count": 5,
+      "sector_news_weight": 1
+    },
+    "runtime": {
+      "triggers_evaluated": [
+        {
+          "id": "T1",
+          "timeframe": "15m",
+          "left_ref": "close",
+          "left_value": 9.12,
+          "op": "crosses_below",
+          "right_ref": "value",
+          "right_value": 8.93,
+          "passed": false,
+          "evaluable": true
+        },
+        {
+          "id": "T2",
+          "timeframe": "1h",
+          "left_ref": "rsi14_1h",
+          "left_value": 46.99,
+          "op": "<=",
+          "right_ref": "value",
+          "right_value": 48,
+          "passed": true,
+          "evaluable": true
+        }
+      ],
+      "pre_entry_invalidations_hit": false
+    },
+    "order_gate": {
+      "all_triggers_true": false,
+      "no_pre_entry_invalidations": true,
+      "actionability_status": "actionable_on_trigger",
+      "entry_type_sane": true,
+      "can_place_order": false
+    },
+    "strategies": [
+      {
+        "id": "S1",
+        "type": "SELL",
+        "archetype": "breakout",
+        "alignment": "with_trend",
+        "title": "[Revalidated] Bearish breakdown below 8.93 with stop 9.25 aiming for 8.29",
+        "confidence": 0.62,
+        "why_best": "Bearish trend, negative news tone, and a clean breakdown plan with 1.74 risk-reward.",
+        "entryType": "stop",
+        "entry": 8.9,
+        "entryRange": null,
+        "target": 8.29,
+        "stopLoss": 9.25,
+        "riskReward": 1.74,
+        "timeframe": "3-7 days",
+        "indicators": [
+          {
+            "name": "ema20_1D",
+            "value": "9.47",
+            "signal": "SELL"
+          },
+          {
+            "name": "ema50_1D",
+            "value": "9.69",
+            "signal": "SELL"
+          },
+          {
+            "name": "sma200_1D",
+            "value": "9.96",
+            "signal": "SELL"
+          },
+          {
+            "name": "rsi14_1h",
+            "value": "46.99",
+            "signal": "SELL"
+          },
+          {
+            "name": "atr14_1D",
+            "value": "0.50",
+            "signal": "NEUTRAL"
+          }
+        ],
+        "reasoning": [
+          {
+            "because": "Price 9.12 is below 20, 50, and 200-day averages (9.47, 9.69, 9.96), showing a clear downtrend."
+          },
+          {
+            "because": "RSI 1h at 46.99 is below 50, meaning momentum tilts to sellers."
+          },
+          {
+            "because": "Entry 8.90, stop 9.25, target 8.29 gives risk 0.35 and reward 0.61, a 1.74 ratio."
+          },
+          {
+            "because": "Breakdown under strong support 8.93 fits a with-trend bearish breakout plan."
+          }
+        ],
+        "warnings": [
+          {
+            "code": "GAP_RISK",
+            "severity": "medium",
+            "text": "Recent gap-down can cause fast moves and slippage near entry or stop.",
+            "applies_when": [
+              {
+                "timeframe": "1d",
+                "left": {
+                  "ref": "price"
+                },
+                "op": "crosses_below",
+                "right": {
+                  "ref": "value",
+                  "value": 8.93,
+                  "offset": 0
+                }
+              }
+            ],
+            "mitigation": [
+              "reduce_qty",
+              "wider_stop",
+              "skip_on_news",
+              "wait_for_confirmation"
+            ]
+          },
+          {
+            "code": "SECTOR_WEAKNESS",
+            "severity": "medium",
+            "text": "IT tone is weak and trend bias is down, so bounces can fail.",
+            "applies_when": [
+              {
+                "timeframe": "1d",
+                "left": {
+                  "ref": "ema20_1D"
+                },
+                "op": "<=",
+                "right": {
+                  "ref": "value",
+                  "value": 9.69,
+                  "offset": 0
+                }
+              }
+            ],
+            "mitigation": [
+              "reduce_qty",
+              "wait_for_confirmation"
+            ]
+          }
+        ],
+        "triggers": [
+          {
+            "id": "T1",
+            "scope": "entry",
+            "timeframe": "15m",
+            "left": {
+              "ref": "close"
+            },
+            "op": "crosses_below",
+            "right": {
+              "ref": "value",
+              "value": 8.93,
+              "offset": 0
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": true
+            },
+            "within_sessions": 5,
+            "expiry_bars": 20
+          },
+          {
+            "id": "T2",
+            "scope": "entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "rsi14_1h"
+            },
+            "op": "<=",
+            "right": {
+              "ref": "value",
+              "value": 48,
+              "offset": 0
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": true
+            },
+            "within_sessions": 5,
+            "expiry_bars": 20
+          }
+        ],
+        "confirmation": {
+          "require": "ALL",
+          "window_bars": 8,
+          "conditions": []
+        },
+        "invalidations": [
+          {
+            "scope": "pre_entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "close"
+            },
+            "op": ">=",
+            "right": {
+              "ref": "value",
+              "value": 9.36
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "cancel_entry"
+          },
+          {
+            "scope": "pre_entry",
+            "timeframe": "1d",
+            "left": {
+              "ref": "close"
+            },
+            "op": "<=",
+            "right": {
+              "ref": "value",
+              "value": 8.59
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "cancel_entry"
+          },
+          {
+            "scope": "post_entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "close"
+            },
+            "op": "<=",
+            "right": {
+              "ref": "stopLoss"
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "close_position"
+          }
+        ],
+        "validity": {
+          "entry": {
+            "type": "GTD",
+            "bars_limit": 0,
+            "trading_sessions_soft": 5,
+            "trading_sessions_hard": 8,
+            "expire_calendar_cap_days": 10
+          },
+          "position": {
+            "time_stop_sessions": 7,
+            "gap_policy": "exit_at_open_with_slippage"
+          },
+          "non_trading_policy": "pause_clock"
+        },
+        "beginner_summary": {
+          "one_liner": "Sell only if 8.90 triggers, aim for 8.29, and exit if price hits 9.25 within 3–7 sessions.",
+          "steps": [
+            "Wait for all trigger conditions to be met.",
+            "Place target and stopLoss as given.",
+            "Use a position size that fits your risk comfort."
+          ],
+          "checklist": [
+            "All triggers satisfied",
+            "No invalidation hit",
+            "Order type matches entry plan"
+          ]
+        },
+        "why_in_plain_words": [
+          {
+            "point": "Trend is down and a break of 8.93 opens room lower.",
+            "evidence": "Price is below EMA20 9.47, EMA50 9.69, and SMA200 9.96; support is at 8.93."
+          },
+          {
+            "point": "Potential reward is larger than risk.",
+            "evidence": "Risk 0.35 to stop 9.25 and reward 0.61 to 8.29 gives 1.74 risk-reward."
+          }
+        ],
+        "what_could_go_wrong": [
+          {
+            "risk": "A sharp bounce above 9.36 can kill the breakdown and cancel the setup.",
+            "likelihood": "MEDIUM",
+            "impact": "MEDIUM",
+            "mitigation": "Respect the pre-entry cancel rule and avoid chasing if invalidated."
+          }
+        ],
+        "ui_friendly": {
+          "why_smart_move": "Like setting a tight field, a break under 8.93 triggers 8.90 sell, guard at 9.25, aiming for 8.29.",
+          "ai_will_watch": [
+            "Enter only when a 15m close crosses below 8.93 to trigger the 8.90 sell.",
+            "If any 1h close is 9.36 or higher before entry, we walk away and reset the field.",
+            "If a daily close is 8.59 or lower before entry, we stand down and wait for a new innings.",
+            "After entry, if a 1h close reaches 9.25, we exit to protect the wicket."
+          ],
+          "beginner_explanation": "We wait for proof of weakness with a 15-minute close below 8.93 before selling at 8.90. A stop-loss at 9.25 protects capital if the move fails. The target at 8.29 offers more potential gain than the risk. In cricket terms, we wait for the loose ball, play the shot, and keep a solid defensive guard."
+        },
+        "money_example": {
+          "per_share": {
+            "risk": 0.35,
+            "reward": 0.61,
+            "rr": 1.74
+          },
+          "position": {
+            "qty": 2857,
+            "max_loss": 999.95,
+            "potential_profit": 1742.77,
+            "distance_to_stop_pct": 3.93,
+            "distance_to_target_pct": 6.85
+          }
+        },
+        "suggested_qty": {
+          "risk_budget_inr": 1000,
+          "risk_per_share": 0.35,
+          "qty": 2857,
+          "alternatives": [
+            {
+              "risk_budget_inr": 500,
+              "qty": 1428
+            },
+            {
+              "risk_budget_inr": 1000,
+              "qty": 2857
+            },
+            {
+              "risk_budget_inr": 2500,
+              "qty": 7142
+            }
+          ],
+          "note": "Sizing based only on entry to stopLoss distance."
+        },
+        "risk_meter": {
+          "label": "High",
+          "score": 0.72,
+          "drivers": [
+            "RR band",
+            "Trend alignment",
+            "Volatility vs ATR",
+            "Volume band",
+            "News/sentiment tilt"
+          ]
+        },
+        "actionability": {
+          "label": "Sell idea",
+          "status": "actionable_on_trigger",
+          "next_check_in": "15m",
+          "checklist": [
+            "All triggers satisfied",
+            "No invalidation hit",
+            "Order type matches entry plan"
+          ]
+        },
+        "glossary": {
+          "entry": {
+            "definition": "Price where the trade is planned to start.",
+            "example": "₹8.90"
+          },
+          "target": {
+            "definition": "Price where profits are planned to be booked.",
+            "example": "₹8.29"
+          },
+          "stopLoss": {
+            "definition": "Price where the trade will be closed to limit loss.",
+            "example": "₹9.25"
+          }
+        }
+      }
+    ],
+    "performance_hints": {
+      "confidence_drivers": [
+        "Price below all key moving averages",
+        "Breakdown plan under strong 8.93 support",
+        "Negative news sentiment aligns with trend"
+      ],
+      "uncertainty_factors": [
+        "Below-average volume",
+        "Price near weekly range low may bounce"
+      ],
+      "data_quality_score": 0.85
+    },
+    "disclaimer": "AI-generated educational analysis. Not investment advice."
+  },
+  "tokenUsage": {
+    "input_tokens": 16091,
+    "output_tokens": 9398,
+    "cached_tokens": 0,
+    "total_tokens": 25489
+  }
+}

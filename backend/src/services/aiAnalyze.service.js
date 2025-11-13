@@ -191,7 +191,8 @@ class AIAnalyzeService {
         stock_symbol,
         analysis_type,
         current_price,
-        scheduled_release_time = null
+        scheduled_release_time = null,
+       
     }) {
         try {
             const validPrice = parseFloat(current_price);
@@ -199,50 +200,85 @@ class AIAnalyzeService {
                 throw new Error(`Invalid current price: ${current_price}. Cannot create analysis record.`);
             }
 
-            // Use upsert to prevent duplicate analysis records
-            const pendingAnalysis = await StockAnalysis.findOneAndUpdate(
-                {
-                    instrument_key,
-                    analysis_type
-                },
-                {
-                    $set: {
-                        instrument_key,
-                        stock_name,
-                        stock_symbol,
-                        analysis_type,
-                        current_price: validPrice, // Ensure this is always updated
-                        status: 'pending',
-                        expires_at: await StockAnalysis.getExpiryTime(analysis_type), // Market-aware expiry with analysis type
-                        scheduled_release_time: scheduled_release_time, // Set release time for scheduled analyses (null for immediate)
-                        progress: {
-                            percentage: 0,
-                            current_step: 'Starting analysis...',
-                            steps_completed: 0,
-                            total_steps: 8,
-                            estimated_time_remaining: 90,
-                            last_updated: new Date()
-                        },
-                        analysis_data: {
-                            schema_version: '1.3',
-                            symbol: stock_symbol,
-                            analysis_type,
-                            insufficientData: false,
-                            strategies: [],
-                            overall_sentiment: 'NEUTRAL'
-                        },
-                        created_at: new Date() // Update creation time for fresh analysis
-                    }
-                },
-                {
-                    upsert: true, // Create if doesn't exist, update if exists
-                    new: true,    // Return the updated document
-                    runValidators: true
-                }
-            );
+            // Check if existing analysis exists
+            const existing = await StockAnalysis.findOne({
+                instrument_key,
+                analysis_type
+            });
 
-            console.log(`📝 [PENDING ANALYSIS] Created/updated record for ${stock_symbol}: ${pendingAnalysis._id}`);
-            return pendingAnalysis;
+            // Calculate valid_until time (next market close)
+            const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
+            const valid_until = await MarketHoursUtil.getValidUntilTime();
+            const now = new Date();
+            // If existing analysis has valid_until field, preserve existing data
+            // Just update status to pending for validation
+            if (existing && existing.valid_until &&  now > existing.valid_until)  {
+                if(existing.status === 'pending') {
+                    existing.status = 'pending';
+                    existing.current_price = validPrice;
+                    existing.scheduled_release_time = scheduled_release_time;
+                    existing.progress = {
+                        percentage: 0,
+                        current_step:  'Starting validation...',
+                        steps_completed: 0,
+                        total_steps: 8,
+                        estimated_time_remaining: 90,
+                        last_updated: new Date()
+                    };
+                    await existing.save();
+                }
+
+                // Preserve existing strategy, just mark as pending for validation/refresh
+                
+
+                console.log(`📝 [PRESERVE] Updated ${stock_symbol} to pending, kept existing data: ${existing._id}`);
+                return existing;
+            } else {
+                // No existing analysis OR no valid_until (legacy) - create/replace with upsert
+                const pendingAnalysis = await StockAnalysis.findOneAndUpdate(
+                    {
+                        instrument_key,
+                        analysis_type
+                    },
+                    {
+                        $set: {
+                            instrument_key,
+                            stock_name,
+                            stock_symbol,
+                            analysis_type,
+                            current_price: validPrice,
+                            status: 'pending',
+                            scheduled_release_time: scheduled_release_time,
+                            valid_until: valid_until,
+                            progress: {
+                                percentage: 0,
+                                current_step: 'Starting analysis...',
+                                steps_completed: 0,
+                                total_steps: 8,
+                                estimated_time_remaining: 90,
+                                last_updated: new Date()
+                            },
+                            analysis_data: {
+                                schema_version: '1.3',
+                                symbol: stock_symbol,
+                                analysis_type,
+                                insufficientData: false,
+                                strategies: [],
+                                overall_sentiment: 'NEUTRAL'
+                            },
+                            created_at: new Date()
+                        }
+                    },
+                    {
+                        upsert: true,
+                        new: true,
+                        runValidators: true
+                    }
+                );
+
+                console.log(`📝 [NEW/REPLACE] Created/updated record for ${stock_symbol}: ${pendingAnalysis._id}`);
+                return pendingAnalysis;
+            }
 
         } catch (error) {
             console.error(`❌ [PENDING ANALYSIS] Failed to create record for ${stock_symbol}:`, error.message);
@@ -316,18 +352,32 @@ class AIAnalyzeService {
         userId,  // Accept both user_id and userId for compatibility
         skipNotification = false,
         scheduled_release_time = null,
-        skipIntraday= false
+        skipIntraday= false,
+
 
 
     }) {
         // Normalize user_id (accept both formats)
         const normalizedUserId = user_id || userId;
 
-        
+        // Fetch user's favorite sport for personalized analysis
+        let favoriteSport = 'cricket'; // default
+        if (normalizedUserId) {
+            try {
+                const user = await User.findById(normalizedUserId).select('favorite_sport');
+                if (user && user.favorite_sport) {
+                    favoriteSport = user.favorite_sport;
+                }
+            } catch (error) {
+                console.log(`⚠️ Could not fetch user favorite sport, using default: ${error.message}`);
+            }
+        }
+
+
         try {
-            
+
             const modelConfig = await modelSelectorService.determineAIModel();
-                
+
                // Set the determined models
                 this.analysisModel = modelConfig.models.analysis;
                 this.sentimentalModel = modelConfig.models.sentiment;
@@ -338,21 +388,29 @@ class AIAnalyzeService {
 
             if (existing) {
                 if (existing.status === 'completed') {
-                    // Duplicate UserAnalyticsUsage record for this user if userId is provided
-                    if (normalizedUserId) {
-                        await this.duplicateUserAnalyticsUsage(
-                            existing._id,
-                            normalizedUserId,
-                            stock_symbol,
-                            analysis_type
-                        );
-                    }
+                    const now = new Date();
 
-                    return {
-                        success: true,
-                        data: existing,
-                        cached: true
-                    };
+                    // Check if strategy is still valid
+                    if (existing.valid_until && now <= existing.valid_until) {
+                        console.log(`✅ [CACHE] Strategy valid until ${existing.valid_until.toISOString()}`);
+
+                        // Duplicate UserAnalyticsUsage record for this user if userId is provided
+                        if (normalizedUserId) {
+                            await this.duplicateUserAnalyticsUsage(
+                                existing._id,
+                                normalizedUserId,
+                                stock_symbol,
+                                analysis_type
+                            );
+                        }
+
+                        return {
+                            success: true,
+                            data: existing,
+                            cached: true
+                        };
+                    } 
+                   
                 } else if (existing.status === 'in_progress') {
                     // Don't duplicate for in_progress - no UserAnalyticsUsage record exists yet
                     // It will be created when the analysis completes
@@ -378,16 +436,21 @@ class AIAnalyzeService {
                 console.log(`✅ [PRICE FETCH] Got price from cache: ${current_price}`);
             }
 
-            // Create pending analysis record using common method
+
+                 // Create pending analysis record using common method
             const pendingAnalysis = await this.createPendingAnalysisRecord({
                 instrument_key,
                 stock_name,
                 stock_symbol,
                 analysis_type,
                 current_price,
-                scheduled_release_time
+                scheduled_release_time,
+               
             });
 
+
+            
+           
             try {
                 // Generate AI analysis with progress tracking
                 const analysisResult = await this.generateAIAnalysisWithProgress(
@@ -397,7 +460,8 @@ class AIAnalyzeService {
                         stock_symbol,
                         current_price,
                         analysis_type,
-                        skipIntraday
+                        skipIntraday,
+                        game_mode: favoriteSport
                     },
                     pendingAnalysis // Pass analysis record for progress updates
                 );
@@ -478,7 +542,7 @@ class AIAnalyzeService {
      * Generate AI analysis with progress tracking
      */
     async generateAIAnalysisWithProgress(params, analysisRecord) {
-        const { stock_name, stock_symbol, current_price, analysis_type, instrument_key } = params;
+        const { stock_name, stock_symbol, current_price, analysis_type, instrument_key, game_mode = 'cricket' } = params;
         
         try {
             // Step 1: Initialize
@@ -2135,12 +2199,35 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
      * Stage 3: Final Assembly (v1.4)
      * Combines MARKET DATA + S1 + S2 + sentimentContext
      */
-    async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2 }) {
-        const { system, user } = buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2 });
+    async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode = 'cricket' }) {
+        const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode });
         const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
 
         console.log('🛫 Stage 3: Finalize - Calling OpenAI API...',JSON.stringify(msgs));
         const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
+
+        // 🧪 DEBUG: Write Stage 3 output to file for inspection
+        try {
+            const fs = await import('fs/promises');
+            const path = await import('path');
+            const debugDir = path.join(process.cwd(), 'debug-logs');
+            await fs.mkdir(debugDir, { recursive: true });
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `stage3-${stock_symbol}-${timestamp}.json`;
+            const filepath = path.join(debugDir, filename);
+
+            await fs.writeFile(filepath, JSON.stringify({
+                stock_symbol,
+                timestamp: new Date().toISOString(),
+                output: out,
+                tokenUsage
+            }, null, 2));
+
+            console.log(`📝 [DEBUG] Stage 3 output written to: ${filepath}`);
+        } catch (err) {
+            console.error('❌ [DEBUG] Failed to write Stage 3 output:', err.message);
+        }
 
         return { data: out, tokenUsage };
     }
@@ -2330,11 +2417,23 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         }
 
         // STAGE 3
-        const stage3Prompts = buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2 });
         const s3result = await this.stage3Finalize({
-            stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2
+            stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2, instrument_key, game_mode
         });
         tokenTracking.stage3 = s3result.tokenUsage;
+
+        // Generate Stage 3 prompts for fine-tune data
+        const stage3Prompts = await buildStage3Prompt({
+            stock_name,
+            stock_symbol,
+            current_price,
+            marketPayload,
+            sectorInfo,
+            s1: s1r.s1,
+            s2: s2r.s2,
+            instrument_key,
+            game_mode
+        });
 
         // Save Stage 3 fine-tune data
         if (instrument_key) {

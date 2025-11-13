@@ -313,60 +313,63 @@ class MarketHoursUtil {
     }
 
     /**
-     * COMMON EXPIRY TIME FUNCTION
-     * Calculate expiry time for ALL analyses, monitoring, sessions
-     * Rules:
-     * - If today is a trading day and current time is before 3:59 PM IST: Expires TODAY at 3:59 PM IST
-     * - Otherwise: Expires on NEXT trading day at 3:59 PM IST
-     * Stored in DB as UTC (3:59 PM IST - 5:30 = 10:25 AM UTC)
+     * Get validity time for analysis (next market close)
+     * Strategy should be revalidated after this time since it uses previous close data
      *
-     * @param {Date} fromDate - Starting date (defaults to now)
-     * @returns {Date} - Expiry time in UTC for database storage
+     * Examples:
+     * - Created Friday 2:00 PM → Valid until Friday 3:30 PM (today's close)
+     * - Created Friday 4:00 PM → Valid until Monday 3:30 PM (next trading day close)
+     * - Created Monday 10:00 AM → Valid until Monday 3:30 PM (today's close)
+     *
+     * @param {Date} fromDate - Creation date (defaults to now)
+     * @returns {Promise<Date>} - Validity time (next market close in IST)
      */
-    static async getExpiryTime(fromDate = new Date()) {
+    static async getValidUntilTime(fromDate = new Date()) {
         try {
             const now = fromDate || new Date();
             const istNow = this.toIST(now);
 
-            console.log(`📅 [EXPIRY CALC] Current time IST: ${istNow.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
+            console.log(`📅 [VALID UNTIL] Calculating for: ${istNow.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
 
-            // Check if today is a trading day using database
+            // Check if today is a trading day
             const isTodayTradingDay = await this.isTradingDay(istNow);
+
+            // Market close time: 3:59:59 PM IST
+            const marketCloseHour = 15;
+            const marketCloseMinute = 59;
+            const marketCloseTime = marketCloseHour * 60 + marketCloseMinute; // 15:59 = 959 minutes
+
             const currentHour = istNow.getHours();
             const currentMinute = istNow.getMinutes();
             const currentTimeInMinutes = currentHour * 60 + currentMinute;
-            const expiryTimeInMinutes = 15 * 60 + 59; // 3:59 PM = 15:55
 
-            let expiryDate;
+            let validUntilDateIST;
 
-            // If today is a trading day and we're before 3:59 PM, expire today
-            if (isTodayTradingDay && currentTimeInMinutes < expiryTimeInMinutes) {
-                console.log(`📅 [EXPIRY CALC] Today is a trading day and before 3:59 PM - expiring TODAY`);
-                expiryDate = new Date(istNow);
+            // If today is a trading day and before market close, valid until today's close
+            if (isTodayTradingDay && currentTimeInMinutes < marketCloseTime) {
+                console.log(`📅 [VALID UNTIL] Today is trading day and before 3:59 PM - valid until today's close`);
+                validUntilDateIST = new Date(istNow);
             } else {
-                // Otherwise, get next trading day
-                console.log(`📅 [EXPIRY CALC] ${!isTodayTradingDay ? 'Today is not a trading day' : 'Already past 3.59 PM'} - expiring NEXT trading day`);
-                expiryDate = await this.getNextTradingDay(istNow);
+                // Otherwise, valid until next trading day's close
+                console.log(`📅 [VALID UNTIL] ${!isTodayTradingDay ? 'Not a trading day' : 'Market already closed'} - valid until next trading day close`);
+                validUntilDateIST = await this.getNextTradingDay(istNow);
             }
 
-            console.log(`📅 [EXPIRY CALC] Expiry trading day: ${expiryDate.toISOString()}`);
+            // Extract IST date components
+            const year = validUntilDateIST.getFullYear();
+            const month = validUntilDateIST.getMonth();
+            const day = validUntilDateIST.getDate();
 
-            // Create expiry time in UTC directly
-            // We want 3:59 PM IST = 10:25 AM UTC
-            // expiryDate is in IST, so we need to extract the IST date components
-            const istYear = expiryDate.getFullYear();
-            const istMonth = expiryDate.getMonth();
-            const istDay = expiryDate.getDate();
+            // Create UTC date for 3:59:59 PM IST (10:29:59 AM UTC)
+            // IST is UTC+5:30, so 3:59:59 PM IST = 10:29:59 AM UTC
+            const validUntilUTC = new Date(Date.UTC(year, month, day, 10, 29, 59, 0));
 
-            // Create a new UTC date for the same calendar day, then set to 10:25 AM UTC (3:59 PM IST)
-            const expiryUTC = new Date(Date.UTC(istYear, istMonth, istDay, 10, 29, 0, 0));
+            console.log(`📅 [VALID UNTIL] Valid until IST: ${validUntilUTC.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})} (should be 3:59:59 PM IST)`);
+            console.log(`📅 [VALID UNTIL] Valid until UTC: ${validUntilUTC.toISOString()} (stored in DB)`);
 
-            console.log(`📅 [EXPIRY CALC] Expiry IST: ${expiryUTC.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})} (should be 3:59 PM IST)`);
-            console.log(`📅 [EXPIRY CALC] Expiry UTC (DB): ${expiryUTC.toISOString()} (should be 10:25 AM UTC)`);
-
-            return expiryUTC;
+            return validUntilUTC;
         } catch (error) {
-            console.error('❌ [EXPIRY CALC] Error calculating expiry time:', error);
+            console.error('❌ [VALID UNTIL] Error calculating validity time:', error);
             // Fallback: 24 hours from now
             const fallback = new Date();
             fallback.setHours(fallback.getHours() + 24);

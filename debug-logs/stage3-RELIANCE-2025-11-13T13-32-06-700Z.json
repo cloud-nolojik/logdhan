@@ -1,0 +1,379 @@
+{
+  "stock_symbol": "RELIANCE",
+  "timestamp": "2025-11-13T13:32:06.701Z",
+  "output": {
+    "schema_version": "1.4",
+    "symbol": "RELIANCE",
+    "analysis_type": "swing",
+    "generated_at_ist": "2025-11-13T19:00:00+05:30",
+    "insufficientData": false,
+    "market_summary": {
+      "last": 1512.1,
+      "trend": "BULLISH",
+      "volatility": "MEDIUM",
+      "volume": "AVERAGE"
+    },
+    "overall_sentiment": "NEUTRAL",
+    "sentiment_analysis": {
+      "confidence": 70,
+      "strength": "medium",
+      "reasoning": "News tone is mixed and company-specific; price trend is positive but headlines are neutral overall.",
+      "key_factors": [
+        "Mixed company performance",
+        "Investor interest despite estimate miss"
+      ],
+      "sector_specific": false,
+      "market_alignment": "neutral",
+      "trading_bias": "neutral",
+      "risk_level": "medium",
+      "position_sizing": "standard",
+      "entry_strategy": "cautious",
+      "news_count": 5,
+      "recent_news_count": 5,
+      "sector_news_weight": 0.8
+    },
+    "runtime": {
+      "triggers_evaluated": [
+        {
+          "id": "T1",
+          "timeframe": "15m",
+          "left_ref": "price",
+          "left_value": 1512.1,
+          "op": "crosses_above",
+          "right_ref": "entry",
+          "right_value": 1525.1,
+          "passed": false,
+          "evaluable": false
+        },
+        {
+          "id": "T2",
+          "timeframe": "1h",
+          "left_ref": "rsi14_1h",
+          "left_value": 60.93,
+          "op": ">=",
+          "right_ref": "value",
+          "right_value": 58,
+          "passed": true,
+          "evaluable": true
+        }
+      ],
+      "pre_entry_invalidations_hit": false
+    },
+    "order_gate": {
+      "all_triggers_true": false,
+      "no_pre_entry_invalidations": true,
+      "actionability_status": "actionable_on_trigger",
+      "entry_type_sane": true,
+      "can_place_order": false
+    },
+    "strategies": [
+      {
+        "id": "S1",
+        "type": "BUY",
+        "archetype": "breakout",
+        "alignment": "with_trend",
+        "title": "[Revalidated] Breakout buy above 1525.1 toward 1555.13 with stop at 1510.09",
+        "confidence": 0.6,
+        "why_best": "Uptrend with momentum and a clean breakout plan above 1525.1, offering a 2.00 risk-reward.",
+        "entryType": "stop",
+        "entry": 1525.1,
+        "entryRange": null,
+        "target": 1555.13,
+        "stopLoss": 1510.09,
+        "riskReward": 2,
+        "timeframe": "3-7 days",
+        "indicators": [
+          {
+            "name": "ema20_1D",
+            "value": "1465.69",
+            "signal": "BUY"
+          },
+          {
+            "name": "ema50_1D",
+            "value": "1434.54",
+            "signal": "BUY"
+          },
+          {
+            "name": "sma200_1D",
+            "value": "1368.67",
+            "signal": "BUY"
+          },
+          {
+            "name": "rsi14_1h",
+            "value": "60.93",
+            "signal": "BUY"
+          },
+          {
+            "name": "atr14_1D",
+            "value": "21.45",
+            "signal": "NEUTRAL"
+          }
+        ],
+        "reasoning": [
+          {
+            "because": "Price 1512.1 is above the 20, 50, and 200-day averages (1465.69, 1434.54, 1368.67), showing an uptrend."
+          },
+          {
+            "because": "RSI 1h at 60.93 is a healthy strength level, so buyers are active without extremes."
+          },
+          {
+            "because": "Entry 1525.1 is just above the 1524.7 swing high, adding a clean breakout confirmation."
+          },
+          {
+            "because": "Risk is 15.01 and reward is 30.03, giving a 2.00 risk-reward that justifies the trade."
+          }
+        ],
+        "warnings": [
+          {
+            "code": "GAP_RISK",
+            "severity": "medium",
+            "text": "Gaps can jump over entry or stop and cause slippage.",
+            "applies_when": [
+              {
+                "timeframe": "15m",
+                "left": {
+                  "ref": "price"
+                },
+                "op": "crosses_above",
+                "right": {
+                  "ref": "entry",
+                  "value": 1525.1,
+                  "offset": 0
+                }
+              }
+            ],
+            "mitigation": [
+              "reduce_qty",
+              "skip_on_news",
+              "wait_for_confirmation"
+            ]
+          }
+        ],
+        "triggers": [
+          {
+            "id": "T1",
+            "scope": "entry",
+            "timeframe": "15m",
+            "left": {
+              "ref": "price"
+            },
+            "op": "crosses_above",
+            "right": {
+              "ref": "entry",
+              "value": null,
+              "offset": 0
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": true
+            },
+            "within_sessions": 5,
+            "expiry_bars": 20
+          },
+          {
+            "id": "T2",
+            "scope": "entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "rsi14_1h"
+            },
+            "op": ">=",
+            "right": {
+              "ref": "value",
+              "value": 58,
+              "offset": 0
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": true
+            },
+            "within_sessions": 5,
+            "expiry_bars": 20
+          }
+        ],
+        "confirmation": {
+          "require": "ALL",
+          "window_bars": 8,
+          "conditions": []
+        },
+        "invalidations": [
+          {
+            "scope": "pre_entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "close"
+            },
+            "op": "<=",
+            "right": {
+              "ref": "value",
+              "value": 1490
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "cancel_entry"
+          },
+          {
+            "scope": "post_entry",
+            "timeframe": "1h",
+            "left": {
+              "ref": "close"
+            },
+            "op": "<=",
+            "right": {
+              "ref": "stopLoss"
+            },
+            "occurrences": {
+              "count": 1,
+              "consecutive": false
+            },
+            "action": "close_position"
+          }
+        ],
+        "validity": {
+          "entry": {
+            "type": "GTD",
+            "bars_limit": 0,
+            "trading_sessions_soft": 5,
+            "trading_sessions_hard": 8,
+            "expire_calendar_cap_days": 10
+          },
+          "position": {
+            "time_stop_sessions": 7,
+            "gap_policy": "exit_at_open_with_slippage"
+          },
+          "non_trading_policy": "pause_clock"
+        },
+        "beginner_summary": {
+          "one_liner": "Buy only if price crosses 1525.1, aim for 1555.13, and cut loss at 1510.09 within 3–7 sessions.",
+          "steps": [
+            "Wait for all trigger conditions to be met.",
+            "Place target and stopLoss as given.",
+            "Use a position size that fits your risk comfort."
+          ],
+          "checklist": [
+            "All triggers satisfied",
+            "No invalidation hit",
+            "Order type matches entry plan"
+          ]
+        },
+        "why_in_plain_words": [
+          {
+            "point": "Trend and momentum support a breakout entry.",
+            "evidence": "Price above 1465.69/1434.54/1368.67 and RSI 60.93 show buyers in control."
+          },
+          {
+            "point": "The potential reward is larger than the risk.",
+            "evidence": "Reward 30.03 vs risk 15.01 from 1525.1 to 1555.13 and 1510.09."
+          }
+        ],
+        "what_could_go_wrong": [
+          {
+            "risk": "A false break near 1524.7–1525.1 could quickly reverse.",
+            "likelihood": "MEDIUM",
+            "impact": "MEDIUM",
+            "mitigation": "Enter only on trigger and exit at 1510.09 if the move fails."
+          }
+        ],
+        "ui_friendly": {
+          "why_smart_move": "Like waiting for the right bouncer, we buy above 1525.1 aiming 1555.13 while guarding the wicket at 1510.09.",
+          "ai_will_watch": [
+            "I will alert when price crosses above 1525.1 on the 15-minute chart to play the attacking shot.",
+            "If any 1-hour close is 1490 or lower before entry, we leave this over and reset.",
+            "After entry, if a 1-hour close is at or below 1510.09, we walk off to protect the wicket."
+          ],
+          "beginner_explanation": "We wait for price to move above 1525.1 to confirm strength before buying. A stop-loss at 1510.09 limits damage if the move fails. The target at 1555.13 aims for about twice the reward compared to the risk. In cricket terms, we wait for the right ball, keep our guard, and look for a boundary."
+        },
+        "money_example": {
+          "per_share": {
+            "risk": 15.01,
+            "reward": 30.03,
+            "rr": 2
+          },
+          "position": {
+            "qty": 66,
+            "max_loss": 990.66,
+            "potential_profit": 1981.98,
+            "distance_to_stop_pct": 0.99,
+            "distance_to_target_pct": 1.97
+          }
+        },
+        "suggested_qty": {
+          "risk_budget_inr": 1000,
+          "risk_per_share": 15.01,
+          "qty": 66,
+          "alternatives": [
+            {
+              "risk_budget_inr": 500,
+              "qty": 33
+            },
+            {
+              "risk_budget_inr": 1000,
+              "qty": 66
+            },
+            {
+              "risk_budget_inr": 2500,
+              "qty": 166
+            }
+          ],
+          "note": "Sizing based only on entry to stopLoss distance."
+        },
+        "risk_meter": {
+          "label": "Medium",
+          "score": 0.55,
+          "drivers": [
+            "RR band",
+            "Trend alignment",
+            "Volatility vs ATR",
+            "Volume band",
+            "News/sentiment tilt"
+          ]
+        },
+        "actionability": {
+          "label": "Buy idea",
+          "status": "actionable_on_trigger",
+          "next_check_in": "15m",
+          "checklist": [
+            "All triggers satisfied",
+            "No invalidation hit",
+            "Order type matches entry plan"
+          ]
+        },
+        "glossary": {
+          "entry": {
+            "definition": "Price where the trade is planned to start.",
+            "example": "₹1525.1"
+          },
+          "target": {
+            "definition": "Price where profits are planned to be booked.",
+            "example": "₹1555.13"
+          },
+          "stopLoss": {
+            "definition": "Price where the trade will be closed to limit loss.",
+            "example": "₹1510.09"
+          }
+        }
+      }
+    ],
+    "performance_hints": {
+      "confidence_drivers": [
+        "Price above key moving averages",
+        "RSI 1h at 60.93 supports strength",
+        "Clear breakout level near 1524.7–1525.1"
+      ],
+      "uncertainty_factors": [
+        "Resistance close by at 1524.7",
+        "Neutral news tone"
+      ],
+      "data_quality_score": 0.88
+    },
+    "disclaimer": "AI-generated educational analysis. Not investment advice."
+  },
+  "tokenUsage": {
+    "input_tokens": 16437,
+    "output_tokens": 7852,
+    "cached_tokens": 0,
+    "total_tokens": 24289
+  }
+}

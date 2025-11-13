@@ -179,7 +179,11 @@ class AgendaScheduledBulkAnalysisService {
             const stockMap = new Map();
             let totalWatchlistItems = 0;
 
-            for (const user of users) {
+            // Process all users in production mode
+            const usersToProcess = users;
+            console.log(`📊 [PRODUCTION MODE] Processing ${usersToProcess.length} users`);
+
+            for (const user of usersToProcess) {
                 if (user.watchlist && user.watchlist.length > 0) {
                     totalWatchlistItems += user.watchlist.length;
 
@@ -217,10 +221,13 @@ class AgendaScheduledBulkAnalysisService {
             // Set release time to 5:00 PM IST today
             const releaseTime = new Date();
 
-            // 4. Create pending analysis records for all stocks upfront
-            console.log(`📝 [SCHEDULED BULK] Creating pending analysis records for ${uniqueStocks.length} stocks...`);
+            // 4. Check existing strategies and decide: VALIDATE or CREATE pending record
+            console.log(`📝 [SCHEDULED BULK] Checking existing strategies for ${uniqueStocks.length} stocks...`);
             let recordsCreated = 0;
+            let recordsToValidate = 0;
             let recordsSkipped = 0;
+
+            const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
 
             for (const stock of uniqueStocks) {
                 const current_price = priceMap[stock.instrument_key];
@@ -247,24 +254,42 @@ class AgendaScheduledBulkAnalysisService {
                 }
 
                 try {
-                    // Create pending analysis record (this creates one record per stock, not per user)
-                    await aiAnalyzeService.createPendingAnalysisRecord({
-                        instrument_key: stock.instrument_key,
-                        stock_name: stockDetails.name,
-                        stock_symbol: stockDetails.trading_symbol,
-                        analysis_type: 'swing',
-                        current_price: current_price,
-                        scheduled_release_time: releaseTime
-                    });
-                    recordsCreated++;
-                    console.log(`  📝 [${recordsCreated}/${uniqueStocks.length}] Created pending record for ${stock.trading_symbol} at ₹${current_price}`);
+                    // Check if existing completed strategy exists
+                    const existing = await StockAnalysis.findByInstrument(stock.instrument_key, 'swing');
+
+                    if (existing && existing.status === 'completed' && existing.valid_until) {
+                        const now = new Date();
+
+                        if (now > existing.valid_until) {
+                            // Strategy expired - will be validated by analyzeStock()
+                            recordsToValidate++;
+                            console.log(`  🔄 [${recordsToValidate}/${uniqueStocks.length}] ${stock.trading_symbol} - expired strategy will be validated`);
+                        } else {
+                            // Strategy still valid - skip
+                            recordsSkipped++;
+                            console.log(`  ✅ [${recordsSkipped}/${uniqueStocks.length}] ${stock.trading_symbol} - strategy still valid until ${existing.valid_until.toISOString()}`);
+                            continue;
+                        }
+                    } else {
+                        // No existing strategy or not completed - create pending record
+                        await aiAnalyzeService.createPendingAnalysisRecord({
+                            instrument_key: stock.instrument_key,
+                            stock_name: stockDetails.name,
+                            stock_symbol: stockDetails.trading_symbol,
+                            analysis_type: 'swing',
+                            current_price: current_price,
+                            scheduled_release_time: releaseTime
+                        });
+                        recordsCreated++;
+                        console.log(`  📝 [${recordsCreated}/${uniqueStocks.length}] Created pending record for ${stock.trading_symbol} at ₹${current_price}`);
+                    }
                 } catch (error) {
-                    console.error(`  ❌ Failed to create pending record for ${stock.trading_symbol}:`, error.message);
+                    console.error(`  ❌ Failed to check/create record for ${stock.trading_symbol}:`, error.message);
                     recordsSkipped++;
                 }
             }
 
-            console.log(`✅ [SCHEDULED BULK] Created ${recordsCreated} pending analysis records, skipped ${recordsSkipped}`);
+            console.log(`✅ [SCHEDULED BULK] Created ${recordsCreated} pending records, ${recordsToValidate} to validate, ${recordsSkipped} skipped`);
 
             // 5. Analyze each stock for each user who has it in their watchlist
             let analysisCount = 0;
@@ -302,7 +327,8 @@ class AgendaScheduledBulkAnalysisService {
                             user_id: userId.toString(),
                             skipNotification: true,  // Skip notifications for scheduled bulk pre-analysis
                             scheduled_release_time: releaseTime,  // Release at 5:00 PM
-                            skipIntraday: true  // Add buffer to intraday candles for end-of-day analysis
+                            skipIntraday: true , // Add buffer to intraday candles for end-of-day analysis
+                           
                         });
 
                         if (result.success) {
