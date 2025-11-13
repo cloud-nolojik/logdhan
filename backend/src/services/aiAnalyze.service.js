@@ -2207,27 +2207,27 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
 
         // 🧪 DEBUG: Write Stage 3 output to file for inspection
-        try {
-            const fs = await import('fs/promises');
-            const path = await import('path');
-            const debugDir = path.join(process.cwd(), 'debug-logs');
-            await fs.mkdir(debugDir, { recursive: true });
+        // try {
+        //     const fs = await import('fs/promises');
+        //     const path = await import('path');
+        //     const debugDir = path.join(process.cwd(), 'debug-logs');
+        //     await fs.mkdir(debugDir, { recursive: true });
 
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const filename = `stage3-${stock_symbol}-${timestamp}.json`;
-            const filepath = path.join(debugDir, filename);
+        //     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        //     const filename = `stage3-${stock_symbol}-${timestamp}.json`;
+        //     const filepath = path.join(debugDir, filename);
 
-            await fs.writeFile(filepath, JSON.stringify({
-                stock_symbol,
-                timestamp: new Date().toISOString(),
-                output: out,
-                tokenUsage
-            }, null, 2));
+        //     await fs.writeFile(filepath, JSON.stringify({
+        //         stock_symbol,
+        //         timestamp: new Date().toISOString(),
+        //         output: out,
+        //         tokenUsage
+        //     }, null, 2));
 
-            console.log(`📝 [DEBUG] Stage 3 output written to: ${filepath}`);
-        } catch (err) {
-            console.error('❌ [DEBUG] Failed to write Stage 3 output:', err.message);
-        }
+        //     console.log(`📝 [DEBUG] Stage 3 output written to: ${filepath}`);
+        // } catch (err) {
+        //     console.error('❌ [DEBUG] Failed to write Stage 3 output:', err.message);
+        // }
 
         return { data: out, tokenUsage };
     }
