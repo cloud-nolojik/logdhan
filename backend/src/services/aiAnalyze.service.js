@@ -31,8 +31,8 @@ class AIAnalyzeService {
         
         // Model configuration
         this.analysisModel = "gpt-4o";
-        this.basicModel = "gpt-5";
-        this.advancedModel = "gpt-5"; 
+        this.basicModel = "gpt-5.1-2025-11-13";
+        this.advancedModel = "gpt-5.1-2025-11-13"; 
         
         // Use existing term-to-frames mapping from aiReview
         this.termToFrames = {
