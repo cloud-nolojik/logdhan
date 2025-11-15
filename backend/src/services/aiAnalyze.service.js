@@ -357,6 +357,11 @@ class AIAnalyzeService {
 
 
     }) {
+        // ⏱️ START TIMING
+        const analysisStartTime = Date.now();
+        console.log(`\n⏱️ ========== ANALYSIS START: ${stock_symbol} (${instrument_key}) ==========`);
+        console.log(`⏱️ Start Time: ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })} IST`);
+
         // Normalize user_id (accept both formats)
         const normalizedUserId = user_id || userId;
 
@@ -384,7 +389,10 @@ class AIAnalyzeService {
             
 
             // Check for existing analysis (completed or in-progress)
+            const cacheCheckStart = Date.now();
             const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
+            const cacheCheckTime = Date.now() - cacheCheckStart;
+            console.log(`⏱️ [TIMING] Cache check: ${cacheCheckTime}ms`);
 
             if (existing) {
                 if (existing.status === 'completed') {
@@ -392,7 +400,10 @@ class AIAnalyzeService {
 
                     // Check if strategy is still valid
                     if (existing.valid_until && now <= existing.valid_until) {
+                        const totalTime = Date.now() - analysisStartTime;
                         console.log(`✅ [CACHE] Strategy valid until ${existing.valid_until.toISOString()}`);
+                        console.log(`⏱️ ========== ANALYSIS COMPLETE (CACHED): ${stock_symbol} ==========`);
+                        console.log(`⏱️ Total Time: ${totalTime}ms (${(totalTime / 1000).toFixed(2)}s)`);
 
                         // Duplicate UserAnalyticsUsage record for this user if userId is provided
                         if (normalizedUserId) {
@@ -409,8 +420,10 @@ class AIAnalyzeService {
                             data: existing,
                             cached: true
                         };
-                    } 
-                   
+                    }
+                    // If completed but expired, fall through to create new analysis
+                    console.log(`🔄 [RETRY] Previous analysis expired (valid_until: ${existing.valid_until}), creating new analysis`);
+
                 } else if (existing.status === 'in_progress') {
                     // Don't duplicate for in_progress - no UserAnalyticsUsage record exists yet
                     // It will be created when the analysis completes
@@ -419,6 +432,10 @@ class AIAnalyzeService {
                         data: existing,
                         inProgress: true
                     };
+                } else if (existing.status === 'failed') {
+                    // Failed analysis found - retry automatically
+                    console.log(`🔄 [RETRY] Previous analysis failed, retrying...`);
+                    // Fall through to create new analysis
                 }
             }
 
@@ -449,10 +466,13 @@ class AIAnalyzeService {
             });
 
 
-            
-           
+
+
             try {
                 // Generate AI analysis with progress tracking
+                const aiAnalysisStart = Date.now();
+                console.log(`⏱️ [TIMING] Starting AI analysis generation...`);
+
                 const analysisResult = await this.generateAIAnalysisWithProgress(
                     {
                         instrument_key,
@@ -466,19 +486,35 @@ class AIAnalyzeService {
                     pendingAnalysis // Pass analysis record for progress updates
                 );
 
+                const aiAnalysisTime = Date.now() - aiAnalysisStart;
+                console.log(`⏱️ [TIMING] AI analysis generation: ${aiAnalysisTime}ms (${(aiAnalysisTime / 1000).toFixed(2)}s)`);
+
                 // Update analysis with results and mark completed or failed based on data sufficiency
                 pendingAnalysis.analysis_data = analysisResult;
                 
                 // Check if AI returned insufficientData and mark as failed if so
                 if (analysisResult.insufficientData === true) {
+                    const totalTime = Date.now() - analysisStartTime;
                     console.log(`❌ [ANALYSIS STATUS] Marking ${stock_symbol} as failed due to insufficient data`);
                     await pendingAnalysis.markFailed('Insufficient market data for analysis');
-                    
+
+                    console.log(`⏱️ ========== ANALYSIS COMPLETE (INSUFFICIENT DATA): ${stock_symbol} ==========`);
+                    console.log(`⏱️ Total Time: ${totalTime}ms (${(totalTime / 1000).toFixed(2)}s)`);
+
                     // Update bulk session if this analysis is part of one
                     await this.updateBulkSessionProgress(instrument_key, analysis_type, 'failed');
                 } else {
                     console.log(`✅ [ANALYSIS STATUS] Marking ${stock_symbol} as completed with valid analysis`);
                     await pendingAnalysis.markCompleted();
+
+                    // Calculate and log total time
+                    const totalTime = Date.now() - analysisStartTime;
+                    console.log(`⏱️ ========== ANALYSIS COMPLETE (SUCCESS): ${stock_symbol} ==========`);
+                    console.log(`⏱️ Total Time: ${totalTime}ms (${(totalTime / 1000).toFixed(2)}s)`);
+                    console.log(`⏱️ Breakdown:`);
+                    console.log(`   - Cache check: ${cacheCheckTime}ms`);
+                    console.log(`   - AI generation: ${aiAnalysisTime}ms`);
+                    console.log(`   - Other operations: ${totalTime - cacheCheckTime - aiAnalysisTime}ms`);
 
                     // Update bulk session if this analysis is part of one
                    // await this.updateBulkSessionProgress(instrument_key, analysis_type, 'completed');
@@ -522,14 +558,23 @@ class AIAnalyzeService {
                 };
 
             } catch (analysisError) {
+                const totalTime = Date.now() - analysisStartTime;
+                console.log(`⏱️ ========== ANALYSIS FAILED (ERROR): ${stock_symbol} ==========`);
+                console.log(`⏱️ Total Time: ${totalTime}ms (${(totalTime / 1000).toFixed(2)}s)`);
+                console.error(`❌ Error: ${analysisError.message}`);
+
                 // Mark analysis as failed using new method
                 await pendingAnalysis.markFailed(analysisError.message);
-                
-                // console.error(`❌ Analysis failed for ${stock_symbol}:`, analysisError.message);
+
                 throw analysisError;
             }
 
-        } catch (error) {    
+        } catch (error) {
+            const totalTime = Date.now() - analysisStartTime;
+            console.log(`⏱️ ========== ANALYSIS FAILED (OUTER CATCH): ${stock_symbol} ==========`);
+            console.log(`⏱️ Total Time: ${totalTime}ms (${(totalTime / 1000).toFixed(2)}s)`);
+            console.error(`❌ Error: ${error.message}`);
+
             return {
                 success: false,
                 error: 'Failed to generate AI analysis',
@@ -543,39 +588,49 @@ class AIAnalyzeService {
      */
     async generateAIAnalysisWithProgress(params, analysisRecord) {
         const { stock_name, stock_symbol, current_price, analysis_type, instrument_key, game_mode = 'cricket' } = params;
-        
+
+        const stageStart = Date.now();
+        console.log(`⏱️ [STAGE TIMING] Starting generateAIAnalysisWithProgress for ${stock_symbol}`);
+
         try {
             // Step 1: Initialize
             await analysisRecord.updateProgress('Initializing analysis...', 5, 85);
-            
+
             // Step 2: Fetch market data
             await analysisRecord.updateProgress('Fetching market data...', 15, 75);
-            
+
             // Step 3: Calculate technical indicators
             await analysisRecord.updateProgress('Calculating technical indicators...', 30, 60);
-            
+
             // Step 4: Analyze patterns
             await analysisRecord.updateProgress('Analyzing price patterns...', 45, 50);
-            
+
             // Step 5: Generate sentiment analysis
             await analysisRecord.updateProgress('Analyzing market sentiment...', 60, 35);
-            
+
             // Step 6: Generate strategies
             await analysisRecord.updateProgress('Generating trading strategies...', 75, 20);
-            
+
             // Step 7: Score and validate strategies
             await analysisRecord.updateProgress('Scoring and validating strategies...', 90, 10);
-            
+
             // Call the actual analysis method
+            const analysisMethodStart = Date.now();
             const result = await this.generateAIAnalysis(params);
-            
+            const analysisMethodTime = Date.now() - analysisMethodStart;
+            console.log(`⏱️ [STAGE TIMING] generateAIAnalysis (core logic): ${analysisMethodTime}ms (${(analysisMethodTime / 1000).toFixed(2)}s)`);
+
             // Step 8: Finalize
             await analysisRecord.updateProgress('Finalizing analysis...', 95, 2);
-            
+
+            const totalStageTime = Date.now() - stageStart;
+            console.log(`⏱️ [STAGE TIMING] Total generateAIAnalysisWithProgress: ${totalStageTime}ms (${(totalStageTime / 1000).toFixed(2)}s)`);
+
             return result;
-            
+
         } catch (error) {
-            // console.error('❌ Progress tracking analysis failed:', error);
+            const totalStageTime = Date.now() - stageStart;
+            console.log(`⏱️ [STAGE TIMING] generateAIAnalysisWithProgress FAILED after ${totalStageTime}ms`);
             throw error;
         }
     }
@@ -584,9 +639,10 @@ class AIAnalyzeService {
      * Generate AI analysis using real market data
      */
     async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key,skipIntraday }) {
+        const methodStart = Date.now();
+        console.log(`⏱️ [METHOD TIMING] Starting generateAIAnalysis for ${stock_symbol}`);
+
         try {
-            // console.log(`🚀 Starting real data fetch for ${stock_symbol} (${analysis_type})`);
-            
             // Create trade data structure for API calls
             const tradeData = {
                 term: analysis_type === 'swing' ? 'short' : 'intraday',
@@ -599,17 +655,22 @@ class AIAnalyzeService {
 
             // Get sector information for enhanced analysis
             const sectorInfo = getSectorForStock(stock_symbol, stock_name);
-            // console.log(`🏭 Sector identified: ${sectorInfo.name} (${sectorInfo.code}) - Index: ${sectorInfo.index}`);
 
             // Fetch optimized market data (DB first, API fallback) in parallel
-//             console.log(`📰 Fetching news for: ${stock_name}`);
+            const dataFetchStart = Date.now();
+            console.log(`⏱️ [DATA FETCH] Starting parallel fetch (candles + news)...`);
+
             const [candleData, newsData] = await Promise.all([
                 this.fetchOptimizedMarketData(tradeData),
                 this.fetchSectorEnhancedNews(stock_name, sectorInfo).catch(err => {
-//                     console.warn('⚠️ News fetch failed, continuing without news:', err.message);
                     return null;
                 })
             ]);
+
+            const dataFetchTime = Date.now() - dataFetchStart;
+            console.log(`⏱️ [DATA FETCH] Completed in ${dataFetchTime}ms`);
+            console.log(`   - Candle data source: ${candleData.source} (${candleData.fetchTime}ms)`);
+            console.log(`   - News articles: ${newsData ? newsData.length : 0}`);
 
             // Check for insufficient data from candle fetcher
             if (candleData.insufficientData) {
@@ -648,8 +709,9 @@ class AIAnalyzeService {
             }
 
             // Analyze news sentiment with sector context - now returns detailed analysis
-            const sentimentAnalysis = newsData ? 
-                await this.analyzeSectorSentiment(newsData, tradeData.term, sectorInfo) : 
+            const sentimentStart = Date.now();
+            const sentimentAnalysis = newsData ?
+                await this.analyzeSectorSentiment(newsData, tradeData.term, sectorInfo) :
                 {
                     sentiment: 'neutral',
                     confidence: 50,
@@ -657,7 +719,9 @@ class AIAnalyzeService {
                     keyFactors: [],
                     sectorSpecific: false
                 };
-            
+            const sentimentTime = Date.now() - sentimentStart;
+            console.log(`⏱️ [SENTIMENT] Analysis completed in ${sentimentTime}ms`);
+
             // Extract simple sentiment for backward compatibility
             const sentiment = typeof sentimentAnalysis === 'string' ? sentimentAnalysis : sentimentAnalysis.sentiment;
                 
@@ -764,10 +828,10 @@ class AIAnalyzeService {
 //                 console.log(`📰 Updated newsLite with enhanced analysis:`, payload.newsLite);
             }
 
-//             console.log(`📊 Generated clean payload for stock analysis of ${stock_symbol}`);
-//             console.log(`🤖 Using AI models - Analysis: ${this.analysisModel}, Sentiment: ${this.sentimentalModel}`);
-
             // Generate analysis with real market data and sector context using 3-stage process
+            const aiGenerationStart = Date.now();
+            console.log(`⏱️ [AI GENERATION] Starting 3-stage analysis for ${stock_symbol}...`);
+
             const analysisResult = await this.generateStockAnalysis3Call({
                 instrument_key,
                 stock_name,
@@ -779,8 +843,16 @@ class AIAnalyzeService {
                 sectorInfo
             });
 
-//             console.log(`✅ AI Analysis completed successfully for ${stock_symbol}`);
-//             console.log(`📋 Analysis result:`, JSON.stringify(analysisResult, null, 2));
+            const aiGenerationTime = Date.now() - aiGenerationStart;
+            const totalMethodTime = Date.now() - methodStart;
+
+            console.log(`⏱️ [AI GENERATION] 3-stage analysis completed in ${aiGenerationTime}ms (${(aiGenerationTime / 1000).toFixed(2)}s)`);
+            console.log(`⏱️ [METHOD TIMING] Total generateAIAnalysis time: ${totalMethodTime}ms (${(totalMethodTime / 1000).toFixed(2)}s)`);
+            console.log(`⏱️ [METHOD BREAKDOWN]:`);
+            console.log(`   - Data fetch (candles + news): ${dataFetchTime}ms`);
+            console.log(`   - Sentiment analysis: ${sentimentTime}ms`);
+            console.log(`   - AI generation (3-stage): ${aiGenerationTime}ms`);
+            console.log(`   - Other operations: ${totalMethodTime - dataFetchTime - sentimentTime - aiGenerationTime}ms`);
 
             return analysisResult;
 
@@ -2162,17 +2234,30 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
      * Validates MARKET DATA and computes market_summary
      */
     async stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo }) {
-        const { system, user } = buildStage1Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
-        const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
+        try {
+            const { system, user } = buildStage1Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
+            const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
 
-        console.log('🛫 Stage 1: Preflight - Calling OpenAI API...',JSON.stringify(msgs));
-        const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
+            console.log(`🛫 [STAGE 1] ${stock_symbol} - Calling OpenAI API...`);
+            const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
 
-        // Gate quickly
-        if (out.insufficientData === true) {
-            return { ok: false, s1: out, tokenUsage };
+            // Gate quickly
+            if (out.insufficientData === true) {
+                console.log(`⚠️ [STAGE 1] ${stock_symbol} - Insufficient data detected`);
+                return { ok: false, s1: out, tokenUsage };
+            }
+            console.log(`✅ [STAGE 1] ${stock_symbol} - Success (Tokens: ${tokenUsage.total_tokens})`);
+            return { ok: true, s1: out, tokenUsage };
+        } catch (error) {
+            console.error(`❌ [STAGE 1] ${stock_symbol} - FAILED`);
+            console.error(`❌ [STAGE 1] Error message: ${error.message}`);
+            console.error(`❌ [STAGE 1] Error stack: ${error.stack}`);
+            if (error.response) {
+                console.error(`❌ [STAGE 1] OpenAI Response Status: ${error.response.status}`);
+                console.error(`❌ [STAGE 1] OpenAI Response Data:`, JSON.stringify(error.response.data, null, 2));
+            }
+            throw error;
         }
-        return { ok: true, s1: out, tokenUsage };
     }
 
 
@@ -2181,17 +2266,30 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
      * Builds ONE best-fit skeleton (BUY/SELL/NO_TRADE) with entry/stop/target ranges
      */
     async stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1 }) {
-        const { system, user } = buildStage2Prompt({ stock_name, stock_symbol, current_price, marketPayload, s1 });
-        const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
+        try {
+            const { system, user } = buildStage2Prompt({ stock_name, stock_symbol, current_price, marketPayload, s1 });
+            const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
 
-        console.log('🛫 Stage 2: Skeleton - Calling OpenAI API...',JSON.stringify(msgs));
-        const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
+            console.log(`🛫 [STAGE 2] ${stock_symbol} - Calling OpenAI API...`);
+            const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
 
-        // Gate: if NO_TRADE is returned we still go to Stage 3 (final will carry NO_TRADE)
-        if (out.insufficientData === true) {
-            return { ok: false, s2: out, tokenUsage };
+            // Gate: if NO_TRADE is returned we still go to Stage 3 (final will carry NO_TRADE)
+            if (out.insufficientData === true) {
+                console.log(`⚠️ [STAGE 2] ${stock_symbol} - Insufficient data detected`);
+                return { ok: false, s2: out, tokenUsage };
+            }
+            console.log(`✅ [STAGE 2] ${stock_symbol} - Success (Tokens: ${tokenUsage.total_tokens})`);
+            return { ok: true, s2: out, tokenUsage };
+        } catch (error) {
+            console.error(`❌ [STAGE 2] ${stock_symbol} - FAILED`);
+            console.error(`❌ [STAGE 2] Error message: ${error.message}`);
+            console.error(`❌ [STAGE 2] Error stack: ${error.stack}`);
+            if (error.response) {
+                console.error(`❌ [STAGE 2] OpenAI Response Status: ${error.response.status}`);
+                console.error(`❌ [STAGE 2] OpenAI Response Data:`, JSON.stringify(error.response.data, null, 2));
+            }
+            throw error;
         }
-        return { ok: true, s2: out, tokenUsage };
     }
 
 
@@ -2200,36 +2298,48 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
      * Combines MARKET DATA + S1 + S2 + sentimentContext
      */
     async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode = 'cricket' }) {
-        const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode });
-        const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
+        try {
+            const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode });
+            const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
 
-        console.log('🛫 Stage 3: Finalize - Calling OpenAI API...',JSON.stringify(msgs));
-        const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
+            console.log(`🛫 [STAGE 3] ${stock_symbol} - Calling OpenAI API...`);
+            const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
 
-        // 🧪 DEBUG: Write Stage 3 output to file for inspection
-        // try {
-        //     const fs = await import('fs/promises');
-        //     const path = await import('path');
-        //     const debugDir = path.join(process.cwd(), 'debug-logs');
-        //     await fs.mkdir(debugDir, { recursive: true });
+            // 🧪 DEBUG: Write Stage 3 output to file for inspection
+            // try {
+            //     const fs = await import('fs/promises');
+            //     const path = await import('path');
+            //     const debugDir = path.join(process.cwd(), 'debug-logs');
+            //     await fs.mkdir(debugDir, { recursive: true });
 
-        //     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        //     const filename = `stage3-${stock_symbol}-${timestamp}.json`;
-        //     const filepath = path.join(debugDir, filename);
+            //     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            //     const filename = `stage3-${stock_symbol}-${timestamp}.json`;
+            //     const filepath = path.join(debugDir, filename);
 
-        //     await fs.writeFile(filepath, JSON.stringify({
-        //         stock_symbol,
-        //         timestamp: new Date().toISOString(),
-        //         output: out,
-        //         tokenUsage
-        //     }, null, 2));
+            //     await fs.writeFile(filepath, JSON.stringify({
+            //         stock_symbol,
+            //         timestamp: new Date().toISOString(),
+            //         output: out,
+            //         tokenUsage
+            //     }, null, 2));
 
-        //     console.log(`📝 [DEBUG] Stage 3 output written to: ${filepath}`);
-        // } catch (err) {
-        //     console.error('❌ [DEBUG] Failed to write Stage 3 output:', err.message);
-        // }
+            //     console.log(`📝 [DEBUG] Stage 3 output written to: ${filepath}`);
+            // } catch (err) {
+            //     console.error('❌ [DEBUG] Failed to write Stage 3 output:', err.message);
+            // }
 
-        return { data: out, tokenUsage };
+            console.log(`✅ [STAGE 3] ${stock_symbol} - Success (Tokens: ${tokenUsage.total_tokens})`);
+            return { data: out, tokenUsage };
+        } catch (error) {
+            console.error(`❌ [STAGE 3] ${stock_symbol} - FAILED`);
+            console.error(`❌ [STAGE 3] Error message: ${error.message}`);
+            console.error(`❌ [STAGE 3] Error stack: ${error.stack}`);
+            if (error.response) {
+                console.error(`❌ [STAGE 3] OpenAI Response Status: ${error.response.status}`);
+                console.error(`❌ [STAGE 3] OpenAI Response Data:`, JSON.stringify(error.response.data, null, 2));
+            }
+            throw error;
+        }
     }
 
 
@@ -2239,6 +2349,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
      */
     async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo, instrument_key }) {
         const t0 = Date.now();
+        console.log(`⏱️ [3-STAGE] Starting 3-stage analysis for ${stock_symbol}`);
 
         // Initialize token tracking
         const tokenTracking = {
@@ -2249,9 +2360,23 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         };
 
         // STAGE 1
+        const stage1Start = Date.now();
+        console.log(`⏱️ [STAGE 1] ${stock_symbol} - Starting preflight validation...`);
         const stage1Prompts = buildStage1Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
-        const s1r = await this.stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
-        tokenTracking.stage1 = s1r.tokenUsage;
+
+        let s1r;
+        let stage1Time = 0;
+        try {
+            s1r = await this.stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
+            tokenTracking.stage1 = s1r.tokenUsage;
+            stage1Time = Date.now() - stage1Start;
+            console.log(`⏱️ [STAGE 1] ${stock_symbol} - Completed in ${stage1Time}ms - Tokens: ${s1r.tokenUsage.total_tokens} (${s1r.ok ? 'PASS ✅' : 'FAIL ⚠️'})`);
+        } catch (error) {
+            stage1Time = Date.now() - stage1Start;
+            console.error(`⏱️ [STAGE 1] ${stock_symbol} - FAILED in ${stage1Time}ms`);
+            console.error(`❌ [STAGE 1 ERROR] ${stock_symbol}:`, error.message);
+            throw error;
+        }
 
         // Save Stage 1 fine-tune data
         if (instrument_key) {
@@ -2389,9 +2514,23 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         }
 
         // STAGE 2
+        const stage2Start = Date.now();
+        console.log(`⏱️ [STAGE 2] ${stock_symbol} - Starting strategy skeleton generation...`);
         const stage2Prompts = buildStage2Prompt({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
-        const s2r = await this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
-        tokenTracking.stage2 = s2r.tokenUsage;
+
+        let s2r;
+        let stage2Time = 0;
+        try {
+            s2r = await this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
+            tokenTracking.stage2 = s2r.tokenUsage;
+            stage2Time = Date.now() - stage2Start;
+            console.log(`⏱️ [STAGE 2] ${stock_symbol} - Completed in ${stage2Time}ms - Tokens: ${s2r.tokenUsage.total_tokens} (${s2r.ok ? 'PASS ✅' : 'FAIL ⚠️'})`);
+        } catch (error) {
+            stage2Time = Date.now() - stage2Start;
+            console.error(`⏱️ [STAGE 2] ${stock_symbol} - FAILED in ${stage2Time}ms`);
+            console.error(`❌ [STAGE 2 ERROR] ${stock_symbol}:`, error.message);
+            throw error;
+        }
 
         // Save Stage 2 fine-tune data
         if (instrument_key) {
@@ -2416,20 +2555,27 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
             }).catch(err => console.error('Failed to save stage2 fine-tune data:', err));
         }
         let s3result;
-        
-           let game_mode = "badminton";
-        
-        try{
-            s3result = await this.stage3Finalize({
-            stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2, instrument_key, game_mode
-        });
-        tokenTracking.stage3 = s3result.tokenUsage;
+        let stage3Time = 0;
 
-        }
-        catch(err){
-            console.error("Error in stage 3 fine-tune data saving:", err);
-        }
+        let game_mode = "badminton";
+
         // STAGE 3
+        const stage3Start = Date.now();
+        console.log(`⏱️ [STAGE 3] ${stock_symbol} - Starting final assembly with UI-friendly fields...`);
+
+        try {
+            s3result = await this.stage3Finalize({
+                stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2, instrument_key, game_mode
+            });
+            tokenTracking.stage3 = s3result.tokenUsage;
+            stage3Time = Date.now() - stage3Start;
+            console.log(`⏱️ [STAGE 3] ${stock_symbol} - Completed in ${stage3Time}ms - Tokens: ${s3result.tokenUsage.total_tokens} ✅`);
+        } catch (error) {
+            stage3Time = Date.now() - stage3Start;
+            console.error(`⏱️ [STAGE 3] ${stock_symbol} - FAILED in ${stage3Time}ms`);
+            console.error(`❌ [STAGE 3 ERROR] ${stock_symbol}:`, error.message);
+            throw error;
+        }
         
         // Generate Stage 3 prompts for fine-tune data
         const stage3Prompts = await buildStage3Prompt({
@@ -2487,6 +2633,14 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         // Add candle metadata for UI display
         finalOut.meta.candle_info = this.extractCandleMetadata(marketPayload);
 
+        const total3StageTime = Date.now() - t0;
+        console.log(`⏱️ [3-STAGE] ========== COMPLETE: ${stock_symbol} ==========`);
+        console.log(`⏱️ [3-STAGE] Total Time: ${total3StageTime}ms (${(total3StageTime / 1000).toFixed(2)}s)`);
+        console.log(`⏱️ [3-STAGE] Breakdown:`);
+        console.log(`   - Stage 1 (Preflight): ${stage1Time}ms`);
+        console.log(`   - Stage 2 (Skeleton): ${stage2Time}ms`);
+        console.log(`   - Stage 3 (Finalize): ${stage3Time}ms`);
+        console.log(`   - Other operations: ${total3StageTime - stage1Time - stage2Time - stage3Time}ms`);
         console.log(`📊 [TOKEN USAGE] ${stock_symbol} - Total: ${tokenTracking.total.total_tokens} (Input: ${tokenTracking.total.input_tokens}, Output: ${tokenTracking.total.output_tokens}, Cached: ${tokenTracking.total.cached_tokens})`);
 
         // Store usage data in separate collection for persistent cost tracking

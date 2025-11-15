@@ -12,6 +12,7 @@ import MarketHoursUtil from '../utils/marketHours.js';
 import Stock from '../models/stock.js';
 import { getCurrentPrice } from '../utils/stockDb.js';
 import priceCacheService from './priceCache.service.js';
+import pLimit from 'p-limit';
 
 class AgendaScheduledBulkAnalysisService {
     constructor() {
@@ -24,6 +25,13 @@ class AgendaScheduledBulkAnalysisService {
             failedRuns: 0,
             lastRunDate: null,
             lastRunSummary: null
+        };
+        // Rate limit tracking
+        this.rateLimitStats = {
+            totalRetries: 0,
+            rateLimitHits: 0,
+            lastRateLimitTime: null,
+            tokenUsageToday: 0
         };
     }
 
@@ -291,17 +299,41 @@ class AgendaScheduledBulkAnalysisService {
 
             console.log(`✅ [SCHEDULED BULK] Created ${recordsCreated} pending records, ${recordsToValidate} to validate, ${recordsSkipped} skipped`);
 
-            // 5. Analyze each stock for each user who has it in their watchlist
+            // 5. Analyze each stock for each user who has it in their watchlist - PARALLEL PROCESSING
             let analysisCount = 0;
             let successCount = 0;
             let failureCount = 0;
             let skippedCount = 0;
 
-            console.log(`🔄 [SCHEDULED BULK] Starting analysis for ${uniqueStocks.length} stocks...`);
+            // Configure concurrency limit based on OpenAI rate limits
+            // PERFORMANCE CALCULATION:
+            // - 1000 stocks × 12s avg = 12,000s total work
+            // - 12,000s ÷ 10 concurrent = ~1,200s = ~20 minutes (vs 3.3 hours sequential!)
+            //
+            // RATE LIMIT CONSIDERATIONS (OpenAI API):
+            // - Free Tier: 3 RPM (too slow, need Tier 1+)
+            // - Tier 1: 500 RPM, 30,000 TPM
+            // - Tier 2: 5,000 RPM, 450,000 TPM
+            // - Each analysis = 3 API calls (stage1, stage2, stage3)
+            // - Average tokens per analysis: ~6,000 tokens
+            //
+            // SAFE CONCURRENCY LIMITS BY TIER:
+            // - Tier 1: CONCURRENCY_LIMIT = 5  (15 RPM, ~30K TPM)
+            // - Tier 2: CONCURRENCY_LIMIT = 10 (30 RPM, ~60K TPM)
+            // - Tier 3: CONCURRENCY_LIMIT = 20 (60 RPM, ~120K TPM)
+            //
+            // With exponential backoff, the system will automatically slow down if rate limits are hit
+            // START WITH CONSERVATIVE LIMIT - Increase gradually based on your tier
+            const CONCURRENCY_LIMIT = 1;  // Safe for Tier 1, increase to 10 for Tier 2+
+            const limit = pLimit(CONCURRENCY_LIMIT);
+
+            console.log(`🔄 [SCHEDULED BULK] Starting PARALLEL analysis for ${uniqueStocks.length} stocks with ${CONCURRENCY_LIMIT} concurrent tasks...`);
+            const bulkStartTime = Date.now();
+
+            // Create analysis tasks for all stocks
+            const analysisTasks = [];
 
             for (const stock of uniqueStocks) {
-                console.log(`\n📊 [SCHEDULED BULK] Analyzing ${stock.trading_symbol} for ${stock.users.length} user(s)...`);
-
                 // Get price from our pre-fetched priceMap
                 const current_price = priceMap[stock.instrument_key];
                 if (!current_price || isNaN(current_price) || current_price <= 0) {
@@ -310,48 +342,63 @@ class AgendaScheduledBulkAnalysisService {
                     continue;
                 }
 
-                // Analyze this stock for each user who has it
-                // NOTE: Scheduled bulk analysis does NOT check user limits
-                // It pre-analyzes ALL watchlist stocks for ALL users during 4-5 PM window
-                // User limits only apply to manual analysis requests
+                // Create tasks for each user who has this stock
+                // NOTE: Each stock is only analyzed ONCE, but shared with all users who have it
+                // The first user triggers the analysis, subsequent users get cached results
                 for (const userId of stock.users) {
-                    analysisCount++;
+                    // Wrap each analysis in a limited concurrency task with retry logic
+                    const task = limit(async () => {
+                        analysisCount++;
+                        const taskStartTime = Date.now();
 
-                    try {
-                        const result = await aiAnalyzeService.analyzeStock({
-                            instrument_key: stock.instrument_key,
-                            stock_name: stock.name,
-                            stock_symbol: stock.trading_symbol,
-                            current_price: current_price,
-                            analysis_type: 'swing',
-                            user_id: userId.toString(),
-                            skipNotification: true,  // Skip notifications for scheduled bulk pre-analysis
-                            scheduled_release_time: releaseTime,  // Release at 5:00 PM
-                            skipIntraday: true , // Add buffer to intraday candles for end-of-day analysis
-                           
-                        });
+                        try {
+                            // Wrap API call with exponential backoff retry
+                            const result = await this.retryWithExponentialBackoff(async () => {
+                                return await aiAnalyzeService.analyzeStock({
+                                    instrument_key: stock.instrument_key,
+                                    stock_name: stock.name,
+                                    stock_symbol: stock.trading_symbol,
+                                    current_price: current_price,
+                                    analysis_type: 'swing',
+                                    user_id: userId.toString(),
+                                    skipNotification: true,  // Skip notifications for scheduled bulk pre-analysis
+                                    scheduled_release_time: releaseTime,  // Release at 5:00 PM
+                                    skipIntraday: true, // Add buffer to intraday candles for end-of-day analysis
+                                });
+                            });
 
-                        if (result.success) {
-                            if (result.cached) {
-                                skippedCount++;
-                                console.log(`  ⏭️  [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} already analyzed for user ${userId}`);
+                            const taskTime = Date.now() - taskStartTime;
+
+                            if (result.success) {
+                                if (result.cached) {
+                                    skippedCount++;
+                                    console.log(`  ⏭️  [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} cached for user (${taskTime}ms)`);
+                                } else {
+                                    successCount++;
+                                    console.log(`  ✅ [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} analyzed (${taskTime}ms)`);
+                                }
                             } else {
-                                successCount++;
-                                console.log(`  ✅ [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} analyzed for user ${userId}`);
+                                failureCount++;
+                                console.log(`  ❌ [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} failed - ${result.error || 'Unknown error'} (${taskTime}ms)`);
                             }
-                        } else {
+                        } catch (error) {
                             failureCount++;
-                            console.log(`  ❌ [${analysisCount}/${totalWatchlistItems}] ${stock.trading_symbol} failed for user ${userId} - ${result.error || 'Unknown error'}`);
+                            const taskTime = Date.now() - taskStartTime;
+                            console.error(`  ❌ [${analysisCount}/${totalWatchlistItems}] Error analyzing ${stock.trading_symbol}:`, error.message, `(${taskTime}ms)`);
                         }
-                    } catch (error) {
-                        failureCount++;
-                        console.error(`  ❌ [${analysisCount}/${totalWatchlistItems}] Error analyzing ${stock.trading_symbol} for user ${userId}:`, error.message);
-                    }
+                    });
 
-                    // Add delay between analyses to avoid rate limiting
-                    await this.delay(2000); // 2 second delay
+                    analysisTasks.push(task);
                 }
             }
+
+            // Execute all tasks in parallel with concurrency limit
+            console.log(`🚀 [SCHEDULED BULK] Executing ${analysisTasks.length} analysis tasks with ${CONCURRENCY_LIMIT} concurrent workers...`);
+            await Promise.all(analysisTasks);
+
+            const bulkTotalTime = Date.now() - bulkStartTime;
+            console.log(`⏱️ [SCHEDULED BULK] All analyses completed in ${bulkTotalTime}ms (${(bulkTotalTime / 1000 / 60).toFixed(2)} minutes)`);
+            console.log(`⏱️ [PERFORMANCE] Average time per analysis: ${(bulkTotalTime / analysisCount).toFixed(0)}ms`);
 
             // 4. Summary
             const summary = {
@@ -372,6 +419,8 @@ class AgendaScheduledBulkAnalysisService {
             console.log(`   ❌ Failed: ${failureCount}`);
             console.log(`   📈 Unique Stocks: ${uniqueStocks.length}`);
             console.log(`   👥 Total Users: ${users.length}`);
+            console.log(`   🔄 Rate Limit Retries: ${this.rateLimitStats.totalRetries}`);
+            console.log(`   ⚠️  Rate Limit Hits: ${this.rateLimitStats.rateLimitHits}`);
             console.log('='.repeat(60));
 
             // Update stats
@@ -394,6 +443,45 @@ class AgendaScheduledBulkAnalysisService {
      */
     delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Retry with exponential backoff for rate limit errors
+     * Based on OpenAI best practices
+     */
+    async retryWithExponentialBackoff(fn, maxRetries = 5, baseDelay = 1000) {
+        let retries = 0;
+
+        while (retries < maxRetries) {
+            try {
+                return await fn();
+            } catch (error) {
+                // Check if it's a rate limit error
+                const isRateLimitError =
+                    error.message?.includes('rate limit') ||
+                    error.message?.includes('429') ||
+                    error.status === 429;
+
+                if (!isRateLimitError || retries === maxRetries - 1) {
+                    // Not a rate limit error, or we've exhausted retries
+                    throw error;
+                }
+
+                // Calculate exponential backoff with jitter
+                const exponentialDelay = baseDelay * Math.pow(2, retries);
+                const jitter = Math.random() * 1000; // Add 0-1 second random jitter
+                const totalDelay = exponentialDelay + jitter;
+
+                this.rateLimitStats.totalRetries++;
+                this.rateLimitStats.rateLimitHits++;
+                this.rateLimitStats.lastRateLimitTime = new Date();
+
+                console.log(`⚠️ [RATE LIMIT] Hit rate limit, retry ${retries + 1}/${maxRetries} after ${totalDelay.toFixed(0)}ms`);
+
+                await this.delay(totalDelay);
+                retries++;
+            }
+        }
     }
 
     /**

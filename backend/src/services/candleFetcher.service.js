@@ -299,7 +299,7 @@ class CandleFetcherService {
                         timeframe,
                         params.fromDate,
                         params.toDate,
-                        isMarketOpen // Skip intraday if market is open
+                        tradeData.skipIntraday // Skip intraday if market is open
                     );
 
                     console.log(`📊 [SINGLE CALL] ${timeframe}: ${urls.length} URL(s) generated`);

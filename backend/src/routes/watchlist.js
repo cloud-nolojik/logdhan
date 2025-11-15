@@ -201,6 +201,11 @@ router.get('/', auth, async (req, res) => {
 
     // Get cache statistics for last update time
     const cacheStats = priceCacheService.getStats();
+    console.log('📊 Cache stats:', {
+      lastFetchTime: cacheStats.lastFetchTime,
+      cacheAge: cacheStats.cacheAge,
+      isFetching: cacheStats.isFetching
+    });
 
     res.json({
       data: watchlistWithPrices,

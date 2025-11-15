@@ -176,6 +176,8 @@ router.get('/profile', auth, async (req, res) => {
       lastName: user.lastName || null,
       email: user.email || null,
       mobileNumber: user.mobileNumber,
+      favorite_sport: user.favorite_sport || null,
+      hasConsented: user.hasConsented || false,
       isOnboarded: user.isOnboarded,
       experienceAssessmentComplete: user.assessmentHistory?.quickQuiz?.completed || false,
       deepDiagnosticComplete: user.assessmentHistory?.deepDiagnostic?.completed || false,
