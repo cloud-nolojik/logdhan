@@ -324,7 +324,7 @@ class AgendaScheduledBulkAnalysisService {
             //
             // With exponential backoff, the system will automatically slow down if rate limits are hit
             // START WITH CONSERVATIVE LIMIT - Increase gradually based on your tier
-            const CONCURRENCY_LIMIT = 1;  // Safe for Tier 1, increase to 10 for Tier 2+
+            const CONCURRENCY_LIMIT = 10;  // Safe for Tier 1, increase to 10 for Tier 2+
             const limit = pLimit(CONCURRENCY_LIMIT);
 
             console.log(`🔄 [SCHEDULED BULK] Starting PARALLEL analysis for ${uniqueStocks.length} stocks with ${CONCURRENCY_LIMIT} concurrent tasks...`);
