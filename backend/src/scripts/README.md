@@ -38,7 +38,7 @@ Check the migration results:
 mongo
 
 # Check stock counts
-use logdhan
+use swingsetups
 db.stocks.countDocuments({segment: "NSE_EQ"})
 db.stocks.countDocuments({segment: "BSE_EQ"})
 

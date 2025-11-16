@@ -24,7 +24,7 @@ We've created a convenient test script that triggers notifications and checks st
 
 ```bash
 # Navigate to backend directory
-cd /Users/nolojik/Documents/logdhan/backend
+cd /Users/nolojik/Documents/swingsetups/backend
 
 # Option 1: Pass auth token as argument
 node test-bulk-notification.js "your-auth-token-here"

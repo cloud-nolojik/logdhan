@@ -275,7 +275,7 @@ Graceful shutdown also implemented for both services.
 Use the existing test script for bulk notifications:
 
 ```bash
-cd /Users/nolojik/Documents/logdhan/backend
+cd /Users/nolojik/Documents/swingsetups/backend
 node test-bulk-notification.js
 ```
 

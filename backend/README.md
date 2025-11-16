@@ -38,7 +38,7 @@ Backend server for the Logdhan application, providing REST APIs for user authent
 1. Clone the repository:
 ```bash
 git clone https://github.com/yourusername/logdhan-backend.git
-cd logdhan-backend
+cd swingsetups-backend
 ```
 
 2. Install dependencies:

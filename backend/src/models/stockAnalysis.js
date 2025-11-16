@@ -745,6 +745,15 @@ stockAnalysisSchema.statics.isBulkAnalysisAllowed = async function() {
     return await MarketHoursUtil.isBulkAnalysisAllowed();
 };
 
+/**
+ * Calculate expiry time using common utility
+ * ALL analyses expire at 3:59 PM IST on NEXT trading day
+ * Stored in DB as UTC (10:29:59 AM UTC)
+ */
+stockAnalysisSchema.statics.getExpiryTime = async function() {
+    return await MarketHoursUtil.getValidUntilTime();
+};
+
 // Removed old canRunBulkAnalysis - now using upstoxMarketTimingService.canRunBulkAnalysis()
 
 stockAnalysisSchema.statics.getAnalysisStats = function() {

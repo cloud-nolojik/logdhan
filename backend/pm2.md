@@ -7,10 +7,10 @@
 pm2 start ecosystem.config.js
 
 # Start only backend
-pm2 start ecosystem.config.js --only logdhan-backend
+pm2 start ecosystem.config.js --only swingsetups-backend
 
 # Start only frontend  
-pm2 start ecosystem.config.js --only logdhan-frontend
+pm2 start ecosystem.config.js --only swingsetups-frontend
 
 # Start with specific environment
 pm2 start ecosystem.config.js --env production
@@ -27,14 +27,14 @@ pm2 list
 pm2 logs
 
 # Monitor specific app
-pm2 logs logdhan-backend
-pm2 logs logdhan-frontend
+pm2 logs swingsetups-backend
+pm2 logs swingsetups-frontend
 
 # Monitor with live dashboard
 pm2 monit
 
 # Show process details
-pm2 show logdhan-backend
+pm2 show swingsetups-backend
 ```
 
 ## 🔄 Management
@@ -44,22 +44,22 @@ pm2 show logdhan-backend
 pm2 restart ecosystem.config.js
 
 # Restart specific app
-pm2 restart logdhan-backend
+pm2 restart swingsetups-backend
 
 # Reload (zero-downtime restart)
-pm2 reload logdhan-backend
+pm2 reload swingsetups-backend
 
 # Stop all apps
 pm2 stop ecosystem.config.js
 
 # Stop specific app
-pm2 stop logdhan-backend
+pm2 stop swingsetups-backend
 
 # Delete all apps
 pm2 delete ecosystem.config.js
 
 # Delete specific app
-pm2 delete logdhan-backend
+pm2 delete swingsetups-backend
 ```
 
 ## 🔧 Configuration
@@ -127,7 +127,7 @@ pm2 ping
 pm2 list | grep -E "(memory|cpu)"
 
 # Detailed process info
-pm2 describe logdhan-backend
+pm2 describe swingsetups-backend
 ```
 
 ## ⚙️ Environment Variables
@@ -146,7 +146,7 @@ cp .env.example .env
 pm2 kill
 
 # Reset PM2 
-pm2 reset logdhan-backend
+pm2 reset swingsetups-backend
 
 # Update PM2
 npm install -g pm2@latest

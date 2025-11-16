@@ -46,7 +46,7 @@ BACKEND_URL=https://yourdomain.com
 
 ### **Step 1: Install Dependencies**
 ```bash
-cd /path/to/logdhan/backend
+cd /path/to/swingsetups/backend
 npm install rss-parser
 ```
 

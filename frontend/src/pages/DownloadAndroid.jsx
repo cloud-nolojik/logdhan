@@ -29,7 +29,7 @@ export default function DownloadAndroid() {
           
           <div className="space-y-4">
             <a
-              href="https://play.google.com/store/apps/details?id=com.nolojik.logdhan"
+              href="https://play.google.com/store/apps/details?id=swingsetups"
               target="_blank"
               rel="noopener noreferrer"
               className="block bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold px-8 py-4 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-105"
