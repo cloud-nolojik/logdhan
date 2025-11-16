@@ -686,10 +686,10 @@ class CandleFetcherService {
      * @param {string} toDate - End date (YYYY-MM-DD or Date object)
      * @returns {Array} - Array of candle objects
      */
-    async fetchCandlesFromAPI(instrumentKey, interval, fromDate, toDate,skipIntraday = false) {
-       
+    async fetchCandlesFromAPI(instrumentKey, interval, fromDate, toDate, skipIntraday = false) {
+
         try {
-            
+
             // Map Upstox interval to standard timeframe for URL builder
             const intervalToTimeframeMap = {
                 '15minute': '15m',
@@ -702,47 +702,110 @@ class CandleFetcherService {
                 throw new Error(`Unsupported interval: ${interval}. Expected one of: 15minute, 60minute, day`);
             }
 
-            const urls = await this.buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate,skipIntraday);
+            console.log(`📦 [CHUNKING] Checking if ${timeframe} requires chunking for date range: ${fromDate} to ${toDate}`);
+
+            // Convert string dates to Date objects if needed
+            const fromDateObj = typeof fromDate === 'string' ? new Date(fromDate) : fromDate;
+            const toDateObj = typeof toDate === 'string' ? new Date(toDate) : toDate;
+
+            // Split date range into chunks based on Upstox API limits
+            const chunks = await dateCalculator.splitDateRangeIntoChunks(timeframe, fromDateObj, toDateObj);
             let allCandles = [];
+            let totalUrls = 0;
 
-            // Fetch data from each URL
-            for (let i = 0; i < urls.length; i++) {
-                const url = urls[i];
-                const urlType = url.includes('/intraday/') ? 'INTRADAY' : 'HISTORICAL';
+            // Check if we need to use chunks (multiple API calls due to Upstox limits)
+            if (chunks && chunks.length > 1) {
+                console.log(`📦 [CHUNKS] ${timeframe} requires ${chunks.length} API calls due to Upstox limits`);
 
-              
-                const startTime = Date.now();
-                const response = await this.fetchCandleData(url);
-                const duration = Date.now() - startTime;
+                // Fetch data for each chunk
+                for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+                    const chunk = chunks[chunkIndex];
+                    console.log(`📦 [CHUNK ${chunkIndex + 1}/${chunks.length}] Fetching: ${chunk.fromDate} to ${chunk.toDate}`);
 
-             
-                if (!response) {
-                    console.log(`⚠️  [API FETCH ${i + 1}/${urls.length}] Response is null or undefined`);
-                    continue;
+                    const chunkUrls = await this.buildHistoricalUrlFromDates(
+                        instrumentKey,
+                        timeframe,
+                        chunk.fromDate,
+                        chunk.toDate,
+                        skipIntraday
+                    );
+
+                    console.log(`📊 [CHUNK ${chunkIndex + 1}/${chunks.length}] Generated ${chunkUrls.length} URL(s)`);
+                    totalUrls += chunkUrls.length;
+
+                    // Fetch data from each URL in this chunk
+                    for (let urlIndex = 0; urlIndex < chunkUrls.length; urlIndex++) {
+                        const url = chunkUrls[urlIndex];
+                        const urlType = url.includes('/intraday/') ? 'INTRADAY' : 'HISTORICAL';
+
+                        console.log(`📡 [FETCH] Chunk ${chunkIndex + 1}/${chunks.length}, URL ${urlIndex + 1}/${chunkUrls.length} [${urlType}]`);
+
+                        const startTime = Date.now();
+                        const response = await this.fetchCandleData(url);
+                        const duration = Date.now() - startTime;
+
+                        if (!response || !response.data || !response.data.candles) {
+                            console.log(`⚠️  [API FETCH] Response invalid, skipping...`);
+                            continue;
+                        }
+
+                        const candles = response.data.candles;
+                        if (candles.length === 0) {
+                            console.log(`⚠️  [API FETCH] API returned 0 candles`);
+                            continue;
+                        }
+
+                        console.log(`✅ [FETCH] Received ${candles.length} candles in ${duration}ms`);
+
+                        // Show sample of raw data
+                        if (candles.length > 1) {
+                            console.log(`📋 [SAMPLE] Last candle: [${candles[candles.length - 1].join(', ')}]`);
+                        }
+
+                        // Add to collection
+                        allCandles.push(...candles);
+                    }
                 }
+            } else {
+                // Single API call is sufficient (no chunking needed)
+                console.log(`📊 [SINGLE CALL] ${timeframe} does not require chunking`);
 
-                if (!response.data) {
-                     continue;
+                const urls = await this.buildHistoricalUrlFromDates(instrumentKey, timeframe, fromDate, toDate, skipIntraday);
+                totalUrls = urls.length;
+
+                // Fetch data from each URL
+                for (let i = 0; i < urls.length; i++) {
+                    const url = urls[i];
+                    const urlType = url.includes('/intraday/') ? 'INTRADAY' : 'HISTORICAL';
+
+                    console.log(`📡 [FETCH] URL ${i + 1}/${urls.length} [${urlType}]`);
+
+                    const startTime = Date.now();
+                    const response = await this.fetchCandleData(url);
+                    const duration = Date.now() - startTime;
+
+                    if (!response || !response.data || !response.data.candles) {
+                        console.log(`⚠️  [API FETCH ${i + 1}/${urls.length}] Response invalid, skipping...`);
+                        continue;
+                    }
+
+                    const candles = response.data.candles;
+                    if (candles.length === 0) {
+                        console.log(`⚠️  [API FETCH ${i + 1}/${urls.length}] API returned 0 candles`);
+                        console.log(`   └─ Possible reasons: Market closed, no trading data, weekend/holiday`);
+                        continue;
+                    }
+
+                    console.log(`✅ [FETCH] Received ${candles.length} candles in ${duration}ms`);
+
+                    // Show sample of raw data
+                    if (candles.length > 1) {
+                        console.log(`📋 [SAMPLE] Last candle: [${candles[candles.length - 1].join(', ')}]`);
+                    }
+
+                    // Add to collection
+                    allCandles.push(...candles);
                 }
-
-                if (!response.data.candles) {
-                     continue;
-                }
-
-                const candles = response.data.candles;
-                if (candles.length === 0) {
-                    console.log(`⚠️  [API FETCH ${i + 1}/${urls.length}] API returned 0 candles`);
-                    console.log(`   └─ Possible reasons: Market closed, no trading data, weekend/holiday`);
-                    continue;
-                }
-
-                // Show sample of raw data
-                if (candles.length > 1) {
-                    console.log(`📋 [SAMPLE] Last candle: [${candles[candles.length - 1].join(', ')}]`);
-                }
-
-                // Add to collection
-                allCandles.push(...candles);
             }
             if (allCandles.length === 0) {
                 console.log(`\n❌ [API FETCH] No candles collected from any URL`);
@@ -773,7 +836,8 @@ class CandleFetcherService {
             const formattedCandles = formatCandles(sortedCandles);
 
             console.log(`✅ [API FETCH] Complete`);
-            console.log(`   ├─ Total URLs fetched: ${urls.length}`);
+            console.log(`   ├─ Total URLs fetched: ${totalUrls}`);
+            console.log(`   ├─ Chunks used: ${chunks ? chunks.length : 1}`);
             console.log(`   ├─ Raw candles collected: ${allCandles.length}`);
             console.log(`   ├─ After deduplication: ${formattedCandles.length}`);
             console.log(`   ├─ First timestamp: ${formattedCandles[0].timestamp}`);
