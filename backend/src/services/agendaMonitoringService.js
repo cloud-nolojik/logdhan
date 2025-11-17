@@ -387,6 +387,10 @@ class AgendaMonitoringService {
                     let successfulNotifications = 0;
                     let failedNotifications = 0;
 
+                    // Get the strategy object from analysis
+                    const strategy = (analysis.analysis_data?.strategies || []).find(s => s.id === strategyId);
+                    const strategyName = strategy?.name || strategy?.title || strategyId || 'Unnamed Strategy';
+
                     for (const userSubscription of subscription.subscribed_users) {
                         try {
                             const userId = userSubscription.user_id;
@@ -419,7 +423,6 @@ class AgendaMonitoringService {
                             // Prepare notification data
                             const userName = user.name || user.email?.split('@')[0] || 'User';
                             const stockSymbol = analysis.stock_symbol || analysis.stock_name;
-                            const strategyName = strategy.name || 'Unnamed Strategy';
 
                             // Create in-app notification
                             await Notification.createNotification({
