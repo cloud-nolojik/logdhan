@@ -363,7 +363,7 @@ class AgendaScheduledBulkAnalysisService {
                                     user_id: userId.toString(),
                                     skipNotification: true,  // Skip notifications for scheduled bulk pre-analysis
                                     scheduled_release_time: releaseTime,  // Release at 5:00 PM
-                                    skipIntraday: true, // Add buffer to intraday candles for end-of-day analysis
+                                    skipIntraday: false, // Add buffer to intraday candles for end-of-day analysis
                                 });
                             });
 

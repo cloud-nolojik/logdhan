@@ -381,15 +381,32 @@ class CandleFetcherService {
 
         
 
-        // Get effective trading time for this timeframe
+        // Get effective trading time for this timeframe (in IST)
         const effectiveTime = await MarketHoursUtil.getEffectiveTradingTime(new Date(), timeframe);
         const effectiveDate = MarketHoursUtil.normalizeDateToMidnight(effectiveTime);
         const toDateNormalized = MarketHoursUtil.normalizeDateToMidnight(new Date(toDate));
-        const today = MarketHoursUtil.normalizeDateToMidnight(new Date());
+        // Convert current time to IST before normalizing to avoid UTC/IST date mismatch
+        const todayIST = MarketHoursUtil.toIST(new Date());
+        const today = MarketHoursUtil.normalizeDateToMidnight(todayIST);
 
         // Check if toDate matches effective trading date (current trading day)
         const isCurrentTradingDay = toDateNormalized.getTime() === effectiveDate.getTime();
         const toDateIsToday = toDateNormalized.getTime() === today.getTime();
+
+        // Debug logging for intraday URL decision
+        console.log(`   🔍 [INTRADAY DEBUG] Decision variables:`);
+        console.log(`      1. effectiveTime (IST): ${effectiveTime.toISOString()}`);
+        console.log(`      2. effectiveDate (midnight): ${effectiveDate.toISOString()}`);
+        console.log(`      3. toDate (input): ${toDate}`);
+        console.log(`      4. toDateNormalized: ${toDateNormalized.toISOString()}`);
+        console.log(`      5. todayIST: ${todayIST.toISOString()}`);
+        console.log(`      6. today (midnight): ${today.toISOString()}`);
+        console.log(`      7. isCurrentTradingDay: ${isCurrentTradingDay} (${toDateNormalized.getTime()} === ${effectiveDate.getTime()})`);
+        console.log(`      8. toDateIsToday: ${toDateIsToday} (${toDateNormalized.getTime()} === ${today.getTime()})`);
+        console.log(`      9. skipIntraday: ${skipIntraday}`);
+        console.log(`      10. !skipIntraday: ${!skipIntraday}`);
+        console.log(`      11. (isCurrentTradingDay || toDateIsToday): ${isCurrentTradingDay || toDateIsToday}`);
+        console.log(`      12. Final condition result: ${(isCurrentTradingDay || toDateIsToday) && !skipIntraday}`);
 
         const urls = [];
 
