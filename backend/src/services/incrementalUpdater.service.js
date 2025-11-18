@@ -55,16 +55,22 @@ class IncrementalUpdaterService {
                 // Get last bar time from staleInfo
                 const lastBarTime = new Date(staleInfo.last_bar_time);
 
-                // Calculate fromDate: next day after last bar
+                // Calculate fromDate: For intraday timeframes (15m, 1h), use the same day as last bar
+                // For daily timeframe, use next day
+                // The API will return candles AFTER the last bar timestamp
                 const fromDateObj = new Date(lastBarTime);
-                fromDateObj.setDate(fromDateObj.getDate() + 1); // Add 1 day
+                if (timeframe === '1d') {
+                    // For daily, move to next day
+                    fromDateObj.setDate(fromDateObj.getDate() + 1);
+                }
+                // For intraday (15m, 1h), keep the same day so we don't miss candles from that day
 
                 const fromDate = fromDateObj.toISOString().split('T')[0];
                 const toDate = now.toISOString().split('T')[0];
 
                 console.log(`📍 [${timeframe}] Date calculation:`);
                 console.log(`   ├─ Last bar time: ${lastBarTime.toISOString()}`);
-                console.log(`   ├─ From date (next day): ${fromDate}`);
+                console.log(`   ├─ From date: ${fromDate}`);
                 console.log(`   ├─ To date (today): ${toDate}`);
                 console.log(`   └─ Existing bars in DB: ${dbRecord?.candle_data?.length || 0}\n`);
 
@@ -156,10 +162,17 @@ class IncrementalUpdaterService {
                             console.log(`✅ [${timeframe}] SUCCESS - Using existing data\n`);
                         }
                     } else {
-                        console.log(`⚠️  [${timeframe}] API returned 0 candles (market closed or no data)`);
-                        updatedData[timeframe] = dbRecord?.candle_data || [];
-                        successCount++;
-                        console.log(`✅ [${timeframe}] SUCCESS - Using existing DB data\n`);
+                        // Data is stale but API returned 0 candles - this is an error condition
+                        console.log(`❌ [${timeframe}] API returned 0 candles for STALE data!`);
+                        console.log(`   ├─ Last bar time: ${lastBarTime.toISOString()}`);
+                        console.log(`   ├─ Requested range: ${fromDate} to ${toDate}`);
+                        console.log(`   └─ This indicates stale data that cannot be refreshed`);
+                        throw new Error(
+                            `STALE DATA ERROR: ${timeframe} timeframe is stale (last bar: ${lastBarTime.toISOString()}) ` +
+                            `but API returned 0 candles for range ${fromDate} to ${toDate}. ` +
+                            `Cannot proceed with stale data. This may indicate: ` +
+                            `market closure, data unavailability, or incomplete historical data.`
+                        );
                     }
                 } catch (apiError) {
                     console.log(`\n❌ [${timeframe}] ERROR during API fetch or merge!`);
@@ -167,7 +180,14 @@ class IncrementalUpdaterService {
                     if (apiError.stack) {
                         console.error(`   └─ Stack trace: ${apiError.stack.split('\n')[0]}\n`);
                     }
-                    // On error, use existing DB data
+
+                    // If this is a STALE DATA ERROR, re-throw it to stop the entire operation
+                    if (apiError.message.includes('STALE DATA ERROR')) {
+                        console.log(`🛑 [${timeframe}] STOPPING - Cannot proceed with stale data\n`);
+                        throw apiError;
+                    }
+
+                    // For other errors, use existing DB data as fallback
                     updatedData[timeframe] = dbRecord?.candle_data || [];
                     errorCount++;
                     console.log(`⚠️  [${timeframe}] FALLBACK - Using existing DB data\n`);

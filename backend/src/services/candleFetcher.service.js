@@ -392,14 +392,18 @@ class CandleFetcherService {
         const toDateIsToday = toDateNormalized.getTime() === today.getTime();
 
         const urls = [];
-         if ((isCurrentTradingDay || toDateIsToday) && !skipIntraday) {
-            let intradayUrl = this.buildIntradayUrl(instrumentKey, timeframe);
-            console.log(`   └─ Intraday (today): ${intradayUrl}`);
-           
-        }
+
+        // Always add historical URL first (for past data)
         const historicalUrl = `https://api.upstox.com/v3/historical-candle/${instrumentKey}/${mapping.unit}/${mapping.interval}/${toDate}/${fromDate}`;
-       
-        urls.push(historicalUrl);  
+        urls.push(historicalUrl);
+        console.log(`   ├─ Historical URL: ${historicalUrl}`);
+
+        // Add intraday URL if toDate is current trading day (for today's live data)
+        if ((isCurrentTradingDay || toDateIsToday) && !skipIntraday) {
+            let intradayUrl = this.buildIntradayUrl(instrumentKey, timeframe);
+            urls.push(intradayUrl);
+            console.log(`   └─ Intraday URL: ${intradayUrl}`);
+        }  
 
 
         console.log("buildHistoricalUrlFromDates",JSON.stringify(urls));
