@@ -132,8 +132,9 @@ router.get('/', auth, async (req, res) => {
             monitoring_status: 'active' // Only active monitoring jobs
           }).lean();
 
-          // Calculate AI confidence from strategies
+          // Calculate AI confidence from strategies and get strategy type
           let ai_confidence = null;
+          let strategy_type = null; // BUY, SELL, HOLD, NO_TRADE
           if (analysis && analysis.analysis_data && analysis.analysis_data.strategies) {
             const strategies = analysis.analysis_data.strategies;
             if (strategies.length > 0) {
@@ -144,6 +145,10 @@ router.get('/', auth, async (req, res) => {
               if (confidences.length > 0) {
                 ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
               }
+
+              // Get the strategy type from the first/best strategy
+              // Strategies are typically sorted by confidence, so first one is best
+              strategy_type = strategies[0]?.type || null;
             }
           }
 
@@ -158,6 +163,7 @@ router.get('/', auth, async (req, res) => {
             has_analysis: !!analysis,
             analysis_status: analysis?.status || null,
             ai_confidence,
+            strategy_type, // BUY, SELL, HOLD, NO_TRADE
             is_monitoring: !!activeMonitoring,
             monitoring_strategy_id: activeMonitoring?.strategy_id || null
           };
@@ -173,6 +179,7 @@ router.get('/', auth, async (req, res) => {
             has_analysis: false,
             analysis_status: null,
             ai_confidence: null,
+            strategy_type: null,
             is_monitoring: false,
             monitoring_strategy_id: null
           };
