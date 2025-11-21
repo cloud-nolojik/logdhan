@@ -226,8 +226,8 @@ class AgendaScheduledBulkAnalysisService {
             const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
             console.log(`✅ [SCHEDULED BULK] Fetched ${Object.keys(priceMap).length} prices`);
 
-            // Set release time to 5:00 PM IST today
-            const releaseTime = new Date();
+            // Set release time to 5:00 PM IST today (UTC stored)
+            const releaseTime = MarketHoursUtil.getScheduledReleaseTime();
 
             // 4. Check existing strategies and decide: VALIDATE or CREATE pending record
             console.log(`📝 [SCHEDULED BULK] Checking existing strategies for ${uniqueStocks.length} stocks...`);

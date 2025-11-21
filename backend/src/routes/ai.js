@@ -61,7 +61,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */ async 
         // During downtime, NO manual analysis is allowed - bulk processing is running
         const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
         const now = new Date();
-        const downtimeCheck = MarketHoursUtil.isDowntimeWindow(now);
+        const downtimeCheck = await MarketHoursUtil.isDowntimeWindow(now);
 
         if (downtimeCheck.isDowntime) {
             console.log(`❌ [DOWNTIME] Manual analysis blocked - bulk processing window (4:00-5:00 PM IST)`);

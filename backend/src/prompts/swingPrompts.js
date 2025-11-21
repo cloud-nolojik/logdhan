@@ -209,7 +209,7 @@ OUTPUT:
 //    - Conditions: The existing strategy structure still holds (entry/stop/target consistent, RR acceptable, no obvious invalidation).  
 //    - Action: KEEP entry, stopLoss, target, type, alignment, archetype EXACTLY.  
 //    - Recompute runtime, order_gate, money_example, suggested_qty from Current Price.  
-//    - Prefix title with: "[Revalidated] " (include the space after the bracket).
+//    - Prefix title with: "[Still Valid] " (include the space after the bracket).
 
 // 2) **ADJUST (Minimal change)**  
 //    - Conditions: Minor update required (e.g., RR broken, entry > stopLoss for BUY, invalid levels).  
@@ -499,7 +499,7 @@ OUTPUT:
 //     "type": "SELL",
 //     "archetype": "breakout",
 //     "alignment": "with_trend",
-//     "title": "[Revalidated] With-trend breakdown below 431 toward 416.51",
+//     "title": "[Still Valid] With-trend breakdown below 431 toward 416.51",
 //     "confidence": 0.62,
 //     "why_best": "Bearish trend, negative news tone, and clean breakdown plan with 1.75 risk-reward.",
 //     "entryType": "stop",
@@ -777,7 +777,7 @@ OUTPUT:
 // □ All required fields present per schema v1.4
 // □ No template text (<...> or {{...}})
 // □ Real numbers from provided data only
-// □ Title has correct prefix: [Revalidated]/[Adjusted]/[Retired] if applicable
+// □ Title has correct prefix: [Still Valid]/[Adjusted]/[Retired] if applicable
 // □ Sport language consistent if game_mode active
 // □ performance_hints populated with actual factors at ROOT level
 // □ Triggers and invalidations copied correctly from STAGE-2
@@ -968,7 +968,7 @@ OUTPUT:
 // KEEP actions:
 // - Preserve type, entry, stopLoss, target, archetype, alignment EXACTLY.
 // - Recompute runtime, order_gate, money_example, suggested_qty using current data.
-// - Prefix strategies[0].title with "[Revalidated] " (with trailing space).
+// - Prefix strategies[0].title with "[Still Valid] " (with trailing space).
 
 // 2) ADJUST (Minimal Change)
 // Use ADJUST when:
@@ -1196,7 +1196,7 @@ OUTPUT:
 //     "type": "BUY"|"SELL"|"NO_TRADE",
 //     "archetype": "breakout"|"pullback"|"trend-follow"|"mean-reversion"|"range-fade",
 //     "alignment": "with_trend"|"counter_trend"|"neutral",
-//     "title": "[Revalidated|Adjusted|Retired] strategy title",
+//     "title": "[Still Valid|Adjusted|Retired] strategy title",
 //     "confidence": <number 0-1>,
 //     "why_best": "Short explanation",
 //     "entryType": "limit"|"market"|"range"|"stop"|"stop-limit",
@@ -1464,7 +1464,7 @@ KEEP actions:
 • Preserve all price regions (middle, upper, lower) exactly as in the existing structure.
 • Preserve type, alignment, and archetype.
 • Recompute runtime, order_gate, money_example, and suggested_qty only.
-• Prefix the title with “[Revalidated] ”.
+• Prefix the title with “[Still Valid] ”.
 
 2) ADJUST (Minimal Modification)
 Use ADJUST when:

@@ -8,6 +8,7 @@ import { Subscription } from '../models/subscription.js';
 import { getCurrentPrice } from '../utils/stockDb.js';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
 import { messagingService } from '../services/messaging/messaging.service.js';
+import MarketHoursUtil from '../utils/marketHours.js';
 
 const router = express.Router();
 
@@ -1109,7 +1110,7 @@ async function processSessionBasedBulkAnalysis(session) {
                         user_id:session.user_id,
                         // user_id: removed for bulk analysis to make results shareable across users
                         forceFresh: false,
-                        scheduled_release_time:new Date(),
+                        scheduled_release_time: MarketHoursUtil.getScheduledReleaseTime(),
                         skipNotification: true  // Skip per-stock notifications in bulk analysis
                     });
 

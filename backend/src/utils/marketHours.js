@@ -332,7 +332,8 @@ class MarketHoursUtil {
             console.log(`📅 [VALID UNTIL] Calculating for: ${istNow.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
 
             // Check if today is a trading day
-            const isTodayTradingDay = await this.isTradingDay(istNow);
+            // Use the raw timestamp here to avoid double timezone conversion
+            const isTodayTradingDay = await this.isTradingDay(now);
 
             // Market close time: 3:59:59 PM IST
             const marketCloseHour = 15;
@@ -352,7 +353,7 @@ class MarketHoursUtil {
             } else {
                 // Otherwise, valid until next trading day's close
                 console.log(`📅 [VALID UNTIL] ${!isTodayTradingDay ? 'Not a trading day' : 'Market already closed'} - valid until next trading day close`);
-                validUntilDateIST = await this.getNextTradingDay(istNow);
+                validUntilDateIST = await this.getNextTradingDay(now);
             }
 
             // Extract IST date components
@@ -361,8 +362,13 @@ class MarketHoursUtil {
             const day = validUntilDateIST.getDate();
 
             // Create UTC date for 3:59:59 PM IST (10:29:59 AM UTC)
-            // IST is UTC+5:30, so 3:59:59 PM IST = 10:29:59 AM UTC
-            const validUntilUTC = new Date(Date.UTC(year, month, day, 10, 29, 59, 0));
+            const validUntilUTC = this.getUtcForIstTime({
+                baseDate: validUntilDateIST,
+                hour: 15,
+                minute: 59,
+                second: 59,
+                millisecond: 0
+            });
 
             console.log(`📅 [VALID UNTIL] Valid until IST: ${validUntilUTC.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})} (should be 3:59:59 PM IST)`);
             console.log(`📅 [VALID UNTIL] Valid until UTC: ${validUntilUTC.toISOString()} (stored in DB)`);
@@ -375,6 +381,51 @@ class MarketHoursUtil {
             fallback.setHours(fallback.getHours() + 24);
             return fallback;
         }
+    }
+
+    /**
+     * Convert an IST clock time on a given calendar day to UTC
+     * @param {Object} params
+     * @param {Date} [params.baseDate=new Date()] - Reference date (any timezone)
+     * @param {number} [params.hour=0] - IST hour (0-23)
+     * @param {number} [params.minute=0] - IST minute
+     * @param {number} [params.second=0] - IST second
+     * @param {number} [params.millisecond=0] - IST millisecond
+     * @returns {Date} UTC Date matching the IST clock time on that calendar day
+     */
+    static getUtcForIstTime({
+        baseDate = new Date(),
+        hour = 0,
+        minute = 0,
+        second = 0,
+        millisecond = 0
+    } = {}) {
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+        // Shift into IST day to read the correct calendar components regardless of server timezone
+        const istDate = new Date(baseDate.getTime() + IST_OFFSET_MS);
+        const year = istDate.getUTCFullYear();
+        const month = istDate.getUTCMonth();
+        const day = istDate.getUTCDate();
+
+        const utcMs = Date.UTC(year, month, day, hour, minute, second, millisecond) - IST_OFFSET_MS;
+        return new Date(utcMs);
+    }
+
+    /**
+     * Get UTC timestamp for 5:00 PM IST on the provided date (defaults to today)
+     * Used to schedule when bulk analyses become visible to users
+     * @param {Date} baseDate - Reference date (any timezone)
+     * @returns {Date} UTC Date corresponding to 5:00 PM IST
+     */
+    static getScheduledReleaseTime(baseDate = new Date()) {
+        return this.getUtcForIstTime({
+            baseDate,
+            hour: 17,
+            minute: 0,
+            second: 0,
+            millisecond: 0
+        });
     }
 
     /**
@@ -494,12 +545,12 @@ class MarketHoursUtil {
                         validUntil: nextTradingDayEnd.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})
                     };
                 } else {
-                    // Current day is holiday
+                    // Current day is holiday - allow bulk all day (outside scheduled window)
                     const nextTradingDay = await this.getNextTradingDay(currentDate);
                     return {
-                        allowed: false,
-                        reason: "holiday",
-                        nextAllowed: `${nextTradingDay.toLocaleDateString('en-IN', {timeZone: 'Asia/Kolkata'})} 5.00 PM IST`
+                        allowed: true,
+                        reason: "holiday_session",
+                        validUntil: `${nextTradingDay.toLocaleDateString('en-IN', {timeZone: 'Asia/Kolkata'})} 8:59 AM IST`
                     };
                 }
             }
@@ -527,21 +578,31 @@ class MarketHoursUtil {
      * @param {Date} now - Current date (defaults to now)
      * @returns {{isDowntime: boolean, message?: string, nextAllowed?: string}}
      */
-    static isDowntimeWindow(now = new Date()) {
-        const istNow = this.toIST(now);
-        const hours = istNow.getHours();
-        const minutes = hours * 60 + istNow.getMinutes();
+    static async isDowntimeWindow(now = new Date()) {
+        try {
+            const istNow = this.toIST(now);
+            const minutes = istNow.getHours() * 60 + istNow.getMinutes();
 
-        // Downtime: 4:00 PM - 5:00 PM IST (16:00 - 17:00)
-        if (minutes >= 16 * 60 && minutes < 17 * 60) {
-            return {
-                isDowntime: true,
-                message: 'Analysis is temporarily unavailable (4:00-5:00 PM IST). Bulk processing is running. Please try again after 5:00 PM.',
-                nextAllowed: '5:00 PM IST'
-            };
+            // Downtime: 4:00 PM - 5:00 PM IST (16:00 - 17:00)
+            if (minutes >= 16 * 60 && minutes < 17 * 60) {
+                // Only block on trading days
+                const isTradingDay = await this.isTradingDay(istNow);
+                if (!isTradingDay) {
+                    return { isDowntime: false };
+                }
+
+                return {
+                    isDowntime: true,
+                    message: 'Analysis is temporarily unavailable (4:00-5:00 PM IST). Bulk processing is running. Please try again after 5:00 PM.',
+                    nextAllowed: '5:00 PM IST'
+                };
+            }
+
+            return { isDowntime: false };
+        } catch (error) {
+            console.error('❌ [DOWNTIME] Error checking downtime window:', error);
+            return { isDowntime: false };
         }
-
-        return { isDowntime: false };
     }
 
     /**
@@ -839,7 +900,7 @@ class MarketHoursUtil {
                 const nextTradingDayStr = this.formatDateIST(nextTradingDay);
 
                 // Check if we're in downtime (4:00-5:00 PM)
-                const downtimeCheck = this.isDowntimeWindow(now);
+                const downtimeCheck = await this.isDowntimeWindow(now);
 
                 let userMessage;
 
