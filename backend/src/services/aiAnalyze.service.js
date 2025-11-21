@@ -213,25 +213,21 @@ class AIAnalyzeService {
             // If existing analysis has valid_until field, preserve existing data
             // Just update status to pending for validation
             if (existing && existing.valid_until &&  now > existing.valid_until)  {
-                if(existing.status === 'pending') {
-                    existing.status = 'pending';
-                    existing.current_price = validPrice;
-                    existing.scheduled_release_time = scheduled_release_time;
-                    existing.progress = {
-                        percentage: 0,
-                        current_step:  'Starting validation...',
-                        steps_completed: 0,
-                        total_steps: 8,
-                        estimated_time_remaining: 90,
-                        last_updated: new Date()
-                    };
-                    await existing.save();
-                }
+                // Preserve existing strategy, but mark as pending for revalidation and refresh release time
+                existing.status = 'pending';
+                existing.current_price = validPrice;
+                existing.scheduled_release_time = scheduled_release_time;
+                existing.progress = {
+                    percentage: 0,
+                    current_step:  'Starting validation...',
+                    steps_completed: 0,
+                    total_steps: 8,
+                    estimated_time_remaining: 90,
+                    last_updated: new Date()
+                };
+                await existing.save();
 
-                // Preserve existing strategy, just mark as pending for validation/refresh
-                
-
-                console.log(`📝 [PRESERVE] Updated ${stock_symbol} to pending, kept existing data: ${existing._id}`);
+                console.log(`📝 [PRESERVE] Updated ${stock_symbol} to pending, refreshed release time: ${existing._id}`);
                 return existing;
             } else {
                 // No existing analysis OR no valid_until (legacy) - create/replace with upsert
