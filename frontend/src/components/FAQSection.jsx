@@ -12,7 +12,7 @@ const faqs = [
   },
   {
     q: 'How many stocks can I track on each plan?',
-    a: 'The free trial lets you track up to 3 stocks for 30 days. Paid plans allow larger watchlists, from 3 to 30 stocks depending on your subscription tier. For the latest details, please refer to the Pricing page.'
+    a: 'The free trial lets you track up to 3 stocks for 30 days. Paid plans allow larger watchlists, from 3 to 100 stocks depending on your subscription tier. For the latest details, please refer to the Pricing page.'
   },
   {
     q: 'What time is analysis updated?',
