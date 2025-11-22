@@ -263,7 +263,7 @@ export default function Pricing() {
               </h3>
               <p className="text-xs text-slate-600 text-center">
                 Only difference between plans is how many stocks you can track – from a small
-                starter watchlist to 30 stocks.
+                starter watchlist to 100 stocks.
               </p>
             </div>
             <div className="rounded-2xl bg-slate-50 p-5">

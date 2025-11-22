@@ -52,7 +52,7 @@ export default function HowItWorks() {
                 <p className="text-sm sm:text-base text-slate-600">
                   Pick the stocks you already follow. You can start with just a
                   few names and adjust anytime. Your plan decides how many
-                  stocks you can track (3 to 30 stocks, depending on plan).
+                  stocks you can track (3 to 100 stocks, depending on plan).
                 </p>
               </div>
             </div>

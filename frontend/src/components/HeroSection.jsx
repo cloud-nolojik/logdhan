@@ -50,7 +50,7 @@ export default function HeroSection() {
                 ✓
               </span>
               <span>
-                Track from 3 to 30 stocks in your watchlist, depending on plan.
+                Track from 3 to 100 stocks in your watchlist, depending on plan.
               </span>
             </li>
           </ul>

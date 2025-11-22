@@ -83,7 +83,7 @@ export default function Home() {
                   <div>
                     <p className="font-semibold">Pricing</p>
                     <p className="text-sm text-white/70">
-                      Plans from ₹99 to ₹1999 per month. Track from 3 to 30 stocks based on your plan.
+                      Plans from ₹99 to ₹1999 per month. Track from 3 to 100 stocks based on your plan.
                     </p>
                   </div>
                 </li>
