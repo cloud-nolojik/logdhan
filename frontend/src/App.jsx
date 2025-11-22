@@ -9,8 +9,6 @@ import Pricing from './pages/Pricing';
 import PricingPolicy from './pages/PricingPolicy';
 import Download from './pages/Download';
 import DownloadAndroid from './pages/DownloadAndroid';
-import DownloadIOS from './pages/DownloadIOS';
-import DownloadWeb from './pages/DownloadWeb';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import Terms from './pages/Terms';
 import RefundPolicy from './pages/RefundPolicy';
@@ -20,9 +18,9 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-main-gradient">
       <head>
-        <title>LogDhan – Educational Stock Analysis Learning Platform</title>
-        <meta name="description" content="LogDhan is an educational stock analysis platform for learning investment concepts. Educational tools for understanding market analysis. Powered by Nolojik Innovations." />
-        <link rel="icon" href="/logo.svg" />
+        <title>SwingSetups – AI Swing Analysis for Your Watchlist</title>
+        <meta name="description" content="SwingSetups provides daily AI-generated swing analysis for your stock watchlist. Clear price regions, simple explanations, educational approach. Track NSE & BSE stocks." />
+        <link rel="icon" href="/favicon.ico" />
       </head>
       <SEBIDisclaimerBanner />
       <Navbar />
@@ -34,9 +32,7 @@ export default function App() {
           <Route path="/pricing-policy" element={<PricingPolicy />} />
           <Route path="/download" element={<Download />} />
           <Route path="/download/android" element={<DownloadAndroid />} />
-          <Route path="/download/ios" element={<DownloadIOS />} />
-          <Route path="/download/web" element={<DownloadWeb />} />
-          <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
           <Route path="/terms" element={<Terms />} />
           <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="/contact" element={<Contact />} />

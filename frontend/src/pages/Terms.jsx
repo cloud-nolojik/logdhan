@@ -2,48 +2,116 @@ import React from 'react';
 
 export default function Terms() {
   return (
-    <div className="min-h-[70vh] flex flex-col items-center justify-center px-4 py-16 bg-gradient-to-br from-[#1e3a8a] to-[#06b6d4]">
-      <div className="bg-white/10 border border-gold-light rounded-xl p-8 max-w-4xl w-full shadow-lg">
-        <h1 className="text-2xl md:text-3xl font-bold text-white mb-6">Terms of Service</h1>
+    <div className="min-h-screen bg-slate-50 px-4 py-16 sm:px-6 lg:px-8">
+      {/* subtle background gradient */}
+      <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_#e0f2fe,_transparent_55%),_radial-gradient(circle_at_bottom,_#f1f5f9,_transparent_60%)]" />
+
+      <div className="mx-auto max-w-4xl bg-white rounded-3xl border border-slate-100 shadow-sm p-8 md:p-10">
         
-        <div className="text-white/90 space-y-4 text-sm md:text-base">
-          <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-4 mb-6">
-            <p className="text-red-200 font-semibold">⚠️ Important Disclaimer:</p>
-            <p className="text-red-100 mt-1">LogDhan AI reviews can make mistakes and should not be considered as financial advice. Always consult with qualified financial advisors and verify information independently before making investment decisions.</p>
+        <h1 className="text-3xl md:text-4xl font-bold text-slate-900 mb-6">
+          <span className="text-transparent bg-gradient-to-r from-blue-600 to-emerald-500 bg-clip-text">
+            Terms of Service
+          </span>
+        </h1>
+
+        <div className="text-slate-700 space-y-6 text-sm md:text-base leading-relaxed">
+
+          {/* Disclaimer */}
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4">
+            <p className="text-amber-700 font-semibold">⚠️ Important Disclaimer</p>
+            <p className="text-amber-800/90 text-sm mt-1">
+              SwingSetups is an educational platform and does <strong>not</strong> provide financial advice, investment recommendations, or brokerage services. All information is for learning purposes only. Trading involves risk and users are responsible for their decisions.
+            </p>
           </div>
 
-          <h2 className="text-lg font-semibold text-gold-light">1. Service Description</h2>
-          <p>LogDhan is an AI-powered trading assistant that provides insights and analysis for investment decisions. This service is provided by Nolojik Innovations Private Limited and operates on a credit-based system where 1 AI review equals 1 credit.</p>
+          {/* 1. Service Description */}
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">1. Service Description</h2>
+            <p className="text-slate-600">
+              SwingSetups provides AI-generated analysis of stock price behaviour for educational purposes.
+              The platform does not execute orders, suggest trades, or manage portfolios. Access is provided
+              through subscription plans based on the number of stocks tracked.
+            </p>
+          </div>
 
-          <h2 className="text-lg font-semibold text-gold-light">2. User Responsibilities</h2>
-          <p>By using LogDhan, you agree to use the service responsibly and acknowledge that all AI-generated content is for informational purposes only. You are solely responsible for your investment decisions and any consequences thereof.</p>
+          {/* 2. User Responsibilities */}
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">2. User Responsibilities</h2>
+            <p className="text-slate-600">
+              By using SwingSetups, you agree to:
+            </p>
+            <ul className="list-disc list-inside text-slate-600 space-y-1 mt-2">
+              <li>Use analysis only for learning, not as actionable investment advice</li>
+              <li>Verify information independently before trading</li>
+              <li>Comply with applicable laws and exchange regulations</li>
+            </ul>
+          </div>
 
-          <h2 className="text-lg font-semibold text-gold-light">3. Credit System and Billing</h2>
-          <p>LogDhan operates on a prepaid credit system. Credits are consumed when you request AI reviews (1 review = 1 credit). All purchases are subject to our refund policy and Indian payment regulations.</p>
+          {/* 3. Subscription & Billing */}
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">3. Subscription & Billing</h2>
+            <p className="text-slate-600">
+              SwingSetups operates on recurring subscription plans. The primary difference between plans is watchlist capacity. Payments follow our Refund Policy and pricing may change with prior notice.
+            </p>
+          </div>
 
-          <h2 className="text-lg font-semibold text-gold-light">4. Limitation of Liability</h2>
-          <p>Nolojik Innovations Private Limited and LogDhan shall not be liable for any financial losses, damages, or consequences arising from the use of AI-generated trading insights. Users trade at their own risk.</p>
+          {/* 4. Limitation of Liability */}
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">4. Limitation of Liability</h2>
+            <p className="text-slate-600">
+              SwingSetups and Nolojik Innovations Pvt Ltd are not liable for financial loss, trading outcomes, market movements,
+              or decisions based on platform content. Users trade entirely at their own risk.
+            </p>
+          </div>
 
-          <h2 className="text-lg font-semibold text-gold-light">5. Intellectual Property</h2>
-          <p>LogDhan and all related technologies are proprietary to Nolojik Innovations Private Limited. Users may not reproduce, distribute, or create derivative works without explicit permission.</p>
+          {/* 5. Intellectual Property */}
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">5. Intellectual Property</h2>
+            <p className="text-slate-600">
+              All branding, algorithms, UI, analysis outputs, and documentation belong to Nolojik Innovations Pvt Ltd.
+              Redistribution, scraping, automated extraction, or resale is prohibited without written permission.
+            </p>
+          </div>
 
-          <h2 className="text-lg font-semibold text-gold-light">6. Service Availability</h2>
-          <p>We strive to maintain service availability but do not guarantee uninterrupted access. Scheduled maintenance and technical issues may temporarily affect service.</p>
+          {/* 6. Availability */}
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">6. Service Availability</h2>
+            <p className="text-slate-600">
+              While we strive to provide continuous service, uptime is not guaranteed. Maintenance, outages, and market holidays
+              may impact availability or analysis timing.
+            </p>
+          </div>
 
-          <h2 className="text-lg font-semibold text-gold-light">7. Governing Law</h2>
-          <p>These terms are governed by Indian law. Any disputes shall be resolved in accordance with Indian legal procedures and jurisdiction.</p>
+          {/* 7. Compliance */}
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">7. Governing Law</h2>
+            <p className="text-slate-600">
+              These terms are governed by Indian law. Any disputes fall under the jurisdiction of Bengaluru courts.
+            </p>
+          </div>
 
-          <h2 className="text-lg font-semibold text-gold-light">8. Contact Information</h2>
-          <p>For questions about these terms, contact us at <a href="mailto:hello@nolojik.com" className="text-gold-light hover:underline font-semibold">hello@nolojik.com</a>.</p>
+          {/* 8. Contact */}
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">8. Contact</h2>
+            <p className="text-slate-600">
+              For queries regarding these terms:
+              <br />
+              <a href="mailto:hello@nolojik.com" className="text-blue-600 hover:text-emerald-500 hover:underline transition">
+                hello@nolojik.com
+              </a>
+            </p>
+          </div>
         </div>
-        
-        <div className="text-xs text-white/60 mt-8 pt-4 border-t border-white/20">
+
+        {/* Footer text */}
+        <div className="text-xs text-slate-500 mt-10 pt-4 border-t border-slate-200">
           <p>Last updated: {new Date().toLocaleDateString()}</p>
-          <p className="mt-1">LogDhan is a product of Nolojik Innovations Private Limited</p>
-          <p className="mt-1">Legal Name: Nolojik Innovations Private Limited (CIN: U62090KA2023PTC180927)</p>
-          <p>Registered under the Companies Act, 2013 | Headquartered in Bengaluru, India</p>
+          <p className="mt-1">SwingSetups is a product of Nolojik Innovations Pvt Ltd</p>
+          <p className="mt-1 text-slate-600">CIN: U62090KA2023PTC180927</p>
+          <p className="text-slate-600">Registered under the Companies Act, 2013 · Bengaluru, India</p>
         </div>
+
       </div>
     </div>
   );
-} 
+}

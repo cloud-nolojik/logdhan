@@ -4,71 +4,68 @@ import { Link } from 'react-router-dom';
 
 export default function DownloadAndroid() {
   return (
-    <div className="min-h-[80vh] flex flex-col items-center justify-center px-4 py-16 bg-main-gradient">
-      <motion.div
-        initial={{ opacity: 0, y: 40 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8 }}
-        className="max-w-3xl w-full text-center"
-      >
-        <div className="text-8xl mb-8">🤖</div>
-        
-        <h1 className="text-4xl md:text-6xl font-bold text-white mb-6">
-          Download for 
-          <span className="block text-transparent bg-gradient-to-r from-green-400 to-green-600 bg-clip-text">
-            Android
-          </span>
-        </h1>
-        
-        <p className="text-xl text-white/90 mb-8">
-          Get LogDhan on your Android device and start making smarter trading decisions
-        </p>
+    <section className="relative overflow-hidden bg-slate-50">
+      {/* subtle background gradient */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_#e0f2fe,_transparent_55%),_radial-gradient(circle_at_bottom,_#f1f5f9,_transparent_60%)]" />
 
-        <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl p-8 mb-8">
-          <h3 className="text-2xl font-semibold text-white mb-6">Download Options</h3>
+      <div className="relative max-w-5xl mx-auto px-4 py-20">
+        
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+          className="text-center mb-12"
+        >
+          <img
+            src="/app-icon.png"
+            alt="SwingSetups Icon"
+            className="w-20 h-20 mx-auto mb-6 rounded-2xl shadow-md"
+          />
+
+          <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight text-slate-900">
+            Download for Android
+          </h1>
+
+          <p className="text-slate-600 mt-4 max-w-2xl mx-auto text-base">
+            Install SwingSetups on your Android device and get daily swing analysis
+            for the stocks you follow. Simple, educational views — not trading calls.
+          </p>
+        </motion.div>
+
+        {/* Play Store Button */}
+        <div className="max-w-md mx-auto bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-6">
           
-          <div className="space-y-4">
-            <a
-              href="https://play.google.com/store/apps/details?id=swingsetups"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold px-8 py-4 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-105"
-            >
-              <div className="flex items-center justify-center gap-3">
-                <span className="text-2xl">📱</span>
-                <div>
-                  <div className="text-lg">Google Play Store</div>
-                  <div className="text-sm opacity-90">Recommended</div>
-                </div>
-              </div>
-            </a>
+          <a
+            href="https://play.google.com/store/apps/details?id=swingsetups"
+            target="_blank"
+            className="flex items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-blue-600 to-emerald-500 text-white font-semibold px-6 py-3 shadow-md hover:brightness-105 transition"
+          >
+            📱 Install from Google Play
+          </a>
 
-            <div className="bg-white/5 border border-white/10 text-white/60 font-semibold px-8 py-4 rounded-xl">
-              <div className="flex items-center justify-center gap-3">
-                <span className="text-2xl">📦</span>
-                <div>
-                  <div className="text-lg">Direct APK Download</div>
-                  <div className="text-sm">Coming Soon</div>
-                </div>
-              </div>
-            </div>
+          <div className="text-center text-xs text-slate-500">
+            APK sideload option will be available soon.
           </div>
         </div>
 
-        <div className="bg-white/5 border border-accent-purple/30 rounded-2xl p-6 mb-8">
-          <h4 className="text-lg font-semibold text-white mb-4">System Requirements</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-white/80 text-sm">
-            <div>✅ Android 6.0 or higher</div>
-            <div>✅ 100MB free storage</div>
-            <div>✅ Internet connection</div>
-            <div>✅ Camera (for QR scanning)</div>
-          </div>
+        {/* System Requirements */}
+        <div className="max-w-md mx-auto mt-10 bg-slate-50 border border-slate-200 rounded-xl p-6">
+          <p className="font-medium text-slate-800 mb-4">System requirements</p>
+          <ul className="text-sm text-slate-600 space-y-2">
+            <li>• Android 6.0 or higher</li>
+            <li>• 100MB free storage</li>
+            <li>• Internet connection</li>
+          </ul>
         </div>
 
-        <Link to="/download" className="inline-block bg-white/10 hover:bg-white/20 text-white font-semibold px-6 py-3 rounded-xl transition-all duration-300">
-          ← Back to All Platforms
-        </Link>
-      </motion.div>
-    </div>
+        {/* Back link */}
+        <div className="text-center mt-10">
+          <Link className="text-sm text-blue-600 hover:underline" to="/download">
+            ← Back to downloads
+          </Link>
+        </div>
+      </div>
+    </section>
   );
 }

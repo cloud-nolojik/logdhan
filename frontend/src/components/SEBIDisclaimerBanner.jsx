@@ -1,22 +1,16 @@
 import React from 'react';
-import { motion } from 'framer-motion';
 
 export default function SEBIDisclaimerBanner() {
   return (
-    <motion.div 
-      initial={{ y: -100 }}
-      animate={{ y: 0 }}
-      className="bg-gradient-to-r from-red-600 to-red-500 text-white text-center py-3 px-4 text-sm font-medium sticky top-0 z-50 shadow-lg"
-    >
-      <div className="container mx-auto flex items-center justify-center gap-2">
-        <span className="text-lg">⚠️</span>
-        <span className="font-bold">EDUCATIONAL ONLY:</span>
-        <span>
-          LogDhan provides educational stock analysis tools for learning purposes only. Not investment advice. 
-          SEBI registration not required for educational content. 
-          <span className="font-semibold"> Consult certified financial advisors for investment decisions.</span>
+    <div className="w-full bg-amber-900/20 border-b border-amber-700/30">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6 py-2 flex items-center gap-3 text-xs sm:text-sm text-amber-200">
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-700/30 text-amber-400 text-xs font-semibold flex-shrink-0">
+          !
         </span>
+        <p className="leading-snug">
+          Educational use only · SwingSetups is not a SEBI-registered advisor or broker. Please consult certified professionals before trading or investing.
+        </p>
       </div>
-    </motion.div>
+    </div>
   );
 }

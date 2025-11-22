@@ -1,8 +1,8 @@
 {
-  "name": "logdhan-frontend",
+  "name": "swingsetups-frontend",
   "version": "1.0.0",
   "private": true,
-  "description": "LogDhan – AI for Smarter Trades | Credit-based trading assistant by Nolojik Innovations.",
+  "description": "SwingSetups – AI swing analysis for your watchlist | Educational stock analysis platform by Nolojik Innovations.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

@@ -165,7 +165,7 @@ app.use('/api/v1/bulk-analysis', bulkAnalysisRoutes);
 app.use('/api/v1/webhook', webhookRoutes);
 app.use('/api/v1/monitoring', monitoringRoutes);
 app.use('/api/v1/feedback', feedbackRoutes);
-app.use('/api/public', publicRoutes);
+app.use('/api/v1/public', publicRoutes);
 app.use('/api/v1/consent', consentRoutes);
 
 // App redirect routes for WhatsApp deep links
