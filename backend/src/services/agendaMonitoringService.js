@@ -10,6 +10,7 @@ import { User } from '../models/user.js';
 import batchManager from './batchManager.js';
 import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
+import MarketHoursUtil from '../utils/marketHours.js';
 
 class AgendaMonitoringService {
     constructor() {
@@ -82,8 +83,8 @@ class AgendaMonitoringService {
                 timezone: 'Asia/Kolkata'
             });
 
-            // Schedule periodic cleanup of expired monitoring subscriptions (every 30 minutes)
-            await this.agenda.every('30 minutes', 'cleanup-expired-subscriptions', {}, {
+            // Schedule cleanup of expired monitoring subscriptions at 3:15 PM IST on weekdays
+            await this.agenda.every('15 15 * * 1-5', 'cleanup-expired-subscriptions', {}, {
                 _id: 'expired-subscription-cleanup',
                 timezone: 'Asia/Kolkata'
             });
@@ -267,27 +268,17 @@ class AgendaMonitoringService {
                 }
             }
 
-            // Check if market is open using simple time-based logic
+            // Check if market is open using centralized utility (handles holidays/trading days)
             console.log(`📈 [STEP 2/6] Checking market status...`);
             const now = new Date();
-            const istTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
-            const currentHours = istTime.getHours();
-            const currentMinutes = istTime.getMinutes();
-            const currentTimeInMinutes = currentHours * 60 + currentMinutes;
-            const marketOpen = 9 * 60 + 15;  // 9:15 AM
-            const marketClose = 15 * 60 + 30; // 3:30 PM
-            const dayOfWeek = istTime.getDay(); // 0 = Sunday, 6 = Saturday
+            // Keep UTC as source of truth; derive IST only for logging
+           
+            // Use MarketHoursUtil to handle trading days/holidays; pass UTC now
+            let isMarketOpen = await MarketHoursUtil.isMarketOpen();
 
-            const isMarketOpen = dayOfWeek >= 1 && dayOfWeek <= 5 &&
-                                currentTimeInMinutes >= marketOpen &&
-                                currentTimeInMinutes <= marketClose;
 
-            console.log(`   ├─ Market Open: ${isMarketOpen ? 'YES ✅' : 'NO ❌'}`);
-            console.log(`   ├─ Current Time (IST): ${istTime.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
-            console.log(`   ├─ Day of Week: ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek]}`);
-            console.log(`   └─ Time: ${String(currentHours).padStart(2, '0')}:${String(currentMinutes).padStart(2, '0')}\n`);
-
-            if (!isMarketOpen) {
+            
+            if (isMarketOpen) {
                 console.log(`⏸️ [STEP 2/6] SKIPPING - Market is closed, no trigger check needed`);
                 console.log(`   └─ Will resume checking when market opens\n`);
 
@@ -429,7 +420,7 @@ class AgendaMonitoringService {
                                 userId: userId,
                                 title: 'Monitoring Alert - Conditions Met!',
                                 message: `${stockSymbol} - ${strategyName}: Entry conditions have been met! Check your app for details.`,
-                                type: 'trade_alert',
+                                type: 'alert',
                                 relatedStock: {
                                     trading_symbol: stockSymbol,
                                     instrument_key: analysis.instrument_key
@@ -877,6 +868,11 @@ class AgendaMonitoringService {
 
             console.log('🚀 [BATCH MONITORING] Initializing hybrid batch architecture...');
 
+            // Cancel any existing batch jobs
+            await this.agenda.cancel({ name: 'check-triggers-batch' });
+            console.log('🧹 [BATCH MONITORING] Cancelled existing batch jobs');
+            this.activeBatches.clear();
+
             // Get optimal batches from BatchManager
             const batches = await batchManager.createOptimalBatches();
             
@@ -885,26 +881,14 @@ class AgendaMonitoringService {
                 return;
             }
 
-            // Cancel any existing batch jobs
-            await this.agenda.cancel({ name: 'check-triggers-batch' });
-            console.log('🧹 [BATCH MONITORING] Cancelled existing batch jobs');
-
             // Create new batch jobs
             let createdJobs = 0;
             for (const batch of batches) {
                 try {
                     // Determine cron expression based on fastest frequency needed
                     // DEFAULT: Every 15 minutes for production monitoring
-                    let cronExpression;
-                    if (batch.max_frequency_seconds <= 60) {
-                        cronExpression = '*/15 * * * *'; // Every 15 minutes (changed from 1 minute)
-                    } else if (batch.max_frequency_seconds <= 300) {
-                        cronExpression = '*/15 * * * *'; // Every 15 minutes 
-                    } else if (batch.max_frequency_seconds <= 900) {
-                        cronExpression = '*/15 * * * *'; // Every 15 minutes
-                    } else {
-                        cronExpression = '*/30 * * * *'; // Every 30 minutes for slower frequencies
-                    }
+                    let cronExpression = '*/15 * * * *'; // Every 15 minutes (changed from 1 minute);
+                    
 
                     console.log(`📅 [BATCH MONITORING] Creating batch job ${batch.batchId}: ${batch.analysisIds.length} analyses, ${cronExpression}`);
 
@@ -1100,6 +1084,17 @@ class AgendaMonitoringService {
             // 🆕 BATCH ARCHITECTURE: No individual jobs - everything goes through batch processing
             console.log(`📦 [BATCH MODE] Subscription created - monitoring will be handled by batch jobs every 15 minutes`);
 
+            // Immediate one-off check to catch already-satisfied triggers
+            // Run asynchronously so the API response stays fast
+            setTimeout(async () => {
+                try {
+                    console.log(`⚡ [MONITORING] Performing immediate trigger check for ${jobId}`);
+                    await this.executeMonitoringCheck(analysisId, strategyId);
+                } catch (immediateErr) {
+                    console.error('❌ [MONITORING] Immediate trigger check failed:', immediateErr);
+                }
+            }, 0);
+
             // 🆕 BATCH ARCHITECTURE: Trigger batch refresh when new monitoring starts
             if (this.useBatchMode) {
                 // Schedule batch refresh in background (non-blocking)
@@ -1187,8 +1182,11 @@ class AgendaMonitoringService {
                 console.log(`✅ Processed ${subscriptions.length} subscription(s) - removed/deleted as appropriate`);
             }
 
-            // Cancel jobs in Agenda
-            const cancelledJobs = await this.agenda.cancel(cancelQuery);
+            // Cancel jobs in Agenda (guard if agenda not initialized in test harness)
+            let cancelledJobs = 0;
+            if (this.agenda) {
+                cancelledJobs = await this.agenda.cancel(cancelQuery);
+            }
 
             // Remove from local tracking
             if (strategyId) {
@@ -1209,10 +1207,21 @@ class AgendaMonitoringService {
 
             // CRITICAL FIX #3: Clean up orphaned analysis_session records in database
             // Get userId from job data to clean up sessions
-            const jobs = await this.agenda.jobs(cancelQuery);
-            if (jobs.length > 0 && jobs[0].attrs.data.userId) {
-                const userIdFromJob = jobs[0].attrs.data.userId;
-                await this.cleanupAnalysisSessionRecords(analysisId, userIdFromJob);
+            if (this.agenda) {
+                const jobs = await this.agenda.jobs(cancelQuery);
+                if (jobs.length > 0 && jobs[0].attrs.data.userId) {
+                    const userIdFromJob = jobs[0].attrs.data.userId;
+                    await this.cleanupAnalysisSessionRecords(analysisId, userIdFromJob);
+                }
+            }
+
+            // Refresh batch configuration so removed subscriptions are no longer scheduled
+            if (this.useBatchMode) {
+                try {
+                    await this.refreshBatchConfiguration();
+                } catch (refreshError) {
+                    console.warn('⚠️ [BATCH MONITORING] Failed to refresh batch configuration after stop:', refreshError.message);
+                }
             }
 
             console.log(`✅ Stopped ${cancelledJobs} monitoring job(s) for ${analysisId}${strategyId ? `_${strategyId}` : ''}`);
@@ -1259,14 +1268,108 @@ class AgendaMonitoringService {
         try {
             console.log(`📊 Getting monitoring status for analysis ${analysisId}${strategyId ? `, strategy ${strategyId}` : ''}, user ${userId}`);
 
+            const toIstString = (date) => date
+                ? MarketHoursUtil.toIST(date).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+                : null;
+
+            const buildHistoryStatus = (history) => {
+                let historyState = 'inactive';
+                switch (history.status) {
+                    case 'conditions_met':
+                        historyState = 'finished';
+                        break;
+                    case 'expired':
+                        historyState = 'expired';
+                        break;
+                    case 'market_closed':
+                        historyState = 'paused';
+                        break;
+                    case 'stopped':
+                    case 'order_placed':
+                        historyState = 'finished';
+                        break;
+                    case 'error':
+                        historyState = 'error';
+                        break;
+                    default:
+                        historyState = 'inactive';
+                }
+
+                const historyMessage = history.status === 'conditions_met'
+                    ? `Entry conditions met at ${history.check_timestamp.toISOString()}`
+                    : `Last check status: ${history.status}`;
+
+                return {
+                    isMonitoring: false,
+                    state: historyState,
+                    message: historyMessage,
+                    subscription_id: null,
+                    subscribed_users_count: 0,
+                    is_user_subscribed: !!userId,
+                    conditions_met_at: history.status === 'conditions_met' ? history.check_timestamp : null,
+                    conditions_met_at_ist: history.status === 'conditions_met'
+                        ? toIstString(history.check_timestamp)
+                        : null,
+                    history_status: history.status,
+                    notification_sent_at: null,
+                    expires_at: null,
+                    jobId: null,
+                    startedAt: null,
+                    isPaused: false,
+                    pausedReason: null
+                };
+            };
+
+            const buildSubscriptionStatus = (subscription) => {
+                return {
+                    isMonitoring: true,
+                    state: 'active',
+                    subscription_id: subscription._id,
+                    subscribed_users_count: subscription.subscribed_users.length,
+                    is_user_subscribed: true,
+                    conditions_met_at: null,
+                    conditions_met_at_ist: null,
+                    notification_sent_at: subscription.notification_sent_at,
+                    expires_at: subscription.expires_at,
+                    jobId: subscription.job_id,
+                    startedAt: subscription.createdAt,
+                    message: '👁️ AI is watching the market'
+                };
+            };
+
             if (strategyId) {
                 // Check MonitoringSubscription (source of truth for multi-user monitoring)
-                const subscription = await MonitoringSubscription.findOne({
+                const subscriptionQuery = {
                     analysis_id: analysisId,
                     strategy_id: strategyId
-                });
+                };
+                if (userId) {
+                    subscriptionQuery['subscribed_users.user_id'] = userId;
+                }
 
-                if (!subscription) {
+                const subscription = await MonitoringSubscription.findOne(subscriptionQuery);
+
+                // Only consider active subscription; otherwise use history
+                const isExpired = subscription ? subscription.expires_at <= new Date() : false;
+                const isActiveSub = subscription && subscription.monitoring_status === 'active' && !isExpired;
+
+                if (!isActiveSub) {
+                    // Fallback to latest monitoring history when no active subscription exists
+                    const historyQuery = {
+                        analysis_id: analysisId,
+                        strategy_id: strategyId
+                    };
+                    if (userId) {
+                        historyQuery.user_id = userId;
+                    }
+                    const latestHistory = await MonitoringHistory.findOne(historyQuery)
+                        .sort({ check_timestamp: -1 })
+                        .lean();
+
+                    if (latestHistory) {
+                        return buildHistoryStatus(latestHistory);
+                    }
+
                     return {
                         isMonitoring: false,
                         state: 'inactive',
@@ -1278,90 +1381,13 @@ class AgendaMonitoringService {
                     };
                 }
 
-                // Check if user is subscribed (if userId provided)
-                let isUserSubscribed = true;
-                let userSubscriptionData = null;
-                if (userId) {
-                    userSubscriptionData = subscription.subscribed_users.find(
-                        sub => sub.user_id.toString() === userId.toString()
-                    );
-                    isUserSubscribed = !!userSubscriptionData;
-                }
-
-                // Check if subscription is actively monitoring
-                const isExpired = subscription.expires_at <= new Date();
-                const isActive = subscription.monitoring_status === 'active' && !isExpired;
-
-                // Check if Agenda job is paused
-                let isPaused = false;
-                let pausedReason = null;
-                if (isActive) {
-                    try {
-                        const jobs = await this.agenda.jobs({
-                            name: 'check-triggers',
-                            'data.analysisId': analysisId,
-                            'data.strategyId': strategyId
-                        });
-                        if (jobs.length > 0) {
-                            const job = jobs[0];
-                            isPaused = job.attrs.disabled === true;
-                            if (isPaused) {
-                                // Check local tracking for pause reason
-                                const localJob = this.activeJobs.get(`${analysisId}_${strategyId}`);
-                                pausedReason = localJob?.pauseReason || 'manual';
-                            }
-                        }
-                    } catch (jobError) {
-                        console.error('Error checking job pause status:', jobError);
-                    }
-                }
-
-                // Map backend status to app state
-                const appState = this.mapSubscriptionStateToAppState(
-                    subscription.monitoring_status,
-                    isExpired
-                );
-
-                // Build appropriate message based on state
-                let message = '';
-                if (subscription.monitoring_status === 'conditions_met') {
-                    message = '✅ Entry conditions met! Alert sent.';
-                } else if (subscription.monitoring_status === 'expired' || isExpired) {
-                    message = '⏰ Monitoring expired at 3:30 PM';
-                } else if (subscription.monitoring_status === 'cancelled') {
-                    message = 'Monitoring stopped by user';
-                } else if (subscription.monitoring_status === 'invalidated') {
-                    message = 'Setup invalidated';
-                } else if (isPaused) {
-                    message = `⏸️ Monitoring paused (${pausedReason})`;
-                } else if (isActive && isUserSubscribed) {
-                    message = '👁️ AI is watching the market';
-                } else if (isActive && !isUserSubscribed) {
-                    message = 'User is not subscribed to this monitoring';
-                } else {
-                    message = `Monitoring is ${subscription.monitoring_status}`;
-                }
-
-                return {
-                    isMonitoring: isActive && isUserSubscribed && !isPaused,
-                    state: appState,
-                    subscription_id: subscription._id,
-                    subscribed_users_count: subscription.subscribed_users.length,
-                    is_user_subscribed: isUserSubscribed,
-                    conditions_met_at: subscription.conditions_met_at,
-                    notification_sent_at: subscription.notification_sent_at,
-                    expires_at: subscription.expires_at,
-                    jobId: subscription.job_id,
-                    startedAt: userSubscriptionData?.subscribed_at || subscription.createdAt,
-                    isPaused: isPaused,
-                    pausedReason: pausedReason,
-                    message
-                };
+                return buildSubscriptionStatus(subscription);
 
             } else {
                 // Check analysis-level (all strategies)
                 const subscriptions = await MonitoringSubscription.find({
-                    analysis_id: analysisId
+                    analysis_id: analysisId,
+                    ...(userId ? { 'subscribed_users.user_id': userId } : {})
                 });
 
                 if (!subscriptions || subscriptions.length === 0) {
@@ -1395,6 +1421,9 @@ class AgendaMonitoringService {
                     subscriptions: subscriptions.map(sub => {
                         const isExpired = sub.expires_at <= now;
                         const isActive = sub.monitoring_status === 'active' && !isExpired;
+                        const conditionsMetAtIst = sub.conditions_met_at
+                            ? MarketHoursUtil.toIST(sub.conditions_met_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+                            : null;
 
                         return {
                             subscription_id: sub._id,
@@ -1404,6 +1433,7 @@ class AgendaMonitoringService {
                             isMonitoring: isActive,
                             subscribed_users_count: sub.subscribed_users.length,
                             conditions_met_at: sub.conditions_met_at,
+                            conditions_met_at_ist: conditionsMetAtIst,
                             expires_at: sub.expires_at,
                             jobId: sub.job_id
                         };
@@ -1564,6 +1594,19 @@ class AgendaMonitoringService {
 
             const now = new Date();
 
+            // Skip on non-trading days
+            const isTradingDay = await MarketHoursUtil.isTradingDay(now);
+            if (!isTradingDay) {
+                console.log('⏭️ [EXPIRY CLEANUP] Skipping - not a trading day');
+                return { success: true, skipped: true, reason: 'non_trading_day' };
+            }
+
+            // Find active subscriptions that have expired
+            const expiredSubs = await MonitoringSubscription.find({
+                monitoring_status: 'active',
+                expires_at: { $lte: now }
+            }).lean();
+
             // Update expired subscriptions to 'expired' status
             const result = await MonitoringSubscription.updateMany(
                 {
@@ -1578,6 +1621,25 @@ class AgendaMonitoringService {
                     }
                 }
             );
+
+            // Record history for expired subscriptions (per user)
+            for (const sub of expiredSubs) {
+                if (sub.subscribed_users && sub.subscribed_users.length > 0) {
+                    for (const u of sub.subscribed_users) {
+                        await MonitoringHistory.create({
+                            analysis_id: sub.analysis_id,
+                            strategy_id: sub.strategy_id,
+                            user_id: u.user_id,
+                            stock_symbol: sub.stock_symbol || '',
+                            status: 'expired',
+                            reason: 'Monitoring expired at validity cutoff',
+                            details: {},
+                            monitoring_duration_ms: 0,
+                            check_timestamp: now
+                        });
+                    }
+                }
+            }
 
             if (result && result.modifiedCount > 0) {
                 console.log(`✅ [EXPIRY CLEANUP] Marked ${result.modifiedCount} subscriptions as expired`);

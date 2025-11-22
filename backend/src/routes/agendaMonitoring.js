@@ -7,6 +7,7 @@ import agendaBulkAnalysisNotificationService from '../services/agendaBulkAnalysi
 import agendaBulkAnalysisReminderService from '../services/agendaBulkAnalysisReminderService.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import triggerOrderService from '../services/triggerOrderService.js';
+import MarketHoursUtil from '../utils/marketHours.js';
 
 const router = express.Router();
 
@@ -473,6 +474,9 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
             });
         }
         
+        // Block monitoring interactions during 3:15 PM - 3:59:59 PM IST on trading days
+        const { blocked: monitoring_window_blocked, reason: monitoring_window_message } = await MarketHoursUtil.isMonitoringWindowBlocked();
+
         
         
         // Get monitoring status for each strategy in the analysis
@@ -513,6 +517,9 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
                 total_strategies: strategies.length,
                 active_monitoring_count: Object.values(strategyStatuses).filter(s => s.isMonitoring).length,
                 conditions_met_count: conditionsMetCount, // Number of strategies where conditions were met
+
+                monitoring_window_blocked,
+                monitoring_window_message: monitoring_window_message || null,
 
                 // Agenda-specific info
                 monitoring_engine: 'agenda'

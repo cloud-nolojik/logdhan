@@ -28,7 +28,7 @@ const monitoringHistorySchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['checking', 'triggers_not_met', 'conditions_met', 'order_placed', 'market_closed', 'error', 'stopped'],
+        enum: ['checking', 'triggers_not_met', 'conditions_met', 'order_placed', 'market_closed', 'error', 'stopped', 'expired'],
         required: true
     },
     reason: {

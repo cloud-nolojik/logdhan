@@ -384,6 +384,78 @@ class MarketHoursUtil {
     }
 
     /**
+     * Get monitoring expiry time (3:14:59 PM IST) on the current or next trading day
+     * Stored as UTC
+     * @param {Date} fromDate - reference date (defaults to now)
+     * @returns {Promise<Date>} UTC date representing 3:14:59 PM IST
+     */
+    static async getMonitoringExpiryTime(fromDate = new Date()) {
+        try {
+            const now = fromDate || new Date();
+            const istNow = this.toIST(now);
+
+            // Use UTC timestamp for trading-day check to avoid double conversion
+            const isTodayTradingDay = await this.isTradingDay(now);
+
+            // Monitoring expiry time: 3:14:59 PM IST
+            const expiryHour = 15;
+            const expiryMinute = 14;
+            const expiryTimeMinutes = expiryHour * 60 + expiryMinute; // 15:14 = 914 minutes
+
+            const currentHour = istNow.getHours();
+            const currentMinute = istNow.getMinutes();
+            const currentTimeInMinutes = currentHour * 60 + currentMinute;
+
+            let expiryDateIST;
+
+            if (isTodayTradingDay && currentTimeInMinutes < expiryTimeMinutes) {
+                expiryDateIST = new Date(istNow);
+            } else {
+                // Otherwise, move to next trading day
+                expiryDateIST = await this.getNextTradingDay(now);
+            }
+
+            const year = expiryDateIST.getFullYear();
+            const month = expiryDateIST.getMonth();
+            const day = expiryDateIST.getDate();
+
+            // 3:14:59 PM IST = 09:44:59 UTC
+            const expiryUTC = new Date(Date.UTC(year, month, day, 9, 44, 59, 0));
+
+            console.log(`📅 [MONITORING EXPIRY] Expiry IST: ${expiryUTC.toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})} (3:14:59 PM IST)`);
+            console.log(`📅 [MONITORING EXPIRY] Expiry UTC: ${expiryUTC.toISOString()} (stored in DB)`);
+
+            return expiryUTC;
+        } catch (error) {
+            console.error('❌ [MONITORING EXPIRY] Error calculating monitoring expiry time:', error);
+            const fallback = new Date();
+            fallback.setHours(fallback.getHours() + 24);
+            return fallback;
+        }
+    }
+
+    /**
+     * Check if monitoring interactions should be blocked (3:15 PM - 3:59:59 PM IST on trading days)
+     * @param {Date} now - Reference time (defaults to current UTC time)
+     * @returns {Promise<{blocked: boolean, reason?: string}>}
+     */
+    static async isMonitoringWindowBlocked(now = new Date()) {
+        const istNow = this.toIST(now);
+        const currentMinutes = istNow.getHours() * 60 + istNow.getMinutes();
+        const blockStart = 15 * 60 + 15; // 3:15 PM
+        const blockEnd = 16 * 60;        // 4:00 PM (exclusive)
+
+        // Only block on trading days within the window
+        const isTrading = await this.isTradingDay(now);
+        const blocked = isTrading && currentMinutes >= blockStart && currentMinutes < blockEnd;
+
+        return {
+            blocked,
+            reason: blocked ? 'Monitoring window blocked between 3:15 PM and 3:59 PM IST on trading days.' : undefined
+        };
+    }
+
+    /**
      * Convert an IST clock time on a given calendar day to UTC
      * @param {Object} params
      * @param {Date} [params.baseDate=new Date()] - Reference date (any timezone)

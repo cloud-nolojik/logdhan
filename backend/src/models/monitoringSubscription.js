@@ -189,11 +189,11 @@ monitoringSubscriptionSchema.index({
 
 /**
  * Calculate expiry time using common utility
- * ALL subscriptions expire at 3:59 PM IST on NEXT trading day
- * Stored in DB as UTC (10:29:59 AM UTC)
+ * ALL subscriptions expire at 3:14:59 PM IST on NEXT trading day
+ * Stored in DB as UTC (09:44:59 AM UTC)
  */
 monitoringSubscriptionSchema.statics.getExpiryTime = async function() {
-    return await MarketHoursUtil.getValidUntilTime();
+    return await MarketHoursUtil.getMonitoringExpiryTime();
 };
 
 /**

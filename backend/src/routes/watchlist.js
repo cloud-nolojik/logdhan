@@ -8,6 +8,7 @@ import MarketHoursUtil from '../utils/marketHours.js';
 // Use database version instead of JSON file version
 import { getExactStock } from '../utils/stockDb.js';
 import priceCacheService from '../services/priceCache.service.js';
+import { getMonitoringState } from '../services/monitoringState.service.js';
 import pLimit from 'p-limit';
 // Upstox allows 50 requests/second, so 20 concurrent is safe with 10s timeouts
 const limit = pLimit(20); // Optimized for better performance while staying within rate limits
@@ -125,12 +126,8 @@ router.get('/', auth, async (req, res) => {
             }).sort({ created_at: -1 }).lean();
           }
 
-          // Check if stock is being monitored by this user
-          const activeMonitoring = await MonitoringSubscription.findOne({
-            instrument_key: item.instrument_key,
-            'subscribed_users.user_id': req.user._id,
-            monitoring_status: 'active' // Only active monitoring jobs
-          }).lean();
+          // Monitoring state (active subscription + history fallback)
+          const monitoringInfo = await getMonitoringState({ analysis, userId: req.user._id });
 
           // Calculate AI confidence from strategies and get strategy type
           let ai_confidence = null;
@@ -164,8 +161,11 @@ router.get('/', auth, async (req, res) => {
             analysis_status: analysis?.status || null,
             ai_confidence,
             strategy_type, // BUY, SELL, HOLD, NO_TRADE
-            is_monitoring: !!activeMonitoring,
-            monitoring_strategy_id: activeMonitoring?.strategy_id || null
+            is_monitoring: monitoringInfo.is_monitoring,
+            monitoring_strategy_id: monitoringInfo.strategy_id,
+            monitoring_state: monitoringInfo.state,
+            monitoring_analysis_id: monitoringInfo.analysis_id,
+            monitoring_conditions_met_at: monitoringInfo.conditions_met_at
           };
         } catch (err) {
           console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);

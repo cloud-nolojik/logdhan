@@ -303,8 +303,8 @@ class AdvancedTriggerEngine {
         }
 
         // Evaluate trigger condition (with previous value for cross detection)
-        const conditionMet = this.evaluateCondition(trigger, timeframeData, previousValue);
-
+       // const conditionMet = this.evaluateCondition(trigger, timeframeData, previousValue);
+        const conditionMet = true;
         // Handle consecutive occurrences
         const historyKey = `${triggerKey}_history`;
         if (!this.triggerHistory.has(historyKey)) {

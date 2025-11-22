@@ -10,7 +10,7 @@ const TIMEZONE = 'Asia/Kolkata';
 
 /**
  * Agenda service for sending bulk analysis expiry reminders
- * Sends notifications at 8:00 AM IST on trading days to remind users that bulk analysis will expire soon
+ * 🚫 Disabled: we no longer send these notifications.
  */
 class AgendaBulkAnalysisReminderService {
     constructor() {
@@ -22,6 +22,11 @@ class AgendaBulkAnalysisReminderService {
      * Initialize the agenda service
      */
     async initialize() {
+        // Reminders are disabled
+        console.log('⏸️ [BULK ANALYSIS REMINDER] Service disabled - skipping initialization');
+        this.initialized = true;
+        return;
+
         try {
             // Create agenda instance
             this.agenda = new Agenda({
@@ -75,6 +80,9 @@ class AgendaBulkAnalysisReminderService {
      * Only runs on trading days
      */
     async sendBulkAnalysisReminder(job) {
+        console.log('⏸️ [BULK ANALYSIS REMINDER] Skipped - reminders are disabled');
+        return;
+
         const jobStartTime = Date.now();
         console.log('⏰ [BULK ANALYSIS REMINDER] Starting to send expiry reminders to all users');
 
