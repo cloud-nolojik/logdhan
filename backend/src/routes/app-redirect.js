@@ -10,11 +10,7 @@ const router = express.Router();
 router.get('/analysis/completed', (req, res) => {
   const userAgent = req.get('User-Agent') || '';
   const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
-  
-  console.log(`🔗 Deep link accessed: /app/analysis/completed`);
-  console.log(`📱 User Agent: ${userAgent.substring(0, 100)}...`);
-  console.log(`📱 Is Mobile: ${isMobile}`);
-  
+
   if (isMobile) {
     // Mobile device - try to open app with fallback
     res.send(generateMobileRedirectHTML());

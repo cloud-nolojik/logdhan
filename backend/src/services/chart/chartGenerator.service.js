@@ -16,58 +16,54 @@ class ChartGeneratorService {
     try {
       // Handle both old format (logEntry) and new format (chartData object)
       let tradeData, candleSummary, indicators, patternAnalysis, chartOverlay;
-      
+
       if (chartData.tradeData) {
         // New format from AI service
         ({ tradeData, candleSummary, indicators, patternAnalysis, chartOverlay } = chartData);
-      }
-      else{
-        console.log('⚠️ Invalid chart data format');
+      } else
+      {
+
         return null;
       }
-
-      console.log(`📊 Starting chart generation for ${tradeData.symbol}...`);
 
       // Convert candleSummary to OHLCV format if it's a string
       let ohlcvData;
       if (typeof candleSummary === 'string' || candleSummary?.message === 'Levels only – no candles') {
-        console.log(`📈 Generating levels-only chart (no candle data)`);
+
         ohlcvData = this.generateMockOHLCVData(tradeData);
       } else if (candleSummary?.candles && candleSummary.candles.length === 0) {
-        console.log(`📈 Empty candle data - using mock data`);
+
         ohlcvData = this.generateMockOHLCVData(tradeData);
       } else {
         ohlcvData = candleSummary.candles || this.generateMockOHLCVData(tradeData);
       }
-      
+
       // Extract timeframe info for chart title
       let timeframe = null;
       if (typeof candleSummary === 'object' && candleSummary.timeframe) {
         timeframe = candleSummary.timeframe;
       }
-      
+
       // Draw chart with provided data and indicators
       const chartBuffer = await this.drawTechnicalChart(ohlcvData, tradeData, patternAnalysis, chartOverlay, indicators, timeframe);
-      
+
       // Upload to Azure
       const chartUrl = await this.uploadChart(chartBuffer);
-      
-      console.log(`✅ Chart generated successfully: ${chartUrl}`);
-      
+
       return {
         chartUrl,
         analysis: patternAnalysis
       };
-      
+
     } catch (error) {
       console.error('❌ Chart generation failed:', error);
-      
+
       // Generate fail-soft fallback response
       const fallbackUrl = await this.generateFallbackChart(tradeData, error.message);
-      
+
       return {
         chartUrl: fallbackUrl,
-        analysis: { 
+        analysis: {
           error: 'Chart generation failed',
           fallback: true,
           message: 'Technical chart unavailable - showing placeholder'
@@ -148,15 +144,15 @@ RESPOND IN JSON:
       const response = await axios.post('https://api.openai.com/v1/chat/completions', {
         model: 'gpt-4o-mini',
         messages: [
-          {
-            role: 'system',
-            content: 'You are a professional technical analyst. Always respond with valid JSON only.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
+        {
+          role: 'system',
+          content: 'You are a professional technical analyst. Always respond with valid JSON only.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }],
+
         temperature: 0.3,
         max_tokens: 1500
       }, {
@@ -167,7 +163,7 @@ RESPOND IN JSON:
       });
 
       const content = response.data.choices[0].message.content;
-      
+
       // Try to extract JSON from markdown code blocks
       let jsonContent = content;
       const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
@@ -180,9 +176,9 @@ RESPOND IN JSON:
           jsonContent = objectMatch[0];
         }
       }
-      
+
       return JSON.parse(jsonContent);
-      
+
     } catch (error) {
       console.error('❌ AI technical analysis failed:', error);
       return {
@@ -201,48 +197,48 @@ RESPOND IN JSON:
     const entryPrice = parseFloat(tradeData.entryprice) || 1000; // Default price if invalid
     const targetPrice = parseFloat(tradeData.target) || entryPrice * 1.03;
     const stopPrice = parseFloat(tradeData.stoploss) || entryPrice * 0.98;
-    
+
     // Validate that we have valid prices
     if (isNaN(entryPrice) || entryPrice <= 0) {
       console.warn('⚠️ Invalid entry price, using default ₹1000');
       const defaultPrice = 1000;
       return this.generateDefaultMockData(defaultPrice, tradeData.symbol || 'STOCK');
     }
-    
+
     // Create a more realistic price progression that moves towards the target
     let basePrice = entryPrice * 0.98; // Start slightly below entry
     const candleCount = 50;
     const targetDirection = tradeData.direction === 'BUY' ? 1 : -1;
     const trendStrength = 0.4; // How much to trend towards target
-    
+
     // Add some market session-based time intervals
     const now = new Date();
     const startTime = new Date(now.getTime() - candleCount * 15 * 60000); // 15min intervals
-    
+
     for (let i = 0; i < candleCount; i++) {
       // Create trend towards target with some randomness
       const progressFactor = i / candleCount;
       const trendBias = (entryPrice - basePrice) * trendStrength * progressFactor * targetDirection;
-      
+
       // Add market volatility and noise
       const volatility = Math.random() * 0.015; // 1.5% max volatility
       const randomWalk = (Math.random() - 0.5) * volatility;
-      
+
       const open = basePrice;
       const priceChange = trendBias + randomWalk;
       const close = basePrice * (1 + priceChange);
-      
+
       // Realistic wick generation
       const wickRange = Math.abs(close - open) * (0.5 + Math.random() * 1.5);
       const high = Math.max(open, close) + wickRange * Math.random();
       const low = Math.min(open, close) - wickRange * Math.random();
-      
+
       // Ensure prices stay reasonable
       const finalHigh = Math.max(open, close, high);
       const finalLow = Math.min(open, close, low);
-      
+
       const candleTime = new Date(startTime.getTime() + i * 15 * 60000);
-      
+
       mockData.push({
         timestamp: candleTime.toISOString(),
         open: Math.round(open * 100) / 100,
@@ -251,11 +247,10 @@ RESPOND IN JSON:
         close: Math.round(close * 100) / 100,
         volume: Math.floor(Math.random() * 150000) + 25000 + (i % 5 === 0 ? 50000 : 0) // Volume spikes every 5 candles
       });
-      
+
       basePrice = close;
     }
-    
-    console.log(`🎨 Generated mock ${candleCount} candles from ₹${mockData[0].close} to ₹${mockData[mockData.length-1].close}`);
+
     return mockData;
   }
 
@@ -266,23 +261,23 @@ RESPOND IN JSON:
     const mockData = [];
     const candleCount = 50;
     let currentPrice = basePrice;
-    
+
     // Add some market session-based time intervals
     const now = new Date();
     const startTime = new Date(now.getTime() - candleCount * 15 * 60000); // 15min intervals
-    
+
     for (let i = 0; i < candleCount; i++) {
       // Create slight price movement (±2%)
       const priceChange = (Math.random() - 0.5) * 0.04; // ±2% change
       const open = currentPrice;
       const close = currentPrice * (1 + priceChange);
-      
+
       // Create realistic high and low
       const high = Math.max(open, close) * (1 + Math.random() * 0.01); // Up to 1% wick
       const low = Math.min(open, close) * (1 - Math.random() * 0.01); // Down to 1% wick
-      
+
       const candleTime = new Date(startTime.getTime() + i * 15 * 60000);
-      
+
       mockData.push({
         timestamp: candleTime.toISOString(),
         open: Math.round(open * 100) / 100,
@@ -291,11 +286,10 @@ RESPOND IN JSON:
         close: Math.round(close * 100) / 100,
         volume: Math.floor(Math.random() * 100000) + 50000
       });
-      
+
       currentPrice = close;
     }
-    
-    console.log(`🎨 Generated default mock data for ${symbol}: ${candleCount} candles around ₹${basePrice}`);
+
     return mockData;
   }
 
@@ -307,7 +301,7 @@ RESPOND IN JSON:
     const height = 600;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
-    
+
     // Validate ohlcvData
     if (!ohlcvData || ohlcvData.length === 0) {
       console.warn('⚠️ No OHLCV data provided, generating fallback chart');
@@ -324,8 +318,8 @@ RESPOND IN JSON:
     ctx.fillRect(0, 0, width, height);
 
     // Calculate price range with validation
-    const prices = ohlcvData.map(d => [d.high, d.low]).flat().filter(p => !isNaN(p) && p > 0);
-    
+    const prices = ohlcvData.map((d) => [d.high, d.low]).flat().filter((p) => !isNaN(p) && p > 0);
+
     // If no valid prices, use fallback values
     if (prices.length === 0) {
       console.warn('⚠️ No valid price data found, using fallback chart');
@@ -340,47 +334,47 @@ RESPOND IN JSON:
     }
 
     // Price to pixel conversion
-    const priceToY = (price) => padding.top + ((maxPrice - price) / priceRange) * chartHeight;
-    const indexToX = (index) => padding.left + (index / (ohlcvData.length - 1)) * chartWidth;
+    const priceToY = (price) => padding.top + (maxPrice - price) / priceRange * chartHeight;
+    const indexToX = (index) => padding.left + index / (ohlcvData.length - 1) * chartWidth;
 
     // Draw grid lines with price labels
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 0.5;
     ctx.fillStyle = '#888';
     ctx.font = '10px Arial';
-    
+
     for (let i = 0; i <= 10; i++) {
-      const y = padding.top + (i / 10) * chartHeight;
-      const price = maxPrice - (i / 10) * priceRange;
-      
+      const y = padding.top + i / 10 * chartHeight;
+      const price = maxPrice - i / 10 * priceRange;
+
       // Draw horizontal grid line
       ctx.beginPath();
       ctx.moveTo(padding.left, y);
       ctx.lineTo(width - padding.right, y);
       ctx.stroke();
-      
+
       // Draw price label on right (with validation)
       const priceLabel = isNaN(price) || !isFinite(price) ? '₹--' : `₹${Math.round(price)}`;
       ctx.fillText(priceLabel, width - padding.right + 5, y + 3);
     }
-    
+
     // Draw vertical grid lines with time labels
     for (let i = 0; i <= 5; i++) {
-      const x = padding.left + (i / 5) * chartWidth;
-      const dataIndex = Math.floor((i / 5) * (ohlcvData.length - 1));
-      
+      const x = padding.left + i / 5 * chartWidth;
+      const dataIndex = Math.floor(i / 5 * (ohlcvData.length - 1));
+
       // Draw vertical grid line
       ctx.strokeStyle = '#222';
       ctx.beginPath();
       ctx.moveTo(x, padding.top);
       ctx.lineTo(x, height - padding.bottom);
       ctx.stroke();
-      
+
       // Draw time label at bottom
       if (ohlcvData[dataIndex]) {
         const timestamp = new Date(ohlcvData[dataIndex].timestamp);
-        const timeLabel = timestamp.toLocaleTimeString('en-IN', { 
-          hour: '2-digit', 
+        const timeLabel = timestamp.toLocaleTimeString('en-IN', {
+          hour: '2-digit',
           minute: '2-digit',
           hour12: false,
           timeZone: 'Asia/Kolkata'
@@ -396,7 +390,7 @@ RESPOND IN JSON:
       if (!candle || isNaN(candle.open) || isNaN(candle.close) || isNaN(candle.high) || isNaN(candle.low)) {
         return;
       }
-      
+
       const x = indexToX(index);
       const openY = priceToY(candle.open);
       const closeY = priceToY(candle.close);
@@ -428,10 +422,10 @@ RESPOND IN JSON:
     // Draw support/resistance levels
     if (technicalAnalysis.keyLevels) {
       const levels = technicalAnalysis.keyLevels;
-      
+
       // Support levels
       if (levels.strongSupport) {
-        levels.strongSupport.forEach(price => {
+        levels.strongSupport.forEach((price) => {
           const y = priceToY(price);
           ctx.strokeStyle = '#00ff00';
           ctx.lineWidth = 2;
@@ -440,7 +434,7 @@ RESPOND IN JSON:
           ctx.moveTo(padding.left, y);
           ctx.lineTo(width - padding.right, y);
           ctx.stroke();
-          
+
           // Label
           ctx.fillStyle = '#00ff00';
           ctx.font = '12px Arial';
@@ -450,7 +444,7 @@ RESPOND IN JSON:
 
       // Resistance levels
       if (levels.strongResistance) {
-        levels.strongResistance.forEach(price => {
+        levels.strongResistance.forEach((price) => {
           const y = priceToY(price);
           ctx.strokeStyle = '#ff4444';
           ctx.lineWidth = 2;
@@ -459,7 +453,7 @@ RESPOND IN JSON:
           ctx.moveTo(padding.left, y);
           ctx.lineTo(width - padding.right, y);
           ctx.stroke();
-          
+
           // Label
           ctx.fillStyle = '#ff4444';
           ctx.font = '12px Arial';
@@ -470,7 +464,7 @@ RESPOND IN JSON:
 
     // Draw trendlines
     if (technicalAnalysis.trendlines) {
-      technicalAnalysis.trendlines.forEach(trendline => {
+      technicalAnalysis.trendlines.forEach((trendline) => {
         const startX = indexToX(trendline.startIndex);
         const endX = indexToX(trendline.endIndex);
         const startY = priceToY(trendline.startPrice);
@@ -491,7 +485,7 @@ RESPOND IN JSON:
     let targetPrice = tradeData.target;
     let stopPrice = tradeData.stoploss;
     let showBothLevels = false;
-    
+
     if (technicalAnalysis.updatedLevels && technicalAnalysis.updatedLevels.isOutdated) {
       // Show both original and suggested levels
       showBothLevels = true;
@@ -501,7 +495,7 @@ RESPOND IN JSON:
     if (showBothLevels) {
       // Draw original levels (faded)
       ctx.globalAlpha = 0.3;
-      
+
       // Original entry
       const origEntryY = priceToY(tradeData.entryprice);
       ctx.strokeStyle = '#00ffff';
@@ -514,7 +508,7 @@ RESPOND IN JSON:
       ctx.fillStyle = '#888888';
       ctx.font = '11px Arial';
       ctx.fillText(`Original Entry: ₹${tradeData.entryprice}`, padding.left + 10, origEntryY - 5);
-      
+
       // Original target
       const origTargetY = priceToY(tradeData.target);
       ctx.strokeStyle = '#00ff00';
@@ -523,7 +517,7 @@ RESPOND IN JSON:
       ctx.lineTo(width - padding.right, origTargetY);
       ctx.stroke();
       ctx.fillText(`Original Target: ₹${tradeData.target}`, padding.left + 10, origTargetY - 5);
-      
+
       // Original stop
       const origStopY = priceToY(tradeData.stoploss);
       ctx.strokeStyle = '#ff0000';
@@ -532,16 +526,16 @@ RESPOND IN JSON:
       ctx.lineTo(width - padding.right, origStopY);
       ctx.stroke();
       ctx.fillText(`Original Stop: ₹${tradeData.stoploss}`, padding.left + 10, origStopY + 15);
-      
+
       ctx.setLineDash([]);
       ctx.globalAlpha = 1.0;
-      
+
       // Now draw suggested levels (bright)
       entryPrice = technicalAnalysis.updatedLevels.suggestedEntry;
       targetPrice = technicalAnalysis.updatedLevels.suggestedTarget;
       stopPrice = technicalAnalysis.updatedLevels.suggestedStop;
     }
-    
+
     const entryY = priceToY(entryPrice);
     const targetY = priceToY(targetPrice);
     const stopY = priceToY(stopPrice);
@@ -556,8 +550,8 @@ RESPOND IN JSON:
     ctx.stroke();
     ctx.fillStyle = '#00ffff';
     ctx.font = 'bold 14px Arial';
-    const entryLabel = showBothLevels ? 
-      `📈 SUGGESTED ENTRY: ₹${entryPrice}` : `📈 ENTRY: ₹${entryPrice}`;
+    const entryLabel = showBothLevels ?
+    `📈 SUGGESTED ENTRY: ₹${entryPrice}` : `📈 ENTRY: ₹${entryPrice}`;
     ctx.fillText(entryLabel, padding.left + 10, entryY - 10);
 
     // Target line
@@ -568,8 +562,8 @@ RESPOND IN JSON:
     ctx.lineTo(width - padding.right, targetY);
     ctx.stroke();
     ctx.fillStyle = '#00ff00';
-    const targetLabel = showBothLevels ? 
-      `🎯 SUGGESTED TARGET: ₹${targetPrice}` : `🎯 TARGET: ₹${targetPrice}`;
+    const targetLabel = showBothLevels ?
+    `🎯 SUGGESTED TARGET: ₹${targetPrice}` : `🎯 TARGET: ₹${targetPrice}`;
     ctx.fillText(targetLabel, padding.left + 10, targetY - 10);
 
     // Stop loss line
@@ -580,10 +574,10 @@ RESPOND IN JSON:
     ctx.lineTo(width - padding.right, stopY);
     ctx.stroke();
     ctx.fillStyle = '#ff0000';
-    const stopLabel = showBothLevels ? 
-      `🛑 SUGGESTED STOP: ₹${stopPrice}` : `🛑 STOP: ₹${stopPrice}`;
+    const stopLabel = showBothLevels ?
+    `🛑 SUGGESTED STOP: ₹${stopPrice}` : `🛑 STOP: ₹${stopPrice}`;
     ctx.fillText(stopLabel, padding.left + 10, stopY + 20);
-    
+
     // Show R:R ratio for suggested levels
     if (showBothLevels && technicalAnalysis.updatedLevels.riskRewardRatio) {
       ctx.fillStyle = '#ffff00';
@@ -595,7 +589,7 @@ RESPOND IN JSON:
     if (ohlcvData.length > 0) {
       const currentPrice = ohlcvData[ohlcvData.length - 1].close;
       const currentPriceY = priceToY(currentPrice);
-      
+
       // Draw current price line
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1;
@@ -605,7 +599,7 @@ RESPOND IN JSON:
       ctx.lineTo(width - padding.right, currentPriceY);
       ctx.stroke();
       ctx.setLineDash([]); // Reset dash
-      
+
       // Current price label
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 12px Arial';
@@ -615,24 +609,24 @@ RESPOND IN JSON:
     // Chart title with timeframe
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 18px Arial';
-    const titleText = timeframe ? 
-      `${tradeData.symbol} (${timeframe}) - ${technicalAnalysis.patternType || 'Technical Analysis'}` :
-      `${tradeData.symbol} - ${technicalAnalysis.patternType || 'Technical Analysis'}`;
+    const titleText = timeframe ?
+    `${tradeData.symbol} (${timeframe}) - ${technicalAnalysis.patternType || 'Technical Analysis'}` :
+    `${tradeData.symbol} - ${technicalAnalysis.patternType || 'Technical Analysis'}`;
     ctx.fillText(titleText, padding.left, 30);
-    
+
     // Confidence score
     if (technicalAnalysis.confidenceScore) {
       ctx.fillStyle = '#ffff00';
       ctx.font = '14px Arial';
       ctx.fillText(`Confidence: ${Math.round(technicalAnalysis.confidenceScore * 100)}%`, width - 150, 30);
     }
-    
+
     // Add technical indicators snapshot if available
     if (indicators) {
       ctx.fillStyle = '#cccccc';
       ctx.font = '11px Arial';
       let yPos = height - padding.bottom + 40;
-      
+
       if (indicators.ema20) {
         ctx.fillText(`EMA20: ₹${Math.round(indicators.ema20 * 100) / 100}`, padding.left, yPos);
       }
@@ -643,34 +637,34 @@ RESPOND IN JSON:
         ctx.fillText(`Vol Avg: ${Math.round(indicators.volume_avg / 1000)}K`, padding.left + 200, yPos);
       }
     }
-    
+
     // Warning for outdated trade levels
     if (ohlcvData.length > 0) {
       const currentPrice = ohlcvData[ohlcvData.length - 1].close;
       const entryPrice = tradeData.entryprice;
       const priceDiff = Math.abs((currentPrice - entryPrice) / entryPrice * 100);
-      
-      if (priceDiff > 5) { // If more than 5% difference
+
+      if (priceDiff > 5) {// If more than 5% difference
         ctx.fillStyle = '#ff6600';
         ctx.font = 'bold 12px Arial';
         ctx.fillText(`⚠️ OUTDATED: Current ₹${currentPrice} vs Entry ₹${entryPrice}`, padding.left, 50);
       }
     }
-    
+
     // Add color legend for level interpretation
     if (showBothLevels) {
       const legendX = width - padding.right - 200;
       const legendY = padding.top + 60;
-      
+
       // Legend background
       ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
       ctx.fillRect(legendX - 10, legendY - 10, 190, 80);
-      
+
       // Legend title
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 12px Arial';
       ctx.fillText('Level Legend:', legendX, legendY);
-      
+
       // Legend entries
       ctx.font = '11px Arial';
       ctx.fillStyle = '#00ffff';
@@ -684,7 +678,6 @@ RESPOND IN JSON:
     return canvas.toBuffer('image/png');
   }
 
-
   /**
    * Generate a simple fallback chart with error message
    */
@@ -694,27 +687,27 @@ RESPOND IN JSON:
       const height = 600;
       const canvas = createCanvas(width, height);
       const ctx = canvas.getContext('2d');
-      
+
       // Dark background
       ctx.fillStyle = '#1a1a1a';
       ctx.fillRect(0, 0, width, height);
-      
+
       // Error message
       ctx.fillStyle = '#ff6600';
       ctx.font = 'bold 24px Arial';
       ctx.textAlign = 'center';
       ctx.fillText('Technical Chart Unavailable', width / 2, height / 2 - 60);
-      
+
       // Stock info
       ctx.fillStyle = '#ffffff';
       ctx.font = '18px Arial';
       ctx.fillText(`${tradeData.symbol} - ${tradeData.direction} @ ₹${tradeData.entryprice}`, width / 2, height / 2);
-      
+
       // Suggestion
       ctx.fillStyle = '#888888';
       ctx.font = '14px Arial';
       ctx.fillText('Please try again later or contact support if issue persists', width / 2, height / 2 + 40);
-      
+
       // Trade levels summary
       ctx.textAlign = 'left';
       ctx.fillStyle = '#00ffff';
@@ -723,22 +716,22 @@ RESPOND IN JSON:
       ctx.fillText(`Target: ₹${tradeData.target}`, 50, height - 70);
       ctx.fillStyle = '#ff0000';
       ctx.fillText(`Stop: ₹${tradeData.stoploss}`, 50, height - 40);
-      
+
       const chartBuffer = canvas.toBuffer('image/png');
       return await this.uploadChart(chartBuffer);
-      
+
     } catch (fallbackError) {
       console.error('❌ Fallback chart generation also failed:', fallbackError);
       return null;
     }
   }
-  
+
   /**
    * Upload chart to Azure storage
    */
   async uploadChart(chartBuffer) {
     const fileName = `chart-${uuidv4()}.png`;
-    
+
     try {
       // Save locally first
       const chartDir = path.join(process.cwd(), 'temp', 'charts');
@@ -747,7 +740,7 @@ RESPOND IN JSON:
       }
 
       const localPath = path.join(chartDir, fileName);
-      
+
       fs.writeFileSync(localPath, chartBuffer);
 
       // Import Azure service dynamically
@@ -765,9 +758,9 @@ RESPOND IN JSON:
           console.warn('⚠️ Could not clean up local file:', cleanupError.message);
         }
       }
-      
+
       return azureUrl;
-      
+
     } catch (error) {
       console.error('Chart upload failed:', error);
       // Fallback to local URL

@@ -32,7 +32,7 @@ function calculateMatchScore(searchTerm, stock) {
   if (shortName.startsWith(term)) score += 20;
 
   // Boost score for popular stocks (can add a popularity field later)
-  if (['RELIANCE', 'TCS', 'INFY', 'HDFC', 'ICICI'].some(popular => symbol.includes(popular))) {
+  if (['RELIANCE', 'TCS', 'INFY', 'HDFC', 'ICICI'].some((popular) => symbol.includes(popular))) {
     score += 10;
   }
 
@@ -47,47 +47,46 @@ export async function searchStocks(searchTerm) {
     }
 
     const searchRegex = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    
+
     // Parallel search in both exchanges
     const [nseMatches, bseMatches] = await Promise.all([
-      Stock.find({
-        segment: 'NSE_EQ',
-        is_active: true,
-        $or: [
-          { trading_symbol: searchRegex },
-          { name: searchRegex },
-          { short_name: searchRegex }
-        ]
-      })
-      .select('segment name exchange trading_symbol instrument_key short_name isin')
-      .limit(50)
-      .lean(),
-      
-      Stock.find({
-        segment: 'BSE_EQ',
-        is_active: true,
-        $or: [
-          { trading_symbol: searchRegex },
-          { name: searchRegex },
-          { short_name: searchRegex }
-        ]
-      })
-      .select('segment name exchange trading_symbol instrument_key short_name isin')
-      .limit(50)
-      .lean()
-    ]);
+    Stock.find({
+      segment: 'NSE_EQ',
+      is_active: true,
+      $or: [
+      { trading_symbol: searchRegex },
+      { name: searchRegex },
+      { short_name: searchRegex }]
+
+    }).
+    select('segment name exchange trading_symbol instrument_key short_name isin').
+    limit(50).
+    lean(),
+
+    Stock.find({
+      segment: 'BSE_EQ',
+      is_active: true,
+      $or: [
+      { trading_symbol: searchRegex },
+      { name: searchRegex },
+      { short_name: searchRegex }]
+
+    }).
+    select('segment name exchange trading_symbol instrument_key short_name isin').
+    limit(50).
+    lean()]
+    );
 
     // Calculate match scores and combine results
     const allMatches = [
-      ...nseMatches.map(stock => ({
-        ...stock,
-        matchScore: calculateMatchScore(searchTerm, stock)
-      })),
-      ...bseMatches.map(stock => ({
-        ...stock,
-        matchScore: calculateMatchScore(searchTerm, stock)
-      }))
-    ];
+    ...nseMatches.map((stock) => ({
+      ...stock,
+      matchScore: calculateMatchScore(searchTerm, stock)
+    })),
+    ...bseMatches.map((stock) => ({
+      ...stock,
+      matchScore: calculateMatchScore(searchTerm, stock)
+    }))];
 
     // Sort by match score (best matches first)
     allMatches.sort((a, b) => b.matchScore - a.matchScore);
@@ -95,7 +94,7 @@ export async function searchStocks(searchTerm) {
     // Remove duplicate stocks (same company in both exchanges)
     const uniqueMatches = [];
     const seenNames = new Set();
-    
+
     for (const match of allMatches) {
       const key = match.name.toLowerCase().replace(/\s+/g, '');
       if (!seenNames.has(key)) {
@@ -103,8 +102,8 @@ export async function searchStocks(searchTerm) {
         uniqueMatches.push(match);
       } else {
         // Prefer NSE over BSE for duplicates
-        const existingIndex = uniqueMatches.findIndex(m => 
-          m.name.toLowerCase().replace(/\s+/g, '') === key
+        const existingIndex = uniqueMatches.findIndex((m) =>
+        m.name.toLowerCase().replace(/\s+/g, '') === key
         );
         if (existingIndex >= 0 && match.exchange === 'NSE' && uniqueMatches[existingIndex].exchange === 'BSE') {
           uniqueMatches[existingIndex] = match;
@@ -112,10 +111,10 @@ export async function searchStocks(searchTerm) {
       }
     }
 
-    return { 
+    return {
       allMatches: uniqueMatches.slice(0, 20) // Return top 20 results
     };
-    
+
   } catch (error) {
     console.error('Error searching stocks in DB:', error);
     // Fallback to empty results on error
@@ -133,7 +132,7 @@ export async function getExactStock(instrumentKey) {
     // Check cache first
     const cacheKey = `stock:${instrumentKey}`;
     const cached = stockCache.get(cacheKey);
-    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
       return cached.data;
     }
 
@@ -141,9 +140,9 @@ export async function getExactStock(instrumentKey) {
     const stock = await Stock.findOne({
       instrument_key: instrumentKey,
       is_active: true
-    })
-    .select('-__v -createdAt -updatedAt -search_keywords')
-    .lean();
+    }).
+    select('-__v -createdAt -updatedAt -search_keywords').
+    lean();
 
     if (stock) {
       // Update cache
@@ -154,7 +153,7 @@ export async function getExactStock(instrumentKey) {
     }
 
     return stock;
-    
+
   } catch (error) {
     console.error('Error fetching exact stock from DB:', error);
     return null;
@@ -174,7 +173,7 @@ export async function validateStock(instrumentKey) {
     });
 
     return !!exists;
-    
+
   } catch (error) {
     console.error('Error validating stock:', error);
     return false;
@@ -202,21 +201,20 @@ export async function getCurrentPrice(instrumentKey, sendCandles = false) {
   try {
     // Try different API endpoints
     const apiFormats = [
-      // Current day intraday data
-      {
-        name: 'v3-intraday-current',
-        url: `https://api.upstox.com/v3/historical-candle/intraday/${instrumentKey}/minutes/1`
-      },
-      // Historical data with date range
-      {
-        name: 'v3-historical-with-dates',
-        url: `https://api.upstox.com/v3/historical-candle/${instrumentKey}/minutes/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
-      }
-    ];
+    // Current day intraday data
+    {
+      name: 'v3-intraday-current',
+      url: `https://api.upstox.com/v3/historical-candle/intraday/${instrumentKey}/minutes/1`
+    },
+    // Historical data with date range
+    {
+      name: 'v3-historical-with-dates',
+      url: `https://api.upstox.com/v3/historical-candle/${instrumentKey}/minutes/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
+    }];
 
     for (const format of apiFormats) {
       try {
-    //    console.log(`Trying ${format.name} API for ${instrumentKey}...`);
+        //    console.log(`Trying ${format.name} API for ${instrumentKey}...`);
 
         const response = await axios.get(format.url, axiosConfig);
         const candles = response.data?.data?.candles || [];
@@ -224,20 +222,20 @@ export async function getCurrentPrice(instrumentKey, sendCandles = false) {
         if (candles.length > 0) {
           if (sendCandles) {
             // Return full candle array for market route and other use cases
-         // console.log(`✅ Success with ${format.name} - Returning ${candles.length} candles for ${instrumentKey}`);
+            // console.log(`✅ Success with ${format.name} - Returning ${candles.length} candles for ${instrumentKey}`);
             return candles;
           } else {
             // Return only price for simple price queries
             const latest = candles[0]; // last candle
             const currentPrice = latest ? latest[4] : null; // close price
-         // console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
+            // console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
             return currentPrice;
           }
         }
       } catch (apiError) {
         // Only log significant errors
         if (apiError.response?.status !== 400) {
-          console.log(`${format.name} failed for ${instrumentKey}: ${apiError.response?.status || apiError.message}`);
+
         }
         // Continue to next format
         continue;
@@ -269,17 +267,17 @@ export async function getStockExchange(instrumentKey) {
 export async function getStocksByExchange(exchange, limit = 100) {
   try {
     const segment = exchange === 'NSE' ? 'NSE_EQ' : 'BSE_EQ';
-    
+
     const stocks = await Stock.find({
       segment,
       is_active: true
-    })
-    .select('name trading_symbol instrument_key exchange')
-    .limit(limit)
-    .lean();
-    
+    }).
+    select('name trading_symbol instrument_key exchange').
+    limit(limit).
+    lean();
+
     return stocks;
-    
+
   } catch (error) {
     console.error('Error fetching stocks by exchange:', error);
     return [];
@@ -290,21 +288,20 @@ export async function getStocksByExchange(exchange, limit = 100) {
 export async function getIndexStocks() {
   try {
     const indexStocks = [
-      'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
-      'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK',
-      'LT', 'AXISBANK', 'ASIANPAINT', 'MARUTI', 'WIPRO'
-    ];
-    
+    'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
+    'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK',
+    'LT', 'AXISBANK', 'ASIANPAINT', 'MARUTI', 'WIPRO'];
+
     const stocks = await Stock.find({
       segment: 'NSE_EQ',
       trading_symbol: { $in: indexStocks },
       is_active: true
-    })
-    .select('name trading_symbol instrument_key exchange')
-    .lean();
-    
+    }).
+    select('name trading_symbol instrument_key exchange').
+    lean();
+
     return stocks;
-    
+
   } catch (error) {
     console.error('Error fetching index stocks:', error);
     return [];
@@ -321,12 +318,12 @@ export async function bulkValidateStocks(instrumentKeys) {
     const validStocks = await Stock.find({
       instrument_key: { $in: instrumentKeys },
       is_active: true
-    })
-    .select('instrument_key')
-    .lean();
-    
-    return validStocks.map(s => s.instrument_key);
-    
+    }).
+    select('instrument_key').
+    lean();
+
+    return validStocks.map((s) => s.instrument_key);
+
   } catch (error) {
     console.error('Error bulk validating stocks:', error);
     return [];
@@ -336,7 +333,7 @@ export async function bulkValidateStocks(instrumentKeys) {
 // Clear cache (useful for maintenance)
 export function clearStockCache() {
   stockCache.clear();
-  console.log('Stock cache cleared');
+
 }
 
 // Export all functions

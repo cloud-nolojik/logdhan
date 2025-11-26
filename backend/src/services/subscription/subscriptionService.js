@@ -10,9 +10,9 @@ class SubscriptionService {
   constructor() {
     this.cashfreeClientId = process.env.CASHFREE_CLIENT_ID;
     this.cashfreeClientSecret = process.env.CASHFREE_CLIENT_SECRET;
-    this.cashfreeBaseUrl = process.env.NODE_ENV === 'production' 
-      ? 'https://api.cashfree.com/pg' 
-      : 'https://sandbox.cashfree.com/pg';
+    this.cashfreeBaseUrl = process.env.NODE_ENV === 'production' ?
+    'https://api.cashfree.com/pg' :
+    'https://sandbox.cashfree.com/pg';
     this.webhookSecret = process.env.CASHFREE_WEBHOOK_SECRET;
   }
 
@@ -21,152 +21,151 @@ class SubscriptionService {
    */
   async initializeDefaultPlans() {
     const defaultPlans = [
-      {
-        planId: 'trial_3_stocks',
-        name: '3 Stock Trial',
-        description: '3 stocks watchlist with AI swing analysis',
-        type: 'TRIAL',
-        price: 0,
+    {
+      planId: 'trial_3_stocks',
+      name: '3 Stock Trial',
+      description: '3 stocks watchlist with AI swing analysis',
+      type: 'TRIAL',
+      price: 0,
+      stockLimit: 3,
+      features: [
+      '3 stocks watchlist',
+      'AI swing analysis & setups',
+      'WhatsApp alerts (4 types)',
+      'Entry/exit signals with confidence',
+      'Risk management education',
+      'Broker-independent'],
+
+      recurringType: 'ONE_TIME',
+      billingCycle: 'ONE_TIME',
+      maxAmount: 0,
+      recurringAmount: 0,
+      costCap: 0,
+      grossMargin: 0,
+      pipelineAccess: 'FULL',
+      analysisLevel: 'advanced',
+      restrictions: {
         stockLimit: 3,
-        features: [
-          '3 stocks watchlist',
-          'AI swing analysis & setups',
-          'WhatsApp alerts (4 types)',
-          'Entry/exit signals with confidence',
-          'Risk management education',
-          'Broker-independent'
-        ],
-        recurringType: 'ONE_TIME',
-        billingCycle: 'ONE_TIME',
-        maxAmount: 0,
-        recurringAmount: 0,
-        costCap: 0,
-        grossMargin: 0,
-        pipelineAccess: 'FULL',
-        analysisLevel: 'advanced',
-        restrictions: {
-          stockLimit: 3,
-          trialDurationDays: 30
-        },
-        sortOrder: 0
+        trialDurationDays: 30
       },
-      {
-        planId: '1_stock_plan',
-        cashfreePlanId: '1_stock_plan',
-        name: '1 Stock Plan',
-        description: '1 stocks watchlist with advanced AI analysis',
-        type: 'MONTHLY',
-        price: 99,
-        stockLimit: 20,
-        features: [
-          '20 stocks watchlist',
-          'Advanced AI analysis',
-          'Priority WhatsApp alerts',
-          'Technical pattern recognition',
-          'Market timing education',
-          'Comprehensive setup details'
-        ],
-        recurringType: 'PERIODIC',
-        billingCycle: 'MONTHLY',
-        maxAmount: 99,
-        recurringAmount: 99,
-        costCap: 69,
-        grossMargin: 30,
-        pipelineAccess: 'FULL',
-        analysisLevel: 'advanced',
-        restrictions: {
-          stockLimit: 1
-        },
-        sortOrder: 1
+      sortOrder: 0
+    },
+    {
+      planId: '1_stock_plan',
+      cashfreePlanId: '1_stock_plan',
+      name: '1 Stock Plan',
+      description: '1 stocks watchlist with advanced AI analysis',
+      type: 'MONTHLY',
+      price: 99,
+      stockLimit: 20,
+      features: [
+      '20 stocks watchlist',
+      'Advanced AI analysis',
+      'Priority WhatsApp alerts',
+      'Technical pattern recognition',
+      'Market timing education',
+      'Comprehensive setup details'],
+
+      recurringType: 'PERIODIC',
+      billingCycle: 'MONTHLY',
+      maxAmount: 99,
+      recurringAmount: 99,
+      costCap: 69,
+      grossMargin: 30,
+      pipelineAccess: 'FULL',
+      analysisLevel: 'advanced',
+      restrictions: {
+        stockLimit: 1
       },
-      {
-        planId: '10_stock_plan',
-        cashfreePlanId: '10_stock_plan',
-        name: '10 Stock Plan',
-        description: '10 stocks watchlist with full AI analysis',
-        type: 'MONTHLY',
-        price: 999,
-        stockLimit: 10,
-        features: [
-          '10 stocks watchlist',
-          'Full AI swing analysis',
-          'Real-time WhatsApp alerts',
-          'Entry/SL/target recommendations',
-          'Risk-reward calculations',
-          'Educational content only'
-        ],
-        recurringType: 'PERIODIC',
-        billingCycle: 'MONTHLY',
-        maxAmount: 999,
-        recurringAmount: 999,
-        costCap: 699,
-        grossMargin: 300,
-        pipelineAccess: 'FULL',
-        analysisLevel: 'advanced',
-        restrictions: {
-          stockLimit: 10
-        },
-        sortOrder: 2
+      sortOrder: 1
+    },
+    {
+      planId: '10_stock_plan',
+      cashfreePlanId: '10_stock_plan',
+      name: '10 Stock Plan',
+      description: '10 stocks watchlist with full AI analysis',
+      type: 'MONTHLY',
+      price: 999,
+      stockLimit: 10,
+      features: [
+      '10 stocks watchlist',
+      'Full AI swing analysis',
+      'Real-time WhatsApp alerts',
+      'Entry/SL/target recommendations',
+      'Risk-reward calculations',
+      'Educational content only'],
+
+      recurringType: 'PERIODIC',
+      billingCycle: 'MONTHLY',
+      maxAmount: 999,
+      recurringAmount: 999,
+      costCap: 699,
+      grossMargin: 300,
+      pipelineAccess: 'FULL',
+      analysisLevel: 'advanced',
+      restrictions: {
+        stockLimit: 10
       },
-      {
-        planId: '20_stock_plan',
-        cashfreePlanId: '20_stock_plan',
-        name: '20 Stock Plan',
-        description: '20 stocks watchlist with advanced AI analysis',
-        type: 'MONTHLY',
-        price: 1999,
-        stockLimit: 20,
-        features: [
-          '20 stocks watchlist',
-          'Advanced AI analysis',
-          'Priority WhatsApp alerts',
-          'Technical pattern recognition',
-          'Market timing education',
-          'Comprehensive setup details'
-        ],
-        recurringType: 'PERIODIC',
-        billingCycle: 'MONTHLY',
-        maxAmount: 1999,
-        recurringAmount: 1999,
-        costCap: 1399,
-        grossMargin: 600,
-        pipelineAccess: 'FULL',
-        analysisLevel: 'advanced',
-        restrictions: {
-          stockLimit: 20
-        },
-        sortOrder: 3
+      sortOrder: 2
+    },
+    {
+      planId: '20_stock_plan',
+      cashfreePlanId: '20_stock_plan',
+      name: '20 Stock Plan',
+      description: '20 stocks watchlist with advanced AI analysis',
+      type: 'MONTHLY',
+      price: 1999,
+      stockLimit: 20,
+      features: [
+      '20 stocks watchlist',
+      'Advanced AI analysis',
+      'Priority WhatsApp alerts',
+      'Technical pattern recognition',
+      'Market timing education',
+      'Comprehensive setup details'],
+
+      recurringType: 'PERIODIC',
+      billingCycle: 'MONTHLY',
+      maxAmount: 1999,
+      recurringAmount: 1999,
+      costCap: 1399,
+      grossMargin: 600,
+      pipelineAccess: 'FULL',
+      analysisLevel: 'advanced',
+      restrictions: {
+        stockLimit: 20
       },
-      {
-        planId: '30_stock_plan',
-        cashfreePlanId: '30_stock_plan',
-        name: '30 Stock Plan',
-        description: '30 stocks watchlist with premium AI insights',
-        type: 'MONTHLY',
-        price: 2999,
-        stockLimit: 30,
-        features: [
-          '30 stocks watchlist',
-          'Premium AI insights',
-          'Instant WhatsApp notifications',
-          'Advanced market analysis',
-          'Maximum learning capacity',
-          'Professional education tools'
-        ],
-        recurringType: 'PERIODIC',
-        billingCycle: 'MONTHLY',
-        maxAmount: 2999,
-        recurringAmount: 2999,
-        costCap: 2099,
-        grossMargin: 900,
-        pipelineAccess: 'FULL',
-        analysisLevel: 'advanced',
-        restrictions: {
-          stockLimit: 30
-        },
-        sortOrder: 4
-      }
-    ];
+      sortOrder: 3
+    },
+    {
+      planId: '30_stock_plan',
+      cashfreePlanId: '30_stock_plan',
+      name: '30 Stock Plan',
+      description: '30 stocks watchlist with premium AI insights',
+      type: 'MONTHLY',
+      price: 2999,
+      stockLimit: 30,
+      features: [
+      '30 stocks watchlist',
+      'Premium AI insights',
+      'Instant WhatsApp notifications',
+      'Advanced market analysis',
+      'Maximum learning capacity',
+      'Professional education tools'],
+
+      recurringType: 'PERIODIC',
+      billingCycle: 'MONTHLY',
+      maxAmount: 2999,
+      recurringAmount: 2999,
+      costCap: 2099,
+      grossMargin: 900,
+      pipelineAccess: 'FULL',
+      analysisLevel: 'advanced',
+      restrictions: {
+        stockLimit: 30
+      },
+      sortOrder: 4
+    }];
 
     for (const planData of defaultPlans) {
       await Plan.findOneAndUpdate(
@@ -176,7 +175,6 @@ class SubscriptionService {
       );
     }
 
-    console.log('✅ Default subscription plans initialized');
   }
 
   /**
@@ -221,7 +219,7 @@ class SubscriptionService {
       if (plan.type === 'TRIAL') {
         // Trial plans last for specified trial duration
         const trialDays = plan.restrictions?.trialDurationDays || 30;
-        endDate = new Date(now.getTime() + (trialDays * 24 * 60 * 60 * 1000));
+        endDate = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
       } else if (plan.billingCycle === 'MONTHLY') {
         // Monthly plans
         endDate = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
@@ -282,7 +280,6 @@ class SubscriptionService {
       const subscription = new Subscription(subscriptionData);
       await subscription.save();
 
-      console.log(`✅ Subscription created for user ${userId}: ${subscriptionId}`);
       return subscription;
 
     } catch (error) {
@@ -297,14 +294,14 @@ class SubscriptionService {
   async getUserActiveSubscription(userId) {
     const subscription = await Subscription.findOne({
       userId,
-      status: { $in: ['ACTIVE', 'EXPIRED', 'GRACE_PERIOD'] },
+      status: { $in: ['ACTIVE', 'EXPIRED', 'GRACE_PERIOD'] }
     }).sort({ createdAt: -1 });
 
     if (!subscription) return null;
 
     // Check if subscription needs status update
     await this.checkAndUpdateSubscriptionStatus(subscription);
-    
+
     return subscription;
   }
 
@@ -328,12 +325,12 @@ class SubscriptionService {
         subscription.status = 'EXPIRED';
         subscription.isTrialExpired = true;
         await subscription.save();
-        console.log(`Trial subscription expired for user ${subscription.userId}`);
+
       } else {
         // Paid subscription expired - handle based on your business logic
         subscription.status = 'EXPIRED';
         await subscription.save();
-        console.log(`Paid subscription expired for user ${subscription.userId}`);
+
       }
     }
 
@@ -364,15 +361,15 @@ class SubscriptionService {
       const safeCustomerDetails = customerDetails || {};
 
       // Use customer details from request or fallback to user data
-      const customerName = safeCustomerDetails.name || 
-        user.firstName || user.lastName || user.name || 
-        (user.email ? user.email.split('@')[0] : `User_${user.mobileNumber?.slice(-4) || 'Unknown'}`);
-      
-      const customerEmail = safeCustomerDetails.email || 
-        user.email || `${user.mobileNumber}@logdhan.app`;
-      
-      const customerPhone = safeCustomerDetails.phone || 
-        user.mobileNumber || user.phone || '9999999999';
+      const customerName = safeCustomerDetails.name ||
+      user.firstName || user.lastName || user.name || (
+      user.email ? user.email.split('@')[0] : `User_${user.mobileNumber?.slice(-4) || 'Unknown'}`);
+
+      const customerEmail = safeCustomerDetails.email ||
+      user.email || `${user.mobileNumber}@logdhan.app`;
+
+      const customerPhone = safeCustomerDetails.phone ||
+      user.mobileNumber || user.phone || '9999999999';
 
       // Create Cashfree subscription mandate for payment
       const mandateData = {
@@ -391,15 +388,14 @@ class SubscriptionService {
       }
 
       const cashfreeResponse = await cashfreeSubscriptionService.createSubscriptionMandate(mandateData);
-      
+
       // ✅ CRITICAL FIX: Save cf_subscription_id to user's existing subscription record
       const existingSubscription = await this.getUserActiveSubscription(userId);
       if (existingSubscription && cashfreeResponse.subscriptionId) {
         existingSubscription.cashfreeSubscriptionId = cashfreeResponse.subscriptionId;
         existingSubscription.cashfreeSessionId = cashfreeResponse.subscriptionSessionId;
         await existingSubscription.save();
-        
-        console.log(`✅ Saved cf_subscription_id: ${cashfreeResponse.subscriptionId} to subscription: ${existingSubscription.subscriptionId}`);
+
       }
 
       // Generate checkout URL pointing to nolojik-webapp
@@ -436,14 +432,14 @@ class SubscriptionService {
     try {
       // Process webhook through Cashfree service
       const webhookResult = await cashfreeSubscriptionService.processSubscriptionWebhook(webhookData, signature);
-      
+
       if (!webhookResult.processed) {
         return webhookResult;
       }
 
       // Handle different subscription events
       const { action, subscriptionId } = webhookResult;
-      
+
       // Find local subscription record using cf_subscription_id
       const subscription = await Subscription.findOne({
         cashfreeSubscriptionId: subscriptionId
@@ -469,7 +465,7 @@ class SubscriptionService {
           await this.handlePaymentFailed(subscription, webhookResult.eventData);
           break;
         default:
-          console.log(`📝 Unhandled webhook action: ${action}`);
+
       }
 
       return { processed: true, action, subscriptionId };
@@ -485,28 +481,27 @@ class SubscriptionService {
    */
   async handleSubscriptionActivated(subscription, eventData) {
     try {
-      console.log(`🎉 Handling subscription activation for: ${subscription.subscriptionId}`);
-      
+
       // Use the subscription update service to handle the activation
       const { subscriptionUpdateService } = await import('./subscriptionUpdateService.js');
-      
+
       // Get current Cashfree status to update subscription properly
       const cashfreeStatus = await cashfreeSubscriptionService.getSubscriptionStatus(subscription.cashfreeSubscriptionId);
-      
+
       // Update subscription using the centralized service
       const updateResult = await subscriptionUpdateService.updateSubscriptionFromCashfree(
-        subscription.subscriptionId, 
+        subscription.subscriptionId,
         cashfreeStatus
       );
-      
+
       if (updateResult.updated) {
         // Move cashfree IDs to oldTransactionIds after successful activation
         await subscriptionUpdateService.moveToOldTransactionIds(subscription, 'ACTIVATED_SUCCESSFULLY');
-        console.log(`✅ Subscription activated and updated for user ${subscription.userId}: ${subscription.subscriptionId}`);
+
       } else {
-        console.log(`ℹ️ Subscription activation noted but no update needed: ${subscription.subscriptionId}`);
+
       }
-      
+
     } catch (error) {
       console.error('Error handling subscription activation:', error);
       throw error;
@@ -521,11 +516,9 @@ class SubscriptionService {
       subscription.status = 'CANCELLED';
       subscription.metadata.cancellationReason = eventData.reason || 'User cancelled';
       subscription.metadata.cancelledAt = new Date();
-      
+
       await subscription.save();
-      
-      console.log(`📅 Subscription cancelled for user ${subscription.userId}: ${subscription.subscriptionId}`);
-      
+
     } catch (error) {
       console.error('Error handling subscription cancellation:', error);
       throw error;
@@ -537,29 +530,28 @@ class SubscriptionService {
    */
   async handlePaymentSuccess(subscription, eventData) {
     try {
-      console.log(`💰 Handling payment success for: ${subscription.subscriptionId}`);
-      
+
       // Use the subscription update service to handle the payment success
       const { subscriptionUpdateService } = await import('./subscriptionUpdateService.js');
-      
+
       // Get current Cashfree status to update subscription properly
       const cashfreeStatus = await cashfreeSubscriptionService.getSubscriptionStatus(subscription.cashfreeSubscriptionId);
-      
+
       // Update subscription using the centralized service
       const updateResult = await subscriptionUpdateService.updateSubscriptionFromCashfree(
-        subscription.subscriptionId, 
+        subscription.subscriptionId,
         cashfreeStatus
       );
-      
+
       if (updateResult.updated) {
-        console.log(`✅ Payment processed and subscription updated: ${subscription.subscriptionId}`);
+
       } else {
         // Still update last billing date even if no other changes
         subscription.billing.lastBillingDate = new Date();
         await subscription.save();
-        console.log(`ℹ️ Payment noted, subscription already current: ${subscription.subscriptionId}`);
+
       }
-      
+
     } catch (error) {
       console.error('Error handling payment success:', error);
       throw error;
@@ -573,10 +565,10 @@ class SubscriptionService {
     try {
       // Log payment failure but don't immediately cancel subscription
       console.warn(`💳 Payment failed for subscription ${subscription.subscriptionId}: ${eventData.reason}`);
-      
+
       // You might want to set a grace period or retry logic here
       // For now, just log the failure
-      
+
     } catch (error) {
       console.error('Error handling payment failure:', error);
       throw error;

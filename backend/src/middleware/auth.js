@@ -8,7 +8,6 @@ export const auth = async (req, res, next) => {
     if (!token) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    console.log('Auth token:', token);
 
     // Check if token is blacklisted
     const isBlacklisted = await TokenBlacklist.isTokenBlacklisted(token);
@@ -32,4 +31,4 @@ export const auth = async (req, res, next) => {
     console.error('Auth middleware error:', error);
     res.status(401).json({ error: 'Authentication failed' });
   }
-}; 
+};

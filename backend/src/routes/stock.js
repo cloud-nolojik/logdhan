@@ -4,7 +4,6 @@ import { searchStocks, getExactStock, getCurrentPrice } from '../utils/stockDb.j
 import { User } from '../models/user.js';
 import { auth } from '../middleware/auth.js';
 
-
 const router = express.Router();
 
 // Route: Search stocks
@@ -19,21 +18,21 @@ router.get('/search', auth, async (req, res) => {
     //now we need iwht use rwatchlist if it already added then we need to remove it from the allMatches
     const user = await User.findById(req.user.id);
     const watchlist = user.watchlist;
-    allMatches.forEach(stock => {
-      if (watchlist.some(item => item.instrument_key === stock.instrument_key)) {
+    allMatches.forEach((stock) => {
+      if (watchlist.some((item) => item.instrument_key === stock.instrument_key)) {
         stock.isInWatchlist = true;
-      } 
+      }
     });
 
     res.status(200).json({
-      results: allMatches.map(stock => ({
+      results: allMatches.map((stock) => ({
         instrument_key: stock.instrument_key,
         trading_symbol: stock.trading_symbol,
         name: stock.name,
         exchange: stock.exchange,
         tradingViewLink: `https://www.tradingview.com/chart?symbol=${stock.exchange}:${stock.trading_symbol}`
       })),
-      total: allMatches.length,
+      total: allMatches.length
     });
   } catch (error) {
     console.error('Error in /search:', error);
@@ -45,16 +44,13 @@ router.get('/search', auth, async (req, res) => {
 router.get('/:instrument_key', auth, async (req, res) => {
   try {
     const { instrument_key } = req.params;
-    
+
     // Validate instrument_key parameter
     if (!instrument_key || instrument_key.trim().length === 0) {
       return res.status(400).json({ error: 'Invalid instrument_key parameter' });
     }
-    
-    console.log('Getting stock details for instrument_key:', instrument_key);
-    
+
     const stock = await getExactStock(instrument_key);
-    console.log('Stock found:', stock);
 
     if (!stock) {
       return res.status(404).json({ error: 'Stock not found' });
@@ -64,7 +60,7 @@ router.get('/:instrument_key', auth, async (req, res) => {
     let currentPrice;
     try {
       currentPrice = await getCurrentPrice(instrument_key);
-      console.log('Current price:', currentPrice);
+
     } catch (priceError) {
       console.warn('Error getting current price:', priceError);
       currentPrice = null; // Set to null if price fetch fails
@@ -93,42 +89,36 @@ router.get('/:instrument_key/news', auth, async (req, res) => {
   try {
     const { instrument_key } = req.params;
     const { limit = 10 } = req.query; // Default to 10 news items
-    
-    console.log(`📰 Fetching news for instrument: ${instrument_key}`);
-    
+
     // Validate instrument_key parameter
     if (!instrument_key || instrument_key.trim().length === 0) {
-      console.log('❌ Invalid instrument_key parameter');
-      return res.status(400).json({ 
+
+      return res.status(400).json({
         success: false,
-        error: 'Invalid instrument_key parameter' 
+        error: 'Invalid instrument_key parameter'
       });
     }
 
     // Get stock details to extract stock name
     const stockDetails = await getExactStock(instrument_key);
     if (!stockDetails) {
-      console.log(`❌ Stock not found for instrument: ${instrument_key}`);
-      return res.status(404).json({ 
+
+      return res.status(404).json({
         success: false,
-        error: 'Stock not found' 
+        error: 'Stock not found'
       });
     }
 
-    console.log(`📰 Found stock: ${stockDetails.name || stockDetails.trading_symbol}`);
-
     // Import aiReviewService instance to use its news fetching functionality
     const { aiReviewService } = await import('../services/ai/aiReview.service.js');
-    
+
     // Fetch news using the existing service
     const stockName = stockDetails.name || stockDetails.trading_symbol;
-    console.log(`📰 Fetching  news for: ${stockName}`);
-    
+
     try {
       const newsItems = await aiReviewService.fetchNewsData(stockName);
-      console.log(`📰 Retrieved ${newsItems?.length || 0} news items`);
-      
-      if (!newsItems  || newsItems.length === 0) {
+
+      if (!newsItems || newsItems.length === 0) {
         return res.status(200).json({
           success: true,
           data: {
@@ -140,9 +130,9 @@ router.get('/:instrument_key/news', auth, async (req, res) => {
           }
         });
       }
-      
+
       // Process and format news items for frontend
-      const formattedNews = newsItems.slice(0, parseInt(limit)).map(item => ({
+      const formattedNews = newsItems.slice(0, parseInt(limit)).map((item) => ({
         title: item.title,
         link: item.link,
         publishedDate: item.pubDate,
@@ -151,8 +141,6 @@ router.get('/:instrument_key/news', auth, async (req, res) => {
         thumbnail: item.thumbnail || null,
         guid: item.guid || item.link
       }));
-
-      console.log(`📰 Returning ${formattedNews.length} formatted news items`);
 
       res.status(200).json({
         success: true,
@@ -180,10 +168,10 @@ router.get('/:instrument_key/news', auth, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error in news endpoint:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: 'Failed to fetch stock news',
-      message: error.message 
+      message: error.message
     });
   }
 });

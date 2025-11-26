@@ -5,11 +5,11 @@ import { User } from '../../models/user.js';
 
 class CashfreeService {
   constructor() {
-    this.baseURL = process.env.NODE_ENV === 'production' 
-      ? 'https://api.cashfree.com/pg'
-      : 'https://sandbox.cashfree.com/pg';
-    
-    this.appId =  process.env.NODE_ENV === 'production' ? process.env.CASHFREE_APP_ID : process.env.CASHFREE_APP_ID_TEST;
+    this.baseURL = process.env.NODE_ENV === 'production' ?
+    'https://api.cashfree.com/pg' :
+    'https://sandbox.cashfree.com/pg';
+
+    this.appId = process.env.NODE_ENV === 'production' ? process.env.CASHFREE_APP_ID : process.env.CASHFREE_APP_ID_TEST;
     this.secretKey = process.env.NODE_ENV === 'production' ? process.env.CASHFREE_SECRET_KEY : process.env.CASHFREE_SECRET_KEY_TEST;
     this.apiVersion = '2025-01-01';
   }
@@ -39,7 +39,7 @@ class CashfreeService {
 
       // Calculate credits for the amount (deprecated - use subscriptions instead)
       const credits = Math.floor(amount / 0.5); // Simple calculation
-      
+
       // Prepare order data for Cashfree (minimal required fields)
       const orderData = {
         order_amount: amount,
@@ -49,28 +49,21 @@ class CashfreeService {
           customer_phone: user.mobileNumber || "9999999999"
         }
       };
-      
+
       // Add optional fields if available
       if (user.firstName && user.lastName) {
         orderData.customer_details.customer_name = `${user.firstName} ${user.lastName}`;
       }
-      
+
       if (user.email) {
         orderData.customer_details.customer_email = user.email;
       }
-      
+
       // Add return URL for Cashfree to redirect after payment
       orderData.order_meta = {
         return_url: `https://www.nolojik.com/logdhan/thankyou`,
         notify_url: `${process.env.BACKEND_URL}/api/payments/webhook`
       };
-
-      console.log('Cashfree Debug - Environment:', process.env.NODE_ENV);
-      console.log('Cashfree Debug - Base URL:', this.baseURL);
-      console.log('Cashfree Debug - App ID:', this.appId ? 'SET' : 'NOT SET');
-      console.log('Cashfree Debug - Secret Key:', this.secretKey ? 'SET' : 'NOT SET');
-      console.log('Cashfree Debug - Headers:', JSON.stringify(this.getHeaders(), null, 2));
-      console.log('Cashfree Debug - Order Data:', JSON.stringify(orderData, null, 2));
 
       // Create order with Cashfree
       const response = await axios.post(
@@ -80,13 +73,6 @@ class CashfreeService {
       );
 
       const { payment_session_id, order_id } = response.data;
-
-      console.log('Cashfree Debug - Payment Session ID:', payment_session_id);
-      console.log('Cashfree Debug - Order ID:', order_id);
-      
-      console.log('Cashfree Debug - Raw Response Data:', JSON.stringify(response.data, null, 2));
-      console.log('Cashfree Debug - Extracted payment_session_id:', payment_session_id);
-      console.log('Cashfree Debug - payment_session_id length:', payment_session_id?.length);
 
       // Save order to database
       const payment = new Payment({
@@ -105,7 +91,6 @@ class CashfreeService {
 
       await payment.save();
 
-      console.log('Cashfree Debug - Payment URL:', `https://www.nolojik.com/logdhan/checkout?sessionId=${payment_session_id}&amount=${amount}&orderId=${order_id}&type=payment`);
       return {
         success: true,
         data: {
@@ -123,7 +108,7 @@ class CashfreeService {
       console.error('Error response data:', error.response?.data);
       console.error('Error response status:', error.response?.status);
       console.error('Error response headers:', error.response?.headers);
-      
+
       if (error.response?.data) {
         throw new Error(`Cashfree Error: ${JSON.stringify(error.response.data)}`);
       } else {
@@ -137,11 +122,11 @@ class CashfreeService {
    */
   verifyWebhookSignature(payload, signature) {
     try {
-      const expectedSignature = crypto
-        .createHmac('sha256', this.secretKey)
-        .update(payload)
-        .digest('hex');
-      
+      const expectedSignature = crypto.
+      createHmac('sha256', this.secretKey).
+      update(payload).
+      digest('hex');
+
       return signature === expectedSignature;
     } catch (error) {
       console.error('Error verifying webhook signature:', error);
@@ -177,10 +162,8 @@ class CashfreeService {
         });
 
         // Credit addition is now handled by subscription system
-        console.log(`Payment processed: ${order_id} - Credits now managed via subscriptions`);
 
         // Package assignment is now handled by subscription system
-        console.log(`Package assignment skipped - using subscription system for user ${payment.user}`);
 
         return {
           success: true,
@@ -237,8 +220,8 @@ class CashfreeService {
   async getUserPayments(userId, limit = 20, skip = 0) {
     try {
       const payments = await Payment.getUserPayments(userId, limit, skip);
-      
-      return payments.map(payment => ({
+
+      return payments.map((payment) => ({
         id: payment._id,
         orderId: payment.orderId,
         amount: payment.amount,
@@ -255,4 +238,4 @@ class CashfreeService {
   }
 }
 
-export const cashfreeService = new CashfreeService(); 
+export const cashfreeService = new CashfreeService();

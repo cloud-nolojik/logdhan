@@ -21,7 +21,7 @@ class ReferralService {
       }
 
       const referralCode = await ReferralCode.findOrCreateForUser(userId);
-      
+
       return {
         code: referralCode.code,
         totalRedemptions: referralCode.analytics.totalRedemptions,
@@ -60,9 +60,9 @@ class ReferralService {
       }
 
       // Find referral code
-      const referralCode = await ReferralCode.findOne({ 
-        code: code.toUpperCase(), 
-        isActive: true 
+      const referralCode = await ReferralCode.findOne({
+        code: code.toUpperCase(),
+        isActive: true
       }).session(session);
 
       if (!referralCode) {
@@ -79,7 +79,7 @@ class ReferralService {
       if (metadata.ip) {
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
-        
+
         // Check IP limit (implement with Redis in production)
         const ipRedemptions = await this.countRedemptionsByIP(metadata.ip, todayStart);
         if (ipRedemptions >= this.maxRedemptionsPerIP) {
@@ -138,8 +138,6 @@ class ReferralService {
 
       await session.commitTransaction();
 
-      console.log(`✅ Referral redeemed: ${user.firstName} used ${code} from ${referrer.firstName}. Both got +${this.bonusAmount} credits.`);
-
       return {
         success: true,
         message: `🎁 +${this.bonusAmount} credits added for you and your friend!`,
@@ -162,9 +160,9 @@ class ReferralService {
    */
   async getReferralStats(userId) {
     try {
-      const referralCode = await ReferralCode.findOne({ 
-        referrer: userId, 
-        isActive: true 
+      const referralCode = await ReferralCode.findOne({
+        referrer: userId,
+        isActive: true
       }).populate('redeemedBy.user', 'firstName lastName createdAt');
 
       if (!referralCode) {
@@ -189,9 +187,9 @@ class ReferralService {
         if (subscription) paidConversions++;
       }
 
-      const conversionRate = referralCode.redeemedBy.length > 0 
-        ? (paidConversions / referralCode.redeemedBy.length) * 100 
-        : 0;
+      const conversionRate = referralCode.redeemedBy.length > 0 ?
+      paidConversions / referralCode.redeemedBy.length * 100 :
+      0;
 
       return {
         code: referralCode.code,
@@ -199,13 +197,13 @@ class ReferralService {
         creditsEarned: referralCode.analytics.totalCreditsEarned,
         remainingUses: referralCode.remainingUses,
         conversionRate: Math.round(conversionRate),
-        recentReferrals: referralCode.redeemedBy
-          .slice(-5)
-          .map(r => ({
-            name: r.user.firstName || 'Friend',
-            date: r.redeemedAt,
-            credits: r.creditsBonusGiven
-          }))
+        recentReferrals: referralCode.redeemedBy.
+        slice(-5).
+        map((r) => ({
+          name: r.user.firstName || 'Friend',
+          date: r.redeemedAt,
+          credits: r.creditsBonusGiven
+        }))
       };
     } catch (error) {
       console.error('Error getting referral stats:', error);

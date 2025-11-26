@@ -13,7 +13,6 @@ import pLimit from 'p-limit';
 // Upstox allows 50 requests/second, so 20 concurrent is safe with 10s timeouts
 const limit = pLimit(20); // Optimized for better performance while staying within rate limits
 
-
 const router = express.Router();
 
 // Add stock to watchlist
@@ -29,8 +28,8 @@ router.post('/', auth, async (req, res) => {
 
     // Check if stock is already in watchlist
     const user = await User.findById(req.user.id);
-    const isInWatchlist = user.watchlist.some(item => 
-      item.instrument_key === instrument_key
+    const isInWatchlist = user.watchlist.some((item) =>
+    item.instrument_key === instrument_key
     );
 
     if (isInWatchlist) {
@@ -39,10 +38,10 @@ router.post('/', auth, async (req, res) => {
 
     // Check stock limit based on subscription
     const currentStockCount = user.watchlist.length;
-    
+
     try {
       const stockLimitCheck = await Subscription.canUserAddStock(req.user.id, currentStockCount);
-      
+
       if (!stockLimitCheck.canAdd) {
         return res.status(403).json({
           error: 'Stock limit reached',
@@ -58,7 +57,7 @@ router.post('/', auth, async (req, res) => {
     } catch (subscriptionError) {
       console.error('Error checking subscription limits:', subscriptionError);
       return res.status(400).json({
-        error: 'Subscription check failed', 
+        error: 'Subscription check failed',
         message: subscriptionError.message
       });
     }
@@ -89,14 +88,12 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-
 // Get user's watchlist
 router.get('/', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     const watchlist = user.watchlist || [];
 
-    console.log(`⚡ Fetching data for ${watchlist.length} items in watchlist...`);
     const startTime = Date.now();
 
     // Check if we're currently in the scheduled window using MarketHoursUtil
@@ -104,11 +101,11 @@ router.get('/', auth, async (req, res) => {
     const isInScheduledWindow = bulkAnalysisCheck.reason === 'scheduled_window';
 
     if (isInScheduledWindow) {
-      console.log('⏰ Currently in scheduled window (4:00 PM - 4:59 PM IST) - hiding all analyses');
+
     }
 
     // ⚡ OPTIMIZATION: Fetch prices using triple-fallback pattern (DB → Memory → API)
-    const instrumentKeys = watchlist.map(item => item.instrument_key);
+    const instrumentKeys = watchlist.map((item) => item.instrument_key);
     const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
 
     // Process watchlist items in parallel (for analysis and monitoring data)
@@ -122,7 +119,7 @@ router.get('/', auth, async (req, res) => {
           let analysis = null;
           if (!isInScheduledWindow) {
             analysis = await StockAnalysis.findOne({
-              instrument_key: item.instrument_key,
+              instrument_key: item.instrument_key
             }).sort({ created_at: -1 }).lean();
           }
 
@@ -136,9 +133,9 @@ router.get('/', auth, async (req, res) => {
             const strategies = analysis.analysis_data.strategies;
             if (strategies.length > 0) {
               // Get average confidence from all strategies
-              const confidences = strategies
-                .filter(s => s.confidence != null)
-                .map(s => s.confidence);
+              const confidences = strategies.
+              filter((s) => s.confidence != null).
+              map((s) => s.confidence);
               if (confidences.length > 0) {
                 ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
               }
@@ -188,7 +185,6 @@ router.get('/', auth, async (req, res) => {
     );
 
     const endTime = Date.now();
-    console.log(`⚡ Total watchlist fetch completed in ${endTime - startTime}ms (${watchlist.length} stocks)`);
 
     // Get subscription info for stock limits
     let stockLimitInfo = null;
@@ -208,11 +204,6 @@ router.get('/', auth, async (req, res) => {
 
     // Get cache statistics for last update time
     const cacheStats = priceCacheService.getStats();
-    console.log('📊 Cache stats:', {
-      lastFetchTime: cacheStats.lastFetchTime,
-      cacheAge: cacheStats.cacheAge,
-      isFetching: cacheStats.isFetching
-    });
 
     res.json({
       data: watchlistWithPrices,
@@ -234,13 +225,12 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-
 // Remove stock from watchlist
 router.delete('/:instrument_key', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     const stockIndex = user.watchlist.findIndex(
-      item => item.instrument_key === req.params.instrument_key
+      (item) => item.instrument_key === req.params.instrument_key
     );
 
     if (stockIndex === -1) {
@@ -257,6 +247,4 @@ router.delete('/:instrument_key', auth, async (req, res) => {
   }
 });
 
-
-
-export default router; 
+export default router;

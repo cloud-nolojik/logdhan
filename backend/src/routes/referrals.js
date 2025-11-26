@@ -12,7 +12,7 @@ const router = express.Router();
 router.get('/code', auth, subscriptionRateLimit, async (req, res) => {
   try {
     const result = await referralService.getUserReferralCode(req.user.id);
-    
+
     res.json({
       success: true,
       data: result
@@ -33,7 +33,7 @@ router.get('/code', auth, subscriptionRateLimit, async (req, res) => {
 router.post('/redeem', auth, subscriptionRateLimit, async (req, res) => {
   try {
     const { code } = req.body;
-    
+
     if (!code || typeof code !== 'string' || code.length < 6) {
       return res.status(400).json({
         success: false,
@@ -48,22 +48,16 @@ router.post('/redeem', auth, subscriptionRateLimit, async (req, res) => {
     };
 
     const result = await referralService.redeemReferralCode(req.user.id, code, metadata);
-    
+
     // Track analytics event
-    console.log('📊 Referral Analytics:', {
-      event: 'referral_redeemed',
-      userId: req.user.id,
-      code,
-      timestamp: new Date().toISOString()
-    });
-    
+
     res.json({
       success: true,
       data: result
     });
   } catch (error) {
     console.error('Error redeeming referral code:', error);
-    
+
     // Return specific error messages for common failures
     const errorMessages = {
       'Invalid referral code': 'The referral code you entered is invalid.',
@@ -74,9 +68,9 @@ router.post('/redeem', auth, subscriptionRateLimit, async (req, res) => {
       'User has already received a referral bonus': 'You have already received a referral bonus.',
       'Too many redemptions from this device': 'Too many referrals from this device today. Try again tomorrow.'
     };
-    
+
     const message = errorMessages[error.message] || 'Failed to redeem referral code. Please try again.';
-    
+
     res.status(400).json({
       success: false,
       message,
@@ -92,10 +86,10 @@ router.post('/redeem', auth, subscriptionRateLimit, async (req, res) => {
 router.get('/stats', auth, subscriptionRateLimit, async (req, res) => {
   try {
     const stats = await referralService.getReferralStats(req.user.id);
-    
+
     // Add CAC calculation
     const cac = referralService.calculateReferralCAC(stats.conversionRate);
-    
+
     res.json({
       success: true,
       data: {
@@ -123,16 +117,9 @@ router.get('/stats', auth, subscriptionRateLimit, async (req, res) => {
 router.post('/share', auth, subscriptionRateLimit, async (req, res) => {
   try {
     const { channel, code } = req.body;
-    
+
     // Track sharing analytics
-    console.log('📊 Referral Share Analytics:', {
-      event: 'referral_code_shared',
-      userId: req.user.id,
-      channel: channel || 'unknown',
-      code,
-      timestamp: new Date().toISOString()
-    });
-    
+
     res.json({
       success: true,
       message: 'Share tracked successfully'

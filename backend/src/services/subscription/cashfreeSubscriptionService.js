@@ -8,28 +8,21 @@ import crypto from 'crypto';
 class CashfreeSubscriptionService {
   constructor() {
     const isProduction = process.env.ENVIRONMENT === 'PRODUCTION';
-    
-    this.baseURL = isProduction 
-      ? 'https://api.cashfree.com/pg' 
-      : 'https://sandbox.cashfree.com/pg';
-    
-    this.clientId = isProduction 
-      ? process.env.CASHFREE_APP_ID 
-      : process.env.CASHFREE_APP_ID_TEST;
-    
-    this.clientSecret = isProduction 
-      ? process.env.CASHFREE_SECRET_KEY 
-      : process.env.CASHFREE_SECRET_KEY_TEST;
-    
+
+    this.baseURL = isProduction ?
+    'https://api.cashfree.com/pg' :
+    'https://sandbox.cashfree.com/pg';
+
+    this.clientId = isProduction ?
+    process.env.CASHFREE_APP_ID :
+    process.env.CASHFREE_APP_ID_TEST;
+
+    this.clientSecret = isProduction ?
+    process.env.CASHFREE_SECRET_KEY :
+    process.env.CASHFREE_SECRET_KEY_TEST;
+
     this.apiVersion = '2025-01-01';
-    
-    console.log('🔑 Cashfree config:', {
-      baseURL: this.baseURL,
-      clientId: this.clientId ? `${this.clientId.substring(0, 10)}...` : 'NOT SET',
-      clientSecret: this.clientSecret ? '***SET***' : 'NOT SET',
-      apiVersion: this.apiVersion,
-      NODE_ENV: process.env.NODE_ENV
-    });
+
   }
 
   /**
@@ -73,17 +66,12 @@ class CashfreeSubscriptionService {
         plan_note: `LogDhan ${planData.planName} subscription plan`
       };
 
-      console.log('📦 Creating Cashfree plan:', JSON.stringify(cashfreePlanData, null, 2));
-
       const response = await axios.post(
         `${this.baseURL}/plans`,
         cashfreePlanData,
         { headers: this.getHeaders() }
       );
 
-      console.log(`✅ Created Cashfree plan: ${response.data.plan_id}`);
-      console.log('📦 Plan creation response:', JSON.stringify(response.data, null, 2));
-      
       return {
         planId: response.data.plan_id,
         planName: response.data.plan_name,
@@ -104,10 +92,10 @@ class CashfreeSubscriptionService {
         message: error.message,
         headers: error.response?.headers
       });
-      
+
       // If plan already exists, that's okay - return success
       if (error.response?.status === 409 || error.response?.data?.message?.includes('already exists')) {
-        console.log('✅ Plan already exists in Cashfree, continuing...');
+
         return {
           planId: planData.planId,
           planName: planData.planName,
@@ -120,13 +108,13 @@ class CashfreeSubscriptionService {
           status: 'ACTIVE'
         };
       }
-      
+
       // Extract the actual error message from Cashfree response
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.error || 
-                          error.response?.statusText || 
-                          error.message;
-      
+      const errorMessage = error.response?.data?.message ||
+      error.response?.data?.error ||
+      error.response?.statusText ||
+      error.message;
+
       throw new Error(`Failed to create Cashfree plan: ${errorMessage}`);
     }
   }
@@ -141,7 +129,6 @@ class CashfreeSubscriptionService {
         { headers: this.getHeaders() }
       );
 
-      console.log('📊 Cashfree subscription status response:', response.data);
       return response.data;
     } catch (error) {
       console.error('❌ Error fetching subscription status:', error.response?.data || error.message);
@@ -184,7 +171,7 @@ class CashfreeSubscriptionService {
 
       // Generate subscription ID first
       const subscriptionId = `logdhan_sub_${subscriptionData.userId}_${Date.now()}`;
-      
+
       const mandateData = {
         subscription_id: subscriptionId,
         customer_details: {
@@ -213,18 +200,10 @@ class CashfreeSubscriptionService {
           notification_url: `https://cooling-sciences-silence-strikes.trycloudflare.com/api/v1/subscriptions/webhook`
         },
         subscription_first_charge_time: null,
-        subscription_expiry_time: new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString() // 1 day from now
+        subscription_expiry_time: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() // 1 day from now
       };
 
       const returnUrl = `https://www.nolojik.com/logdhan/thankyou`;
-      console.log('🔗 Thank You URL will be:', returnUrl);
-      console.log('🔄 Creating Cashfree subscription with data:', JSON.stringify(mandateData, null, 2));
-
-      console.log('📤 Sending subscription request to Cashfree:', {
-        url: `${this.baseURL}/subscriptions`,
-        planName: mandateData.plan_details.plan_name,
-        customerEmail: mandateData.customer_details.customer_email
-      });
 
       const response = await axios.post(
         `${this.baseURL}/subscriptions`,
@@ -232,9 +211,6 @@ class CashfreeSubscriptionService {
         { headers: this.getHeaders() }
       );
 
-      console.log(`✅ Created subscription mandate: ${response.data.subscription_id}`);
-      console.log('📦 Full Cashfree response:', JSON.stringify(response.data, null, 2));
-      
       return {
         subscriptionId: response.data.subscription_id,
         subscriptionSessionId: response.data.subscription_session_id,
@@ -250,13 +226,13 @@ class CashfreeSubscriptionService {
         message: error.message,
         headers: error.response?.headers
       });
-      
+
       // Extract the actual error message from Cashfree response
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.error || 
-                          error.response?.statusText || 
-                          error.message;
-      
+      const errorMessage = error.response?.data?.message ||
+      error.response?.data?.error ||
+      error.response?.statusText ||
+      error.message;
+
       throw new Error(`Failed to create subscription: ${errorMessage}`);
     }
   }
@@ -305,7 +281,6 @@ class CashfreeSubscriptionService {
         { headers: this.getHeaders() }
       );
 
-      console.log(`✅ Cancelled subscription: ${subscriptionId}`);
       return {
         subscriptionId: response.data.subscription_id,
         status: response.data.subscription_status,
@@ -328,7 +303,7 @@ class CashfreeSubscriptionService {
         { headers: this.getHeaders() }
       );
 
-      return response.data.map(payment => ({
+      return response.data.map((payment) => ({
         paymentId: payment.payment_id,
         subscriptionId: payment.subscription_id,
         amount: payment.payment_amount,
@@ -359,7 +334,6 @@ class CashfreeSubscriptionService {
         { headers: this.getHeaders() }
       );
 
-      console.log(`✅ Paused subscription: ${subscriptionId}`);
       return {
         subscriptionId: response.data.subscription_id,
         status: response.data.subscription_status,
@@ -387,7 +361,6 @@ class CashfreeSubscriptionService {
         { headers: this.getHeaders() }
       );
 
-      console.log(`✅ Resumed subscription: ${subscriptionId}`);
       return {
         subscriptionId: response.data.subscription_id,
         status: response.data.subscription_status,
@@ -405,11 +378,11 @@ class CashfreeSubscriptionService {
    */
   verifyWebhookSignature(payload, signature) {
     try {
-      const expectedSignature = crypto
-        .createHmac('sha256', this.clientSecret)
-        .update(payload)
-        .digest('hex');
-      
+      const expectedSignature = crypto.
+      createHmac('sha256', this.clientSecret).
+      update(payload).
+      digest('hex');
+
       return signature === expectedSignature;
     } catch (error) {
       console.error('Error verifying webhook signature:', error);
@@ -427,8 +400,6 @@ class CashfreeSubscriptionService {
       if (!this.verifyWebhookSignature(payload, signature)) {
         throw new Error('Invalid webhook signature');
       }
-
-      console.log(`📥 Processing subscription webhook: ${webhookData.type}`);
 
       const eventType = webhookData.type;
       const subscriptionData = webhookData.data;

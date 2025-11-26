@@ -57,7 +57,7 @@ export class InfobipProvider extends MessagingProvider {
     }
 
     // Ensure phone number is in correct format
-     let formattedNumber = to;
+    let formattedNumber = to;
     // if (!formattedNumber.startsWith('+')) {
     //   formattedNumber = '+' + formattedNumber;
     // }
@@ -83,28 +83,28 @@ export class InfobipProvider extends MessagingProvider {
     // Add buttons for templates that have them
     if (templateName === 'otp') {
       content.templateData.buttons = [
-        {
-          type: "URL",
-          parameter: templateData.otp || "000000"
-        }
-      ];
+      {
+        type: "URL",
+        parameter: templateData.otp || "000000"
+      }];
+
     } else if (templateName === 'monitoring_conditions_met') {
       content.templateData.buttons = [
-        {
-          type: "URL",
-          parameter: templateData.instrumentKey || ""
-        }
-      ];
+      {
+        type: "URL",
+        parameter: templateData.instrumentKey || ""
+      }];
+
     }
 
     const postData = {
       messages: [
-        {
-          from: this.config.fromNumber,
-          to: formattedNumber,
-          content: content
-        }
-      ]
+      {
+        from: this.config.fromNumber,
+        to: formattedNumber,
+        content: content
+      }]
+
     };
 
     return new Promise((resolve, reject) => {
@@ -127,9 +127,9 @@ export class InfobipProvider extends MessagingProvider {
           try {
             const body = Buffer.concat(chunks);
             const response = JSON.parse(body.toString());
-            
+
             if (res.statusCode >= 200 && res.statusCode < 300) {
-              console.log('✅ Infobip WhatsApp message sent successfully:', response);
+
               resolve(response);
             } else {
               console.error('❌ Infobip API error:', response);
@@ -164,18 +164,18 @@ export class InfobipProvider extends MessagingProvider {
     switch (templateName) {
       case 'otp':
         return [
-          templateData.otp || '000000'
-        ];
+        templateData.otp || '000000'];
+
       case 'analysis_service_update':
         return [
-          templateData.userName || 'logdhanuser',
-          templateData.stocksWithFeedback || '0 stocks'
-        ];
+        templateData.userName || 'logdhanuser',
+        templateData.stocksWithFeedback || '0 stocks'];
+
       case 'monitoring_conditions_met':
         return [
-          templateData.userName || 'logdhanuser',
-          templateData.stockSymbol || 'Stock'
-        ];
+        templateData.userName || 'logdhanuser',
+        templateData.stockSymbol || 'Stock'];
+
       default:
         return [];
     }

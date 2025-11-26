@@ -19,7 +19,7 @@ const router = express.Router();
 // Helper function to extract confidence from UI chips
 function extractConfidenceFromChips(chips) {
   if (!Array.isArray(chips)) return null;
-  
+
   // Look for confidence-related chips (RR, confidence, score, etc.)
   for (const chip of chips) {
     if (chip.label && typeof chip.value === 'string') {
@@ -30,7 +30,7 @@ function extractConfidenceFromChips(chips) {
       }
     }
   }
-  
+
   // Default confidence based on verdict tone
   return 0.5; // neutral confidence
 }
@@ -38,22 +38,22 @@ function extractConfidenceFromChips(chips) {
 // Helper function to extract risk level from analysis data
 function extractRiskLevel(analysisData) {
   if (!analysisData) return null;
-  
+
   // Check if analysis indicates high risk
   if (analysisData.isValid === false) return "High";
-  
+
   // Check guards for risk indicators
   if (analysisData.guards?.needsData) return "High";
-  
+
   // Check user review validity
   if (analysisData.userReview?.isValidToday === false) return "Medium-High";
-  
+
   // Check alignment issues
   const alignment = analysisData.userReview?.alignment;
   if (alignment?.withVWAP === 'below' && alignment?.with15mBias === 'against') {
     return "High";
   }
-  
+
   // Default to medium risk
   return "Medium";
 }
@@ -78,8 +78,6 @@ router.post('/', auth, async (req, res) => {
       sentimentModel,
       analysisModel
     } = req.body;
-
-
 
     // Validate log data
     const { errors, isValid } = validateStockLog({
@@ -110,13 +108,13 @@ router.post('/', auth, async (req, res) => {
     if (needsReview) {
       // Check if user has enough credits in their subscription
       const { subscriptionService } = await import('../services/subscription/subscriptionService.js');
-      
+
       const canUse = await subscriptionService.canUserUseCredits(req.user.id, 1, isFromRewardedAd);
-      
+
       if (!canUse.canUse) {
         // Determine if we should suggest watching an ad
         const suggestAd = !isFromRewardedAd && (canUse.reason?.includes('exhausted') || canUse.reason?.includes('limit'));
-        
+
         return res.status(402).json({
           error: `${canUse.reason || 'Please upgrade your subscription to continue using AI trade reviews.'}`,
           suggestAd: suggestAd,
@@ -145,7 +143,7 @@ router.post('/', auth, async (req, res) => {
       // Only set review-related fields if review is actually requested
       ...(needsReview && {
         isFromRewardedAd: isFromRewardedAd || false,
-        creditType: isFromRewardedAd ? "bonus" : (creditType || "regular"),
+        creditType: isFromRewardedAd ? "bonus" : creditType || "regular",
         reviewRequestedAt: new Date(),
         reviewStatus: 'pending'
       })
@@ -174,10 +172,10 @@ router.post('/', auth, async (req, res) => {
         analysisModel: analysisModel || null,
         creditType: creditType || "regular", // Pass credit type for model selection
         isFromRewardedAd: isFromRewardedAd // Flag indicating ad was watched
-      }, req.user.id).catch(error => { // Pass user ID for experience-based responses
+      }, req.user.id).catch((error) => {// Pass user ID for experience-based responses
         // Just log the error, don't block the response
         console.error('Error triggering AI review workflow:', error);
-        console.log('Trade will be created successfully, AI review will retry or handle separately');
+
       });
     }
 
@@ -208,27 +206,23 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-
-router.get('/getLogs',auth,async(req,res)=>{
+router.get('/getLogs', auth, async (req, res) => {
   try {
     const logs = await StockLog.find({ user: req.user.id }).sort({ createdAt: -1 });
-    res.json({ 
+    res.json({
       success: true,
       data: logs,
       message: "Trade logs retrieved successfully"
     });
   } catch (error) {
     console.error('Error fetching stock logs:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Error fetching stock logs',
-      data: null 
+      data: null
     });
   }
 });
-
-
-
 
 // Get stock log entries for a symbol
 router.get('/:instrument_key', auth, async (req, res) => {
@@ -243,7 +237,7 @@ router.get('/:instrument_key', auth, async (req, res) => {
       'stock.instrument_key': stock.instrument_key
     }).sort({ executedAt: -1 });
 
-    const entries = logs.map(log => ({
+    const entries = logs.map((log) => ({
       id: log._id,
       instrument_key: log.stock.instrument_key,
       trading_symbol: log.stock.trading_symbol,
@@ -282,7 +276,7 @@ router.get('/:id/trade-log', auth, async (req, res) => {
   try {
     const logEntry = await StockLog.findOne({
       _id: req.params.id,
-      user: req.user.id,
+      user: req.user.id
     });
 
     if (!logEntry) {
@@ -306,24 +300,23 @@ router.get('/:id/review-status', auth, async (req, res) => {
   try {
     const logEntry = await StockLog.findOne({
       _id: req.params.id,
-      user: req.user.id,
+      user: req.user.id
     });
 
-        if (!logEntry) {
-          return res.status(404).json({ error: 'Log entry not found' });
+    if (!logEntry) {
+      return res.status(404).json({ error: 'Log entry not found' });
     }
 
-    
     // Extract data from the new AI review structure
     const reviewData = logEntry?.reviewResult?.[0];
     const analysisData = reviewData?.analysis;
     const uiData = reviewData?.ui;
-    
+
     // Check if review is completed based on reviewStatus and reviewResult presence
-    const isReviewCompleted = logEntry.reviewStatus === 'completed' || 
-                              logEntry.reviewStatus === 'rejected' ||
-                              (logEntry.reviewStatus === 'failed' && reviewData) ||
-                              (reviewData && analysisData);
+    const isReviewCompleted = logEntry.reviewStatus === 'completed' ||
+    logEntry.reviewStatus === 'rejected' ||
+    logEntry.reviewStatus === 'failed' && reviewData ||
+    reviewData && analysisData;
 
     // Extract rejection reason from flat structure (now consistent across success/rejected)
     const rejectionReason = analysisData?.rejectionReason || null;
@@ -334,26 +327,26 @@ router.get('/:id/review-status', auth, async (req, res) => {
       reviewStatus: logEntry.reviewStatus,
       status: logEntry.reviewStatus, // Add status field for frontend compatibility
       rejectionReason: rejectionReason, // Add rejection reason field
-      
+
       // Extract recommendation from analysis or UI
       recommendation: analysisData?.tldr || uiData?.tldr || "No analysis available",
-      
+
       // Extract verdict/status from UI
       verdict: uiData?.verdict || "unknown",
-      
+
       // Map validity to analysis correctness
-      isAnalysisCorrect: analysisData?.isValid === true ? "valid" : 
-                        analysisData?.isValid === false ? "invalid" : "unknown",
-      
+      isAnalysisCorrect: analysisData?.isValid === true ? "valid" :
+      analysisData?.isValid === false ? "invalid" : "unknown",
+
       // Extract confidence from chips or set default
       confidence: extractConfidenceFromChips(uiData?.chips) || 0.0,
-      
+
       // Extract risk level from analysis
       riskLevel: extractRiskLevel(analysisData) || "N/A",
-      
+
       // Use review completion time
       createdAt: logEntry.reviewCompletedAt || logEntry.updatedAt,
-      
+
       // Include detailed analysis data for testing
       detailedAnalysis: {
         ui: uiData,
@@ -363,7 +356,7 @@ router.get('/:id/review-status', auth, async (req, res) => {
           fullChart: reviewData?.fullChartUrl
         }
       },
-      
+
       // Include comprehensive review metadata
       reviewMetadata: logEntry.reviewMetadata ? {
         totalCost: logEntry.reviewMetadata.totalCost,
@@ -374,11 +367,10 @@ router.get('/:id/review-status', auth, async (req, res) => {
         reviewProcessedAt: logEntry.reviewMetadata.reviewProcessedAt,
         modelBreakdown: logEntry.reviewMetadata.modelBreakdown
       } : null,
-      
+
       // Legacy cost data for backward compatibility
       apiCosts: logEntry.apiCosts || null
     };
-    
 
     res.status(200).json({
       success: true,
@@ -409,11 +401,11 @@ router.post('/:id/request-review', auth, async (req, res) => {
     const { subscriptionService } = await import('../services/subscription/subscriptionService.js');
     const isFromRewardedAd = req.body.isFromRewardedAd || false;
     const canUse = await subscriptionService.canUserUseCredits(req.user.id, 1, isFromRewardedAd);
-    
+
     if (!canUse.canUse) {
       // Determine if we should suggest watching an ad
       const suggestAd = !isFromRewardedAd && (canUse.reason?.includes('exhausted') || canUse.reason?.includes('limit'));
-      
+
       return res.status(402).json({
         success: false,
         message: `${canUse.reason || 'Please upgrade your subscription.'}`,
@@ -432,12 +424,10 @@ router.post('/:id/request-review', auth, async (req, res) => {
     });
 
     try {
-      console.log(`\n=== AI Review Route Called ===`);
-      console.log(`userId: ${req.user.id}, logId: ${req.params.id}, isFromRewardedAd: ${isFromRewardedAd}`);
-      
+
       // Credits will be deducted after successful AI review completion
       // Pass userId and isFromRewardedAd to the AI review service
-      
+
       // Process AI review asynchronously
       aiReviewService.processAIReview({
         logId: req.params.id,
@@ -470,14 +460,14 @@ router.post('/:id/request-review', auth, async (req, res) => {
 
     } catch (deductError) {
       console.error('Error deducting credits for AI review:', deductError);
-      
+
       // Revert the needsReview flag since credit deduction failed
       await StockLog.findByIdAndUpdate(req.params.id, {
         needsReview: false,
         reviewStatus: null,
         reviewRequestedAt: null
       });
-      
+
       return res.status(402).json({
         success: false,
         message: deductError.message || 'Failed to process payment for AI review'
@@ -514,11 +504,11 @@ router.post('/:id/retry-review', auth, async (req, res) => {
     // This ensures we use the same model type (bonus/regular) as the original request
     const isFromRewardedAd = logEntry.isFromRewardedAd || req.body.isFromRewardedAd || false;
     const canUse = await subscriptionService.canUserUseCredits(req.user.id, 1, isFromRewardedAd);
-    
+
     if (!canUse.canUse) {
       // Determine if we should suggest watching an ad
       const suggestAd = !isFromRewardedAd && (canUse.reason?.includes('exhausted') || canUse.reason?.includes('limit'));
-      
+
       return res.status(402).json({
         success: false,
         message: `${canUse.reason || 'Please upgrade your subscription.'}`,
@@ -538,9 +528,7 @@ router.post('/:id/retry-review', auth, async (req, res) => {
     });
 
     try {
-      console.log(`\n=== AI Review Retry Route Called ===`);
-      console.log(`userId: ${req.user.id}, logId: ${req.params.id}, isFromRewardedAd: ${isFromRewardedAd}`);
-      
+
       // Process AI review asynchronously
       aiReviewService.processAIReview({
         instrument_key: logEntry.stock.instrument_key,
@@ -555,7 +543,7 @@ router.post('/:id/retry-review', auth, async (req, res) => {
         logId: req.params.id,
         quantity: logEntry.quantity.toString(),
         createdAt: logEntry.createdAt,
-        creditType: isFromRewardedAd ? "bonus" : (logEntry.creditType || "regular"),
+        creditType: isFromRewardedAd ? "bonus" : logEntry.creditType || "regular",
         isFromRewardedAd: isFromRewardedAd
       }, req.user.id);
 
@@ -572,7 +560,7 @@ router.post('/:id/retry-review', auth, async (req, res) => {
 
     } catch (processError) {
       console.error('Error processing AI review retry:', processError);
-      
+
       // Revert the status changes since processing failed
       await StockLog.findByIdAndUpdate(req.params.id, {
         reviewStatus: 'error',
@@ -582,7 +570,7 @@ router.post('/:id/retry-review', auth, async (req, res) => {
           type: 'processing_error'
         }
       });
-      
+
       return res.status(500).json({
         success: false,
         message: 'Failed to process AI review retry'
@@ -602,10 +590,10 @@ router.post('/:id/retry-review', auth, async (req, res) => {
 router.get('/export/csv', auth, async (req, res) => {
   try {
     const { startDate, endDate, email } = req.query;
-    
+
     // Build query filter
     const filter = { user: req.user._id };
-    
+
     // Date filtering (using executedAt since that's what you have in schema)
     if (startDate || endDate) {
       filter.executedAt = {};
@@ -620,70 +608,68 @@ router.get('/export/csv', auth, async (req, res) => {
         filter.executedAt.$lte = endOfDay;
       }
     }
-    
-    
+
     // Get trade logs with filtering (sort by executedAt since that's your main date field)
     const tradeLogs = await StockLog.find(filter).sort({ executedAt: -1 });
-    
+
     // Enhanced CSV headers - shorter names for better Excel display
     const csvHeader = [
-      'Instrument Key',
-      'Symbol',
-      'Stock Name',
-      'Exchange',
-      'Direction', 
-      'Quantity',
-      'Entry Price',
-      'Target Price',
-      'Stop Loss',
-      'Term',
-      'User Reasoning',
-      'Tags',
-      'Notes',
-      'Executed',
-      'Executed Date',
-      'AI Review Requested',
-      'Review Status',
-      'AI Verdict',
-      'AI Analysis Valid',
-      'AI Recommendation',
-      'Rejection Reason',
-      'Review Requested Date',
-      'Review Completed Date',
-      'Created Date',
-      'Updated Date'
-    ];
-    
-    const csvRows = tradeLogs.map(log => {
+    'Instrument Key',
+    'Symbol',
+    'Stock Name',
+    'Exchange',
+    'Direction',
+    'Quantity',
+    'Entry Price',
+    'Target Price',
+    'Stop Loss',
+    'Term',
+    'User Reasoning',
+    'Tags',
+    'Notes',
+    'Executed',
+    'Executed Date',
+    'AI Review Requested',
+    'Review Status',
+    'AI Verdict',
+    'AI Analysis Valid',
+    'AI Recommendation',
+    'Rejection Reason',
+    'Review Requested Date',
+    'Review Completed Date',
+    'Created Date',
+    'Updated Date'];
+
+    const csvRows = tradeLogs.map((log) => {
       // Extract AI review data properly
       let aiVerdict = '';
       let aiAnalysisCorrect = '';
       let aiInsight = '';
       let rejectionReason = '';
-      
+
       if (log?.reviewResult && Array.isArray(log.reviewResult) && log.reviewResult.length > 0) {
         try {
           const firstReview = log.reviewResult[0];
-          
+
           // Extract verdict from UI section
           aiVerdict = firstReview.ui?.verdict || firstReview.status || '';
-          
+
           // Extract analysis correctness
           if (firstReview.isAnalaysisCorrect !== undefined) {
             aiAnalysisCorrect = firstReview.isAnalaysisCorrect ? 'Yes' : 'No';
           } else if (firstReview.analysis?.isValid !== undefined) {
-            aiAnalysisCorrect = firstReview.analysis.isValid === true ? 'Yes' : 
-                               firstReview.analysis.isValid === false ? 'No' : 'N/A';
+            aiAnalysisCorrect = firstReview.analysis.isValid === true ? 'Yes' :
+            firstReview.analysis.isValid === false ? 'No' : 'N/A';
           } else {
             aiAnalysisCorrect = 'N/A';
           }
-          
+
           // Extract insight/recommendation (prioritize tldr, then insight)
           aiInsight = firstReview.ui?.tldr || firstReview.analysis?.insight || '';
-          
+
           // Extract rejection reason
           rejectionReason = firstReview.analysis?.rejectionReason || '';
-          
+
         } catch (e) {
           console.error('Error parsing review result:', e);
           aiVerdict = 'Error parsing';
@@ -692,7 +678,7 @@ router.get('/export/csv', auth, async (req, res) => {
           rejectionReason = '';
         }
       }
-      
+
       // Helper function to format date for user-friendly display
       const formatDate = (dateString) => {
         if (!dateString) return '';
@@ -701,7 +687,7 @@ router.get('/export/csv', auth, async (req, res) => {
           // Format as DD/MM/YYYY HH:MM AM/PM IST
           const options = {
             day: '2-digit',
-            month: '2-digit', 
+            month: '2-digit',
             year: 'numeric',
             hour: '2-digit',
             minute: '2-digit',
@@ -713,107 +699,103 @@ router.get('/export/csv', auth, async (req, res) => {
           return dateString; // Return original if parsing fails
         }
       };
-      
+
       return [
-        log.stock?.instrument_key || '',
-        log.stock?.trading_symbol || '',
-        `"${(log.stock?.name || '').replace(/"/g, '""')}"`, // Escape stock name
-        log.stock?.exchange || '',
-        log.direction || '',
-        log.quantity || '',
-        log.entryPrice || '',
-        log.targetPrice || '',
-        log.stopLoss || '',
-        log.term || '',
-        `"${(log.reasoning || '').replace(/"/g, '""')}"`, // Escape quotes properly for reasoning
-        `"${(log.tags?.join('; ') || '').replace(/"/g, '""')}"`, // Escape tags properly
-        `"${(log.note || '').replace(/"/g, '""')}"`, // Escape notes properly
-        log.executed ? 'Yes' : 'No',
-        `"${formatDate(log.executedAt)}"`, // Escape date-time string
-        log.needsReview ? 'Yes' : 'No',
-        `"${(log.reviewStatus || '').replace(/"/g, '""')}"`, // Escape review status
-        `"${aiVerdict.replace(/"/g, '""')}"`, // Escape AI verdict
-        aiAnalysisCorrect,
-        `"${aiInsight.replace(/"/g, '""')}"`, // Escape quotes properly for AI insight
-        `"${rejectionReason.replace(/"/g, '""')}"`, // Escape quotes properly for rejection reason
-        `"${formatDate(log.reviewRequestedAt)}"`, // Escape date-time string
-        `"${formatDate(log.reviewCompletedAt)}"`, // Escape date-time string
-        `"${formatDate(log.createdAt)}"`, // Escape date-time string
-        `"${formatDate(log.updatedAt)}"` // Escape date-time string
+      log.stock?.instrument_key || '',
+      log.stock?.trading_symbol || '',
+      `"${(log.stock?.name || '').replace(/"/g, '""')}"`, // Escape stock name
+      log.stock?.exchange || '',
+      log.direction || '',
+      log.quantity || '',
+      log.entryPrice || '',
+      log.targetPrice || '',
+      log.stopLoss || '',
+      log.term || '',
+      `"${(log.reasoning || '').replace(/"/g, '""')}"`, // Escape quotes properly for reasoning
+      `"${(log.tags?.join('; ') || '').replace(/"/g, '""')}"`, // Escape tags properly
+      `"${(log.note || '').replace(/"/g, '""')}"`, // Escape notes properly
+      log.executed ? 'Yes' : 'No',
+      `"${formatDate(log.executedAt)}"`, // Escape date-time string
+      log.needsReview ? 'Yes' : 'No',
+      `"${(log.reviewStatus || '').replace(/"/g, '""')}"`, // Escape review status
+      `"${aiVerdict.replace(/"/g, '""')}"`, // Escape AI verdict
+      aiAnalysisCorrect,
+      `"${aiInsight.replace(/"/g, '""')}"`, // Escape quotes properly for AI insight
+      `"${rejectionReason.replace(/"/g, '""')}"`, // Escape quotes properly for rejection reason
+      `"${formatDate(log.reviewRequestedAt)}"`, // Escape date-time string
+      `"${formatDate(log.reviewCompletedAt)}"`, // Escape date-time string
+      `"${formatDate(log.createdAt)}"`, // Escape date-time string
+      `"${formatDate(log.updatedAt)}"` // Escape date-time string
       ];
     });
-    
+
     // Build CSV content
     const csvContent = [
-      csvHeader.join(','),
-      ...csvRows.map(row => row.join(','))
-    ].join('\n');
-    
+    csvHeader.join(','),
+    ...csvRows.map((row) => row.join(','))].
+    join('\n');
 
- 
-      // Get user details for email
-      const user = await User.findById(req.user._id);
-      
-      // Use provided exportEmail or fall back to user's profile email
-      const emailToUse = email || user.email;
-      
-      if (!emailToUse) {
-        return res.status(400).json({
-          success: false,
-          error: 'Email address is required for export. Please provide an email address.'
-        });
-      }
-      
-      // Validate email format
-      const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
-      if (!emailRegex.test(emailToUse)) {
-        return res.status(400).json({
-          success: false,
-          error: 'Please enter a valid email address'
-        });
-      }
-      
-      // Prepare export parameters for email
-      const exportParams = {
-        startDate: startDate,
-        endDate: endDate,
-        totalTrades: tradeLogs.length
-      };
-      
-      // Generate filename
-      const filename = `trade_logs_${new Date().toISOString().split('T')[0]}.csv`;
-      
-      // Send email with CSV attachment
-      const emailResult = await emailService.sendCSVExport(
-        emailToUse,
-        user.firstName || 'Trader',
-        csvContent,
-        filename,
-        exportParams
-      );
-      
-      if (emailResult.success) {
-        return res.status(200).json({
-          success: true,
-          message: `Export sent successfully to ${emailToUse}`,
-          data: {
-            totalTrades: tradeLogs.length,
-            filename: filename,
-            emailSent: true,
-            emailAddress: emailToUse,
-            isProfileEmail: emailToUse === user.email
-          }
-        });
-      } else {
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to send email. Please try again or download directly.',
-          details: emailResult.error
-        });
-      }
-    
-  
-    
+    // Get user details for email
+    const user = await User.findById(req.user._id);
+
+    // Use provided exportEmail or fall back to user's profile email
+    const emailToUse = email || user.email;
+
+    if (!emailToUse) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email address is required for export. Please provide an email address.'
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
+    if (!emailRegex.test(emailToUse)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please enter a valid email address'
+      });
+    }
+
+    // Prepare export parameters for email
+    const exportParams = {
+      startDate: startDate,
+      endDate: endDate,
+      totalTrades: tradeLogs.length
+    };
+
+    // Generate filename
+    const filename = `trade_logs_${new Date().toISOString().split('T')[0]}.csv`;
+
+    // Send email with CSV attachment
+    const emailResult = await emailService.sendCSVExport(
+      emailToUse,
+      user.firstName || 'Trader',
+      csvContent,
+      filename,
+      exportParams
+    );
+
+    if (emailResult.success) {
+      return res.status(200).json({
+        success: true,
+        message: `Export sent successfully to ${emailToUse}`,
+        data: {
+          totalTrades: tradeLogs.length,
+          filename: filename,
+          emailSent: true,
+          emailAddress: emailToUse,
+          isProfileEmail: emailToUse === user.email
+        }
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to send email. Please try again or download directly.',
+        details: emailResult.error
+      });
+    }
+
   } catch (error) {
     console.error('Error exporting trade logs:', error);
     res.status(500).json({ error: 'Failed to export trade logs' });
@@ -824,7 +806,7 @@ router.get('/export/csv', auth, async (req, res) => {
 router.get('/user/email-status', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('email firstName');
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -843,14 +825,14 @@ router.get('/user/email-status', auth, async (req, res) => {
 router.post('/user/update-email', auth, async (req, res) => {
   try {
     const { email } = req.body;
-    
+
     if (!email) {
       return res.status(400).json({
         success: false,
         error: 'Email is required'
       });
     }
-    
+
     // Validate email format
     const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
     if (!emailRegex.test(email)) {
@@ -859,20 +841,20 @@ router.post('/user/update-email', auth, async (req, res) => {
         error: 'Please enter a valid email address'
       });
     }
-    
+
     // Update user email
     const user = await User.findByIdAndUpdate(
       req.user._id,
       { email: email.toLowerCase().trim() },
       { new: true, runValidators: true }
     ).select('email firstName');
-    
+
     // Send welcome email
     const emailResult = await emailService.sendWelcomeEmail(
       user.email,
       user.firstName || 'Trader'
     );
-    
+
     res.status(200).json({
       success: true,
       message: 'Email updated successfully',
@@ -882,12 +864,12 @@ router.post('/user/update-email', auth, async (req, res) => {
         welcomeEmailSent: emailResult.success
       }
     });
-    
+
   } catch (error) {
     console.error('Error updating user email:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: 'Failed to update email address' 
+      error: 'Failed to update email address'
     });
   }
 });
@@ -896,69 +878,69 @@ router.post('/user/update-email', auth, async (req, res) => {
 router.get('/token-usage/stats', auth, async (req, res) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user.userId);
-    
+
     // Aggregate token usage data for the user
     const tokenStats = await StockLog.aggregate([
-      {
-        $match: {
-          user: userId,
-          tokenUsage: { $exists: true },
-          'tokenUsage.totalTokens': { $gt: 0 }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          totalInputTokens: { $sum: '$tokenUsage.inputTokens' },
-          totalOutputTokens: { $sum: '$tokenUsage.outputTokens' },
-          totalCacheCreationTokens: { $sum: '$tokenUsage.cacheCreationInputTokens' },
-          totalCacheReadTokens: { $sum: '$tokenUsage.cacheReadInputTokens' },
-          totalTokens: { $sum: '$tokenUsage.totalTokens' },
-          totalCost: { $sum: '$tokenUsage.estimatedCost' },
-          reviewCount: { $sum: 1 },
-          models: { $addToSet: '$tokenUsage.model' }
-        }
+    {
+      $match: {
+        user: userId,
+        tokenUsage: { $exists: true },
+        'tokenUsage.totalTokens': { $gt: 0 }
       }
-    ]);
-    
+    },
+    {
+      $group: {
+        _id: null,
+        totalInputTokens: { $sum: '$tokenUsage.inputTokens' },
+        totalOutputTokens: { $sum: '$tokenUsage.outputTokens' },
+        totalCacheCreationTokens: { $sum: '$tokenUsage.cacheCreationInputTokens' },
+        totalCacheReadTokens: { $sum: '$tokenUsage.cacheReadInputTokens' },
+        totalTokens: { $sum: '$tokenUsage.totalTokens' },
+        totalCost: { $sum: '$tokenUsage.estimatedCost' },
+        reviewCount: { $sum: 1 },
+        models: { $addToSet: '$tokenUsage.model' }
+      }
+    }]
+    );
+
     // Get monthly breakdown
     const monthlyStats = await StockLog.aggregate([
-      {
-        $match: {
-          user: userId,
-          tokenUsage: { $exists: true },
-          'tokenUsage.totalTokens': { $gt: 0 }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            year: { $year: '$createdAt' },
-            month: { $month: '$createdAt' }
-          },
-          totalTokens: { $sum: '$tokenUsage.totalTokens' },
-          totalCost: { $sum: '$tokenUsage.estimatedCost' },
-          reviewCount: { $sum: 1 }
-        }
-      },
-      {
-        $sort: { '_id.year': -1, '_id.month': -1 }
-      },
-      {
-        $limit: 12 // Last 12 months
+    {
+      $match: {
+        user: userId,
+        tokenUsage: { $exists: true },
+        'tokenUsage.totalTokens': { $gt: 0 }
       }
-    ]);
-    
+    },
+    {
+      $group: {
+        _id: {
+          year: { $year: '$createdAt' },
+          month: { $month: '$createdAt' }
+        },
+        totalTokens: { $sum: '$tokenUsage.totalTokens' },
+        totalCost: { $sum: '$tokenUsage.estimatedCost' },
+        reviewCount: { $sum: 1 }
+      }
+    },
+    {
+      $sort: { '_id.year': -1, '_id.month': -1 }
+    },
+    {
+      $limit: 12 // Last 12 months
+    }]
+    );
+
     // Get recent reviews with token usage
     const recentReviews = await StockLog.find({
       user: userId,
       tokenUsage: { $exists: true },
       'tokenUsage.totalTokens': { $gt: 0 }
-    })
-    .select('stock.trading_symbol tokenUsage.totalTokens tokenUsage.estimatedCost tokenUsage.model tokenUsage.timestamp createdAt')
-    .sort({ createdAt: -1 })
-    .limit(10);
-    
+    }).
+    select('stock.trading_symbol tokenUsage.totalTokens tokenUsage.estimatedCost tokenUsage.model tokenUsage.timestamp createdAt').
+    sort({ createdAt: -1 }).
+    limit(10);
+
     res.status(200).json({
       success: true,
       data: {
@@ -973,7 +955,7 @@ router.get('/token-usage/stats', auth, async (req, res) => {
           models: []
         },
         monthlyBreakdown: monthlyStats,
-        recentReviews: recentReviews.map(review => ({
+        recentReviews: recentReviews.map((review) => ({
           stock: review.stock?.trading_symbol,
           tokens: review.tokenUsage?.totalTokens,
           cost: review.tokenUsage?.estimatedCost,
@@ -984,9 +966,9 @@ router.get('/token-usage/stats', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching token usage stats:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: 'Failed to fetch token usage statistics' 
+      error: 'Failed to fetch token usage statistics'
     });
   }
 });
@@ -1007,4 +989,4 @@ router.get('/terms', (req, res) => {
   }
 });
 
-export default router; 
+export default router;

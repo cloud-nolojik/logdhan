@@ -6,7 +6,6 @@ import Notification from '../models/notification.js';
 import { firebaseService } from '../services/firebase/firebase.service.js';
 import mongoose from 'mongoose';
 
-
 const router = express.Router();
 
 /**
@@ -16,9 +15,9 @@ const router = express.Router();
 router.get('/plans', async (req, res) => {
   try {
     const plans = await subscriptionService.getActivePlans();
-    
+
     // Transform plans for frontend
-    const formattedPlans = plans.map(plan => ({
+    const formattedPlans = plans.map((plan) => ({
       id: plan.planId,
       name: plan.name,
       description: plan.description,
@@ -28,8 +27,8 @@ router.get('/plans', async (req, res) => {
       features: plan.features,
       billingCycle: plan.billingCycle,
       stocksPerRupee: plan.getStocksPerRupee(),
-      savings: plan.type === 'MONTHLY' && plan.price > 999 ? 
-        Math.round(((plan.price * 0.2)) / plan.price * 100) : 0, // Rough savings calculation
+      savings: plan.type === 'MONTHLY' && plan.price > 999 ?
+      Math.round(plan.price * 0.2 / plan.price * 100) : 0, // Rough savings calculation
       isPopular: plan.planId === 'pro_monthly',
       isBestValue: plan.planId === 'premium_monthly',
       restrictions: plan.restrictions,
@@ -56,7 +55,7 @@ router.get('/plans', async (req, res) => {
 router.get('/current', auth, async (req, res) => {
   try {
     const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
-    
+
     if (!subscription) {
       return res.json({
         success: true,
@@ -66,14 +65,14 @@ router.get('/current', auth, async (req, res) => {
     }
 
     const plan = await subscriptionService.getPlanById(subscription.planId);
-    
+
     // Handle trial and paid plan expiry logic
     let daysRemaining, isExpired, isExpiringSoon, subscriptionStatus;
-    
+
     if (subscription.planId === 'trial_free') {
       // For trial plans, check trial expiry
-      const trialDaysRemaining = subscription.trialExpiryDate ? 
-        Math.ceil((subscription.trialExpiryDate - new Date()) / (1000 * 60 * 60 * 24)) : 0;
+      const trialDaysRemaining = subscription.trialExpiryDate ?
+      Math.ceil((subscription.trialExpiryDate - new Date()) / (1000 * 60 * 60 * 24)) : 0;
       daysRemaining = Math.max(0, trialDaysRemaining);
       isExpired = daysRemaining <= 0 || subscription.isTrialExpired;
       isExpiringSoon = daysRemaining <= 3 && daysRemaining > 0;
@@ -85,7 +84,7 @@ router.get('/current', auth, async (req, res) => {
       isExpiringSoon = daysRemaining <= 7 && daysRemaining > 0;
       subscriptionStatus = isExpired ? 'EXPIRED' : subscription.status;
     }
-    
+
     res.json({
       success: true,
       data: {
@@ -207,7 +206,7 @@ router.post('/generate-payment-url', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error generating payment URL:', error);
-    
+
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to generate payment URL'
@@ -258,14 +257,14 @@ router.post('/create', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating subscription:', error);
-    
+
     if (error.message === 'User already has an active subscription') {
       return res.status(409).json({
         success: false,
         message: error.message
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to create subscription'
@@ -328,11 +327,10 @@ router.post('/topup', auth, async (req, res) => {
  */
 router.post('/refresh-status', auth, async (req, res) => {
   try {
-    console.log('🔄 Manual subscription status refresh requested by user:', req.user.id);
-    
+
     // Get user's current subscription
     const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
-    
+
     if (!subscription) {
       return res.json({
         success: true,
@@ -343,8 +341,6 @@ router.post('/refresh-status', auth, async (req, res) => {
 
     // Check if subscription has a Cashfree ID
     if (!subscription.cashfreeSubscriptionId) {
-      console.log('ℹ️ No Cashfree subscription ID found - status is current');
-      console.log(`📤 RESPONSE: Sending "No Cashfree ID" response - cashfreeSubscriptionId=${subscription.cashfreeSubscriptionId}`);
 
       // Transform MongoDB subscription to match frontend UserSubscription model
       const plan = await subscriptionService.getPlanById(subscription.planId);
@@ -380,15 +376,10 @@ router.post('/refresh-status', auth, async (req, res) => {
       });
     }
 
-    console.log(`🔍 Checking Cashfree status for subscription: ${subscription.cashfreeSubscriptionId}`);
-
     try {
       // Use the new subscription update service
       const { subscriptionUpdateService } = await import('../services/subscription/subscriptionUpdateService.js');
       const result = await subscriptionUpdateService.processSubscriptionUpdate(subscription.cashfreeSubscriptionId);
-      
-      console.log('🎉 Subscription update completed:', result.updated ? 'Updated' : 'No update needed');
-      console.log(`📤 RESPONSE: Sending subscription update result - updated=${result.updated}, action=${result.action}`);
 
       // Transform MongoDB subscription to match frontend UserSubscription model
       const plan = await subscriptionService.getPlanById(result.subscription.planId);
@@ -427,20 +418,16 @@ router.post('/refresh-status', auth, async (req, res) => {
           terminalStatus: result.terminalStatus
         }
       });
-      
+
     } catch (updateError) {
-      console.log('❌ Subscription update error:', updateError.message);
-      
+
       // Handle Cashfree subscription not found
       if (updateError.message && updateError.message.includes('SUBSCRIPTION_DOES_NOT_EXIST_EXCEPTION')) {
-        console.log('❌ Cashfree subscription not found, moving ID to oldTransactionIds');
-        
+
         // Use the subscription update service to move IDs
         const { subscriptionUpdateService } = await import('../services/subscription/subscriptionUpdateService.js');
         await subscriptionUpdateService.moveToOldTransactionIds(subscription, 'CASHFREE_NOT_FOUND');
-        
-        console.log('✅ Moved invalid cashfree IDs to oldTransactionIds');
-        
+
         return res.json({
           success: true,
           message: 'Cashfree subscription not found - cleared invalid IDs',
@@ -453,7 +440,7 @@ router.post('/refresh-status', auth, async (req, res) => {
         });
       } else {
         // For other errors, return the error
-        console.log('❌ Subscription update error (not subscription not found):', updateError.message);
+
         return res.json({
           success: false,
           message: 'Failed to update subscription',
@@ -467,7 +454,7 @@ router.post('/refresh-status', auth, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error refreshing subscription status:', error);
-    
+
     res.status(500).json({
       success: false,
       message: 'Failed to refresh subscription status',
@@ -486,7 +473,7 @@ router.get('/can-add-stock', auth, async (req, res) => {
     const currentStockCount = parseInt(currentCount);
 
     const result = await subscriptionService.canUserAddStock(req.user.id, currentStockCount);
-    
+
     res.json({
       success: true,
       data: result
@@ -507,7 +494,7 @@ router.get('/can-add-stock', auth, async (req, res) => {
 router.get('/can-analyze', auth, async (req, res) => {
   try {
     const result = await subscriptionService.canUserAnalyzeStock(req.user.id);
-    
+
     res.json({
       success: true,
       data: result
@@ -532,7 +519,7 @@ router.get('/can-analyze', auth, async (req, res) => {
 //     const creditsNeeded = parseInt(credits);
 
 //     const result = await subscriptionService.canUserUseCredits(req.user.id, creditsNeeded);
-    
+
 //     res.json({
 //       success: true,
 //       data: result
@@ -553,7 +540,7 @@ router.get('/can-analyze', auth, async (req, res) => {
 router.get('/analytics', auth, async (req, res) => {
   try {
     const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
-    
+
     if (!subscription) {
       return res.json({
         success: true,
@@ -566,7 +553,7 @@ router.get('/analytics', auth, async (req, res) => {
     const cycleStart = subscription.billing.lastBillingDate || subscription.billing.startDate;
     const daysSinceCycleStart = Math.ceil((now - cycleStart) / (1000 * 60 * 60 * 24));
     const daysInCycle = subscription.pricing.billingCycle === 'MONTHLY' ? 30 : 365;
-    
+
     const analytics = {
       usage: {
         stocksAnalyzed: 0, // TODO: Track actual stocks analyzed
@@ -581,7 +568,7 @@ router.get('/analytics', auth, async (req, res) => {
           end: subscription.billing.endDate,
           daysElapsed: daysSinceCycleStart,
           daysRemaining: Math.max(0, daysInCycle - daysSinceCycleStart),
-          progressPercentage: Math.min(100, (daysSinceCycleStart / daysInCycle) * 100)
+          progressPercentage: Math.min(100, daysSinceCycleStart / daysInCycle * 100)
         },
         nextBilling: subscription.billing.nextBillingDate,
         amount: subscription.pricing.amount,
@@ -591,8 +578,8 @@ router.get('/analytics', auth, async (req, res) => {
         pipelineAccess: subscription.restrictions.pipelineAccess,
         firstWeekCap: subscription.restrictions.firstWeekCap,
         firstWeekUsed: subscription.restrictions.firstWeekUsed,
-        firstWeekRemaining: subscription.restrictions.firstWeekCap ? 
-          Math.max(0, subscription.restrictions.firstWeekCap - subscription.restrictions.firstWeekUsed) : null
+        firstWeekRemaining: subscription.restrictions.firstWeekCap ?
+        Math.max(0, subscription.restrictions.firstWeekCap - subscription.restrictions.firstWeekUsed) : null
       },
       recommendations: []
     };
@@ -608,7 +595,7 @@ router.get('/analytics', auth, async (req, res) => {
 
     if (subscription.planId === 'pro_monthly') {
       analytics.recommendations.push({
-        type: 'upgrade_suggestion', 
+        type: 'upgrade_suggestion',
         message: 'Upgrade to Annual plan for better value and track more stocks.',
         action: 'upgrade_annual',
         savings: 189
@@ -635,10 +622,6 @@ router.get('/analytics', auth, async (req, res) => {
 router.post('/process-status', auth, async (req, res) => {
   try {
     const { cf_subscription_id } = req.body;
-    
-    console.log('🔄 Processing subscription status:', {
-      cf_subscription_id,
-    });
 
     if (!cf_subscription_id) {
       return res.status(400).json({
@@ -649,42 +632,37 @@ router.post('/process-status', auth, async (req, res) => {
 
     // Use authenticated user ID for security
     const userId = req.user.id;
-    console.log('✅ Using authenticated userId:', userId);
 
     // Validate that the cf_subscription_id belongs to the authenticated user
     const existingSubscription = await Subscription.findOne({
       userId: userId,
       $or: [
-        { cashfreeSubscriptionId: cf_subscription_id },
-        { subscriptionId: cf_subscription_id }
-      ]
+      { cashfreeSubscriptionId: cf_subscription_id },
+      { subscriptionId: cf_subscription_id }]
+
     });
 
     if (!existingSubscription) {
-      console.log('❌ Subscription not found or access denied for user:', userId);
+
       return res.status(403).json({
         success: false,
         message: 'Subscription not found or access denied'
       });
     }
 
-    console.log('✅ Subscription ownership validated for user:', userId);
-
     // Process the subscription status
     const result = await subscriptionService.processSubscriptionStatus({
       cf_subscription_id
     });
-    
-    console.log('🔄 Subscription processing result:', result);
 
     // Send notification to user about subscription processing result
     try {
-      let notificationTitle, notificationMessage, notificationType = 'subscription';
-      
+      let notificationTitle,notificationMessage,notificationType = 'subscription';
+
       if (result.success) {
         notificationTitle = '🎉 Subscription Activated!';
         notificationMessage = `Your ${result.planName || 'premium'} subscription has been successfully activated. You now have access to all premium features.`;
-        
+
         // Also send push notification
         try {
           await firebaseService.sendToUser(
@@ -692,7 +670,7 @@ router.post('/process-status', auth, async (req, res) => {
             notificationTitle,
             notificationMessage
           );
-          console.log('✅ Push notification sent to user:', userId);
+
         } catch (pushError) {
           console.error('❌ Failed to send push notification:', pushError);
         }
@@ -715,13 +693,11 @@ router.post('/process-status', auth, async (req, res) => {
         }
       });
 
-      console.log('✅ Notification created:', notification._id);
-      
     } catch (notificationError) {
       console.error('❌ Failed to send subscription notification:', notificationError);
       // Don't fail the main request if notification fails
     }
-    
+
     res.json({
       success: true,
       data: result,
@@ -729,7 +705,7 @@ router.post('/process-status', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error processing subscription status:', error);
-    
+
     // Try to send error notification if we have userId
     try {
       const cf_subscription_id = req.body.cf_subscription_id;
@@ -737,7 +713,7 @@ router.post('/process-status', auth, async (req, res) => {
         const parts = cf_subscription_id.split('_');
         if (parts.length >= 3) {
           const userId = parts[2];
-          
+
           await Notification.createNotification({
             userId: userId,
             title: '⚠️ Subscription Processing Error',
@@ -749,14 +725,13 @@ router.post('/process-status', auth, async (req, res) => {
               processed_at: new Date().toISOString()
             }
           });
-          
-          console.log('✅ Error notification sent to user:', userId);
+
         }
       }
     } catch (notificationError) {
       console.error('❌ Failed to send error notification:', notificationError);
     }
-    
+
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to process subscription status'
@@ -775,8 +750,8 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
     // Process subscription webhook
     const result = await subscriptionService.processSubscriptionWebhook(payload, signature);
-    
-    res.status(200).json({ 
+
+    res.status(200).json({
       success: true,
       processed: result.processed,
       event: result.event,
@@ -784,9 +759,9 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     });
   } catch (error) {
     console.error('Subscription webhook error:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 });
@@ -798,7 +773,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 router.post('/cancel', auth, async (req, res) => {
   try {
     const { reason } = req.body;
-    
+
     const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
     if (!subscription) {
       return res.status(404).json({
@@ -872,7 +847,7 @@ router.post('/pause', auth, async (req, res) => {
 router.post('/upgrade', auth, async (req, res) => {
   try {
     const { planId } = req.body;
-    
+
     if (!planId) {
       return res.status(400).json({
         success: false,
@@ -881,7 +856,7 @@ router.post('/upgrade', auth, async (req, res) => {
     }
 
     const result = await subscriptionService.upgradePlan(req.user.id, planId);
-    
+
     res.json({
       success: true,
       data: result,
@@ -903,7 +878,7 @@ router.post('/upgrade', auth, async (req, res) => {
 router.post('/reactivate', auth, async (req, res) => {
   try {
     const { planId } = req.body;
-    
+
     if (!planId) {
       return res.status(400).json({
         success: false,
@@ -912,7 +887,7 @@ router.post('/reactivate', auth, async (req, res) => {
     }
 
     const result = await subscriptionService.reactivateExpiredSubscription(req.user.id, planId);
-    
+
     res.json({
       success: true,
       data: result,
@@ -935,13 +910,13 @@ router.post('/reactivate', auth, async (req, res) => {
 // router.post('/watch-ad', auth, async (req, res) => {
 //   try {
 //     const { adProvider, adUnitId, adReward } = req.body;
-    
+
 //     const result = await subscriptionService.processRewardedAd(req.user.id, {
 //       adProvider,
 //       adUnitId,
 //       adReward
 //     });
-    
+
 //     res.json({
 //       success: true,
 //       data: result,
@@ -963,7 +938,7 @@ router.post('/reactivate', auth, async (req, res) => {
 // router.get('/ad-status', auth, async (req, res) => {
 //   try {
 //     const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
-    
+
 //     if (!subscription) {
 //       return res.status(404).json({
 //         success: false,
@@ -973,27 +948,27 @@ router.post('/reactivate', auth, async (req, res) => {
 
 //     // Clean up expired rewarded credits
 //     subscription.cleanupExpiredCredits();
-    
+
 //     const now = new Date();
 //     const isToday = subscription.credits.lastRewardedDate && 
 //                    subscription.credits.lastRewardedDate.toDateString() === now.toDateString();
-    
+
 //     // Get ad limit from plan restrictions
 //     const plan = await subscriptionService.getPlanById(subscription.planId);
 //     // console.log(`🔍 Ad Status Debug - planId: ${subscription.planId}`);
 //     // console.log(`🔍 Ad Status Debug - plan found: ${plan ? 'yes' : 'no'}`);
 //     // console.log(`🔍 Ad Status Debug - plan.restrictions:`, plan?.restrictions);
 //     // console.log(`🔍 Ad Status Debug - plan.restrictions.rewardedAdLimit:`, plan?.restrictions?.rewardedAdLimit);
-    
+
 //     const dailyLimit = plan?.restrictions?.rewardedAdLimit || 0; // Default 0 for non-ad plans (0 means unlimited)
 //     const adsWatchedToday = isToday ? subscription.credits.dailyRewardedCount : 0;
 //     // If dailyLimit is 0 (unlimited), return 999 for UI, otherwise calculate remaining
 //     const adsRemainingToday = dailyLimit === 0 ? 999 : Math.max(0, dailyLimit - adsWatchedToday);
 //     const creditsPerAd = 1;
-    
+
 //     console.log(`🔍 Ad Status Debug - dailyLimit: ${dailyLimit}, adsWatchedToday: ${adsWatchedToday}, adsRemainingToday: ${adsRemainingToday}`);
 //     console.log(`🔍 Ad Status Debug - isToday: ${isToday}, subscription.credits.dailyRewardedCount: ${subscription.credits.dailyRewardedCount}`);
-    
+
 //     res.json({
 //       success: true,
 //       data: {
@@ -1025,8 +1000,7 @@ router.post('/reactivate', auth, async (req, res) => {
  */
 router.post('/test-notification', auth, async (req, res) => {
   try {
-    console.log('🧪 Creating test notification for user:', req.user.id);
-    
+
     // Create test notification
     const notification = await Notification.createNotification({
       userId: req.user.id,
@@ -1039,8 +1013,6 @@ router.post('/test-notification', auth, async (req, res) => {
       }
     });
 
-    console.log('✅ Test notification created:', notification._id);
-    
     // Also try to send push notification
     try {
       await firebaseService.sendToUser(
@@ -1048,11 +1020,11 @@ router.post('/test-notification', auth, async (req, res) => {
         '🧪 Test Notification',
         'This is a test push notification!'
       );
-      console.log('✅ Test push notification sent');
+
     } catch (pushError) {
       console.error('❌ Test push notification failed:', pushError);
     }
-    
+
     res.json({
       success: true,
       data: {

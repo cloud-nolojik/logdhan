@@ -47,7 +47,6 @@ OUTPUT (JSON only):
   return { system, user };
 }
 
-
 /**
  * Stage 2: Strategy Skeleton & Triggers
  * - Builds ONE best-fit skeleton (BUY/SELL/NO_TRADE) with entry/stop/target ranges
@@ -119,7 +118,6 @@ OUTPUT:
 
   return { system, user };
 }
-
 
 /**
  * Stage 3: Final Assembly (v1.4)
@@ -805,7 +803,6 @@ OUTPUT:
 //   return { system, user };
 // }
 
-
 // export async function buildStage3Prompt({
 //   stock_name,
 //   stock_symbol,
@@ -1277,8 +1274,6 @@ OUTPUT:
 //   return { system, user };
 // }
 
-
-
 export async function buildStage3Prompt({
   stock_name,
   stock_symbol,
@@ -1301,7 +1296,7 @@ export async function buildStage3Prompt({
     existingMetadata = {
       generated_at: existingAnalysis?.analysis_data?.generated_at_ist || null,
       previous_price: existingAnalysis?.analysis_data?.market_summary?.last || null,
-      valid_until: existingAnalysis?.valid_until || null,
+      valid_until: existingAnalysis?.valid_until || null
     };
   }
 
@@ -1417,7 +1412,6 @@ For JSON fields, always map:
 
 Use these field names only inside JSON. In human-readable text, continue using
 “upper price region”, “middle price zone”, and “lower price region” instead.
-
 
 6) NEUTRAL HUMAN TEXT (NO ADVICE)
 You MUST NOT use ANY of these words:
@@ -2003,10 +1997,6 @@ Before you output the JSON, verify:
 --------------------------------------------------
 END OF INSTRUCTIONS FOR MODEL.
 `;
-
-  console.log("Stage 3 prompt built for", stock_symbol);
-  console.log("Stage 3 system:", JSON.stringify(system));
-  console.log("Stage 3 user:", JSON.stringify(user));
 
   return { system, user };
 }

@@ -69,18 +69,18 @@ router.post('/webhook', async (req, res) => {
     const result = await cashfreeService.processWebhook(webhookData, signature);
 
     // Return success to Cashfree
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Webhook processed successfully',
       data: result
     });
 
   } catch (error) {
     console.error('Error processing webhook:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Webhook processing failed',
-      error: error.message 
+      error: error.message
     });
   }
 });
@@ -93,7 +93,7 @@ router.get('/status/:orderId', auth, async (req, res) => {
 
     // Find payment record
     const payment = await Payment.findByOrderId(orderId);
-    
+
     if (!payment) {
       return res.status(404).json({
         success: false,
@@ -156,7 +156,7 @@ router.get('/history', auth, async (req, res) => {
           currentPage: parseInt(page),
           totalPages: Math.ceil(totalPayments / parseInt(limit)),
           totalPayments,
-          hasNext: (parseInt(page) * parseInt(limit)) < totalPayments,
+          hasNext: parseInt(page) * parseInt(limit) < totalPayments,
           hasPrev: parseInt(page) > 1
         }
       },
@@ -235,117 +235,100 @@ router.get('/checkout/:sessionId', async (req, res) => {
   try {
     const { sessionId: rawSessionId } = req.params;
     const { returnUrl } = req.query;
-    
+
     // Decode the session ID
     const sessionId = decodeURIComponent(rawSessionId);
-    
-    console.log('Payment checkout requested:', { rawSessionId, sessionId, returnUrl, env: process.env.NODE_ENV });
-    console.log('Session ID length:', sessionId?.length);
-    console.log('Session ID type:', typeof sessionId);
-    
+
     if (!sessionId) {
       return res.status(400).send('Payment session ID is required');
     }
-    
+
     // Read the payment template
     const templatePath = path.join(__dirname, '../../views/payment.html');
     let template = fs.readFileSync(templatePath, 'utf8');
-    
+
     // Determine SDK URL and environment based on NODE_ENV
-    const sdkUrl = process.env.NODE_ENV === 'production'
-      ? 'https://sdk.cashfree.com/js/v3/cashfree.js'
-      : 'https://sandbox.cashfree.com/js/v3/cashfree.js';
-    
+    const sdkUrl = process.env.NODE_ENV === 'production' ?
+    'https://sdk.cashfree.com/js/v3/cashfree.js' :
+    'https://sandbox.cashfree.com/js/v3/cashfree.js';
+
     const environment = process.env.NODE_ENV === 'production' ? 'production' : 'sandbox';
-    
-    console.log('Using SDK URL:', sdkUrl);
-    console.log('Using environment:', environment);
-    
+
     // Replace placeholders
-    template = template
-      .replace(/{{SDK_URL}}/g, sdkUrl)
-      .replace(/{{PAYMENT_SESSION_ID}}/g, sessionId)
-      .replace(/{{ENVIRONMENT}}/g, environment)
-      .replace(/{{RETURN_URL}}/g, returnUrl || process.env.FRONTEND_URL || 'about:blank');
-    
+    template = template.
+    replace(/{{SDK_URL}}/g, sdkUrl).
+    replace(/{{PAYMENT_SESSION_ID}}/g, sessionId).
+    replace(/{{ENVIRONMENT}}/g, environment).
+    replace(/{{RETURN_URL}}/g, returnUrl || process.env.FRONTEND_URL || 'about:blank');
+
     // Debug: Check if replacement worked
     const hasSessionId = template.includes(sessionId);
     const hasPlaceholder = template.includes('{{PAYMENT_SESSION_ID}}');
-    console.log('Template replacement check:', { hasSessionId, hasPlaceholder });
-    
+
     // Debug: Show a snippet of the template around the session ID
     const sessionIdIndex = template.indexOf(sessionId);
     if (sessionIdIndex > -1) {
       const snippet = template.substring(sessionIdIndex - 50, sessionIdIndex + sessionId.length + 50);
-      console.log('Session ID in template:', snippet);
+
     }
-    
+
     res.setHeader('Content-Type', 'text/html');
     res.send(template);
-    
+
   } catch (error) {
     console.error('Error serving payment page:', error);
     res.status(500).send('Internal server error');
   }
 });
-
 
 router.get('/cashfree-checkout/:sessionId', async (req, res) => {
   try {
     const { sessionId: rawSessionId } = req.params;
     const { returnUrl } = req.query;
-    
+
     // Decode the session ID
     const sessionId = decodeURIComponent(rawSessionId);
-    
-    console.log('Payment checkout requested:', { rawSessionId, sessionId, returnUrl, env: process.env.NODE_ENV });
-    console.log('Session ID length:', sessionId?.length);
-    console.log('Session ID type:', typeof sessionId);
-    
+
     if (!sessionId) {
       return res.status(400).send('Payment session ID is required');
     }
-    
+
     // Read the payment template
     const templatePath = path.join(__dirname, '../../views/payment.html');
     let template = fs.readFileSync(templatePath, 'utf8');
-    
+
     // Determine SDK URL and environment based on NODE_ENV
-    const sdkUrl = process.env.NODE_ENV === 'production'
-      ? 'https://sdk.cashfree.com/js/v3/cashfree.js'
-      : 'https://sandbox.cashfree.com/js/v3/cashfree.js';
-    
+    const sdkUrl = process.env.NODE_ENV === 'production' ?
+    'https://sdk.cashfree.com/js/v3/cashfree.js' :
+    'https://sandbox.cashfree.com/js/v3/cashfree.js';
+
     const environment = process.env.NODE_ENV === 'production' ? 'production' : 'sandbox';
-    
-    console.log('Using SDK URL:', sdkUrl);
-    console.log('Using environment:', environment);
-    
+
     // Replace placeholders
-    template = template
-      .replace(/{{SDK_URL}}/g, sdkUrl)
-      .replace(/{{PAYMENT_SESSION_ID}}/g, sessionId)
-      .replace(/{{ENVIRONMENT}}/g, environment)
-      .replace(/{{RETURN_URL}}/g, returnUrl || process.env.FRONTEND_URL || 'about:blank');
-    
+    template = template.
+    replace(/{{SDK_URL}}/g, sdkUrl).
+    replace(/{{PAYMENT_SESSION_ID}}/g, sessionId).
+    replace(/{{ENVIRONMENT}}/g, environment).
+    replace(/{{RETURN_URL}}/g, returnUrl || process.env.FRONTEND_URL || 'about:blank');
+
     // Debug: Check if replacement worked
     const hasSessionId = template.includes(sessionId);
     const hasPlaceholder = template.includes('{{PAYMENT_SESSION_ID}}');
-    console.log('Template replacement check:', { hasSessionId, hasPlaceholder });
-    
+
     // Debug: Show a snippet of the template around the session ID
     const sessionIdIndex = template.indexOf(sessionId);
     if (sessionIdIndex > -1) {
       const snippet = template.substring(sessionIdIndex - 50, sessionIdIndex + sessionId.length + 50);
-      console.log('Session ID in template:', snippet);
+
     }
-    
+
     res.setHeader('Content-Type', 'text/html');
     res.send(template);
-    
+
   } catch (error) {
     console.error('Error serving payment page:', error);
     res.status(500).send('Internal server error');
   }
 });
 
-export default router; 
+export default router;

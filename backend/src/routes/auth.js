@@ -14,9 +14,9 @@ router.post('/send-otp', async (req, res) => {
     let { mobileNumber } = req.body;
 
     // 1️⃣  Remove leading “+” (if present)
-  if (mobileNumber.startsWith('+')) {
-    mobileNumber = mobileNumber.slice(1);
-  }
+    if (mobileNumber.startsWith('+')) {
+      mobileNumber = mobileNumber.slice(1);
+    }
 
     if (!mobileNumber || !/^\d{12}$/.test(mobileNumber)) {
       return res.status(400).json({ error: 'Invalid mobile number. Must be 12 digits.' });
@@ -28,7 +28,7 @@ router.post('/send-otp', async (req, res) => {
     // Send OTP via messaging service (Infobip WhatsApp)
     try {
       await messagingService.sendOTP(mobileNumber, otp);
-      console.log(`✅ OTP sent successfully to ${mobileNumber}`);
+
     } catch (msgError) {
       console.error('❌ Failed to send OTP via messaging service:', msgError.message);
       // Continue without failing the API - user will see OTP in development
@@ -37,15 +37,15 @@ router.post('/send-otp', async (req, res) => {
     // Save or update user with OTP
     const user = await User.findOneAndUpdate(
       { mobileNumber },
-      { 
+      {
         $set: {
           mobileNumber,
           otp,
           otpExpiry: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
         }
       },
-      { 
-        upsert: true, 
+      {
+        upsert: true,
         new: true,
         runValidators: true,
         setDefaultsOnInsert: true
@@ -56,7 +56,7 @@ router.post('/send-otp', async (req, res) => {
       throw new Error('Failed to update user');
     }
 
-    res.json({ 
+    res.json({
       success: true,
       message: 'OTP sent successfully'
     });
@@ -83,9 +83,9 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ error: 'Invalid OTP. Must be 6 digits.' });
     }
 
-    const user = await User.findOne({ mobileNumber })
-      .select('+otp +otpExpiry');  // Explicitly include otp and otpExpiry fields
-      
+    const user = await User.findOne({ mobileNumber }).
+    select('+otp +otpExpiry'); // Explicitly include otp and otpExpiry fields
+
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -110,13 +110,12 @@ router.post('/verify-otp', async (req, res) => {
     // Check if user needs subscription setup (both new and migrated users)
     const { subscriptionService } = await import('../services/subscription/subscriptionService.js');
     const { Subscription } = await import('../models/subscription.js');
-    
+
     const existingSubscription = await Subscription.findOne({ userId: user._id });
-    
+
     if (!existingSubscription) {
       try {
-        console.log(`🆕 Creating trial subscription for new user ${mobileNumber}`);
-        
+
         // Create trial subscription for new users (30-day free trial with 3 stocks)
         await subscriptionService.createSubscription(
           user._id,
@@ -125,9 +124,7 @@ router.post('/verify-otp', async (req, res) => {
             source: 'new_user_login'
           }
         );
-        
-        console.log(`✅ Created trial subscription for new user ${mobileNumber}`);
-        
+
       } catch (subscriptionError) {
         console.error(`Subscription creation failed for ${mobileNumber}:`, subscriptionError);
       }
@@ -137,7 +134,6 @@ router.post('/verify-otp', async (req, res) => {
 
     // Generate JWT token
     const token = user.generateAuthToken();
-    console.log('token', token);
 
     res.json({
       success: true,
@@ -163,12 +159,12 @@ router.post('/verify-otp', async (req, res) => {
 router.get('/profile', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-otp -otpExpiry');
-    
+
     // Get actual credits from subscription table
     const { Subscription } = await import('../models/subscription.js');
     const subscription = await Subscription.findActiveForUser(req.user.id);
     const bonusCredits = subscription?.credits?.bonusCredits || 0;
-    
+
     // Prepare comprehensive profile data
     const profileData = {
       _id: user._id?.toString() || user.id?.toString(),
@@ -188,11 +184,11 @@ router.get('/profile', auth, async (req, res) => {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     };
-    
-    res.json({ 
-      data: profileData, 
-      success: true, 
-      message: "Profile fetched successfully" 
+
+    res.json({
+      data: profileData,
+      success: true,
+      message: "Profile fetched successfully"
     });
   } catch (error) {
     console.error('Error fetching profile:', error);
@@ -287,16 +283,16 @@ router.post('/logout', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     const token = req.token;
-    
+
     // Clear FCM tokens
     user.fcmTokens = [];
     await user.save();
-    
+
     // Blacklist the JWT token
-    
+
     const decoded = jwt.decode(token);
     const expiresAt = new Date(decoded.exp * 1000);
-    
+
     await TokenBlacklist.blacklistToken(token, req.user.id, expiresAt);
 
     res.json({ message: 'Logged out successfully' });
@@ -310,35 +306,35 @@ router.post('/logout', auth, async (req, res) => {
 router.post('/complete-assessment', auth, async (req, res) => {
   try {
     const { experienceLevel, assessmentScore, confidence, skipPenalty } = req.body;
-    
+
     // Validate input
     if (!experienceLevel || !['beginner', 'intermediate', 'advanced'].includes(experienceLevel)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid experience level. Must be beginner, intermediate, or advanced.' 
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid experience level. Must be beginner, intermediate, or advanced.'
       });
     }
-    
+
     if (typeof assessmentScore !== 'number' || assessmentScore < 0 || assessmentScore > 6) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid assessment score. Must be between 0 and 6.' 
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid assessment score. Must be between 0 and 6.'
       });
     }
-    
+
     if (typeof confidence !== 'number' || confidence < 0 || confidence > 1) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid confidence. Must be between 0 and 1.' 
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid confidence. Must be between 0 and 1.'
       });
     }
 
     // Get user
     const user = await User.findById(req.user.id);
     if (!user) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'User not found' 
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
       });
     }
 
@@ -361,7 +357,7 @@ router.post('/complete-assessment', auth, async (req, res) => {
     if (!user.assessmentHistory) {
       user.assessmentHistory = {};
     }
-    
+
     // Only update quickQuiz, leave deepDiagnostic untouched
     user.assessmentHistory.quickQuiz = {
       completed: true,
@@ -378,27 +374,27 @@ router.post('/complete-assessment', auth, async (req, res) => {
     if (shouldAwardCredits) {
       try {
         const { Subscription } = await import('../models/subscription.js');
-        
+
         // Find user's active subscription and add bonus credits (7-day expiry, advanced analysis)
         const subscription = await Subscription.findActiveForUser(user._id);
         if (subscription) {
           const bonusAmount = 5; // 5 bonus credits for quick quiz
           const expiryDate = new Date();
           expiryDate.setDate(expiryDate.getDate() + 7); // 7 days from now
-          
+
           subscription.credits.bonusCredits += bonusAmount;
           subscription.credits.bonusCreditsExpiry = expiryDate;
           await subscription.save();
-          console.log(`Added ${bonusAmount} bonus credits (7-day expiry) to user ${user._id} for completing assessment`);
+
         } else {
-          console.log(`No active subscription found for user ${user._id} - credits not awarded`);
+
         }
       } catch (creditError) {
         console.error('Error awarding assessment bonus credits:', creditError);
         // Continue without failing the assessment completion
       }
     } else {
-      console.log(`User ${user._id} retook assessment - no additional credits awarded`);
+
     }
 
     // Save user data
@@ -406,12 +402,12 @@ router.post('/complete-assessment', auth, async (req, res) => {
 
     // Return updated user profile
     const updatedUser = await User.findById(req.user.id).select('-otp -otpExpiry');
-    
+
     res.json({
       success: true,
-      message: shouldAwardCredits 
-        ? 'Assessment completed successfully! Trial subscription activated.'
-        : 'Assessment updated successfully! (Subscription already active)',
+      message: shouldAwardCredits ?
+      'Assessment completed successfully! Trial subscription activated.' :
+      'Assessment updated successfully! (Subscription already active)',
       data: {
         _id: updatedUser._id?.toString() || updatedUser.id?.toString(),
         firstName: updatedUser.firstName || null,
@@ -430,9 +426,9 @@ router.post('/complete-assessment', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error completing assessment:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to complete assessment' 
+    res.status(500).json({
+      success: false,
+      error: 'Failed to complete assessment'
     });
   }
 });
@@ -441,7 +437,7 @@ router.post('/complete-assessment', auth, async (req, res) => {
 router.post('/submit-consent', auth, async (req, res) => {
   try {
     const { consentAcceptance } = req.body;
-    
+
     if (!consentAcceptance) {
       return res.status(400).json({
         success: false,
@@ -451,7 +447,7 @@ router.post('/submit-consent', auth, async (req, res) => {
 
     // Validate required fields
     const { checkboxes, hashOfTextShown, consentText } = consentAcceptance;
-    
+
     if (!checkboxes || !hashOfTextShown) {
       return res.status(400).json({
         success: false,
@@ -503,40 +499,39 @@ router.post('/submit-consent', auth, async (req, res) => {
   }
 });
 
-
 // POST /auth/complete-deep-diagnostic - Complete deep diagnostic assessment and award additional credits
 router.post('/complete-deep-diagnostic', auth, async (req, res) => {
   try {
     const { level, totalScore, confidence, badge } = req.body;
-    
+
     // Validate input
     if (!level || !['beginner', 'intermediate', 'advanced'].includes(level)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid experience level. Must be beginner, intermediate, or advanced.' 
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid experience level. Must be beginner, intermediate, or advanced.'
       });
     }
-    
+
     if (typeof totalScore !== 'number' || totalScore < 0 || totalScore > 12) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid total score. Must be between 0 and 12.' 
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid total score. Must be between 0 and 12.'
       });
     }
-    
+
     if (typeof confidence !== 'number' || confidence < 0 || confidence > 1) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid confidence. Must be between 0 and 1.' 
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid confidence. Must be between 0 and 1.'
       });
     }
 
     // Get user
     const user = await User.findById(req.user.id);
     if (!user) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'User not found' 
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
       });
     }
 
@@ -560,7 +555,7 @@ router.post('/complete-deep-diagnostic', auth, async (req, res) => {
     if (!user.assessmentHistory) {
       user.assessmentHistory = {};
     }
-    
+
     // Only update deepDiagnostic, leave quickQuiz untouched
     user.assessmentHistory.deepDiagnostic = {
       completed: true,
@@ -574,27 +569,27 @@ router.post('/complete-deep-diagnostic', auth, async (req, res) => {
     if (shouldAwardCredits) {
       try {
         const { Subscription } = await import('../models/subscription.js');
-        
+
         // Find user's active subscription and add bonus credits (7-day expiry, advanced analysis)
         const subscription = await Subscription.findActiveForUser(user._id);
         if (subscription) {
           const bonusAmount = 10; // 10 bonus credits for deep diagnostic
           const expiryDate = new Date();
           expiryDate.setDate(expiryDate.getDate() + 7); // 7 days from now
-          
+
           subscription.credits.bonusCredits += bonusAmount;
           subscription.credits.bonusCreditsExpiry = expiryDate;
           await subscription.save();
-          console.log(`Added ${bonusAmount} bonus credits (7-day expiry) to user ${user._id} for completing deep diagnostic`);
+
         } else {
-          console.log(`No active subscription found for user ${user._id} - credits not awarded`);
+
         }
       } catch (creditError) {
         console.error('Error awarding deep diagnostic bonus credits:', creditError);
         // Continue without failing the completion
       }
     } else {
-      console.log(`User ${user._id} retook deep diagnostic - no additional credits awarded`);
+
     }
 
     // Save user data
@@ -602,12 +597,12 @@ router.post('/complete-deep-diagnostic', auth, async (req, res) => {
 
     // Return updated user profile
     const updatedUser = await User.findById(req.user.id).select('-otp -otpExpiry');
-    
+
     res.json({
       success: true,
-      message: shouldAwardCredits 
-        ? 'Deep diagnostic completed successfully! Enhanced insights unlocked.'
-        : 'Deep diagnostic updated successfully! (No changes for retake)',
+      message: shouldAwardCredits ?
+      'Deep diagnostic completed successfully! Enhanced insights unlocked.' :
+      'Deep diagnostic updated successfully! (No changes for retake)',
       data: {
         _id: updatedUser._id?.toString() || updatedUser.id?.toString(),
         firstName: updatedUser.firstName || null,
@@ -628,11 +623,11 @@ router.post('/complete-deep-diagnostic', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error completing deep diagnostic:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to complete deep diagnostic' 
+    res.status(500).json({
+      success: false,
+      error: 'Failed to complete deep diagnostic'
     });
   }
 });
 
-export default router; 
+export default router;

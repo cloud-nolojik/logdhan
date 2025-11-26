@@ -22,8 +22,6 @@ const requiredVars = {
   UPSTOX_API_KEY: requireEnv('UPSTOX_API_KEY')
 };
 
-console.log('✅ Environment validation passed');
-
 // Import services and jobs
 import { subscriptionService } from './services/subscription/subscriptionService.js';
 import { azureStorageService } from './services/storage/azureStorage.service.js';
@@ -62,7 +60,6 @@ import consentRoutes from './routes/consent.js';
 import appRedirectRoutes from './routes/app-redirect.js';
 import feedbackRoutes from './routes/feedback.js';
 
-
 const app = express();
 
 // Middleware
@@ -71,12 +68,7 @@ app.use(express.json());
 
 // Request logging middleware - logs URL and body for all requests
 app.use((req, res, next) => {
-  console.log('\n📍 Incoming Request:');
-  console.log('Method:', req.method);
-  console.log('URL:', req.originalUrl);
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-  console.log('Query:', JSON.stringify(req.query, null, 2));
-  console.log('---');
+
   next();
 });
 
@@ -113,23 +105,6 @@ app.use('/charts', (req, res, next) => {
 }, express.static(path.join(process.cwd(), 'temp', 'charts')));
 
 // Connect to MongoDB with robust connection settings
-mongoose.connect(requiredVars.MONGODB_URI, {
-  // Connection pool settings
-  maxPoolSize: 10, // Maintain up to 10 socket connections
-  serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
-  socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-  connectTimeoutMS: 10000, // Give up initial connection after 10 seconds
-  
-  // Resilience settings  
-  maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
-  retryWrites: true, // Automatically retry write operations
-  retryReads: true, // Automatically retry read operations
-})
-  .then(() => console.log('✅ Connected to MongoDB'))
-  .catch(err => {
-    console.error('❌ MongoDB connection error:', err);
-    process.exit(1);
-  });
 
 // Handle MongoDB connection events
 mongoose.connection.on('error', (err) => {
@@ -137,11 +112,11 @@ mongoose.connection.on('error', (err) => {
 });
 
 mongoose.connection.on('disconnected', () => {
-  console.log('⚠️ MongoDB disconnected');
+
 });
 
 mongoose.connection.on('reconnected', () => {
-  console.log('🔄 MongoDB reconnected');
+
 });
 
 // Routes
@@ -184,9 +159,9 @@ app.get('/health', (req, res) => {
 // Initialize Azure Storage
 async function initializeAzureStorage() {
   try {
-    console.log('🔄 Initializing Azure Storage...');
+
     await azureStorageService.initializeContainer();
-    console.log('✅ Azure Storage initialized');
+
   } catch (error) {
     console.warn('⚠️ Azure Storage initialization failed:', error.message);
   }
@@ -195,10 +170,9 @@ async function initializeAzureStorage() {
 // Initialize subscription system
 async function initializeSubscriptionSystem() {
   try {
-    console.log('🔄 Initializing subscription system...');
+
     await subscriptionService.initializeDefaultPlans();
 
-    console.log('✅ Subscription system initialized');
   } catch (error) {
     console.error('❌ Failed to initialize subscription system:', error);
   }
@@ -207,9 +181,9 @@ async function initializeSubscriptionSystem() {
 // Initialize messaging service
 async function initializeMessagingService() {
   try {
-    console.log('🔄 Initializing messaging service...');
+
     await messagingService.initialize();
-    console.log('✅ Messaging service initialized');
+
   } catch (error) {
     console.error('❌ Failed to initialize messaging service:', error);
   }
@@ -218,9 +192,9 @@ async function initializeMessagingService() {
 // Initialize Agenda daily reminder service
 async function initializeAgendaDailyReminderService() {
   try {
-    console.log('🔄 Initializing Agenda daily reminder service...');
+
     await agendaDailyReminderService.initialize();
-    console.log('✅ Agenda daily reminder service initialized');
+
   } catch (error) {
     console.error('❌ Failed to initialize Agenda daily reminder service:', error);
   }
@@ -229,9 +203,9 @@ async function initializeAgendaDailyReminderService() {
 // Initialize Agenda monitoring service
 async function initializeAgendaMonitoringService() {
   try {
-    console.log('🔄 Initializing Agenda monitoring service...');
+
     await agendaMonitoringService.initialize();
-    console.log('✅ Agenda monitoring service initialized');
+
   } catch (error) {
     console.error('❌ Failed to initialize Agenda monitoring service:', error);
   }
@@ -240,9 +214,9 @@ async function initializeAgendaMonitoringService() {
 // Initialize Agenda data pre-fetch service
 async function initializeAgendaDataPrefetchService() {
   try {
-    console.log('🔄 Initializing Agenda data pre-fetch service...');
+
     await agendaDataPrefetchService.initialize();
-    console.log('✅ Agenda data pre-fetch service initialized');
+
   } catch (error) {
     console.error('❌ Failed to initialize Agenda data pre-fetch service:', error);
   }
@@ -251,9 +225,9 @@ async function initializeAgendaDataPrefetchService() {
 // Initialize Agenda bulk analysis notification service
 async function initializeAgendaBulkAnalysisNotificationService() {
   try {
-    console.log('🔄 Initializing Agenda bulk analysis notification service...');
+
     await agendaBulkAnalysisNotificationService.initialize();
-    console.log('✅ Agenda bulk analysis notification service initialized');
+
   } catch (error) {
     console.error('❌ Failed to initialize Agenda bulk analysis notification service:', error);
   }
@@ -262,9 +236,9 @@ async function initializeAgendaBulkAnalysisNotificationService() {
 // Initialize Agenda bulk analysis reminder service (8 AM expiry reminder)
 async function initializeAgendaBulkAnalysisReminderService() {
   try {
-    console.log('🔄 Initializing Agenda bulk analysis reminder service...');
+
     await agendaBulkAnalysisReminderService.initialize();
-    console.log('✅ Agenda bulk analysis reminder service initialized');
+
   } catch (error) {
     console.error('❌ Failed to initialize Agenda bulk analysis reminder service:', error);
   }
@@ -273,9 +247,9 @@ async function initializeAgendaBulkAnalysisReminderService() {
 // Initialize Agenda scheduled bulk analysis service (4 PM pre-analysis)
 async function initializeAgendaScheduledBulkAnalysisService() {
   try {
-    console.log('🔄 Initializing Agenda scheduled bulk analysis service...');
+
     await agendaScheduledBulkAnalysisService.initialize();
-    console.log('✅ Agenda scheduled bulk analysis service initialized (runs at 4:00 PM IST on trading days)');
+
   } catch (error) {
     console.error('❌ Failed to initialize Agenda scheduled bulk analysis service:', error);
   }
@@ -284,9 +258,9 @@ async function initializeAgendaScheduledBulkAnalysisService() {
 // Initialize monitoring cleanup service (4 AM daily cleanup)
 async function initializeAgendaMonitoringCleanupService() {
   try {
-    console.log('🔄 Initializing monitoring cleanup service...');
+
     await agendaMonitoringCleanupService.initialize();
-    console.log('✅ Monitoring cleanup service initialized (runs at 4:00 AM IST daily)');
+
   } catch (error) {
     console.error('❌ Failed to initialize monitoring cleanup service:', error);
   }
@@ -295,9 +269,9 @@ async function initializeAgendaMonitoringCleanupService() {
 // Initialize price cache service
 async function initializePriceCacheService() {
   try {
-    console.log('🔄 Initializing price cache service...');
+
     priceCacheService.start();
-    console.log('✅ Price cache service initialized (fetches prices every 2 minutes for up to 2000 stocks)');
+
   } catch (error) {
     console.error('❌ Failed to initialize price cache service:', error);
   }
@@ -307,7 +281,6 @@ async function initializePriceCacheService() {
 
 const PORT = process.env.PORT || 5650;
 app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
 
   // Initialize all services
   await initializeAzureStorage();
@@ -323,37 +296,31 @@ app.listen(PORT, async () => {
   await initializeAgendaMonitoringCleanupService(); // Cleanup expired monitoring subscriptions
   // BullMQ condition monitoring removed - now using Agenda
 
-  console.log('🚀 All services initialized successfully');
 });
 
 // Graceful shutdown handling
 process.on('SIGINT', async () => {
-  console.log('\n🛑 SIGINT received, shutting down gracefully...');
 
   try {
     // Stop price cache service
-    console.log('🛑 Stopping price cache service...');
+
     priceCacheService.stop();
-    console.log('✅ Price cache service stopped');
 
     // Stop all Agenda services gracefully
-    console.log('🛑 Stopping Agenda services...');
+
     await Promise.all([
-      agendaDataPrefetchService.stop(),
-      agendaDailyReminderService.agenda?.stop?.(),
-      agendaMonitoringService.agenda?.stop?.(),
-      agendaBulkAnalysisNotificationService.shutdown(),
-      agendaBulkAnalysisReminderService.shutdown(),
-      agendaScheduledBulkAnalysisService.stop(),
-      agendaMonitoringCleanupService.shutdown()
-    ]);
-    console.log('✅ All Agenda services stopped');
+    agendaDataPrefetchService.stop(),
+    agendaDailyReminderService.agenda?.stop?.(),
+    agendaMonitoringService.agenda?.stop?.(),
+    agendaBulkAnalysisNotificationService.shutdown(),
+    agendaBulkAnalysisReminderService.shutdown(),
+    agendaScheduledBulkAnalysisService.stop(),
+    agendaMonitoringCleanupService.shutdown()]
+    );
 
     // Close MongoDB connection
     await mongoose.connection.close();
-    console.log('✅ MongoDB connection closed');
 
-    console.log('✅ Graceful shutdown completed');
     process.exit(0);
   } catch (error) {
     console.error('❌ Error during shutdown:', error);
@@ -362,32 +329,27 @@ process.on('SIGINT', async () => {
 });
 
 process.on('SIGTERM', async () => {
-  console.log('\n🛑 SIGTERM received, shutting down gracefully...');
 
   try {
     // Stop price cache service
-    console.log('🛑 Stopping price cache service...');
+
     priceCacheService.stop();
-    console.log('✅ Price cache service stopped');
 
     // Stop all Agenda services gracefully
-    console.log('🛑 Stopping Agenda services...');
+
     await Promise.all([
-      agendaDataPrefetchService.stop(),
-      agendaDailyReminderService.agenda?.stop?.(),
-      agendaMonitoringService.agenda?.stop?.(),
-      agendaBulkAnalysisNotificationService.shutdown(),
-      agendaBulkAnalysisReminderService.shutdown(),
-      agendaScheduledBulkAnalysisService.stop(),
-      agendaMonitoringCleanupService.shutdown()
-    ]);
-    console.log('✅ All Agenda services stopped');
+    agendaDataPrefetchService.stop(),
+    agendaDailyReminderService.agenda?.stop?.(),
+    agendaMonitoringService.agenda?.stop?.(),
+    agendaBulkAnalysisNotificationService.shutdown(),
+    agendaBulkAnalysisReminderService.shutdown(),
+    agendaScheduledBulkAnalysisService.stop(),
+    agendaMonitoringCleanupService.shutdown()]
+    );
 
     // Close MongoDB connection
     await mongoose.connection.close();
-    console.log('✅ MongoDB connection closed');
 
-    console.log('✅ Graceful shutdown completed');
     process.exit(0);
   } catch (error) {
     console.error('❌ Error during shutdown:', error);

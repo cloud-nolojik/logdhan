@@ -23,8 +23,7 @@ export class MessagingService {
           webhookUrl: process.env.INFOBIP_WEBHOOK_URL
         });
         await this.infobipProvider.initialize();
-        
-        console.log('✅ Infobip WhatsApp provider initialized successfully');
+
       } catch (error) {
         console.error('❌ Failed to initialize Infobip provider:', error.message);
         throw error;
@@ -34,7 +33,7 @@ export class MessagingService {
       if (!process.env.INFOBIP_API_KEY) missingVars.push('INFOBIP_API_KEY');
       if (!process.env.INFOBIP_BASE_URL) missingVars.push('INFOBIP_BASE_URL');
       if (!process.env.INFOBIP_FROM_NUMBER) missingVars.push('INFOBIP_FROM_NUMBER');
-      
+
       console.warn(`⚠️  Missing Infobip environment variables: ${missingVars.join(', ')}`);
       console.warn('⚠️  OTP sending will be disabled.');
     }
@@ -144,4 +143,4 @@ export class MessagingService {
 }
 
 // Create and export a singleton instance
-export const messagingService = new MessagingService(); 
+export const messagingService = new MessagingService();

@@ -14,16 +14,11 @@ class N8nService {
   async triggerAIReview(tradeLogData) {
     try {
       const webhookUrl = `${this.webhookBaseUrl}${this.aiReviewWebhookId}`;
-      
+
       // Send the first trade object directly (same as Postman format)
       const tradeObject = tradeLogData[0]; // Get the first trade from the array
-      
-      console.log('Sending to n8n webhook:', JSON.stringify(tradeObject, null, 2));
-      console.log('Webhook URL:', webhookUrl);
-      
-      const response = await axios.post(webhookUrl, tradeObject);
 
-      console.log('n8n response:', response.data);
+      const response = await axios.post(webhookUrl, tradeObject);
 
       return {
         success: true,
@@ -32,7 +27,7 @@ class N8nService {
     } catch (error) {
       console.error('Error triggering AI review workflow:', error.message);
       console.error('Error details:', error.response?.data || error);
-      
+
       // Return error response instead of throwing to handle gracefully
       return {
         success: false,
@@ -43,7 +38,6 @@ class N8nService {
       };
     }
   }
-
 
   /**
    * Validates an incoming webhook request from n8n
@@ -56,4 +50,4 @@ class N8nService {
   }
 }
 
-export const n8nService = new N8nService(); 
+export const n8nService = new N8nService();

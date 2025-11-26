@@ -22,17 +22,15 @@ class FirebaseService {
           credential: cert(serviceAccount)
         });
 
-        console.log('Firebase Admin SDK initialized successfully');
       } catch (error) {
         console.error('Error initializing Firebase Admin SDK:', error);
         throw error;
       }
     }
-    
+
     // Get the messaging instance
     this.messaging = getMessaging();
   }
-
 
   /**
    * Send notification to multiple devices
@@ -42,12 +40,12 @@ class FirebaseService {
       if (!tokens || tokens.length === 0) {
         return { success: false, error: 'No tokens provided' };
       }
-  
+
       const failedTokens = [];
       const sentMessages = [];
-  
+
       for (const token of tokens) {
-        if(!token){
+        if (!token) {
           continue;
         }
         // Ensure all data values are strings (Firebase requirement)
@@ -86,17 +84,17 @@ class FirebaseService {
           },
           token
         };
-  
+
         try {
           const response = await this.messaging.send(message);
-          console.log('Successfully sent message:', response);
+
           sentMessages.push(response);
         } catch (error) {
           console.error(`Failed to send to token: ${token}`, error);
           failedTokens.push(token);
         }
       }
-  
+
       return {
         success: true,
         successCount: sentMessages.length,
@@ -115,7 +113,7 @@ class FirebaseService {
     try {
       const user = await User.findById(userId);
       if (!user || !user.fcmTokens || user.fcmTokens.length === 0) {
-        console.log('No FCM tokens found for user:', userId);
+
         return { success: false, error: 'No FCM tokens found' };
       }
 
@@ -169,9 +167,6 @@ class FirebaseService {
       };
 
       const response = await this.messaging.send(message);
-      console.log('🚀 ~ FirebaseService ~ sendToTopic ~ response:', response);
-
-
 
       return { success: true, messageId: response };
     } catch (error) {
@@ -186,7 +181,7 @@ class FirebaseService {
   async sendAIReviewNotification(userId, stockSymbol, logId) {
     const title = 'AI Review Complete';
     const body = `AI review for ${stockSymbol} has been completed. Click to view details.`;
-    
+
     // Include rich data for the notification
     const data = {
       type: 'AI_REVIEW',
@@ -201,4 +196,4 @@ class FirebaseService {
 }
 
 // Create and export a singleton instance
-export const firebaseService = new FirebaseService(); 
+export const firebaseService = new FirebaseService();

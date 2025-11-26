@@ -21,30 +21,28 @@ const MARKET_INDICES = {
   },
   'SENSEX': {
     name: 'Sensex',
-    symbol: 'SENSEX', 
+    symbol: 'SENSEX',
     upstoxKey: 'BSE_INDEX|SENSEX'
   },
   'NIFTY_BANK': {
     name: 'Nifty Bank',
     symbol: 'NIFTY BANK',
     upstoxKey: 'NSE_INDEX|Nifty Bank'
-  },
- 
+  }
+
 };
 
 // ⚡ OPTIMIZED: Function to fetch market data with triple fallback (memory → DB → API)
 async function fetchMarketDataFromCache() {
   try {
     const startTime = Date.now();
-    console.log('⚡ [MARKET] Fetching market indices from price cache...');
 
     // Extract all instrument keys
-    const instrumentKeys = Object.values(MARKET_INDICES).map(info => info.upstoxKey);
+    const instrumentKeys = Object.values(MARKET_INDICES).map((info) => info.upstoxKey);
 
     // ⚡ Step 1: Get bulk LTP data from memory cache - instant!
     const bulkPrices = priceCacheService.getPrices(instrumentKeys);
     const ltpTime = Date.now() - startTime;
-    console.log(`⚡ [MARKET] Memory cache LTP fetch completed in ${ltpTime}ms for ${instrumentKeys.length} indices`);
 
     // ⚡ Step 2: Get candles from memory cache (pre-fetched for indices)
     const candleStartTime = Date.now();
@@ -53,45 +51,41 @@ async function fetchMarketDataFromCache() {
       return { key, indexInfo, candles };
     });
     const candleTime = Date.now() - candleStartTime;
-    console.log(`⚡ [MARKET] Memory cache candle fetch completed in ${candleTime}ms`);
 
     // ⚡ Step 3: Check for missing indices (not in memory cache)
-    const missingIndices = instrumentKeys.filter(key => !bulkPrices[key] || !priceCacheService.getCandles(key));
+    const missingIndices = instrumentKeys.filter((key) => !bulkPrices[key] || !priceCacheService.getCandles(key));
 
     if (missingIndices.length > 0) {
-      console.log(`🔍 [MARKET] ${missingIndices.length} indices missing from memory, checking database...`);
 
       // Fetch from database
       const dbStartTime = Date.now();
       const dbPrices = await LatestPrice.getPricesForInstruments(missingIndices);
       const dbTime = Date.now() - dbStartTime;
-      console.log(`💾 [MARKET] DB fetch completed in ${dbTime}ms - found ${dbPrices.length}/${missingIndices.length} indices`);
 
       // Merge DB prices into bulkPrices
-      dbPrices.forEach(priceDoc => {
+      dbPrices.forEach((priceDoc) => {
         bulkPrices[priceDoc.instrument_key] = priceDoc.last_traded_price;
 
         // Also update candles if available
         if (priceDoc.recent_candles && priceDoc.recent_candles.length > 0) {
-          const matchingIndex = candleResults.find(r => r.indexInfo.upstoxKey === priceDoc.instrument_key);
+          const matchingIndex = candleResults.find((r) => r.indexInfo.upstoxKey === priceDoc.instrument_key);
           if (matchingIndex && !matchingIndex.candles) {
-            matchingIndex.candles = priceDoc.recent_candles.map(c => [
-              new Date(c.timestamp).getTime(),
-              c.open,
-              c.high,
-              c.low,
-              c.close,
-              c.volume
-            ]);
+            matchingIndex.candles = priceDoc.recent_candles.map((c) => [
+            new Date(c.timestamp).getTime(),
+            c.open,
+            c.high,
+            c.low,
+            c.close,
+            c.volume]
+            );
           }
         }
       });
 
       // ⚡ Step 4: For still missing indices, fetch from API
-      const stillMissing = missingIndices.filter(key => !bulkPrices[key]);
+      const stillMissing = missingIndices.filter((key) => !bulkPrices[key]);
 
       if (stillMissing.length > 0) {
-        console.log(`🌐 [MARKET] ${stillMissing.length} indices still missing - fetching from Upstox API...`);
 
         const apiStartTime = Date.now();
         const apiPromises = stillMissing.map(async (instrumentKey) => {
@@ -118,7 +112,7 @@ async function fetchMarketDataFromCache() {
             bulkPrices[instrumentKey] = price;
 
             // Update candles for this index
-            const matchingIndex = candleResults.find(r => r.indexInfo.upstoxKey === instrumentKey);
+            const matchingIndex = candleResults.find((r) => r.indexInfo.upstoxKey === instrumentKey);
             if (matchingIndex) {
               matchingIndex.candles = candles;
             }
@@ -127,7 +121,6 @@ async function fetchMarketDataFromCache() {
           }
         });
 
-        console.log(`🌐 [MARKET] API fetch completed in ${apiTime}ms - ${apiSuccessCount}/${stillMissing.length} successful`);
       }
     }
 
@@ -151,10 +144,10 @@ async function fetchMarketDataFromCache() {
             const previousCandle = candles[1];
             previousClose = previousCandle[4];
             change = close - previousClose;
-            changePercent = previousClose !== 0 ? (change / previousClose) * 100 : 0;
+            changePercent = previousClose !== 0 ? change / previousClose * 100 : 0;
           } else {
             change = close - open;
-            changePercent = open !== 0 ? (change / open) * 100 : 0;
+            changePercent = open !== 0 ? change / open * 100 : 0;
           }
 
           return {
@@ -174,7 +167,7 @@ async function fetchMarketDataFromCache() {
           };
         } else if (currentPrice) {
           // Use LTP data with minimal calculation
-          console.log(`⚡ Using LTP data for ${indexInfo.name}: ₹${currentPrice}`);
+
           return {
             name: indexInfo.name,
             symbol: indexInfo.symbol,
@@ -194,8 +187,8 @@ async function fetchMarketDataFromCache() {
           // Fallback to reasonable default values
           console.warn(`⚠️ No data available for ${indexInfo.name}, using fallback`);
           const basePrice = key === 'SENSEX' ? 75000 :
-                           key === 'NIFTY_50' ? 22500 :
-                           key === 'NIFTY_BANK' ? 48000 : 35000;
+          key === 'NIFTY_50' ? 22500 :
+          key === 'NIFTY_BANK' ? 48000 : 35000;
 
           return {
             name: indexInfo.name,
@@ -216,8 +209,8 @@ async function fetchMarketDataFromCache() {
       } catch (error) {
         console.error(`❌ Error processing ${indexInfo.name}:`, error.message);
         const basePrice = key === 'SENSEX' ? 75000 :
-                         key === 'NIFTY_50' ? 22500 :
-                         key === 'NIFTY_BANK' ? 48000 : 35000;
+        key === 'NIFTY_50' ? 22500 :
+        key === 'NIFTY_BANK' ? 48000 : 35000;
 
         return {
           name: indexInfo.name,
@@ -239,7 +232,7 @@ async function fetchMarketDataFromCache() {
     });
 
     const totalTime = Date.now() - startTime;
-    console.log(`⚡ [MARKET] Total market indices fetch completed in ${totalTime}ms (LTP: ${ltpTime}ms, Candles: ${candleTime}ms) - ALL FROM CACHE!`);
+
     return indices;
   } catch (error) {
     console.error('❌ [MARKET] Error fetching market data from cache:', error);
@@ -251,7 +244,7 @@ async function fetchMarketDataFromCache() {
 router.get('/indices', auth, async (req, res) => {
   try {
     // Fetch data from in-memory cache service (indices are always pre-cached)
-    console.log('⚡ [MARKET] Fetching market indices from price cache service');
+
     const indices = await fetchMarketDataFromCache();
 
     res.status(200).json({
@@ -278,11 +271,11 @@ router.get('/index/:symbol', auth, async (req, res) => {
     const { symbol } = req.params;
 
     // Fetch data from in-memory cache service
-    console.log(`⚡ [MARKET] Fetching index ${symbol} from price cache service`);
+
     const indices = await fetchMarketDataFromCache();
 
-    const indexData = indices.find(index =>
-      index.symbol.toLowerCase().includes(symbol.toLowerCase())
+    const indexData = indices.find((index) =>
+    index.symbol.toLowerCase().includes(symbol.toLowerCase())
     );
 
     if (!indexData) {

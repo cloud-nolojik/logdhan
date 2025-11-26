@@ -6,7 +6,7 @@ class AzureStorageService {
   constructor() {
     this.connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
     this.containerName = process.env.AZURE_BLOB_CONTAINER_NAME || 'charts';
-    
+
     if (!this.connectionString) {
       console.warn('⚠️ Azure Storage connection string not found. Chart uploads will use local storage.');
       this.enabled = false;
@@ -17,7 +17,7 @@ class AzureStorageService {
       this.blobServiceClient = BlobServiceClient.fromConnectionString(this.connectionString);
       this.containerClient = this.blobServiceClient.getContainerClient(this.containerName);
       this.enabled = true;
-      console.log('✅ Azure Blob Storage service initialized');
+
     } catch (error) {
       console.error('❌ Failed to initialize Azure Blob Storage:', error.message);
       this.enabled = false;
@@ -37,7 +37,7 @@ class AzureStorageService {
       });
 
       if (createContainerResponse.succeeded) {
-        console.log(`✅ Azure container '${this.containerName}' created or already exists`);
+
       }
     } catch (error) {
       console.error('❌ Failed to initialize Azure container:', error.message);
@@ -74,15 +74,13 @@ class AzureStorageService {
         }
       });
 
-      console.log(`✅ Uploaded ${blobName} to Azure Blob Storage`);
-
       // Return public URL (use CDN if available, otherwise direct blob URL)
       const publicUrl = blockBlobClient.url;
 
       // Clean up local file after successful upload
       if (fs.existsSync(localFilePath)) {
         fs.unlinkSync(localFilePath);
-        console.log(`🗑️ Cleaned up local file: ${localFilePath}`);
+
       }
 
       return publicUrl;
@@ -114,7 +112,7 @@ class AzureStorageService {
     try {
       const blobClient = this.containerClient.getBlobClient(blobName);
       await blobClient.deleteIfExists();
-      console.log(`🗑️ Deleted blob: ${blobName}`);
+
     } catch (error) {
       console.error(`❌ Failed to delete blob ${blobName}:`, error.message);
     }
@@ -128,15 +126,14 @@ class AzureStorageService {
     if (!this.enabled) return;
 
     try {
-      const cutoffTime = new Date(Date.now() - (hoursOld * 60 * 60 * 1000));
-      
+      const cutoffTime = new Date(Date.now() - hoursOld * 60 * 60 * 1000);
+
       for await (const blob of this.containerClient.listBlobsFlat({ prefix: 'charts/' })) {
         if (blob.properties.createdOn < cutoffTime) {
           await this.deleteBlob(blob.name);
         }
       }
-      
-      console.log(`🧹 Cleaned up charts older than ${hoursOld} hours`);
+
     } catch (error) {
       console.error('❌ Failed to cleanup old charts:', error.message);
     }

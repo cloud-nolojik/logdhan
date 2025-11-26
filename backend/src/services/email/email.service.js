@@ -17,7 +17,7 @@ class EmailService {
   async sendCSVExport(userEmail, userName, csvContent, filename, exportParams = {}) {
     try {
       const { startDate, endDate, totalTrades } = exportParams;
-      
+
       // Create date range text for email
       let dateRangeText = 'all your trade logs';
       if (startDate && endDate) {
@@ -107,16 +107,15 @@ class EmailService {
         Subject: `📊 Your LogDhan Trade Export - ${totalTrades || 0} trades (${new Date().toLocaleDateString()})`,
         HtmlBody: emailBody,
         Attachments: [
-          {
-            Name: filename,
-            Content: Buffer.from(csvContent).toString('base64'),
-            ContentType: 'text/csv'
-          }
-        ],
+        {
+          Name: filename,
+          Content: Buffer.from(csvContent).toString('base64'),
+          ContentType: 'text/csv'
+        }],
+
         Tag: 'trade-export'
       });
 
-      console.log('Export email sent successfully:', response.MessageID);
       return {
         success: true,
         messageId: response.MessageID
