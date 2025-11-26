@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import connectDB from './config/database.js';
 
 // Environment validation - fail fast on startup
 function requireEnv(name) {
@@ -104,20 +105,7 @@ app.use('/charts', (req, res, next) => {
   next();
 }, express.static(path.join(process.cwd(), 'temp', 'charts')));
 
-// Connect to MongoDB with robust connection settings
-
-// Handle MongoDB connection events
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB connection error:', err);
-});
-
-mongoose.connection.on('disconnected', () => {
-
-});
-
-mongoose.connection.on('reconnected', () => {
-
-});
+// MongoDB connection is handled in connectDB() which sets up all event listeners
 
 // Routes
 app.use('/api/v1/auth', authRoutes);
@@ -281,6 +269,10 @@ async function initializePriceCacheService() {
 
 const PORT = process.env.PORT || 5650;
 app.listen(PORT, async () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+
+  // Connect to MongoDB FIRST before initializing services
+  await connectDB();
 
   // Initialize all services
   await initializeAzureStorage();
