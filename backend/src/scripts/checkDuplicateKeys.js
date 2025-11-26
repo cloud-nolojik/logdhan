@@ -1,0 +1,156 @@
+/**
+ * Script to check for duplicate instrument_keys and output distinct data
+ * Usage: node src/scripts/checkDuplicateKeys.js
+ */
+
+const instruments = [
+  {"instrument_key": "NSE_EQ|INE987B01026", "trading_symbol": "NATCOPHARM", "name": "NATCO PHARMA LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE0AE001013", "trading_symbol": "VPRPL", "name": "VISHNU PRAKASH R PUNGLI L", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE736A01011", "trading_symbol": "CDSL", "name": "CENTRAL DEPO SER (I) LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE127I01024", "trading_symbol": "GOODLUCK", "name": "GOODLUCK INDIA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE758C01029", "trading_symbol": "AHLUCONT", "name": "AHLUWALIA CONT IND LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE703B01027", "trading_symbol": "RATNAMANI", "name": "RATNAMANI MET & TUB LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE686Y01026", "trading_symbol": "FINEORG", "name": "FINE ORGANIC IND. LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE843S01025", "trading_symbol": "SURAJEST", "name": "SURAJ ESTATE DEVELOPERS L", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE138Y01010", "trading_symbol": "KFINTECH", "name": "KFIN TECHNOLOGIES LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE372A01015", "trading_symbol": "APARINDS", "name": "APAR INDUSTRIES LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE619B01017", "trading_symbol": "NEWGEN", "name": "NEWGEN SOFTWARE TECH LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE435G01025", "trading_symbol": "DHANUKA", "name": "DHANUKA AGRITECH LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE382Z01011", "trading_symbol": "GRSE", "name": "GARDEN REACH SHIP&ENG LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE467B01029", "trading_symbol": "TCS", "name": "TATA CONSULTANCY SERV LT", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE472A01039", "trading_symbol": "BLUESTARCO", "name": "BLUE STAR LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE597I01028", "trading_symbol": "SHARDAMOTR", "name": "SHARDA MOTOR INDS LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE081A01020", "trading_symbol": "TATASTEEL", "name": "TATA STEEL LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE249Z01020", "trading_symbol": "MAZDOCK", "name": "MAZAGON DOCK SHIPBUIL LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE455K01017", "trading_symbol": "POLYCAB", "name": "POLYCAB INDIA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE758E01017", "trading_symbol": "JIOFIN", "name": "JIO FIN SERVICES LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE002A01018", "trading_symbol": "RELIANCE", "name": "RELIANCE INDUSTRIES LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE280A01028", "trading_symbol": "TITAN", "name": "TITAN COMPANY LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE935A01035", "trading_symbol": "GLENMARK", "name": "GLENMARK PHARMACEUTICALS", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE836A01035", "trading_symbol": "BSOFT", "name": "BIRLASOFT LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE335Y01020", "trading_symbol": "IRCTC", "name": "INDIAN RAIL TOUR CORP LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE203G01027", "trading_symbol": "IGL", "name": "INDRAPRASTHA GAS LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE205A01025", "trading_symbol": "VEDL", "name": "VEDANTA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE239A01024", "trading_symbol": "NESTLEIND", "name": "NESTLE INDIA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE949H01023", "trading_symbol": "MANINFRA", "name": "MAN INFRA LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE040A01034", "trading_symbol": "HDFCBANK", "name": "HDFC BANK LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE195A01028", "trading_symbol": "SUPREMEIND", "name": "SUPREME INDUSTRIES LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE536A01023", "trading_symbol": "GRINDWELL", "name": "GRINDWELL NORTON LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE177H01039", "trading_symbol": "GPIL", "name": "GODAWARI POW & ISP LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE009A01021", "trading_symbol": "INFY", "name": "INFOSYS LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE002S01010", "trading_symbol": "MGL", "name": "MAHANAGAR GAS LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE04I401011", "trading_symbol": "KPITTECH", "name": "KPIT TECHNOLOGIES LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE038A01020", "trading_symbol": "HINDALCO", "name": "HINDALCO INDUSTRIES LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE585B01010", "trading_symbol": "MARUTI", "name": "MARUTI SUZUKI INDIA LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE209L01016", "trading_symbol": "JWL", "name": "JUPITER WAGONS LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE903D01011", "trading_symbol": "MONARCH", "name": "MONARCH NETWORTH CAP LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE966A01022", "trading_symbol": "DOLATALGO", "name": "DOLAT ALGOTECH LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE615H01020", "trading_symbol": "TITAGARH", "name": "TITAGARH RAIL SYSTEMS LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE634S01028", "trading_symbol": "MANKIND", "name": "MANKIND PHARMA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE007B01023", "trading_symbol": "GEOJITFSL", "name": "GEOJIT FINANCIAL SER L", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE572A01036", "trading_symbol": "JBCHEPHARM", "name": "J B CHEMICALS AND PHARMA", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE214T01019", "trading_symbol": "LTIM", "name": "LTIMINDTREE LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE089A01031", "trading_symbol": "DRREDDY", "name": "DR. REDDY S LABORATORIES", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE325A01013", "trading_symbol": "TIMKEN", "name": "TIMKEN INDIA LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE073K01018", "trading_symbol": "SONACOMS", "name": "SONA BLW PRECISION FRGS L", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE263A01024", "trading_symbol": "BEL", "name": "BHARAT ELECTRONICS LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE031B01049", "trading_symbol": "AJANTPHARM", "name": "AJANTA PHARMA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE602W01027", "trading_symbol": "SENCO", "name": "SENCO GOLD LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE317F01035", "trading_symbol": "NESCO", "name": "NESCO LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE731H01025", "trading_symbol": "ACE", "name": "ACTION CONST EQUIP LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE540H01012", "trading_symbol": "VOLTAMP", "name": "VOLTAMP TRANSFORMERS LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE386A01023", "trading_symbol": "VESUVIUS", "name": "VESUVIUS INDIA LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE021A01026", "trading_symbol": "ASIANPAINT", "name": "ASIAN PAINTS LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE976A01021", "trading_symbol": "WSTCSTPAPR", "name": "WEST COAST PAPER MILLS LT", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE153T01027", "trading_symbol": "BLS", "name": "BLS INTL SERVS LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE152M01016", "trading_symbol": "TRITURBINE", "name": "TRIVENI TURBINE LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE583V01021", "trading_symbol": "RADHIKAJWE", "name": "RADHIKA JEWELTECH LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE262H01021", "trading_symbol": "PERSISTENT", "name": "PERSISTENT SYSTEMS LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE00E101023", "trading_symbol": "BIKAJI", "name": "BIKAJI FOODS INTERN LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE974X01010", "trading_symbol": "TIINDIA", "name": "TUBE INVEST OF INDIA LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE878B01027", "trading_symbol": "KEI", "name": "KEI INDUSTRIES LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE844O01030", "trading_symbol": "GUJGASLTD", "name": "GUJARAT GAS LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE128X01021", "trading_symbol": "ACI", "name": "ARCHEAN CHEMICAL IND LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE060901027", "trading_symbol": "LIKHITHA", "name": "LIKHITHA INFRASTRUC LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE288B01029", "trading_symbol": "DEEPAKNTR", "name": "DEEPAK NITRITE LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE006I01046", "trading_symbol": "ASTRAL", "name": "ASTRAL LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE475E01026", "trading_symbol": "CAPLIPOINT", "name": "CAPLIN POINT LAB LTD.", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE199A01012", "trading_symbol": "PGHL", "name": "PROCTER & GAMBLE HEALTH L", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE738I01010", "trading_symbol": "ECLERX", "name": "ECLERX SERVICES LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE462A01022", "trading_symbol": "BAYERCROP", "name": "BAYER CROPSCIENCE LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE0CJF01024", "trading_symbol": "WCIL", "name": "WESTERN CARRIERS (IND) L", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE463A01038", "trading_symbol": "BERGEPAINT", "name": "BERGER PAINTS (I) LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE663A01033", "trading_symbol": "SPLPETRO", "name": "SUPREME PETROCHEM LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE260B01028", "trading_symbol": "GODFRYPHLP", "name": "GODFREY PHILLIPS INDIA LT", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE373A01013", "trading_symbol": "BASF", "name": "BASF INDIA LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE227W01023", "trading_symbol": "CLEAN", "name": "CLEAN SCIENCE & TECH LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE330T01021", "trading_symbol": "HAPPYFORGE", "name": "HAPPY FORGINGS LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE603J01030", "trading_symbol": "PIIND", "name": "PI INDUSTRIES LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE205C01021", "trading_symbol": "POLYMED", "name": "POLY MEDICURE LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE169A01031", "trading_symbol": "COROMANDEL", "name": "COROMANDEL INTERNTL. LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE177A01018", "trading_symbol": "INGERRAND", "name": "INGERSOLL-RAND INDIA LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE999A01023", "trading_symbol": "KSB", "name": "KSB LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE985W01018", "trading_symbol": "CREATIVE", "name": "CREATIVE NEWTECH LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE271B01025", "trading_symbol": "MAHSEAMLES", "name": "MAHARASHTRA SEAMLESS LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE450U01017", "trading_symbol": "ROUTE", "name": "ROUTE MOBILE LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE933S01016", "trading_symbol": "INDIAMART", "name": "INDIAMART INTERMESH LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE351F01018", "trading_symbol": "JPPOWER", "name": "JAIPRAKASH POWER VEN. LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE377N01017", "trading_symbol": "WAAREEENER", "name": "WAAREE ENERGIES LIMITED", "exchange": "NSE"},
+  {"instrument_key": "BSE_EQ|INE738P01015", "trading_symbol": "HELPAGE", "name": "Helpage Finlease Ltd.", "exchange": "BSE"},
+  {"instrument_key": "BSE_EQ|INE400N01017", "trading_symbol": "SHGANEL", "name": "SHREE GANESH ELASTOPLAST LTD.", "exchange": "BSE"},
+  {"instrument_key": "NSE_EQ|INE139A01034", "trading_symbol": "NATIONALUM", "name": "NATIONAL ALUMINIUM COMPANY LTD", "exchange": "NSE"},
+  {"instrument_key": "BSE_EQ|INE745G01035", "trading_symbol": "MCX", "name": "MULTI COMMODITY EXCHANGE OF IN", "exchange": "BSE"},
+  {"instrument_key": "BSE_EQ|INE04I401011", "trading_symbol": "KPITTECH", "name": "KPIT Technologies Ltd", "exchange": "BSE"},
+  {"instrument_key": "NSE_EQ|INF204KC1402", "trading_symbol": "SILVERBEES", "name": "NIPPONAMC - NETFSILVER", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE0KBH01020", "trading_symbol": "BLUEJET", "name": "BLUE JET HEALTHCARE LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE777K01022", "trading_symbol": "RRKABEL", "name": "R R KABEL LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE358A01014", "trading_symbol": "ABBOTINDIA", "name": "ABBOTT INDIA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE616N01034", "trading_symbol": "INOXINDIA", "name": "INOX INDIA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE067A01029", "trading_symbol": "CGPOWER", "name": "CG POWER AND IND SOL LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE704V01015", "trading_symbol": "DRL", "name": "DHANUKA REALTY LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE811A01020", "trading_symbol": "KIRLPNU", "name": "KIRLOSKAR PNEUMATIC COM L", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE737H01014", "trading_symbol": "FIEMIND", "name": "FIEM INDUSTRIES LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INF754K01TF1", "trading_symbol": "EMULTIMQ", "name": "EDELAMC - EMULTIMQ", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE673O01025", "trading_symbol": "TBOTEK", "name": "TBO TEK LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE021O01019", "trading_symbol": "DODLA", "name": "DODLA DAIRY LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE524A01029", "trading_symbol": "GABRIEL", "name": "GABRIEL INDIA LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE513A01022", "trading_symbol": "SCHAEFFLER", "name": "SCHAEFFLER INDIA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE765G01017", "trading_symbol": "ICICIGI", "name": "ICICI LOMBARD GIC LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE200M01039", "trading_symbol": "VBL", "name": "VARUN BEVERAGES LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE668F01031", "trading_symbol": "JYOTHYLAB", "name": "JYOTHY LABS LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE768C01010", "trading_symbol": "ZYDUSWELL", "name": "ZYDUS WELLNESS LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE531E01026", "trading_symbol": "HINDCOPPER", "name": "HINDUSTAN COPPER LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE1NPP01017", "trading_symbol": "ENRIN", "name": "SIEMENS ENERGY INDIA LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE0U6N01014", "trading_symbol": "SFML", "name": "SUPREME FACILITY MGMT LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE702C01027", "trading_symbol": "APLAPOLLO", "name": "APL APOLLO TUBES LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE024L01027", "trading_symbol": "GRAVITA", "name": "GRAVITA INDIA LIMITED", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INF769K01IB1", "trading_symbol": "MAKEINDIA", "name": "MIRAEAMC - MAMFGETF", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE911B01018", "trading_symbol": "TCIFINANCE", "name": "TCIFINANCELTD-ROLL SETT", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE342J01019", "trading_symbol": "ZFCVINDIA", "name": "ZF COM VE CTR SYS IND LTD", "exchange": "NSE"},
+  {"instrument_key": "NSE_EQ|INE142M01025", "trading_symbol": "TATATECH", "name": "TATA TECHNOLOGIES LIMITED", "exchange": "NSE"}
+];
+
+// Get distinct by instrument_key
+function getDistinct(arr) {
+  const seen = new Map();
+  arr.forEach(item => {
+    if (!seen.has(item.instrument_key)) {
+      seen.set(item.instrument_key, {
+        instrument_key: item.instrument_key,
+        trading_symbol: item.trading_symbol,
+        name: item.name,
+        exchange: item.exchange
+      });
+    }
+  });
+  return Array.from(seen.values());
+}
+
+const distinct = getDistinct(instruments);
+
+console.log(`\nTotal input: ${instruments.length}`);
+console.log(`Distinct: ${distinct.length}`);
+console.log(`Duplicates removed: ${instruments.length - distinct.length}`);
+
+console.log('\n=== DISTINCT JSON ===\n');
+console.log(JSON.stringify(distinct, null, 2));

@@ -572,17 +572,19 @@ class AgendaMonitoringService {
                         historyEntry.monitoring_duration_ms = Date.now() - startTime;
                         await historyEntry.save();
 
-                        // Send WhatsApp notification
-                        await this.sendMonitoringFailureNotification(
-                            userId,
-                            analysisId,
-                            analysis.stock_symbol,
-                            'Pre-entry invalidation triggered',
-                            {
-                                invalidation_details: triggerResult.message || 'Price moved against the setup',
-                                current_price: triggerResult.data?.current_price
-                            }
-                        );
+                        // Send WhatsApp notification to all subscribed users
+                        for (const subscribedUserId of subscribedUserIds) {
+                            await this.sendMonitoringFailureNotification(
+                                subscribedUserId,
+                                analysisId,
+                                analysis.stock_symbol,
+                                'Pre-entry invalidation triggered',
+                                {
+                                    invalidation_details: triggerResult.message || 'Price moved against the setup',
+                                    current_price: triggerResult.data?.current_price
+                                }
+                            );
+                        }
 
                         await this.stopMonitoring(analysisId, strategyId);
                         return;
@@ -599,17 +601,19 @@ class AgendaMonitoringService {
                         historyEntry.monitoring_duration_ms = Date.now() - startTime;
                         await historyEntry.save();
 
-                        // Send WhatsApp notification
-                        await this.sendMonitoringFailureNotification(
-                            userId,
-                            analysisId,
-                            analysis.stock_symbol,
-                            'Entry trigger expired',
-                            {
-                                bars_checked: triggerResult.data.session?.total_bars || 'N/A',
-                                trigger_details: triggerResult.data.expired_trigger
-                            }
-                        );
+                        // Send WhatsApp notification to all subscribed users
+                        for (const subscribedUserId of subscribedUserIds) {
+                            await this.sendMonitoringFailureNotification(
+                                subscribedUserId,
+                                analysisId,
+                                analysis.stock_symbol,
+                                'Entry trigger expired',
+                                {
+                                    bars_checked: triggerResult.data.session?.total_bars || 'N/A',
+                                    trigger_details: triggerResult.data.expired_trigger
+                                }
+                            );
+                        }
 
                         await this.stopMonitoring(analysisId, strategyId);
                         return;
