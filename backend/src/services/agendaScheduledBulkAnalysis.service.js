@@ -13,6 +13,7 @@ import Stock from '../models/stock.js';
 import { getCurrentPrice } from '../utils/stockDb.js';
 import priceCacheService from './priceCache.service.js';
 import pLimit from 'p-limit';
+import { syncScreenerWatchlist } from '../scripts/syncScreenerWatchlist.js';
 
 class AgendaScheduledBulkAnalysisService {
   constructor() {
@@ -157,7 +158,7 @@ class AgendaScheduledBulkAnalysisService {
   async runScheduledAnalysis() {
     // Check if already running
     if (this.isRunning) {
-
+      console.log('[SCHEDULED BULK] Already running, skipping');
       return;
     }
 
@@ -174,7 +175,22 @@ class AgendaScheduledBulkAnalysisService {
     this.stats.totalRuns++;
 
     try {
-      // 1. Get all users
+      // STEP 0: Sync watchlists from Screener.in FIRST
+      console.log('[SCHEDULED BULK] 🔄 Step 0: Syncing watchlists from Screener.in...');
+      const syncResult = await syncScreenerWatchlist({
+        StockModel: Stock,
+        UserModel: User,
+        dryRun: false
+      });
+
+      if (!syncResult.success) {
+        console.error('[SCHEDULED BULK] ❌ Screener sync failed:', syncResult.error);
+        console.log('[SCHEDULED BULK] Continuing with existing watchlists...');
+      } else {
+        console.log(`[SCHEDULED BULK] ✅ Screener sync complete: ${syncResult.matchedStocksCount} stocks synced to ${syncResult.usersUpdated} users`);
+      }
+
+      // 1. Get all users (with freshly synced watchlists)
       const users = await User.find({}).select('_id email name watchlist').lean();
 
       // 2. Collect all unique stocks from all watchlists
