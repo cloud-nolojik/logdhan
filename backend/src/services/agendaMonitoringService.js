@@ -11,6 +11,7 @@ import batchManager from './batchManager.js';
 import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
 import MarketHoursUtil from '../utils/marketHours.js';
+import orderExecutionService from './orderExecutionService.js';
 
 class AgendaMonitoringService {
   constructor() {
@@ -358,12 +359,62 @@ class AgendaMonitoringService {
               const userName = user.name || user.email?.split('@')[0] || 'User';
               const stockSymbol = analysis.stock_symbol || analysis.stock_name;
 
-              // Create in-app notification
+              // 🤖 AUTO-ORDER LOGIC: Execute order if autoOrder is enabled for this user
+              let autoOrderResult = null;
+              if (userSubscription.auto_order) {
+                console.log(`[AUTO-ORDER] Executing auto-order for user ${userId} on ${stockSymbol}`);
+                try {
+                  // Execute order using orderExecutionService
+                  autoOrderResult = await orderExecutionService.validateAndExecuteStrategy({
+                    analysis: analysis,
+                    strategyId: strategyId,
+                    userId: userId.toString(),
+                    customQuantity: null,
+                    bypassTriggers: true // Bypass since conditions are already met
+                  });
+
+                  // Update subscription with auto-order result
+                  const userIndex = subscription.subscribed_users.findIndex(
+                    (sub) => sub.user_id.toString() === userId.toString()
+                  );
+                  if (userIndex !== -1) {
+                    subscription.subscribed_users[userIndex].auto_order_executed_at = new Date();
+                    subscription.subscribed_users[userIndex].auto_order_result = {
+                      success: autoOrderResult.success,
+                      order_id: autoOrderResult.data?.order_id || autoOrderResult.data?.data?.order_id || null,
+                      error: autoOrderResult.success ? null : autoOrderResult.error,
+                      executed_at: new Date()
+                    };
+                    await subscription.save();
+                  }
+
+                  if (autoOrderResult.success) {
+                    console.log(`[AUTO-ORDER] ✅ Order placed successfully for ${userId} on ${stockSymbol}. Order ID: ${autoOrderResult.data?.order_id || 'N/A'}`);
+                  } else {
+                    console.error(`[AUTO-ORDER] ❌ Order failed for ${userId} on ${stockSymbol}:`, autoOrderResult.error);
+                  }
+                } catch (orderError) {
+                  console.error(`[AUTO-ORDER] ❌ Exception executing order for ${userId}:`, orderError);
+                  autoOrderResult = { success: false, error: orderError.message };
+                }
+              }
+
+              // Create in-app notification - different message based on auto-order result
+              const notificationTitle = userSubscription.auto_order ?
+                (autoOrderResult?.success ? '🤖 Auto-Order Placed!' : '⚠️ Auto-Order Failed') :
+                'Monitoring Alert - Conditions Met!';
+
+              const notificationMessage = userSubscription.auto_order ?
+                (autoOrderResult?.success ?
+                  `${stockSymbol} - ${strategyName}: Order placed automatically! Order ID: ${autoOrderResult.data?.order_id || 'N/A'}` :
+                  `${stockSymbol} - ${strategyName}: Auto-order failed - ${autoOrderResult?.error || 'Unknown error'}. Please place order manually.`) :
+                `${stockSymbol} - ${strategyName}: Entry conditions have been met! Check your app for details.`;
+
               await Notification.createNotification({
                 userId: userId,
-                title: 'Monitoring Alert - Conditions Met!',
-                message: `${stockSymbol} - ${strategyName}: Entry conditions have been met! Check your app for details.`,
-                type: 'alert',
+                title: notificationTitle,
+                message: notificationMessage,
+                type: userSubscription.auto_order ? (autoOrderResult?.success ? 'success' : 'error') : 'alert',
                 relatedStock: {
                   trading_symbol: stockSymbol,
                   instrument_key: analysis.instrument_key
@@ -373,7 +424,9 @@ class AgendaMonitoringService {
                   strategyId: strategyId,
                   strategyName: strategyName,
                   currentPrice: triggerResult.data?.current_price,
-                  triggersSatisfied: triggerResult.data?.triggers?.map((t) => t.condition || t.name)
+                  triggersSatisfied: triggerResult.data?.triggers?.map((t) => t.condition || t.name),
+                  auto_order: userSubscription.auto_order,
+                  auto_order_result: autoOrderResult
                 }
               });
 
@@ -381,13 +434,17 @@ class AgendaMonitoringService {
               if (user.fcmTokens && user.fcmTokens.length > 0) {
                 await firebaseService.sendToUser(
                   userId,
-                  'Monitoring Alert - Conditions Met!',
-                  `${stockSymbol} - ${strategyName}: Entry conditions met!`,
+                  notificationTitle,
+                  notificationMessage,
                   {
-                    type: 'MONITORING_CONDITIONS_MET',
+                    type: userSubscription.auto_order ?
+                      (autoOrderResult?.success ? 'AUTO_ORDER_SUCCESS' : 'AUTO_ORDER_FAILED') :
+                      'MONITORING_CONDITIONS_MET',
                     analysisId: analysisId,
                     strategyId: strategyId,
                     stockSymbol: stockSymbol,
+                    autoOrder: userSubscription.auto_order ? 'true' : 'false',
+                    orderId: autoOrderResult?.data?.order_id || '',
                     route: '/monitoring'
                   }
                 );
@@ -405,13 +462,19 @@ class AgendaMonitoringService {
                 user_id: userId,
                 stock_symbol: analysis.stock_symbol,
                 status: 'conditions_met',
-                reason: 'Monitoring conditions met alert sent successfully (in-app + Firebase)',
+                reason: userSubscription.auto_order ?
+                  (autoOrderResult?.success ?
+                    'Auto-order executed successfully' :
+                    `Auto-order failed: ${autoOrderResult?.error || 'Unknown error'}`) :
+                  'Monitoring conditions met alert sent successfully (in-app + Firebase)',
                 details: {
                   notification_type: 'in_app_firebase',
                   stock_symbol: stockSymbol,
                   strategy_name: strategyName,
                   current_price: triggerResult.data?.current_price,
-                  triggers_satisfied: triggerResult.data?.triggers?.map((t) => t.condition || t.name)
+                  triggers_satisfied: triggerResult.data?.triggers?.map((t) => t.condition || t.name),
+                  auto_order_enabled: userSubscription.auto_order,
+                  auto_order_result: autoOrderResult
                 },
                 monitoring_duration_ms: Date.now() - startTime
               });
@@ -893,7 +956,7 @@ class AgendaMonitoringService {
     }
   }
 
-  async startMonitoring(analysisId, strategyId, userId, frequency = { seconds: 900 }, stockSymbol = null, instrumentKey = null) {
+  async startMonitoring(analysisId, strategyId, userId, frequency = { seconds: 900 }, stockSymbol = null, instrumentKey = null, config = {}) {
     try {
       if (!this.isInitialized) {
         await this.initialize();
@@ -906,6 +969,7 @@ class AgendaMonitoringService {
       }
 
       const jobId = `monitor_${analysisId}_${strategyId}`;
+      const { autoOrder = false } = config;
 
       // Check if user can start monitoring (not already met conditions recently)
       const canStart = await MonitoringSubscription.canUserStartMonitoring(analysisId, strategyId);
@@ -931,7 +995,7 @@ class AgendaMonitoringService {
         instrumentKey = analysis.instrument_key;
       }
 
-      // Find or create subscription
+      // Find or create subscription with autoOrder config
       let subscription = await MonitoringSubscription.findOrCreateSubscription(
         analysisId,
         strategyId,
@@ -941,12 +1005,15 @@ class AgendaMonitoringService {
         jobId,
         {
           frequency_seconds: frequency.seconds,
+          autoOrder: autoOrder, // Pass autoOrder flag
           notification_preferences: {
             whatsapp: true,
             email: false
           }
         }
       );
+
+      console.log(`[MONITORING] Started for ${stockSymbol} - User: ${userId}, AutoOrder: ${autoOrder}`);
 
       // 🆕 BATCH ARCHITECTURE: No individual jobs - everything goes through batch processing
 

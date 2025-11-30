@@ -45,6 +45,23 @@ const monitoringSubscriptionSchema = new mongoose.Schema({
       type: Date,
       default: null
     },
+    // Auto-order flag: When true, automatically place order when conditions met
+    auto_order: {
+      type: Boolean,
+      default: false
+    },
+    // Tracks when auto-order was executed
+    auto_order_executed_at: {
+      type: Date,
+      default: null
+    },
+    // Auto-order result
+    auto_order_result: {
+      success: Boolean,
+      order_id: String,
+      error: String,
+      executed_at: Date
+    },
     notification_preferences: {
       whatsapp: {
         type: Boolean,
@@ -231,12 +248,16 @@ monitoringConfig = {})
       }
 
       // Check if user is already subscribed
-      const isUserSubscribed = subscription.subscribed_users.some(
+      const existingUserIndex = subscription.subscribed_users.findIndex(
         (sub) => sub.user_id.toString() === userId.toString()
       );
 
-      if (isUserSubscribed) {
-
+      if (existingUserIndex !== -1) {
+        // User already subscribed - update autoOrder flag if changed
+        if (monitoringConfig.autoOrder !== undefined) {
+          subscription.subscribed_users[existingUserIndex].auto_order = monitoringConfig.autoOrder;
+          await subscription.save();
+        }
         return subscription;
       }
 
@@ -244,6 +265,7 @@ monitoringConfig = {})
       subscription.subscribed_users.push({
         user_id: userId,
         subscribed_at: new Date(),
+        auto_order: monitoringConfig.autoOrder || false,
         notification_preferences: monitoringConfig.notification_preferences || {
           whatsapp: true,
           email: false
@@ -268,6 +290,7 @@ monitoringConfig = {})
       subscribed_users: [{
         user_id: userId,
         subscribed_at: new Date(),
+        auto_order: monitoringConfig.autoOrder || false,
         notification_preferences: monitoringConfig.notification_preferences || {
           whatsapp: true,
           email: false

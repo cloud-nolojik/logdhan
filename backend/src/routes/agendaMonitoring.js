@@ -19,7 +19,7 @@ const router = express.Router();
 router.post('/start', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { analysisId, frequencySeconds = 60 } = req.body;
+    const { analysisId, frequencySeconds = 60, autoOrder = false } = req.body;
 
     // Validate input
     if (!analysisId) {
@@ -28,6 +28,25 @@ router.post('/start', authenticateToken, async (req, res) => {
         error: 'invalid_request',
         message: 'Analysis ID is required'
       });
+    }
+
+    // If autoOrder is enabled, verify Upstox connection
+    if (autoOrder) {
+      const UpstoxUser = (await import('../models/upstoxUser.js')).default;
+      const upstoxUser = await UpstoxUser.findByUserId(userId);
+
+      if (!upstoxUser || !upstoxUser.isTokenValid()) {
+        return res.status(400).json({
+          success: false,
+          error: 'upstox_not_connected',
+          message: 'Auto-order requires Upstox account to be connected. Please connect your Upstox account first.',
+          data: {
+            auto_order_requested: true,
+            upstox_connected: !!upstoxUser,
+            token_valid: upstoxUser ? upstoxUser.isTokenValid() : false
+          }
+        });
+      }
     }
 
     // Validate frequency (minimum 30 seconds, maximum 1 hour)
@@ -255,7 +274,8 @@ router.post('/start', authenticateToken, async (req, res) => {
       userId,
       { seconds: frequencySeconds },
       analysis.stock_symbol,
-      analysis.instrument_key
+      analysis.instrument_key,
+      { autoOrder } // Pass autoOrder config
     );
 
     if (result.success) {
@@ -266,9 +286,13 @@ router.post('/start', authenticateToken, async (req, res) => {
       frequencySeconds === 3600 ? 'every hour' :
       `every ${frequencySeconds} seconds`;
 
+      const autoOrderMessage = autoOrder ?
+        `🎯 Auto-order enabled for ${analysis.stock_symbol}! Order will be placed automatically when conditions are met.` :
+        `🎯 Smart monitoring activated for ${analysis.stock_symbol}! We'll watch the market ${frequencyText} and notify you when conditions are met.`;
+
       res.json({
         success: true,
-        message: `🎯 Smart monitoring activated for ${analysis.stock_symbol}! We'll watch the market ${frequencyText} and place your order at the perfect moment.`,
+        message: autoOrderMessage,
         monitoring_status: 'ACTIVE',
         data: {
           jobId: result.jobId,
@@ -276,24 +300,31 @@ router.post('/start', authenticateToken, async (req, res) => {
           analysisId,
           strategyId,
           stock_symbol: analysis.stock_symbol,
-          // 🆕 NEW FIELDS for shared monitoring
+          // Auto-order configuration
+          auto_order_enabled: autoOrder,
+          // Shared monitoring fields
           subscription_id: result.subscription_id,
           subscribed_users_count: result.subscribed_users_count,
           failed_triggers: triggerCheck.data?.failed_triggers || [],
           user_message: {
-            title: '🔵 Monitoring Active',
+            title: autoOrder ? '🤖 Auto-Order Active' : '🔵 Monitoring Active',
             stock: analysis.stock_symbol,
-            status: 'Your order is being monitored',
+            status: autoOrder ? 'Order will be placed automatically' : 'Your order is being monitored',
             what_we_monitor: [
             `Current price vs. your entry point (₹${strategy.entry})`,
             'Market momentum and trends',
             'Technical indicators for optimal entry'],
 
             frequency: frequencyText,
-            notification: 'You\'ll receive instant notification when order is placed',
+            notification: autoOrder ?
+              'Order will be placed automatically and you\'ll receive confirmation' :
+              'You\'ll receive instant notification when conditions are met',
+            auto_order: autoOrder,
             can_cancel_anytime: true,
             estimated_monitoring_duration: 'Up to 5 trading days',
-            reassurance: 'No manual intervention needed - we\'ve got this!'
+            reassurance: autoOrder ?
+              'Sit back and relax - we\'ll handle everything!' :
+              'No manual intervention needed - we\'ve got this!'
           }
         }
       });
