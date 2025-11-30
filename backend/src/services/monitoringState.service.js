@@ -6,7 +6,7 @@ import MonitoringHistory from '../models/monitoringHistory.js';
  * @param {Object} params
  * @param {Object} params.analysis - Analysis document (lean or full)
  * @param {string|ObjectId} params.userId - User ID
- * @returns {Promise<{state: string, conditions_met_at: Date|null, strategy_id: string|null, is_monitoring: boolean}>}
+ * @returns {Promise<{state: string, conditions_met_at: Date|null, strategy_id: string|null, is_monitoring: boolean, auto_order: boolean}>}
  */
 export async function getMonitoringState({ analysis, userId }) {
   if (!analysis || !analysis._id || !analysis.analysis_data?.strategies?.length) {
@@ -15,7 +15,8 @@ export async function getMonitoringState({ analysis, userId }) {
       conditions_met_at: null,
       strategy_id: null,
       analysis_id: null,
-      is_monitoring: false
+      is_monitoring: false,
+      auto_order: false
     };
   }
 
@@ -30,12 +31,18 @@ export async function getMonitoringState({ analysis, userId }) {
   }).lean();
 
   if (activeMonitoring) {
+    // Find the user's subscription to get auto_order setting
+    const userSub = activeMonitoring.subscribed_users.find(
+      (sub) => sub.user_id.toString() === userId.toString()
+    );
+
     return {
       state: 'active',
       conditions_met_at: null,
       strategy_id: activeMonitoring.strategy_id,
       analysis_id: analysis._id,
-      is_monitoring: true
+      is_monitoring: true,
+      auto_order: userSub?.auto_order || false
     };
   }
 
@@ -52,7 +59,8 @@ export async function getMonitoringState({ analysis, userId }) {
       conditions_met_at: null,
       strategy_id: strategyId,
       analysis_id: analysis._id,
-      is_monitoring: false
+      is_monitoring: false,
+      auto_order: false
     };
   }
 
@@ -69,11 +77,15 @@ export async function getMonitoringState({ analysis, userId }) {
     state = 'expired';
   }
 
+  // Check if there's auto_order info in the history details
+  const autoOrderFromHistory = latestHistory.details?.auto_order_enabled || false;
+
   return {
     state,
     conditions_met_at: latestHistory.status === 'conditions_met' ? latestHistory.check_timestamp : null,
     strategy_id: strategyId,
     analysis_id: analysis._id,
-    is_monitoring: false
+    is_monitoring: false,
+    auto_order: autoOrderFromHistory
   };
 }

@@ -1244,11 +1244,21 @@ class AgendaMonitoringService {
           jobId: null,
           startedAt: null,
           isPaused: false,
-          pausedReason: null
+          pausedReason: null,
+          auto_order: history.details?.auto_order_enabled || false
         };
       };
 
-      const buildSubscriptionStatus = (subscription) => {
+      const buildSubscriptionStatus = (subscription, forUserId = null) => {
+        // Find the user's subscription to get their auto_order setting
+        let userAutoOrder = false;
+        if (forUserId && subscription.subscribed_users) {
+          const userSub = subscription.subscribed_users.find(
+            (sub) => sub.user_id.toString() === forUserId.toString()
+          );
+          userAutoOrder = userSub?.auto_order || false;
+        }
+
         return {
           isMonitoring: true,
           state: 'active',
@@ -1261,7 +1271,8 @@ class AgendaMonitoringService {
           expires_at: subscription.expires_at,
           jobId: subscription.job_id,
           startedAt: subscription.createdAt,
-          message: '👁️ AI is watching the market'
+          message: userAutoOrder ? '🤖 Auto-order enabled - watching market' : '👁️ AI is watching the market',
+          auto_order: userAutoOrder
         };
       };
 
@@ -1309,7 +1320,7 @@ class AgendaMonitoringService {
           };
         }
 
-        return buildSubscriptionStatus(subscription);
+        return buildSubscriptionStatus(subscription, userId);
 
       } else {
         // Check analysis-level (all strategies)
@@ -1353,6 +1364,15 @@ class AgendaMonitoringService {
             MarketHoursUtil.toIST(sub.conditions_met_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) :
             null;
 
+            // Get auto_order for the specific user if userId provided
+            let userAutoOrder = false;
+            if (userId && sub.subscribed_users) {
+              const userSub = sub.subscribed_users.find(
+                (u) => u.user_id.toString() === userId.toString()
+              );
+              userAutoOrder = userSub?.auto_order || false;
+            }
+
             return {
               subscription_id: sub._id,
               strategy_id: sub.strategy_id,
@@ -1363,7 +1383,8 @@ class AgendaMonitoringService {
               conditions_met_at: sub.conditions_met_at,
               conditions_met_at_ist: conditionsMetAtIst,
               expires_at: sub.expires_at,
-              jobId: sub.job_id
+              jobId: sub.job_id,
+              auto_order: userAutoOrder
             };
           })
         };

@@ -162,7 +162,8 @@ router.get('/', auth, async (req, res) => {
             monitoring_strategy_id: monitoringInfo.strategy_id,
             monitoring_state: monitoringInfo.state,
             monitoring_analysis_id: monitoringInfo.analysis_id,
-            monitoring_conditions_met_at: monitoringInfo.conditions_met_at
+            monitoring_conditions_met_at: monitoringInfo.conditions_met_at,
+            auto_order: monitoringInfo.auto_order // Auto-order flag for this user
           };
         } catch (err) {
           console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
@@ -178,7 +179,8 @@ router.get('/', auth, async (req, res) => {
             ai_confidence: null,
             strategy_type: null,
             is_monitoring: false,
-            monitoring_strategy_id: null
+            monitoring_strategy_id: null,
+            auto_order: false
           };
         }
       })
