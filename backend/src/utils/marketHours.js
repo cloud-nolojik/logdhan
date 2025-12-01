@@ -371,43 +371,50 @@ class MarketHoursUtil {
   }
 
   /**
-   * Get monitoring expiry time (3:14:59 PM IST) on the current or next trading day
-   * Stored as UTC
+   * Get monitoring expiry time (3:29:59 PM IST) on the current or next trading day
+   * Stored as UTC - expires just before market close at 3:30 PM
+   * NOTE: This function assumes server is in UTC timezone
    * @param {Date} fromDate - reference date (defaults to now)
-   * @returns {Promise<Date>} UTC date representing 3:14:59 PM IST
+   * @returns {Promise<Date>} UTC date representing 3:29:59 PM IST
    */
   static async getMonitoringExpiryTime(fromDate = new Date()) {
     try {
       const now = fromDate || new Date();
-      const istNow = this.toIST(now);
+
+      // Get current IST time components using timezone-safe method
+      const istTimeStr = now.toLocaleString('en-US', {
+        timeZone: 'Asia/Kolkata',
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: false
+      });
+      const [currentHour, currentMinute] = istTimeStr.split(':').map(Number);
+      const currentTimeInMinutes = currentHour * 60 + currentMinute;
+
+      // Get IST date string for determining which day we're on
+      const istDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD format
 
       // Use UTC timestamp for trading-day check to avoid double conversion
       const isTodayTradingDay = await this.isTradingDay(now);
 
-      // Monitoring expiry time: 3:14:59 PM IST
-      const expiryHour = 15;
-      const expiryMinute = 14;
-      const expiryTimeMinutes = expiryHour * 60 + expiryMinute; // 15:14 = 914 minutes
+      // Monitoring expiry time: 3:29:59 PM IST (just before market close)
+      const expiryTimeMinutes = 15 * 60 + 29; // 15:29 = 929 minutes
 
-      const currentHour = istNow.getHours();
-      const currentMinute = istNow.getMinutes();
-      const currentTimeInMinutes = currentHour * 60 + currentMinute;
-
-      let expiryDateIST;
+      let expiryDateStr;
 
       if (isTodayTradingDay && currentTimeInMinutes < expiryTimeMinutes) {
-        expiryDateIST = new Date(istNow);
+        // Expiry is today
+        expiryDateStr = istDateStr;
       } else {
-        // Otherwise, move to next trading day
-        expiryDateIST = await this.getNextTradingDay(now);
+        // Expiry is next trading day
+        const nextTradingDay = await this.getNextTradingDay(now);
+        expiryDateStr = nextTradingDay.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       }
 
-      const year = expiryDateIST.getFullYear();
-      const month = expiryDateIST.getMonth();
-      const day = expiryDateIST.getDate();
-
-      // 3:14:59 PM IST = 09:44:59 UTC
-      const expiryUTC = new Date(Date.UTC(year, month, day, 9, 44, 59, 0));
+      // Parse the IST date and create UTC expiry time
+      // 3:29:59 PM IST = 09:59:59 UTC (IST is UTC+5:30)
+      const [year, month, day] = expiryDateStr.split('-').map(Number);
+      const expiryUTC = new Date(Date.UTC(year, month - 1, day, 9, 59, 59, 0));
 
       return expiryUTC;
     } catch (error) {
