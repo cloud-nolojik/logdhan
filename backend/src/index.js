@@ -67,9 +67,39 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Request logging middleware - logs URL and body for all requests
+// Request logging middleware - logs URL, body, and auth token for all API requests
 app.use((req, res, next) => {
+  // Only log API requests (skip static files, health checks)
+  if (req.path.startsWith('/api/')) {
+    const timestamp = new Date().toISOString();
+    const authHeader = req.headers.authorization;
+    const tokenPreview = authHeader ? `${authHeader.substring(0, 20)}...` : 'NO_TOKEN';
 
+    // Log request details
+    console.log(`\n📥 [API REQUEST] ${timestamp}`);
+    console.log(`   Method: ${req.method}`);
+    console.log(`   URL: ${req.originalUrl}`);
+    console.log(`   Auth: ${tokenPreview}`);
+
+    // Log body for POST/PUT/PATCH (exclude sensitive fields)
+    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
+      const safeBody = { ...req.body };
+      // Mask sensitive fields
+      if (safeBody.password) safeBody.password = '***';
+      if (safeBody.access_token) safeBody.access_token = '***';
+      if (safeBody.refresh_token) safeBody.refresh_token = '***';
+      console.log(`   Body: ${JSON.stringify(safeBody)}`);
+    }
+
+    // Log response status when done
+    const originalSend = res.send;
+    res.send = function(body) {
+      const responseTime = Date.now() - req._startTime;
+      console.log(`📤 [API RESPONSE] ${req.method} ${req.originalUrl} - Status: ${res.statusCode} (${responseTime}ms)`);
+      return originalSend.call(this, body);
+    };
+    req._startTime = Date.now();
+  }
   next();
 });
 
