@@ -1380,8 +1380,9 @@ class AgendaMonitoringService {
           subscriptions: subscriptions.map((sub) => {
             const isExpired = sub.expires_at <= now;
             const isActive = sub.monitoring_status === 'active' && !isExpired;
+            // Convert UTC to IST string - use toLocaleString with timezone (don't double convert)
             const conditionsMetAtIst = sub.conditions_met_at ?
-            MarketHoursUtil.toIST(sub.conditions_met_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) :
+            new Date(sub.conditions_met_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) :
             null;
 
             // Get auto_order for the specific user if userId provided

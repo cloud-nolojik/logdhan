@@ -169,7 +169,8 @@ class MarketHoursUtil {
    */
   static async getEffectiveTradingTime(date = new Date(), timeframe = '15m') {
     const nowIST = this.toIST(date);
-    const isMarketOpen = await this.isMarketOpen(nowIST);
+    // Pass original date to isMarketOpen - it converts internally
+    const isMarketOpen = await this.isMarketOpen(date);
 
     // If market is open, return current time
     if (isMarketOpen) {
