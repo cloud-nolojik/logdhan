@@ -37,18 +37,19 @@ async function sendBulkAnalysisCompletionNotification(session) {
 }
 
 // Helper function to get user-friendly bulk analysis messages
+// NOTE: Bulk analysis now runs at 7:30 AM - analysis available anytime
 function getBulkAnalysisMessage(reason) {
   const messages = {
-    before_session: "🕐Analysis can be accessed only from 5:00 PM after market close, until the next trading day at 8:59 AM.",
-    session_ended: "⏰ Today's analysis session has ended. Analysis available from 5.00 PM to 8.59 AM.",
-    weekend_session: "📈 Weekend analysis session is active! Analysis available till Monday 8.59 AM.",
-    holiday: "🏖️Analysis can be started only from 5.00 PM on market close till next 8.59 AM.",
-    outside_window: "🚫 Analysis can be started only from 5.00 PM on market close till next 8.59 AM.",
-    weekday_session: "✅ Evening analysis session is active! Available till tomorrow 8.59 AM.",
-    monday_morning: "🌅 Monday morning session - analysis available till 8.59 AM before market opens."
+    before_session: "✅ Analysis is available anytime. Fresh bulk analysis runs daily at 7:30 AM before market opens.",
+    session_ended: "✅ Analysis is available anytime. Fresh bulk analysis runs daily at 7:30 AM before market opens.",
+    weekend_session: "📈 Weekend - analysis available! Fresh analysis will run Monday 7:30 AM.",
+    holiday: "🏖️ Holiday - analysis available! Fresh analysis will run next trading day 7:30 AM.",
+    outside_window: "✅ Analysis is available anytime. Fresh bulk analysis runs daily at 7:30 AM.",
+    weekday_session: "✅ Analysis available! Fresh bulk analysis runs daily at 7:30 AM before market opens.",
+    monday_morning: "🌅 Monday morning - fresh analysis running at 7:30 AM before market opens."
   };
 
-  return messages[reason] || "Bulk analysis is currently not available. Please try again during the allowed window.";
+  return messages[reason] || "Analysis is available. Fresh bulk analysis runs daily at 7:30 AM.";
 }
 import mongoose from 'mongoose';
 

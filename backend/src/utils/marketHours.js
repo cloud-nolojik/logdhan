@@ -627,37 +627,16 @@ class MarketHoursUtil {
   }
 
   /**
-   * Check if current time is in downtime window (4:00-5:00 PM IST)
-   * During downtime, NO manual analysis is allowed - bulk processing runs
+   * Check if current time is in downtime window
+   * NOTE: Downtime disabled - bulk analysis now runs at 7:30 AM before market opens
+   * Users can analyze anytime during the day
    *
    * @param {Date} now - Current date (defaults to now)
    * @returns {{isDowntime: boolean, message?: string, nextAllowed?: string}}
    */
   static async isDowntimeWindow(now = new Date()) {
-    try {
-      const istNow = this.toIST(now);
-      const minutes = istNow.getHours() * 60 + istNow.getMinutes();
-
-      // Downtime: 4:00 PM - 5:00 PM IST (16:00 - 17:00)
-      if (minutes >= 16 * 60 && minutes < 17 * 60) {
-        // Only block on trading days
-        const isTradingDay = await this.isTradingDay(istNow);
-        if (!isTradingDay) {
-          return { isDowntime: false };
-        }
-
-        return {
-          isDowntime: true,
-          message: 'Analysis is temporarily unavailable (4:00-5:00 PM IST). Bulk processing is running. Please try again after 5:00 PM.',
-          nextAllowed: '5:00 PM IST'
-        };
-      }
-
-      return { isDowntime: false };
-    } catch (error) {
-      console.error('❌ [DOWNTIME] Error checking downtime window:', error);
-      return { isDowntime: false };
-    }
+    // No downtime - bulk analysis runs at 7:30 AM before market opens
+    return { isDowntime: false };
   }
 
   /**

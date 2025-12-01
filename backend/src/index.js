@@ -33,7 +33,7 @@ import agendaMonitoringService from './services/agendaMonitoringService.js';
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // Using Agenda for data pre-fetching
 import agendaBulkAnalysisNotificationService from './services/agendaBulkAnalysisNotificationService.js'; // Daily 5 PM bulk analysis notifications
 import agendaBulkAnalysisReminderService from './services/agendaBulkAnalysisReminderService.js'; // Daily 8 AM bulk analysis expiry reminder
-import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // Daily 4 PM pre-analysis of all watchlist stocks (Agenda)
+import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // Daily 7:30 AM pre-analysis of all watchlist stocks (Agenda)
 import agendaMonitoringCleanupService from './services/agendaMonitoringCleanupService.js'; // Daily 4 AM cleanup of expired monitoring subscriptions
 // Removed condition monitoring - direct order placement only
 
@@ -262,7 +262,7 @@ async function initializeAgendaBulkAnalysisReminderService() {
   }
 }
 
-// Initialize Agenda scheduled bulk analysis service (4 PM pre-analysis)
+// Initialize Agenda scheduled bulk analysis service (7:30 AM pre-analysis)
 async function initializeAgendaScheduledBulkAnalysisService() {
   try {
 

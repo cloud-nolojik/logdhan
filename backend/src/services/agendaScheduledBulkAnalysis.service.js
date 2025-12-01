@@ -1,7 +1,7 @@
 /**
  * Agenda-based Scheduled Bulk Analysis Service
- * Runs at 4:00 PM every trading day to pre-analyze all users' watchlist stocks
- * So users see analysis results immediately when they open the app at 5:00 PM
+ * Runs at 7:30 AM every trading day to pre-analyze all users' watchlist stocks
+ * So users see fresh analysis before market opens at 9:15 AM
  * Uses MongoDB for job persistence via Agenda
  */
 
@@ -140,9 +140,9 @@ class AgendaScheduledBulkAnalysisService {
         name: 'watchlist-bulk-analysis'
       });
 
-      // Schedule for 4:00 PM IST every day (Monday-Friday)
+      // Schedule for 7:30 AM IST every day (Monday-Friday)
       // Cron format: minute hour * * day-of-week
-      await this.agenda.every('0 16 * * 1-5', 'watchlist-bulk-analysis', {}, {
+      await this.agenda.every('30 7 * * 1-5', 'watchlist-bulk-analysis', {}, {
         timezone: 'Asia/Kolkata'
       });
 
@@ -153,7 +153,7 @@ class AgendaScheduledBulkAnalysisService {
   }
 
   /**
-   * Main function that runs at 4:00 PM
+   * Main function that runs at 7:30 AM
    */
   async runScheduledAnalysis() {
     // Check if already running
@@ -162,14 +162,14 @@ class AgendaScheduledBulkAnalysisService {
       return;
     }
 
-    // Check if today is a trading day
+    // Check if today is a trading day (skip holidays)
     const today = new Date();
     const isTradingDay = await MarketHoursUtil.isTradingDay(today);
 
-    // if (!isTradingDay) {
-    //     console.log(`⏭️  [SCHEDULED BULK] ${today.toISOString().split('T')[0]} is not a trading day, skipping analysis`);
-    //     return;
-    // }
+    if (!isTradingDay) {
+      console.log(`⏭️  [SCHEDULED BULK] ${today.toISOString().split('T')[0]} is not a trading day, skipping analysis`);
+      return;
+    }
 
     this.isRunning = true;
     this.stats.totalRuns++;
@@ -233,8 +233,8 @@ class AgendaScheduledBulkAnalysisService {
       const instrumentKeys = uniqueStocks.map((stock) => stock.instrument_key);
       const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
 
-      // Set release time to 5:00 PM IST today (UTC stored)
-      const releaseTime = MarketHoursUtil.getScheduledReleaseTime();
+      // No delayed release - analysis visible immediately after 7:30 AM run
+      const releaseTime = null;
 
       // 4. Check existing strategies and decide: VALIDATE or CREATE pending record
 
@@ -366,8 +366,8 @@ class AgendaScheduledBulkAnalysisService {
                   analysis_type: 'swing',
                   user_id: userId.toString(),
                   skipNotification: true, // Skip notifications for scheduled bulk pre-analysis
-                  scheduled_release_time: releaseTime, // Release at 5:00 PM
-                  skipIntraday: false // Add buffer to intraday candles for end-of-day analysis
+                  scheduled_release_time: releaseTime, // null = visible immediately
+                  skipIntraday: false // Use previous day's data for pre-market analysis
                 });
               });
 
