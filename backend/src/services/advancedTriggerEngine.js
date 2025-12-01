@@ -183,9 +183,9 @@ class AdvancedTriggerEngine {
     // CRITICAL FIX #3: Validate candle freshness (timeframe-aware)
     // Only check for stale data during market hours on trading days
     const now = Date.now();
-    const nowIST = MarketHoursUtil.toIST(new Date(now));
-    const isMarketOpen = await MarketHoursUtil.isMarketOpen(nowIST);
-    const isTradingDay = await MarketHoursUtil.isTradingDay(nowIST);
+    // NOTE: Don't pre-convert to IST - isMarketOpen() and isTradingDay() do it internally
+    const isMarketOpen = await MarketHoursUtil.isMarketOpen();
+    const isTradingDay = await MarketHoursUtil.isTradingDay(new Date(now));
 
     // Only validate data freshness if market is open
     if (isMarketOpen && isTradingDay) {
