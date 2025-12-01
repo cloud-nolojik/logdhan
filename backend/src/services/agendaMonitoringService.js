@@ -1215,8 +1215,9 @@ class AgendaMonitoringService {
   async getMonitoringStatus(analysisId, strategyId = null, userId = null) {
     try {
 
+      // Convert UTC date to IST string - toIST() already converts, so use toLocaleString without timezone
       const toIstString = (date) => date ?
-      MarketHoursUtil.toIST(date).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) :
+      new Date(date).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) :
       null;
 
       const buildHistoryStatus = (history) => {
