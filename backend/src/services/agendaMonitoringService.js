@@ -12,6 +12,9 @@ import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 import orderExecutionService from './orderExecutionService.js';
+import upstoxService from './upstox.service.js';
+import UpstoxUser from '../models/upstoxUser.js';
+import { decrypt } from '../utils/encryption.js';
 
 class AgendaMonitoringService {
   constructor() {
@@ -245,7 +248,7 @@ class AgendaMonitoringService {
       // Use MarketHoursUtil to handle trading days/holidays; pass UTC now
       let isMarketOpen = await MarketHoursUtil.isMarketOpen();
 
-      if (isMarketOpen) {
+      if (!isMarketOpen) {
 
         // Save market closed status to history
         historyEntry.status = 'market_closed';
@@ -359,19 +362,35 @@ class AgendaMonitoringService {
               const userName = user.name || user.email?.split('@')[0] || 'User';
               const stockSymbol = analysis.stock_symbol || analysis.stock_name;
 
-              // 🤖 AUTO-ORDER LOGIC: Execute order if autoOrder is enabled for this user
+              // 🤖 AUTO-ORDER LOGIC: Place GTT order if autoOrder is enabled for this user
               let autoOrderResult = null;
               if (userSubscription.auto_order) {
-                console.log(`[AUTO-ORDER] Executing auto-order for user ${userId} on ${stockSymbol}`);
+                console.log(`[AUTO-ORDER] Placing GTT order for user ${userId} on ${stockSymbol}`);
                 try {
-                  // Execute order using orderExecutionService
-                  autoOrderResult = await orderExecutionService.validateAndExecuteStrategy({
-                    analysis: analysis,
-                    strategyId: strategyId,
-                    userId: userId.toString(),
-                    customQuantity: null,
-                    bypassTriggers: true // Bypass since conditions are already met
-                  });
+                  // Get user's Upstox token
+                  const upstoxUser = await UpstoxUser.findByUserId(userId);
+                  if (!upstoxUser || !upstoxUser.isTokenValid()) {
+                    throw new Error('Upstox not connected or token expired');
+                  }
+
+                  const accessToken = decrypt(upstoxUser.access_token);
+
+                  // Get strategy from analysis
+                  const strategy = analysis.analysis_data?.strategies?.find((s) => s.id === strategyId);
+                  if (!strategy) {
+                    throw new Error('Strategy not found in analysis');
+                  }
+
+                  // Get current price for trigger direction
+                  const currentPrice = triggerResult.data?.current_price || null;
+
+                  // Place GTT order using the new multi-leg function
+                  autoOrderResult = await upstoxService.placeGTTOrderFromStrategy(
+                    accessToken,
+                    strategy,
+                    analysis.instrument_key,
+                    currentPrice
+                  );
 
                   // Update subscription with auto-order result
                   const userIndex = subscription.subscribed_users.findIndex(
@@ -381,7 +400,7 @@ class AgendaMonitoringService {
                     subscription.subscribed_users[userIndex].auto_order_executed_at = new Date();
                     subscription.subscribed_users[userIndex].auto_order_result = {
                       success: autoOrderResult.success,
-                      order_id: autoOrderResult.data?.order_id || autoOrderResult.data?.data?.order_id || null,
+                      order_id: autoOrderResult.data?.gtt_order_ids?.[0] || autoOrderResult.data?.order_id || null,
                       error: autoOrderResult.success ? null : autoOrderResult.error,
                       executed_at: new Date()
                     };
@@ -389,12 +408,12 @@ class AgendaMonitoringService {
                   }
 
                   if (autoOrderResult.success) {
-                    console.log(`[AUTO-ORDER] ✅ Order placed successfully for ${userId} on ${stockSymbol}. Order ID: ${autoOrderResult.data?.order_id || 'N/A'}`);
+                    console.log(`[AUTO-ORDER] ✅ GTT order placed for ${userId} on ${stockSymbol}. GTT IDs: ${autoOrderResult.data?.gtt_order_ids?.join(', ') || 'N/A'}`);
                   } else {
-                    console.error(`[AUTO-ORDER] ❌ Order failed for ${userId} on ${stockSymbol}:`, autoOrderResult.error);
+                    console.error(`[AUTO-ORDER] ❌ GTT order failed for ${userId} on ${stockSymbol}:`, autoOrderResult.error);
                   }
                 } catch (orderError) {
-                  console.error(`[AUTO-ORDER] ❌ Exception executing order for ${userId}:`, orderError);
+                  console.error(`[AUTO-ORDER] ❌ Exception placing GTT order for ${userId}:`, orderError);
                   autoOrderResult = { success: false, error: orderError.message };
                 }
               }
@@ -406,15 +425,15 @@ class AgendaMonitoringService {
 
               const notificationMessage = userSubscription.auto_order ?
                 (autoOrderResult?.success ?
-                  `${stockSymbol} - ${strategyName}: Order placed automatically! Order ID: ${autoOrderResult.data?.order_id || 'N/A'}` :
-                  `${stockSymbol} - ${strategyName}: Auto-order failed - ${autoOrderResult?.error || 'Unknown error'}. Please place order manually.`) :
+                  `${stockSymbol} - ${strategyName}: GTT order placed! Entry + Target + StopLoss set. GTT ID: ${autoOrderResult.data?.gtt_order_ids?.[0] || autoOrderResult.data?.order_id || 'N/A'}` :
+                  `${stockSymbol} - ${strategyName}: GTT order failed - ${autoOrderResult?.error || 'Unknown error'}. Please place order manually.`) :
                 `${stockSymbol} - ${strategyName}: Entry conditions have been met! Check your app for details.`;
 
               await Notification.createNotification({
                 userId: userId,
                 title: notificationTitle,
                 message: notificationMessage,
-                type: userSubscription.auto_order ? (autoOrderResult?.success ? 'success' : 'error') : 'alert',
+                type: 'alert', // Valid types: trade_log, ai_review, credit, system, alert, subscription
                 relatedStock: {
                   trading_symbol: stockSymbol,
                   instrument_key: analysis.instrument_key

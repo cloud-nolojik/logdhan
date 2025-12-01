@@ -1169,6 +1169,348 @@ class UpstoxService {
     }
   }
 
+  /**
+   * Place GTT (Good Till Triggered) Order - V3 API
+   * MULTI-LEG ONLY with Target + StopLoss + Optional Trailing Stop Loss
+   *
+   * @param {string} accessToken - Upstox access token
+   * @param {Object} gttOrderData - GTT order parameters
+   * @param {string} gttOrderData.instrumentToken - Instrument key (e.g., "NSE_EQ|INE001A01036")
+   * @param {string} gttOrderData.transactionType - BUY or SELL
+   * @param {number} gttOrderData.quantity - Order quantity
+   * @param {string} gttOrderData.product - D (Delivery), I (Intraday), MTF (default: I for swing)
+   * @param {number} gttOrderData.entryTriggerPrice - Price at which to trigger entry
+   * @param {string} gttOrderData.entryTriggerType - ABOVE, BELOW, or IMMEDIATE
+   * @param {number} gttOrderData.targetPrice - Target exit price (REQUIRED for multi-leg)
+   * @param {number} gttOrderData.stopLossPrice - Stop loss price (REQUIRED for multi-leg)
+   * @param {number} [gttOrderData.trailingGap] - Trailing stop loss gap (optional)
+   * @returns {Object} - GTT order result with gtt_order_ids
+   */
+  async placeGTTOrder(accessToken, gttOrderData) {
+    try {
+      const {
+        instrumentToken,
+        transactionType,
+        quantity,
+        product = 'I', // Default to Intraday for swing trading
+        entryTriggerPrice,
+        entryTriggerType = 'ABOVE', // ABOVE, BELOW, IMMEDIATE
+        targetPrice,
+        stopLossPrice,
+        trailingGap
+      } = gttOrderData;
+
+      // Validate required fields
+      if (!instrumentToken || !transactionType || !quantity || !entryTriggerPrice) {
+        throw new Error('Missing required GTT order parameters: instrumentToken, transactionType, quantity, entryTriggerPrice');
+      }
+
+      // ENFORCE MULTI-LEG ONLY: Both target and stop loss are required
+      if (!targetPrice || targetPrice <= 0) {
+        throw new Error('targetPrice is required for multi-leg GTT order');
+      }
+      if (!stopLossPrice || stopLossPrice <= 0) {
+        throw new Error('stopLossPrice is required for multi-leg GTT order');
+      }
+
+      // Validate price logic based on transaction type
+      const txnType = transactionType.toUpperCase();
+      if (txnType === 'BUY') {
+        // For BUY: Target > Entry > StopLoss
+        if (targetPrice <= entryTriggerPrice) {
+          throw new Error(`Invalid prices for BUY: Target (${targetPrice}) must be greater than Entry (${entryTriggerPrice})`);
+        }
+        if (stopLossPrice >= entryTriggerPrice) {
+          throw new Error(`Invalid prices for BUY: StopLoss (${stopLossPrice}) must be less than Entry (${entryTriggerPrice})`);
+        }
+      } else if (txnType === 'SELL') {
+        // For SELL: StopLoss > Entry > Target
+        if (targetPrice >= entryTriggerPrice) {
+          throw new Error(`Invalid prices for SELL: Target (${targetPrice}) must be less than Entry (${entryTriggerPrice})`);
+        }
+        if (stopLossPrice <= entryTriggerPrice) {
+          throw new Error(`Invalid prices for SELL: StopLoss (${stopLossPrice}) must be greater than Entry (${entryTriggerPrice})`);
+        }
+      } else {
+        throw new Error(`Invalid transactionType: ${transactionType}. Must be BUY or SELL`);
+      }
+
+      // Build rules array for multi-leg order
+      const rules = [];
+
+      // Entry rule (mandatory)
+      rules.push({
+        strategy: 'ENTRY',
+        trigger_type: entryTriggerType,
+        trigger_price: parseFloat(entryTriggerPrice)
+      });
+
+      // Target rule (mandatory for multi-leg)
+      rules.push({
+        strategy: 'TARGET',
+        trigger_type: 'IMMEDIATE',
+        trigger_price: parseFloat(targetPrice)
+      });
+
+      // Stop Loss rule with optional trailing (mandatory for multi-leg)
+      const slRule = {
+        strategy: 'STOPLOSS',
+        trigger_type: 'IMMEDIATE',
+        trigger_price: parseFloat(stopLossPrice)
+      };
+
+      // Add trailing gap for TSL orders
+      if (trailingGap && trailingGap > 0) {
+        slRule.trailing_gap = parseFloat(trailingGap);
+        console.log(`[GTT ORDER] Trailing Stop Loss enabled with gap: ₹${trailingGap}`);
+      }
+
+      rules.push(slRule);
+
+      // Build GTT order payload - always MULTIPLE for multi-leg
+      const gttPayload = {
+        type: 'MULTIPLE',
+        quantity: parseInt(quantity.qty),
+        product: product,
+        instrument_token: instrumentToken,
+        transaction_type: txnType,
+        rules: rules
+      };
+
+      console.log('[GTT ORDER] Placing multi-leg GTT order:', JSON.stringify(gttPayload, null, 2));
+      console.log(`[GTT ORDER] Summary:
+        Instrument: ${instrumentToken}
+        Type: ${txnType}
+        Quantity: ${quantity}
+        Entry: ₹${entryTriggerPrice} (${entryTriggerType})
+        Target: ₹${targetPrice}
+        StopLoss: ₹${stopLossPrice}${trailingGap ? ` (Trailing: ₹${trailingGap})` : ''}
+        Product: ${product}`);
+
+      // Use V3 API for GTT orders
+      const response = await axios.post(
+        'https://api.upstox.com/v3/order/gtt/place',
+        gttPayload,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+          }
+        }
+      );
+
+      console.log('[GTT ORDER] ✅ GTT order response:', JSON.stringify(response.data, null, 2));
+
+      const { status, data, metadata } = response.data;
+
+      if (status === 'success') {
+        return {
+          success: true,
+          data: {
+            gtt_order_ids: data.gtt_order_ids,
+            order_id: data.gtt_order_ids?.[0], // Primary GTT order ID
+            type: 'MULTIPLE',
+            has_trailing_sl: trailingGap && trailingGap > 0,
+            latency: metadata?.latency
+          },
+          message: `GTT multi-leg order placed successfully${trailingGap ? ' with trailing stop loss' : ''}`
+        };
+      } else {
+        throw new Error(`GTT order failed with status: ${status}`);
+      }
+
+    } catch (error) {
+      const errorData = error.response?.data;
+      console.error('[GTT ORDER] ❌ GTT order placement error:', JSON.stringify(errorData || error.message, null, 2));
+      if (errorData?.errors) {
+        console.error('[GTT ORDER] ❌ Error details:', JSON.stringify(errorData.errors, null, 2));
+      }
+      return {
+        success: false,
+        error: 'gtt_order_failed',
+        message: errorData?.errors?.[0]?.message || errorData?.message || error.message || 'Failed to place GTT order',
+        details: errorData
+      };
+    }
+  }
+
+  /**
+   * Place GTT Order from AI Strategy
+   * Converts AI analysis strategy to GTT multi-leg order format
+   * REQUIRES: entry, target, and stopLoss for multi-leg order
+   *
+   * @param {string} accessToken - Upstox access token
+   * @param {Object} strategy - AI strategy object with entry, target, stopLoss
+   * @param {string} instrumentToken - Instrument key
+   * @param {number} currentPrice - Current market price (for trigger direction)
+   * @returns {Object} - GTT order result
+   */
+  async placeGTTOrderFromStrategy(accessToken, strategy, instrumentToken, currentPrice = null) {
+    try {
+      const {
+        type: strategyType, // BUY, SELL
+        entry,
+        stopLoss,
+        target,
+        positionType = 'INTRADAY', // Default to INTRADAY for swing trading
+        trailingStopLoss // Optional trailing gap
+      } = strategy;
+
+      // Validate required strategy fields for multi-leg
+      if (!entry || !strategyType) {
+        throw new Error('Strategy must have entry price and type (BUY/SELL)');
+      }
+
+      // ENFORCE MULTI-LEG: Both target and stopLoss required
+      if (!target || target <= 0) {
+        throw new Error('Strategy must have target price for multi-leg GTT order');
+      }
+      if (!stopLoss || stopLoss <= 0) {
+        throw new Error('Strategy must have stopLoss price for multi-leg GTT order');
+      }
+
+      // Determine trigger type based on entry vs current price
+      let entryTriggerType = 'ABOVE';
+      if (currentPrice) {
+        // For BUY: ABOVE if entry > current, BELOW if entry < current
+        // For SELL: Opposite logic
+        if (strategyType.toUpperCase() === 'BUY') {
+          entryTriggerType = entry > currentPrice ? 'ABOVE' : 'BELOW';
+        } else {
+          entryTriggerType = entry < currentPrice ? 'BELOW' : 'ABOVE';
+        }
+      }
+
+      // Map position type to Upstox product (default to I for swing)
+      const product = positionType === 'DELIVERY' ? 'D' : 'I';
+
+      // Calculate quantity based on strategy (default to 1 if not specified)
+      const quantity = strategy.quantity || strategy.suggested_qty || 1;
+
+      // Build GTT order data
+      const gttOrderData = {
+        instrumentToken,
+        transactionType: strategyType.toUpperCase(),
+        quantity,
+        product,
+        entryTriggerPrice: entry,
+        entryTriggerType,
+        targetPrice: target,
+        stopLossPrice: stopLoss,
+        trailingGap: trailingStopLoss || null
+      };
+
+      console.log(`[GTT ORDER] Converting strategy to multi-leg GTT order:
+        Strategy Type: ${strategyType}
+        Entry: ₹${entry} (${entryTriggerType})
+        Target: ₹${target}
+        Stop Loss: ₹${stopLoss}${trailingStopLoss ? ` (Trailing: ₹${trailingStopLoss})` : ''}
+        Product: ${product}
+        Quantity: ${quantity}`);
+
+      return await this.placeGTTOrder(accessToken, gttOrderData);
+
+    } catch (error) {
+      console.error('[GTT ORDER] ❌ Strategy to GTT conversion error:', error.message);
+      return {
+        success: false,
+        error: 'strategy_to_gtt_failed',
+        message: error.message
+      };
+    }
+  }
+
+  /**
+   * Get GTT Order Details
+   */
+  async getGTTOrderDetails(accessToken, gttOrderId) {
+    try {
+      const response = await axios.get(
+        `https://api.upstox.com/v3/order/gtt/${gttOrderId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Accept': 'application/json'
+          }
+        }
+      );
+
+      return {
+        success: true,
+        data: response.data?.data
+      };
+
+    } catch (error) {
+      console.error('[GTT ORDER] ❌ Get GTT order details error:', error.response?.data || error.message);
+      return {
+        success: false,
+        error: 'get_gtt_order_failed',
+        message: error.response?.data?.message || 'Failed to get GTT order details'
+      };
+    }
+  }
+
+  /**
+   * Cancel GTT Order
+   */
+  async cancelGTTOrder(accessToken, gttOrderId) {
+    try {
+      const response = await axios.delete(
+        `https://api.upstox.com/v3/order/gtt/${gttOrderId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Accept': 'application/json'
+          }
+        }
+      );
+
+      return {
+        success: true,
+        data: response.data
+      };
+
+    } catch (error) {
+      console.error('[GTT ORDER] ❌ Cancel GTT order error:', error.response?.data || error.message);
+      return {
+        success: false,
+        error: 'cancel_gtt_order_failed',
+        message: error.response?.data?.message || 'Failed to cancel GTT order'
+      };
+    }
+  }
+
+  /**
+   * Get all GTT Orders
+   */
+  async getAllGTTOrders(accessToken) {
+    try {
+      const response = await axios.get(
+        'https://api.upstox.com/v3/order/gtt',
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Accept': 'application/json'
+          }
+        }
+      );
+
+      return {
+        success: true,
+        data: response.data?.data || []
+      };
+
+    } catch (error) {
+      console.error('[GTT ORDER] ❌ Get all GTT orders error:', error.response?.data || error.message);
+      return {
+        success: false,
+        error: 'get_all_gtt_orders_failed',
+        message: error.response?.data?.message || 'Failed to get GTT orders'
+      };
+    }
+  }
+
 }
 
 export default new UpstoxService();

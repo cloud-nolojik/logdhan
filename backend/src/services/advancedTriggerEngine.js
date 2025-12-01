@@ -184,8 +184,8 @@ class AdvancedTriggerEngine {
     // Only check for stale data during market hours on trading days
     const now = Date.now();
     const nowIST = MarketHoursUtil.toIST(new Date(now));
-    const isMarketOpen = MarketHoursUtil.isMarketOpen(nowIST);
-    const isTradingDay = MarketHoursUtil.isTradingDay(nowIST);
+    const isMarketOpen = await MarketHoursUtil.isMarketOpen(nowIST);
+    const isTradingDay = await MarketHoursUtil.isTradingDay(nowIST);
 
     // Only validate data freshness if market is open
     if (isMarketOpen && isTradingDay) {
@@ -198,20 +198,27 @@ class AdvancedTriggerEngine {
       const timeframeMinutes = this.parseTimeframeToMinutes(trigger.timeframe);
       const staleThresholdMinutes = timeframeMinutes * 2;
 
-      // Skip evaluation if data is stale (only during market hours)
-      if (dataAgeMinutes > staleThresholdMinutes) {
-        console.warn(`⚠️ ${trigger.id}: Stale market data (${dataAgeMinutes.toFixed(1)} min old, threshold: ${staleThresholdMinutes} min for ${trigger.timeframe}) - skipping evaluation`);
-        return {
-          satisfied: false,
-          expired: false,
-          error: `Stale data: ${dataAgeMinutes.toFixed(1)} minutes old (threshold: ${staleThresholdMinutes} min)`,
-          dataAge: dataAgeMinutes,
-          staleThreshold: staleThresholdMinutes,
-          skipped: true
-        };
-      }
+      ///Skip evaluation if data is stale (only during market hours)
+      // if (dataAgeMinutes > staleThresholdMinutes) {
+      //   console.warn(`⚠️ ${trigger.id}: Stale market data (${dataAgeMinutes.toFixed(1)} min old, threshold: ${staleThresholdMinutes} min for ${trigger.timeframe}) - skipping evaluation`);
+      //   return {
+      //     satisfied: false,
+      //     expired: false,
+      //     error: `Stale data: ${dataAgeMinutes.toFixed(1)} minutes old (threshold: ${staleThresholdMinutes} min)`,
+      //     dataAge: dataAgeMinutes,
+      //     staleThreshold: staleThresholdMinutes,
+      //     skipped: true
+      //   };
+      // }
     } else {
-
+      //Market is closed or not a trading day - skip evaluation
+      return {
+        satisfied: false,
+        expired: false,
+        market_closed: true,
+        reason: !isTradingDay ? 'Not a trading day' : 'Market is closed',
+        skipped: true
+      };
     }
 
     // Check if this is a new bar
@@ -252,8 +259,7 @@ class AdvancedTriggerEngine {
     }
 
     // Evaluate trigger condition (with previous value for cross detection)
-    // const conditionMet = this.evaluateCondition(trigger, timeframeData, previousValue);
-    const conditionMet = true;
+    const conditionMet = this.evaluateCondition(trigger, timeframeData, previousValue);
     // Handle consecutive occurrences
     const historyKey = `${triggerKey}_history`;
     if (!this.triggerHistory.has(historyKey)) {

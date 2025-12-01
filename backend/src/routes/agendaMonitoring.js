@@ -6,7 +6,7 @@ import agendaDataPrefetchService from '../services/agendaDataPrefetchService.js'
 import agendaBulkAnalysisNotificationService from '../services/agendaBulkAnalysisNotificationService.js';
 import agendaBulkAnalysisReminderService from '../services/agendaBulkAnalysisReminderService.js';
 import StockAnalysis from '../models/stockAnalysis.js';
-import triggerOrderService from '../services/triggerOrderService.js';
+import MonitoringSubscription from '../models/monitoringSubscription.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 
 const router = express.Router();
@@ -185,57 +185,41 @@ router.post('/start', authenticateToken, async (req, res) => {
     currentTimeInMinutes >= marketOpen &&
     currentTimeInMinutes <= marketClose;
 
-    // Check current trigger status first
+    // FIRST: Check if MonitoringSubscription already has conditions_met status
+    // This avoids expensive real-time trigger API calls
+    const existingSubscription = await MonitoringSubscription.findOne({
+      analysis_id: analysisId,
+      strategy_id: strategyId,
+      monitoring_status: 'conditions_met'
+    }).lean();
 
-    const triggerCheck = await triggerOrderService.checkTriggerConditions(analysis);
+    if (existingSubscription && existingSubscription.conditions_met_at) {
+      const timeSinceConditionsMet = Date.now() - new Date(existingSubscription.conditions_met_at).getTime();
+      const minutesSince = Math.floor(timeSinceConditionsMet / 60000);
 
-    // If triggers are already met, return error with user-friendly message
-    if (triggerCheck.triggersConditionsMet) {
-      // During market hours, this is more critical
-      if (isMarketHours) {
-        return res.status(200).json({
-          success: false,
-          error: 'conditions_already_met',
-          message: 'Entry conditions already met! Price has reached your trigger point.',
-          data: {
-            triggers_met: true,
-            current_price: triggerCheck.data.current_price,
-            triggers: triggerCheck.data.triggers,
-            market_status: 'open',
-            suggestion: 'Place order immediately or wait for price to come back',
-            conditions_met_at: new Date().toISOString(),
-            user_message: {
-              title: '🎯 Entry Point Reached!',
-              description: `Entry conditions were already met. Current price: ₹${triggerCheck.data.current_price}`,
-              action_button: 'Place Order Now',
-              skip_button: 'Wait for Next Opportunity'
-            }
+      return res.status(400).json({
+        success: false,
+        error: 'conditions_already_met',
+        message: `Entry conditions were already met ${minutesSince} minutes ago.`,
+        data: {
+          triggers_met: true,
+          conditions_met_at: existingSubscription.conditions_met_at,
+          minutes_since: minutesSince,
+          stock_symbol: analysis.stock_symbol,
+          suggestion: minutesSince > 45
+            ? 'Market setup may have changed. Please generate fresh analysis.'
+            : 'Place order now or wait for next opportunity.',
+          user_message: {
+            title: '🎯 Conditions Already Met',
+            description: `Entry conditions were met ${minutesSince} minutes ago for ${analysis.stock_symbol}.`,
+            action_button: 'Place Order Now',
+            skip_button: 'Generate Fresh Analysis'
           }
-        });
-      } else {
-        // Outside market hours - still return error since monitoring won't start
-        return res.status(200).json({
-          success: false,
-          error: 'conditions_already_met',
-          message: 'Entry conditions already met. Order will be placed when market opens.',
-          data: {
-            triggers_met: true,
-            current_price: triggerCheck.data.current_price,
-            triggers: triggerCheck.data.triggers,
-            market_status: 'closed',
-            suggestion: 'Order will be placed automatically when market opens',
-            conditions_met_at: new Date().toISOString(),
-            user_message: {
-              title: '⚠️ Conditions Already Met',
-              description: 'Entry conditions were already satisfied. Order will be placed when market opens.',
-              action_button: 'Check Order Status',
-              skip_button: 'Generate Fresh Analysis'
-            }
-          }
-        });
-      }
+        }
+      });
     }
 
+   
     // Additional validation for market hours - check if price moved too far
     if (isMarketHours) {
       const currentPrice = analysis.current_price;
@@ -305,7 +289,7 @@ router.post('/start', authenticateToken, async (req, res) => {
           // Shared monitoring fields
           subscription_id: result.subscription_id,
           subscribed_users_count: result.subscribed_users_count,
-          failed_triggers: triggerCheck.data?.failed_triggers || [],
+          failed_triggers: [],
           user_message: {
             title: autoOrder ? '🤖 Auto-Order Active' : '🔵 Monitoring Active',
             stock: analysis.stock_symbol,
