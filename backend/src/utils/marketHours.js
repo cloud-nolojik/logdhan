@@ -755,7 +755,8 @@ class MarketHoursUtil {
       ));
 
       // Get next trading day for end time
-      const quotaDateObj = new Date(year, month - 1, day);
+      // Create date at noon UTC to avoid timezone boundary issues
+      const quotaDateObj = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
       const nextTradingDay = await this.getNextTradingDay(quotaDateObj);
 
       // Create end time: next trading day 4:00 PM IST → convert to UTC
