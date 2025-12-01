@@ -6,7 +6,7 @@ import agendaDataPrefetchService from '../services/agendaDataPrefetchService.js'
 import agendaBulkAnalysisNotificationService from '../services/agendaBulkAnalysisNotificationService.js';
 import agendaBulkAnalysisReminderService from '../services/agendaBulkAnalysisReminderService.js';
 import StockAnalysis from '../models/stockAnalysis.js';
-import MonitoringSubscription from '../models/monitoringSubscription.js';
+import MonitoringHistory from '../models/monitoringHistory.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 
 const router = express.Router();
@@ -171,30 +171,20 @@ router.post('/start', authenticateToken, async (req, res) => {
       });
     }
 
-    // Check if we're in market hours
-    const now = new Date();
-    const istTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-    const currentHours = istTime.getHours();
-    const currentMinutes = istTime.getMinutes();
-    const currentTimeInMinutes = currentHours * 60 + currentMinutes;
-    const marketOpen = 9 * 60 + 15; // 9:15 AM
-    const marketClose = 15 * 60 + 30; // 3:30 PM
-    const dayOfWeek = istTime.getDay(); // 0 = Sunday, 6 = Saturday
+    // Check if we're in market hours using MarketHoursUtil
+    // isMarketOpen() already checks isTradingDay() internally
+    const isMarketHours = await MarketHoursUtil.isMarketOpen();
 
-    const isMarketHours = dayOfWeek >= 1 && dayOfWeek <= 5 &&
-    currentTimeInMinutes >= marketOpen &&
-    currentTimeInMinutes <= marketClose;
-
-    // FIRST: Check if MonitoringSubscription already has conditions_met status
-    // This avoids expensive real-time trigger API calls
-    const existingSubscription = await MonitoringSubscription.findOne({
+    // FIRST: Check MonitoringHistory for recent conditions_met status
+    // This persists even after subscription expires/cleans up
+    const conditionsMetHistory = await MonitoringHistory.findOne({
       analysis_id: analysisId,
       strategy_id: strategyId,
-      monitoring_status: 'conditions_met'
-    }).lean();
+      status: 'conditions_met'
+    }).sort({ check_timestamp: -1 }).lean();
 
-    if (existingSubscription && existingSubscription.conditions_met_at) {
-      const timeSinceConditionsMet = Date.now() - new Date(existingSubscription.conditions_met_at).getTime();
+    if (conditionsMetHistory) {
+      const timeSinceConditionsMet = Date.now() - new Date(conditionsMetHistory.check_timestamp).getTime();
       const minutesSince = Math.floor(timeSinceConditionsMet / 60000);
 
       return res.status(400).json({
@@ -203,7 +193,7 @@ router.post('/start', authenticateToken, async (req, res) => {
         message: `Entry conditions were already met ${minutesSince} minutes ago.`,
         data: {
           triggers_met: true,
-          conditions_met_at: existingSubscription.conditions_met_at,
+          conditions_met_at: conditionsMetHistory.check_timestamp,
           minutes_since: minutesSince,
           stock_symbol: analysis.stock_symbol,
           suggestion: minutesSince > 45
