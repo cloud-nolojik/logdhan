@@ -294,7 +294,15 @@ class AdvancedTriggerEngine {
       maxBars: barCounter.maxBars,
       conditionMet,
       occurrencesSatisfied,
-      history: history.slice(-3) // Last 3 for debugging
+      history: history.slice(-3), // Last 3 for debugging
+      candle_used: {
+        timestamp: timeframeData.timestamp,
+        open: timeframeData.open,
+        high: timeframeData.high,
+        low: timeframeData.low,
+        close: timeframeData.close,
+        volume: timeframeData.volume
+      }
     };
   }
 

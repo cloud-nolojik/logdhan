@@ -44,14 +44,30 @@ const monitoringHistorySchema = new mongoose.Schema({
             right_value: mongoose.Schema.Types.Mixed,
             passed: Boolean,
             evaluable: Boolean,
-            timeframe: String
+            timeframe: String,
+            candle_used: {
+                timestamp: String,
+                open: Number,
+                high: Number,
+                low: Number,
+                close: Number,
+                volume: Number
+            }
         }],
         failed_triggers: [{
             id: String,
             condition: String,
             left_value: mongoose.Schema.Types.Mixed,
             right_value: mongoose.Schema.Types.Mixed,
-            reason: String
+            reason: String,
+            candle_used: {
+                timestamp: String,
+                open: Number,
+                high: Number,
+                low: Number,
+                close: Number,
+                volume: Number
+            }
         }],
         invalidations: [{
             condition: String,
@@ -164,8 +180,31 @@ monitoringHistorySchema.statics.getSummaryStats = function(analysisId, strategyI
 monitoringHistorySchema.methods.addTriggerDetails = function(triggers, currentPrice) {
     this.details = this.details || {};
     this.details.current_price = currentPrice;
-    this.details.triggers = triggers;
-    this.details.failed_triggers = triggers.filter(t => !t.passed || !t.evaluable);
+
+    // Map triggers with candle data
+    this.details.triggers = triggers.map(t => ({
+        id: t.id,
+        condition: t.condition,
+        left_value: t.left_value,
+        right_value: t.right_value,
+        passed: t.passed,
+        evaluable: t.evaluable,
+        timeframe: t.timeframe,
+        candle_used: t.candle_used || null
+    }));
+
+    // Map failed triggers with candle data
+    this.details.failed_triggers = triggers
+        .filter(t => !t.passed || !t.evaluable)
+        .map(t => ({
+            id: t.id,
+            condition: t.condition,
+            left_value: t.left_value,
+            right_value: t.right_value,
+            reason: t.reason || (!t.evaluable ? 'Not evaluable' : 'Condition not met'),
+            candle_used: t.candle_used || null
+        }));
+
     return this;
 };
 

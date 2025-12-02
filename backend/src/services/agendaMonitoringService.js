@@ -619,8 +619,23 @@ class AgendaMonitoringService {
         historyEntry.status = 'triggers_not_met';
         historyEntry.reason = triggerResult.message || 'Entry conditions not satisfied';
         if (triggerResult.data) {
+          // Map advanced trigger engine format to MonitoringHistory format
+          const mappedTriggers = (triggerResult.data.triggers || []).map((t, idx) => {
+            const originalTrigger = strategy.triggers?.[idx];
+            return {
+              id: originalTrigger?.id || `trigger_${idx}`,
+              condition: originalTrigger?.condition || originalTrigger?.description || '',
+              left_value: this.getValue(originalTrigger?.left, t),
+              right_value: this.getValue(originalTrigger?.right, t),
+              passed: t.satisfied || false,
+              evaluable: !t.skipped && !t.market_closed,
+              timeframe: originalTrigger?.timeframe || '1d',
+              candle_used: t.candle_used || null
+            };
+          });
+
           historyEntry.addTriggerDetails(
-            triggerResult.data.triggers || [],
+            mappedTriggers,
             triggerResult.data.current_price
           );
         }
@@ -1737,6 +1752,30 @@ class AgendaMonitoringService {
     } catch (error) {
       console.error(`❌ Error sending monitoring failure notification:`, error);
     }
+  }
+
+  /**
+   * Helper to extract value from trigger reference for display
+   */
+  getValue(ref, triggerResult) {
+    if (!ref) return null;
+
+    // If ref has a value property, return it
+    if (ref.value !== undefined) {
+      return ref.value;
+    }
+
+    // If ref has a ref property (like {ref: 'close'}), extract from trigger result
+    if (ref.ref) {
+      const refKey = ref.ref.toLowerCase();
+
+      // Check if value is in trigger result
+      if (triggerResult && triggerResult.candle_used) {
+        return triggerResult.candle_used[refKey] || null;
+      }
+    }
+
+    return null;
   }
 
   async shutdown() {
