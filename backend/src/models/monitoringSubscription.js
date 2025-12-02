@@ -236,6 +236,36 @@ monitoringConfig = {})
 
     if (subscription) {
 
+      // Check if subscription is expired - reset it instead of reusing
+      const isExpired = subscription.expires_at < new Date() || subscription.monitoring_status === 'expired';
+
+      if (isExpired) {
+        // Reset subscription to active state with new expiry
+        const newExpiryTime = await this.getExpiryTime();
+        subscription.monitoring_status = 'active';
+        subscription.expires_at = newExpiryTime;
+        subscription.conditions_met_at = null;
+        subscription.notification_sent_at = null;
+        subscription.stopped_at = null;
+        subscription.stop_reason = null;
+        subscription.last_trigger_snapshot = null;
+        subscription.job_id = jobId; // Update job ID
+
+        // Clear all users and add current user as fresh subscription
+        subscription.subscribed_users = [{
+          user_id: userId,
+          subscribed_at: new Date(),
+          auto_order: monitoringConfig.autoOrder || false,
+          notification_preferences: monitoringConfig.notification_preferences || {
+            whatsapp: true,
+            email: false
+          }
+        }];
+
+        await subscription.save();
+        return subscription;
+      }
+
       // Check if conditions were already met
       if (subscription.monitoring_status === 'conditions_met') {
         const timeSinceConditionsMet = Date.now() - subscription.conditions_met_at.getTime();
