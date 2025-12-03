@@ -181,29 +181,45 @@ monitoringHistorySchema.methods.addTriggerDetails = function(triggers, currentPr
     this.details = this.details || {};
     this.details.current_price = currentPrice;
 
-    // Map triggers with candle data
-    this.details.triggers = triggers.map(t => ({
-        id: t.id,
-        condition: t.condition,
-        left_value: t.left_value,
-        right_value: t.right_value,
-        passed: t.passed,
-        evaluable: t.evaluable,
-        timeframe: t.timeframe,
-        candle_used: t.candle_used || null
-    }));
+    console.log(`📝 [HISTORY MODEL] addTriggerDetails called with ${triggers.length} triggers`);
 
-    // Map failed triggers with candle data
-    this.details.failed_triggers = triggers
-        .filter(t => !t.passed || !t.evaluable)
-        .map(t => ({
+    // Map triggers with candle data
+    this.details.triggers = triggers.map((t, idx) => {
+        if (t.candle_used) {
+            console.log(`   ✅ Trigger ${idx} (${t.id}): HAS candle_used - ${t.candle_used.timestamp}`);
+        } else {
+            console.log(`   ❌ Trigger ${idx} (${t.id}): MISSING candle_used`);
+        }
+
+        return {
             id: t.id,
             condition: t.condition,
             left_value: t.left_value,
             right_value: t.right_value,
-            reason: t.reason || (!t.evaluable ? 'Not evaluable' : 'Condition not met'),
+            passed: t.passed,
+            evaluable: t.evaluable,
+            timeframe: t.timeframe,
             candle_used: t.candle_used || null
-        }));
+        };
+    });
+
+    // Map failed triggers with candle data
+    this.details.failed_triggers = triggers
+        .filter(t => !t.passed || !t.evaluable)
+        .map((t, idx) => {
+            console.log(`   🔴 Failed trigger ${idx} (${t.id}): candle_used = ${t.candle_used ? 'YES' : 'NO'}`);
+
+            return {
+                id: t.id,
+                condition: t.condition,
+                left_value: t.left_value,
+                right_value: t.right_value,
+                reason: t.reason || (!t.evaluable ? 'Not evaluable' : 'Condition not met'),
+                candle_used: t.candle_used || null
+            };
+        });
+
+    console.log(`📊 [HISTORY MODEL] Total triggers: ${this.details.triggers.length}, Failed: ${this.details.failed_triggers.length}`);
 
     return this;
 };

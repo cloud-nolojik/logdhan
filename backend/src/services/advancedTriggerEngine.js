@@ -287,6 +287,17 @@ class AdvancedTriggerEngine {
     // Check occurrences requirement
     const occurrencesSatisfied = this.checkOccurrences(trigger, history);
 
+    const candleData = {
+      timestamp: timeframeData.timestamp,
+      open: timeframeData.open,
+      high: timeframeData.high,
+      low: timeframeData.low,
+      close: timeframeData.close,
+      volume: timeframeData.volume
+    };
+
+    console.log(`🕯️  [TRIGGER ENGINE] Trigger ${trigger.id} evaluated with candle: ${candleData.timestamp} C:${candleData.close}`);
+
     return {
       satisfied: conditionMet && occurrencesSatisfied,
       expired: false,
@@ -295,14 +306,7 @@ class AdvancedTriggerEngine {
       conditionMet,
       occurrencesSatisfied,
       history: history.slice(-3), // Last 3 for debugging
-      candle_used: {
-        timestamp: timeframeData.timestamp,
-        open: timeframeData.open,
-        high: timeframeData.high,
-        low: timeframeData.low,
-        close: timeframeData.close,
-        volume: timeframeData.volume
-      }
+      candle_used: candleData
     };
   }
 

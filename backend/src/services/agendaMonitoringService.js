@@ -619,9 +619,21 @@ class AgendaMonitoringService {
         historyEntry.status = 'triggers_not_met';
         historyEntry.reason = triggerResult.message || 'Entry conditions not satisfied';
         if (triggerResult.data) {
+          console.log(`📊 [CANDLE DEBUG] Mapping ${triggerResult.data.triggers?.length || 0} triggers for ${analysis.stock_symbol}`);
+
           // Map advanced trigger engine format to MonitoringHistory format
           const mappedTriggers = (triggerResult.data.triggers || []).map((t, idx) => {
             const originalTrigger = strategy.triggers?.[idx];
+
+            // Log candle data from trigger result
+            if (t.candle_used) {
+              console.log(`   📍 Trigger ${idx}: ${originalTrigger?.condition || 'N/A'}`);
+              console.log(`      Candle: ${t.candle_used.timestamp} | O:${t.candle_used.open} H:${t.candle_used.high} L:${t.candle_used.low} C:${t.candle_used.close} V:${t.candle_used.volume}`);
+              console.log(`      Satisfied: ${t.satisfied}, Evaluable: ${!t.skipped && !t.market_closed}`);
+            } else {
+              console.log(`   ⚠️  Trigger ${idx}: No candle_used data found in trigger result`);
+            }
+
             return {
               id: originalTrigger?.id || `trigger_${idx}`,
               condition: originalTrigger?.condition || originalTrigger?.description || '',
@@ -634,6 +646,9 @@ class AgendaMonitoringService {
             };
           });
 
+          console.log(`💾 [CANDLE DEBUG] Saving ${mappedTriggers.length} triggers to MonitoringHistory`);
+          console.log(`   Failed triggers count: ${mappedTriggers.filter(t => !t.passed || !t.evaluable).length}`);
+
           historyEntry.addTriggerDetails(
             mappedTriggers,
             triggerResult.data.current_price
@@ -641,6 +656,7 @@ class AgendaMonitoringService {
         }
         historyEntry.monitoring_duration_ms = Date.now() - startTime;
         await historyEntry.save();
+        console.log(`✅ [CANDLE DEBUG] MonitoringHistory saved with ID: ${historyEntry._id}`);
       }
 
     } catch (error) {
