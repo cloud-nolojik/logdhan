@@ -743,10 +743,10 @@ class AIAnalyzeService {
         sectorSpecific: false
       };
       const sentimentTime = Date.now() - sentimentStart;
-      console.log(`[ANALYZE] ⏱️ Sentiment analyzed for ${traceId} in ${sentimentTime}ms (sentiment=${sentiment})`);
 
       // Extract simple sentiment for backward compatibility
       const sentiment = typeof sentimentAnalysis === 'string' ? sentimentAnalysis : sentimentAnalysis.sentiment;
+      console.log(`[ANALYZE] ⏱️ Sentiment analyzed for ${traceId} in ${sentimentTime}ms (sentiment=${sentiment})`);
 
       //             console.log(`📊 Enhanced sector sentiment analysis result:`, sentimentAnalysis);
 
