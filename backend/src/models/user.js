@@ -5,24 +5,29 @@ import bcrypt from 'bcryptjs';
 const watchlistItemSchema = new mongoose.Schema({
   instrument_key: {
     type: String,
-   
+
   },
   trading_symbol: {
     type: String,
-    
+
   },
   name: {
     type: String,
-    
+
   },
   exchange: {
     type: String,
-    
+
     enum: ['NSE', 'BSE']
   },
   addedAt: {
     type: Date,
     default: Date.now
+  },
+  added_source: {
+    type: String,
+    enum: ['screener', 'manual', 'order'],
+    default: 'screener'
   }
 });
 
@@ -50,7 +55,7 @@ const userSchema = new mongoose.Schema({
     unique: true,
     trim: true,
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         return /^\d{12}$/.test(v);
       },
       message: props => `${props.value} is not a valid 12-digit mobile number!`
@@ -142,7 +147,7 @@ const userSchema = new mongoose.Schema({
       default: null
     }
   },
-  
+
   // Quiz results and badges
   assessmentHistory: {
     quickQuiz: {
@@ -159,7 +164,7 @@ const userSchema = new mongoose.Schema({
       badge: String // "Pro Verified" or null
     }
   },
-  
+
   // Behavioral signals for experience adjustment
   experienceSignals: [{
     type: String, // 'simplify_click', 'glossary_tap', etc.
@@ -167,7 +172,7 @@ const userSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
     metadata: { type: Map, of: String }
   }],
-  
+
   // Signal processing batches  
   signalBatches: [{
     processedAt: { type: Date, default: Date.now },
@@ -176,7 +181,7 @@ const userSchema = new mongoose.Schema({
     previousScore: Number,
     newScore: Number
   }],
-  
+
   // Legacy fields (keep for backward compatibility)
   tradingExperience: {
     type: String,
@@ -251,7 +256,7 @@ const userSchema = new mongoose.Schema({
 });
 
 // Update timestamps on save
-userSchema.pre('save', function(next) {
+userSchema.pre('save', function (next) {
   this.updatedAt = new Date();
   next();
 });
@@ -260,7 +265,7 @@ userSchema.pre('save', function(next) {
 userSchema.index({ 'watchlist.stock': 1 });
 
 // Generate JWT token
-userSchema.methods.generateAuthToken = function() {
+userSchema.methods.generateAuthToken = function () {
   return jwt.sign(
     { id: this.id },
     process.env.JWT_SECRET,
@@ -269,9 +274,9 @@ userSchema.methods.generateAuthToken = function() {
 };
 
 // Hash password before saving
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
-  
+
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -282,7 +287,7 @@ userSchema.pre('save', async function(next) {
 });
 
 // Method to compare password for login
-userSchema.methods.comparePassword = async function(candidatePassword) {
+userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 

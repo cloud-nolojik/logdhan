@@ -29,7 +29,7 @@ router.post('/', auth, async (req, res) => {
     // Check if stock is already in watchlist
     const user = await User.findById(req.user.id);
     const isInWatchlist = user.watchlist.some((item) =>
-    item.instrument_key === instrument_key
+      item.instrument_key === instrument_key
     );
 
     if (isInWatchlist) {
@@ -68,7 +68,8 @@ router.post('/', auth, async (req, res) => {
       trading_symbol: stock.trading_symbol,
       name: stock.name,
       exchange: stock.exchange,
-      addedAt: new Date()
+      addedAt: new Date(),
+      added_source: 'manual' // Explicitly mark as manual add
     });
     await user.save();
 
@@ -79,7 +80,8 @@ router.post('/', auth, async (req, res) => {
         trading_symbol: stock.trading_symbol,
         name: stock.name,
         exchange: stock.exchange,
-        addedAt: user.watchlist[user.watchlist.length - 1].addedAt
+        addedAt: user.watchlist[user.watchlist.length - 1].addedAt,
+        added_source: 'manual'
       }
     });
   } catch (error) {
@@ -134,8 +136,8 @@ router.get('/', auth, async (req, res) => {
             if (strategies.length > 0) {
               // Get average confidence from all strategies
               const confidences = strategies.
-              filter((s) => s.confidence != null).
-              map((s) => s.confidence);
+                filter((s) => s.confidence != null).
+                map((s) => s.confidence);
               if (confidences.length > 0) {
                 ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
               }
@@ -151,7 +153,9 @@ router.get('/', auth, async (req, res) => {
             trading_symbol: item.trading_symbol,
             name: item.name,
             exchange: item.exchange,
+            exchange: item.exchange,
             addedAt: item.addedAt,
+            added_source: item.added_source || 'screener', // Default to screener if missing
             current_price,
             // Analysis status fields
             has_analysis: !!analysis,
@@ -172,7 +176,9 @@ router.get('/', auth, async (req, res) => {
             trading_symbol: item.trading_symbol,
             name: item.name,
             exchange: item.exchange,
+            exchange: item.exchange,
             addedAt: item.addedAt,
+            added_source: item.added_source || 'screener',
             current_price: null,
             has_analysis: false,
             analysis_status: null,

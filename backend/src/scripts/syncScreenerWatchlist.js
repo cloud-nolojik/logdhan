@@ -150,14 +150,48 @@ export async function updateAllUsersWatchlists(watchlistItems, UserModel, dryRun
     trading_symbol: item.trading_symbol,
     name: item.name,
     exchange: item.exchange,
-    added_at: new Date()
+    added_at: new Date(),
+    added_source: 'screener' // New items from screener are 'screener' by default
   }));
 
   let usersUpdated = 0;
 
   for (const user of users) {
     try {
-      user.watchlist = newWatchlist;
+      // 1. Identify items to preserve (added_source === 'manual' or 'order')
+      // Note: We also check for 'is_active_order' for backward compatibility during migration
+      const preservedItems = (user.watchlist || []).filter(item =>
+        item.added_source === 'manual' ||
+        item.added_source === 'order' ||
+        item.is_active_order === true
+      );
+
+      // 2. Create a map of new items for easy lookup
+      const newItemsMap = new Map(newWatchlist.map(item => [item.instrument_key, item]));
+
+      // 3. Merge: Start with new items
+      const mergedWatchlist = [...newWatchlist];
+
+      // 4. Handle preserved items
+      for (const preservedItem of preservedItems) {
+        if (newItemsMap.has(preservedItem.instrument_key)) {
+          // Item exists in both: Update the new item to keep the sticky source
+          const index = mergedWatchlist.findIndex(item => item.instrument_key === preservedItem.instrument_key);
+          if (index !== -1) {
+            // Keep the existing source (manual/order) instead of overwriting with 'screener'
+            mergedWatchlist[index].added_source = preservedItem.added_source || (preservedItem.is_active_order ? 'order' : 'manual');
+          }
+        } else {
+          // Item only in preserved: Add it to the list
+          // Ensure we migrate is_active_order to added_source if needed
+          if (!preservedItem.added_source && preservedItem.is_active_order) {
+            preservedItem.added_source = 'order';
+          }
+          mergedWatchlist.push(preservedItem);
+        }
+      }
+
+      user.watchlist = mergedWatchlist;
       await user.save();
       usersUpdated++;
     } catch (error) {
