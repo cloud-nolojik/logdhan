@@ -104,18 +104,18 @@ class AgendaScheduledBulkAnalysisService {
    */
   setupEventHandlers() {
     this.agenda.on('ready', () => {
-
+      console.log('[SCHEDULED BULK] Agenda ready - scheduled job listeners attached');
     });
 
     this.agenda.on('start', (job) => {
       if (job.attrs.name.includes('bulk-analysis')) {
-
+        console.log(`[SCHEDULED BULK] ▶️  Job started: ${job.attrs.name} at ${new Date().toISOString()}`);
       }
     });
 
     this.agenda.on('complete', (job) => {
       if (job.attrs.name.includes('bulk-analysis')) {
-
+        console.log(`[SCHEDULED BULK] ✅ Job completed: ${job.attrs.name} at ${new Date().toISOString()}`);
       }
     });
 
@@ -158,12 +158,15 @@ class AgendaScheduledBulkAnalysisService {
   async runScheduledAnalysis() {
     // Check if already running
     if (this.isRunning) {
-      console.log('[SCHEDULED BULK] Already running, skipping');
+      console.log('[SCHEDULED BULK] Already running, skipping duplicate trigger');
       return;
     }
 
     // Check if today is a trading day (skip holidays)
     const today = new Date();
+    const runLabel = `[SCHEDULED BULK ${today.toISOString()}]`;
+    const istNow = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
+    console.log(`${runLabel} 🚀 Starting scheduled bulk analysis (7:30 AM IST run) at ${istNow}`);
     const isTradingDay = await MarketHoursUtil.isTradingDay(today);
 
     if (!isTradingDay) {
@@ -192,6 +195,7 @@ class AgendaScheduledBulkAnalysisService {
 
       // 1. Get all users (with freshly synced watchlists)
       const users = await User.find({}).select('_id email name watchlist').lean();
+      console.log(`[SCHEDULED BULK] 👥 Loaded ${users.length} users after Screener sync`);
 
       // 2. Collect all unique stocks from all watchlists
       const stockMap = new Map();
@@ -224,14 +228,16 @@ class AgendaScheduledBulkAnalysisService {
       const uniqueStocks = Array.from(stockMap.values());
 
       if (uniqueStocks.length === 0) {
-
+        console.log('[SCHEDULED BULK] No watchlist stocks found across users, skipping');
         return;
       }
 
       // 3. Fetch prices for all unique stocks at once
 
       const instrumentKeys = uniqueStocks.map((stock) => stock.instrument_key);
+      const priceFetchStart = Date.now();
       const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
+      console.log(`[SCHEDULED BULK] 💰 Fetched latest prices for ${instrumentKeys.length} unique stocks in ${Date.now() - priceFetchStart}ms`);
 
       // No delayed release - analysis visible immediately after 7:30 AM run
       const releaseTime = null;
@@ -309,6 +315,7 @@ class AgendaScheduledBulkAnalysisService {
       let successCount = 0;
       let failureCount = 0;
       let skippedCount = 0;
+      const candleLogged = new Set();
 
       // Configure concurrency limit based on OpenAI rate limits
       // PERFORMANCE CALCULATION:
@@ -381,6 +388,25 @@ class AgendaScheduledBulkAnalysisService {
                   successCount++;
 
                 }
+                if (!candleLogged.has(stock.instrument_key) && result.data) {
+                  const candleInfo = result.data?.analysis_data?.meta?.candle_info || result.data?.meta?.candle_info;
+                  if (candleInfo) {
+                    const frames = (candleInfo.timeframes_used || [])
+                      .map((tf) => `${tf.key || tf.timeframe || 'n/a'}:${tf.last_candle_time || 'n/a'}`)
+                      .join(', ');
+                    console.log(
+                      `[SCHEDULED BULK] 🕒 Candles for ${stock.trading_symbol || stock.instrument_key} ` +
+                      `(cached=${result.cached ? 'yes' : 'no'}): primary=${candleInfo.primary_timeframe || 'n/a'}, ` +
+                      `last=${candleInfo.last_candle_time || 'n/a'}, frames=${frames || 'none'}`
+                    );
+                  } else {
+                    console.log(
+                      `[SCHEDULED BULK] ⚠️  No candle metadata found for ${stock.trading_symbol || stock.instrument_key} ` +
+                      `(cached=${result.cached ? 'yes' : 'no'})`
+                    );
+                  }
+                  candleLogged.add(stock.instrument_key);
+                }
               } else {
                 failureCount++;
 
@@ -412,6 +438,11 @@ class AgendaScheduledBulkAnalysisService {
         uniqueStocks: uniqueStocks.length,
         totalUsers: users.length
       };
+      console.log(
+        `${runLabel} 🧾 Summary: uniqueStocks=${summary.uniqueStocks}, totalAnalyses=${summary.totalAnalyses}, ` +
+        `success=${summary.successful}, skipped=${summary.skipped}, failed=${summary.failed}, ` +
+        `users=${summary.totalUsers}, duration_ms=${bulkTotalTime}`
+      );
 
       // Update stats
       this.stats.successfulRuns++;

@@ -347,9 +347,37 @@ class AIAnalyzeService {
   }) {
     // ⏱️ START TIMING
     const analysisStartTime = Date.now();
+    const startIso = new Date().toISOString();
 
     // Normalize user_id (accept both formats)
     const normalizedUserId = user_id || userId;
+    const releaseTimeLog = scheduled_release_time instanceof Date
+      ? scheduled_release_time.toISOString()
+      : (scheduled_release_time || 'immediate');
+    const runContext = skipNotification ? 'bulk_scheduled' : 'on_demand';
+    const logCandleMeta = (label, analysisData) => {
+      const meta = analysisData?.meta || analysisData?.analysis_data?.meta;
+      const candleInfo = meta?.candle_info;
+      if (!candleInfo) {
+        console.log(`[ANALYZE] ${label} candle metadata missing for ${stock_symbol || instrument_key}`);
+        return;
+      }
+
+      const frames = (candleInfo.timeframes_used || [])
+        .map((tf) => `${tf.key || tf.timeframe || 'n/a'}:${tf.last_candle_time || 'n/a'}`)
+        .join(', ');
+
+      console.log(
+        `[ANALYZE] ${label} candles ${stock_symbol || instrument_key}: primary=${candleInfo.primary_timeframe || 'n/a'}, ` +
+        `last=${candleInfo.last_candle_time || 'n/a'}, frames=${frames || 'none'}`
+      );
+    };
+
+    console.log(
+      `[ANALYZE] ▶️ Start ${analysis_type} ${stock_symbol || instrument_key} (${instrument_key}) ` +
+      `user=${normalizedUserId || 'none'} ctx=${runContext} price=${current_price || 'n/a'} ` +
+      `release=${releaseTimeLog} skipIntraday=${skipIntraday} at=${startIso}`
+    );
 
     // Fetch user's favorite sport for personalized analysis
     let favoriteSport = 'cricket'; // default
@@ -384,6 +412,12 @@ class AIAnalyzeService {
           // Check if strategy is still valid
           if (existing.valid_until && now <= existing.valid_until) {
             const totalTime = Date.now() - analysisStartTime;
+            console.log(
+              `[ANALYZE] ♻️ Cache hit for ${stock_symbol || instrument_key} ` +
+              `valid_until=${existing.valid_until?.toISOString ? existing.valid_until.toISOString() : existing.valid_until} ` +
+              `user=${normalizedUserId || 'none'} ctx=${runContext}`
+            );
+            logCandleMeta('Cache', existing.analysis_data || existing);
 
             // Duplicate UserAnalyticsUsage record for this user if userId is provided
             if (normalizedUserId) {
@@ -404,6 +438,10 @@ class AIAnalyzeService {
           // If completed but expired, fall through to create new analysis
 
         } else if (existing.status === 'in_progress') {
+          console.log(
+            `[ANALYZE] ⏳ In-progress reuse for ${stock_symbol || instrument_key} ` +
+            `progress=${existing.progress?.percentage ?? 'n/a'} user=${normalizedUserId || 'none'} ctx=${runContext}`
+          );
           // Don't duplicate for in_progress - no UserAnalyticsUsage record exists yet
           // It will be created when the analysis completes
           return {
@@ -412,7 +450,7 @@ class AIAnalyzeService {
             inProgress: true
           };
         } else if (existing.status === 'failed') {
-
+          console.log(`[ANALYZE] 🔁 Previous analysis failed for ${stock_symbol || instrument_key}, re-running`);
         }
       }
 
@@ -427,6 +465,7 @@ class AIAnalyzeService {
           throw new Error(`Unable to fetch current price for ${instrument_key}. Please try again.`);
         }
 
+        console.log(`[ANALYZE] 💵 Price fetched for ${stock_symbol || instrument_key} from cache: ${current_price}`);
       }
 
       // Create pending analysis record using common method
@@ -439,6 +478,10 @@ class AIAnalyzeService {
         scheduled_release_time
 
       });
+      console.log(
+        `[ANALYZE] 📝 Pending analysis created ${pendingAnalysis._id} for ${stock_symbol || instrument_key} ` +
+        `price=${current_price} user=${normalizedUserId || 'none'} ctx=${runContext}`
+      );
 
       try {
         // Generate AI analysis with progress tracking
@@ -465,6 +508,13 @@ class AIAnalyzeService {
         // Check if AI returned insufficientData and mark as failed if so
         if (analysisResult.insufficientData === true) {
           const totalTime = Date.now() - analysisStartTime;
+          const insufficientReason =
+            analysisResult.reason ||
+            analysisResult?.strategies?.[0]?.action?.why_not ||
+            'Insufficient market data';
+          console.log(
+            `[ANALYZE] ⚠️ Insufficient data for ${stock_symbol || instrument_key} after ${totalTime}ms: ${insufficientReason}`
+          );
 
           await pendingAnalysis.markFailed('Insufficient market data for analysis');
 
@@ -476,6 +526,11 @@ class AIAnalyzeService {
 
           // Calculate and log total time
           const totalTime = Date.now() - analysisStartTime;
+          logCandleMeta('Completed', pendingAnalysis.analysis_data);
+          console.log(
+            `[ANALYZE] ✅ Completed ${stock_symbol || instrument_key} in ${totalTime}ms ` +
+            `user=${normalizedUserId || 'none'} ctx=${runContext} skipNotif=${skipNotification}`
+          );
 
           // Update bulk session if this analysis is part of one
           // await this.updateBulkSessionProgress(instrument_key, analysis_type, 'completed');
@@ -520,7 +575,9 @@ class AIAnalyzeService {
       } catch (analysisError) {
         const totalTime = Date.now() - analysisStartTime;
 
-        console.error(`❌ Error: ${analysisError.message}`);
+        console.error(
+          `[ANALYZE] ❌ Generation failed for ${stock_symbol || instrument_key} after ${totalTime}ms: ${analysisError.message}`
+        );
 
         // Mark analysis as failed using new method
         await pendingAnalysis.markFailed(analysisError.message);
@@ -531,7 +588,9 @@ class AIAnalyzeService {
     } catch (error) {
       const totalTime = Date.now() - analysisStartTime;
 
-      console.error(`❌ Error: ${error.message}`);
+      console.error(
+        `[ANALYZE] ❌ Failed for ${stock_symbol || instrument_key} after ${totalTime}ms: ${error.message}`
+      );
 
       return {
         success: false,
@@ -548,30 +607,40 @@ class AIAnalyzeService {
     const { stock_name, stock_symbol, current_price, analysis_type, instrument_key, game_mode = 'cricket' } = params;
 
     const stageStart = Date.now();
+    const traceId = `${stock_symbol || instrument_key}`;
+    console.log(`[ANALYZE] ↪️ Enter generateAIAnalysisWithProgress for ${traceId}`);
 
     try {
       // Step 1: Initialize
+      console.log(`[ANALYZE] Step 1/8 Initialize ${traceId}`);
       await analysisRecord.updateProgress('Initializing analysis...', 5, 85);
 
       // Step 2: Fetch market data
+      console.log(`[ANALYZE] Step 2/8 Fetch market data ${traceId}`);
       await analysisRecord.updateProgress('Fetching market data...', 15, 75);
 
       // Step 3: Calculate technical indicators
+      console.log(`[ANALYZE] Step 3/8 Calc indicators ${traceId}`);
       await analysisRecord.updateProgress('Calculating technical indicators...', 30, 60);
 
       // Step 4: Analyze patterns
+      console.log(`[ANALYZE] Step 4/8 Analyze patterns ${traceId}`);
       await analysisRecord.updateProgress('Analyzing price patterns...', 45, 50);
 
       // Step 5: Generate sentiment analysis
+      console.log(`[ANALYZE] Step 5/8 Sentiment ${traceId}`);
       await analysisRecord.updateProgress('Analyzing market sentiment...', 60, 35);
 
       // Step 6: Generate strategies
+      console.log(`[ANALYZE] Step 6/8 Strategies ${traceId}`);
       await analysisRecord.updateProgress('Generating trading strategies...', 75, 20);
 
       // Step 7: Score and validate strategies
+      console.log(`[ANALYZE] Step 7/8 Score/validate ${traceId}`);
       await analysisRecord.updateProgress('Scoring and validating strategies...', 90, 10);
 
       // Call the actual analysis method
+      console.log(`[ANALYZE] Step 8/8 Generate final analysis ${traceId}`);
       const analysisMethodStart = Date.now();
       const result = await this.generateAIAnalysis(params);
       const analysisMethodTime = Date.now() - analysisMethodStart;
@@ -580,11 +649,13 @@ class AIAnalyzeService {
       await analysisRecord.updateProgress('Finalizing analysis...', 95, 2);
 
       const totalStageTime = Date.now() - stageStart;
+      console.log(`[ANALYZE] ⏱️ generateAIAnalysisWithProgress finished for ${traceId} in ${totalStageTime}ms`);
 
       return result;
 
     } catch (error) {
       const totalStageTime = Date.now() - stageStart;
+      console.error(`[ANALYZE] ❌ generateAIAnalysisWithProgress failed for ${traceId} after ${totalStageTime}ms: ${error.message}`);
 
       throw error;
     }
@@ -595,6 +666,8 @@ class AIAnalyzeService {
    */
   async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key, skipIntraday }) {
     const methodStart = Date.now();
+    const traceId = `${stock_symbol || instrument_key}`;
+    console.log(`[ANALYZE] ↪️ Enter generateAIAnalysis for ${traceId} skipIntraday=${skipIntraday}`);
 
     try {
       // Create trade data structure for API calls
@@ -621,9 +694,11 @@ class AIAnalyzeService {
       );
 
       const dataFetchTime = Date.now() - dataFetchStart;
+      console.log(`[ANALYZE] ⏱️ Data fetched for ${traceId} in ${dataFetchTime}ms (candle source=${candleData?.source || 'n/a'}, news=${newsData ? newsData.length : 0})`);
 
       // Check for insufficient data from candle fetcher
       if (candleData.insufficientData) {
+        console.log(`[ANALYZE] ⚠️ Insufficient candle data for ${traceId}: ${candleData.reason || 'unknown'}`);
 
         // Return minimal v1.4-shaped NO_TRADE response
         return {
@@ -668,6 +743,7 @@ class AIAnalyzeService {
         sectorSpecific: false
       };
       const sentimentTime = Date.now() - sentimentStart;
+      console.log(`[ANALYZE] ⏱️ Sentiment analyzed for ${traceId} in ${sentimentTime}ms (sentiment=${sentiment})`);
 
       // Extract simple sentiment for backward compatibility
       const sentiment = typeof sentimentAnalysis === 'string' ? sentimentAnalysis : sentimentAnalysis.sentiment;
@@ -676,6 +752,7 @@ class AIAnalyzeService {
 
       // Use aiReviewService's simplified routeToTradingAgent directly with candleFetcherService data
       const agentOut = await this.aiReviewService.routeToTradingAgent(tradeData, candleData.candleSets, newsData);
+      console.log(`[ANALYZE] 🧮 routeToTradingAgent completed for ${traceId}`);
 
       // Build market data payload using existing aiReview function
       let payload;
@@ -791,6 +868,7 @@ class AIAnalyzeService {
 
       const aiGenerationTime = Date.now() - aiGenerationStart;
       const totalMethodTime = Date.now() - methodStart;
+      console.log(`[ANALYZE] ⏱️ generateStockAnalysis3Call finished for ${traceId} in ${aiGenerationTime}ms (total=${totalMethodTime}ms)`);
 
       return analysisResult;
 
@@ -807,6 +885,8 @@ class AIAnalyzeService {
    */
   async fetchOptimizedMarketData(tradeData) {
     const startTime = Date.now();
+    const traceId = `${tradeData.stockSymbol || tradeData.instrument_key}`;
+    console.log(`[ANALYZE] 🌐 Fetching market data for ${traceId}, term=${tradeData.term}, skipIntraday=${tradeData.skipIntraday || false}`);
 
     try {
 
@@ -820,6 +900,11 @@ class AIAnalyzeService {
       if (candleResult.success) {
 
         // Pass clean data directly to AI analysis - no conversions needed
+        console.log(
+          `[ANALYZE] 🌐 Market data ready for ${traceId}: source=${candleResult.source || 'n/a'}, ` +
+          `keys=${Object.keys(candleResult.data || {}).join(',') || 'none'}, ` +
+          `time=${Date.now() - startTime}ms`
+        );
         return {
           candleSets: candleResult.data, // Clean: { '15m': [candles], '1h': [candles], '1d': [candles] }
           source: candleResult.source,
@@ -828,6 +913,7 @@ class AIAnalyzeService {
       } else if (candleResult.error === 'insufficient_data') {
         // Return insufficient data marker instead of throwing error
 
+        console.log(`[ANALYZE] 🌐 Insufficient market data for ${traceId}: ${candleResult.reason || 'unknown'}`);
         return {
           insufficientData: true,
           reason: candleResult.reason,
