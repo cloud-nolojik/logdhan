@@ -7,6 +7,7 @@ import moment from 'moment-timezone';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/logdhan';
 const TIMEZONE = 'Asia/Kolkata';
+const BULK_NOTIFICATIONS_ENABLED = false; // Global kill-switch for bulk analysis notifications
 
 /**
  * Agenda service for sending bulk analysis availability notifications
@@ -22,6 +23,12 @@ class AgendaBulkAnalysisNotificationService {
    * Initialize the agenda service
    */
   async initialize() {
+    if (!BULK_NOTIFICATIONS_ENABLED) {
+      console.warn('⚠️ [BULK ANALYSIS NOTIFICATION] Service disabled via feature flag');
+      this.initialized = true;
+      return;
+    }
+
     try {
       // Create agenda instance
       this.agenda = new Agenda({
@@ -73,6 +80,17 @@ class AgendaBulkAnalysisNotificationService {
    */
   async sendBulkAnalysisAvailableNotifications(job) {
     const jobStartTime = Date.now();
+
+    if (!BULK_NOTIFICATIONS_ENABLED) {
+      job.attrs.data = {
+        ...job.attrs.data,
+        lastRun: new Date(),
+        skipped: true,
+        reason: 'feature_disabled'
+      };
+      await job.save();
+      return;
+    }
 
     try {
       // Check if today is a trading day
