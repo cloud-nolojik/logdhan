@@ -320,9 +320,9 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
 
     // Validate required fields exist for completed analysis
     if (!anyAnalysis.analysis_data?.market_summary?.last ||
-    !anyAnalysis.analysis_data?.market_summary?.trend ||
-    !anyAnalysis.analysis_data?.market_summary?.volatility ||
-    !anyAnalysis.analysis_data?.market_summary?.volume) {
+      !anyAnalysis.analysis_data?.market_summary?.trend ||
+      !anyAnalysis.analysis_data?.market_summary?.volatility ||
+      !anyAnalysis.analysis_data?.market_summary?.volume) {
 
       // Create minimal analysis_data structure with required fields for incomplete analysis
       const defaultAnalysisData = {
@@ -574,35 +574,35 @@ router.get('/cache/stats', authenticateToken, async (req, res) => {
     endOfDay.setHours(23, 59, 59, 999);
 
     const stats = await StockAnalysis.aggregate([
-    {
-      $match: {
-        created_at: { $gte: startOfDay, $lte: endOfDay }
-      }
-    },
-    {
-      $group: {
-        _id: '$analysis_type',
-        count: { $sum: 1 },
-        active_orders: {
-          $sum: {
-            $cond: [
-            { $gt: [{ $size: { $ifNull: ['$placed_orders', []] } }, 0] },
-            1,
-            0]
+      {
+        $match: {
+          created_at: { $gte: startOfDay, $lte: endOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: '$analysis_type',
+          count: { $sum: 1 },
+          active_orders: {
+            $sum: {
+              $cond: [
+                { $gt: [{ $size: { $ifNull: ['$placed_orders', []] } }, 0] },
+                1,
+                0]
 
-          }
-        },
-        expired: {
-          $sum: {
-            $cond: [
-            { $lt: ['$expires_at', new Date()] },
-            1,
-            0]
+            }
+          },
+          expired: {
+            $sum: {
+              $cond: [
+                { $lt: ['$expires_at', new Date()] },
+                1,
+                0]
 
+            }
           }
         }
-      }
-    }]
+      }]
     );
 
     res.json({
@@ -752,6 +752,135 @@ router.get('/health', (req, res) => {
     openai_configured: !!process.env.OPENAI_API_KEY,
     cache_enabled: true
   });
+});
+
+/**
+ * @route POST /api/ai/add-to-watchlist
+ * @desc Add stock to watchlist with 'order' source (Sticky)
+ * @access Private
+ */
+router.post('/add-to-watchlist', authenticateToken, async (req, res) => {
+  try {
+    const { instrument_key } = req.body;
+
+    if (!instrument_key) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'instrument_key is required'
+      });
+    }
+
+    // Get stock details
+    const stockInfo = await Stock.getByInstrumentKey(instrument_key);
+    if (!stockInfo) {
+      return res.status(404).json({
+        success: false,
+        error: 'Stock not found',
+        message: `No stock found with instrument_key: ${instrument_key}`
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Check if stock is already in watchlist
+    const existingItemIndex = user.watchlist.findIndex((item) =>
+      item.instrument_key === instrument_key
+    );
+
+    if (existingItemIndex !== -1) {
+      // Stock exists - update source to 'order' if it's not already
+      const currentSource = user.watchlist[existingItemIndex].added_source;
+
+      if (currentSource !== 'order') {
+        user.watchlist[existingItemIndex].added_source = 'order';
+        await user.save();
+
+        return res.status(200).json({
+          success: true,
+          message: 'Stock updated in watchlist (marked as order)',
+          data: {
+            instrument_key: stockInfo.instrument_key,
+            trading_symbol: stockInfo.trading_symbol,
+            added_source: 'order'
+          }
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Stock already in watchlist as order',
+        data: {
+          instrument_key: stockInfo.instrument_key,
+          trading_symbol: stockInfo.trading_symbol,
+          added_source: 'order'
+        }
+      });
+    }
+
+    // Check stock limit based on subscription
+    const currentStockCount = user.watchlist.length;
+
+    try {
+      const stockLimitCheck = await Subscription.canUserAddStock(req.user.id, currentStockCount);
+
+      if (!stockLimitCheck.canAdd) {
+        return res.status(403).json({
+          success: false,
+          error: 'Stock limit reached',
+          message: `You can add maximum ${stockLimitCheck.stockLimit} stocks to your watchlist. Current: ${stockLimitCheck.currentCount}`,
+          data: {
+            stockLimit: stockLimitCheck.stockLimit,
+            currentCount: stockLimitCheck.currentCount,
+            canAdd: false,
+            needsUpgrade: true
+          }
+        });
+      }
+    } catch (subscriptionError) {
+      console.error('Error checking subscription limits:', subscriptionError);
+      return res.status(400).json({
+        success: false,
+        error: 'Subscription check failed',
+        message: subscriptionError.message
+      });
+    }
+
+    // Add to watchlist
+    user.watchlist.push({
+      instrument_key: stockInfo.instrument_key,
+      trading_symbol: stockInfo.trading_symbol,
+      name: stockInfo.name,
+      exchange: stockInfo.exchange,
+      addedAt: new Date(),
+      added_source: 'order' // Explicitly mark as order
+    });
+    await user.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Stock added to watchlist as order',
+      data: {
+        instrument_key: stockInfo.instrument_key,
+        trading_symbol: stockInfo.trading_symbol,
+        name: stockInfo.name,
+        exchange: stockInfo.exchange,
+        addedAt: user.watchlist[user.watchlist.length - 1].addedAt,
+        added_source: 'order'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Add to Watchlist API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to add stock to watchlist'
+    });
+  }
 });
 
 export default router;
