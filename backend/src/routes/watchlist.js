@@ -99,12 +99,11 @@ router.get('/', auth, async (req, res) => {
     const startTime = Date.now();
 
     // Check if we're currently in the scheduled window using MarketHoursUtil
-    const bulkAnalysisCheck = await MarketHoursUtil.isBulkAnalysisAllowed();
-    const isInScheduledWindow = bulkAnalysisCheck.reason === 'scheduled_window';
-
-    if (isInScheduledWindow) {
-
-    }
+    // const bulkAnalysisCheck = await MarketHoursUtil.isBulkAnalysisAllowed();
+    // const bulkAnalysisCheck = true;
+    // const isInScheduledWindow = bulkAnalysisCheck.reason === 'scheduled_window';
+    const isInScheduledWindow = false
+    
 
     // ⚡ OPTIMIZATION: Fetch prices using triple-fallback pattern (DB → Memory → API)
     const instrumentKeys = watchlist.map((item) => item.instrument_key);
