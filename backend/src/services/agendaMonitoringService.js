@@ -75,8 +75,8 @@ class AgendaMonitoringService {
         timezone: 'Asia/Kolkata'
       });
 
-      // Schedule cleanup of expired monitoring subscriptions at 3:15 PM IST on weekdays
-      await this.agenda.every('15 15 * * 1-5', 'cleanup-expired-subscriptions', {}, {
+      // Schedule cleanup of expired monitoring subscriptions at 3:35 PM IST on weekdays (after monitoring window closes at 3:30 PM)
+      await this.agenda.every('35 15 * * 1-5', 'cleanup-expired-subscriptions', {}, {
         _id: 'expired-subscription-cleanup',
         timezone: 'Asia/Kolkata'
       });
@@ -621,9 +621,12 @@ class AgendaMonitoringService {
         if (triggerResult.data) {
           console.log(`📊 [CANDLE DEBUG] Mapping ${triggerResult.data.triggers?.length || 0} triggers for ${analysis.stock_symbol}`);
 
+          // Get strategy object for trigger details
+          const strategyObj = (analysis.analysis_data?.strategies || []).find((s) => s.id === strategyId);
+
           // Map advanced trigger engine format to MonitoringHistory format
           const mappedTriggers = (triggerResult.data.triggers || []).map((t, idx) => {
-            const originalTrigger = strategy.triggers?.[idx];
+            const originalTrigger = strategyObj?.triggers?.[idx];
 
             // Log candle data from trigger result
             if (t.candle_used) {

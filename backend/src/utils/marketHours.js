@@ -426,23 +426,65 @@ class MarketHoursUtil {
   }
 
   /**
-   * Check if monitoring interactions should be blocked (3:15 PM - 3:59:59 PM IST on trading days)
+   * Check if monitoring interactions should be blocked
+   * Monitoring is only allowed from 8:00 AM to 3:29:59 PM IST on trading days
+   * Blocked: 3:30 PM onwards until 8:00 AM next trading day
    * @param {Date} now - Reference time (defaults to current UTC time)
-   * @returns {Promise<{blocked: boolean, reason?: string}>}
+   * @returns {Promise<{blocked: boolean, reason?: string, next_allowed?: string}>}
    */
   static async isMonitoringWindowBlocked(now = new Date()) {
-    const istNow = this.toIST(now);
-    const currentMinutes = istNow.getHours() * 60 + istNow.getMinutes();
-    const blockStart = 15 * 60 + 15; // 3:15 PM
-    const blockEnd = 16 * 60; // 4:00 PM (exclusive)
+    // Use timezone-safe method to get current IST time
+    const istTimeStr = now.toLocaleString('en-US', {
+      timeZone: 'Asia/Kolkata',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false
+    });
+    const [currentHour, currentMinute] = istTimeStr.split(':').map(Number);
+    const currentMinutes = currentHour * 60 + currentMinute;
 
-    // Only block on trading days within the window
+    // Monitoring window: 8:00 AM (480 min) to 3:29:59 PM (929 min) IST
+    const allowedStart = 8 * 60; // 8:00 AM = 480 minutes
+    const allowedEnd = 15 * 60 + 30; // 3:30 PM = 930 minutes (exclusive)
+
     const isTrading = await this.isTradingDay(now);
-    const blocked = isTrading && currentMinutes >= blockStart && currentMinutes < blockEnd;
 
+    // If not a trading day, always blocked
+    if (!isTrading) {
+      return {
+        blocked: true,
+        reason: 'Market is closed today. Monitoring available on next trading day from 8:00 AM IST.',
+        next_allowed: 'Next trading day 8:00 AM IST'
+      };
+    }
+
+    // On trading days: allow only between 8:00 AM and 3:29:59 PM IST
+    const isWithinAllowedWindow = currentMinutes >= allowedStart && currentMinutes < allowedEnd;
+
+    if (!isWithinAllowedWindow) {
+      // Determine appropriate message based on time
+      if (currentMinutes < allowedStart) {
+        // Before 8:00 AM
+        return {
+          blocked: true,
+          reason: 'Monitoring available from 8:00 AM IST. Please wait.',
+          next_allowed: '8:00 AM IST today'
+        };
+      } else {
+        // After 3:30 PM
+        return {
+          blocked: true,
+          reason: 'Market closed for today. Monitoring available tomorrow from 8:00 AM IST.',
+          next_allowed: 'Next trading day 8:00 AM IST'
+        };
+      }
+    }
+
+    // Within allowed window - not blocked
     return {
-      blocked,
-      reason: blocked ? 'Monitoring window blocked between 3:15 PM and 3:59 PM IST on trading days.' : undefined
+      blocked: false,
+      reason: undefined,
+      next_allowed: undefined
     };
   }
 

@@ -210,6 +210,27 @@ class AIAnalyzeService {
       // If existing analysis has valid_until field, preserve existing data
       // Just update status to pending for validation
       if (existing && existing.valid_until && now > existing.valid_until) {
+        // IMPORTANT: Invalidate old monitoring subscriptions when revalidating
+        // This prevents old "conditions_met" status from blocking new monitoring
+        const MonitoringSubscription = (await import('../models/monitoringSubscription.js')).default;
+        const invalidatedCount = await MonitoringSubscription.updateMany(
+          {
+            analysis_id: existing._id,
+            monitoring_status: { $in: ['active', 'conditions_met'] }
+          },
+          {
+            $set: {
+              monitoring_status: 'invalidated',
+              stop_reason: 'analysis_revalidated',
+              stopped_at: new Date()
+            }
+          }
+        );
+
+        if (invalidatedCount.modifiedCount > 0) {
+          console.log(`🔄 [ANALYSIS] Invalidated ${invalidatedCount.modifiedCount} old monitoring subscriptions for ${stock_symbol} (revalidation)`);
+        }
+
         // Preserve existing strategy, but mark as pending for revalidation and refresh release time
         existing.status = 'pending';
         existing.current_price = validPrice;
@@ -227,6 +248,30 @@ class AIAnalyzeService {
         return existing;
       } else {
         // No existing analysis OR no valid_until (legacy) - create/replace with upsert
+
+        // IMPORTANT: Invalidate old monitoring subscriptions before creating new analysis
+        // This prevents old "conditions_met" status from blocking new monitoring
+        if (existing) {
+          const MonitoringSubscription = (await import('../models/monitoringSubscription.js')).default;
+          const invalidatedCount = await MonitoringSubscription.updateMany(
+            {
+              analysis_id: existing._id,
+              monitoring_status: { $in: ['active', 'conditions_met'] }
+            },
+            {
+              $set: {
+                monitoring_status: 'invalidated',
+                stop_reason: 'fresh_analysis_generated',
+                stopped_at: new Date()
+              }
+            }
+          );
+
+          if (invalidatedCount.modifiedCount > 0) {
+            console.log(`🔄 [ANALYSIS] Invalidated ${invalidatedCount.modifiedCount} old monitoring subscriptions for ${stock_symbol}`);
+          }
+        }
+
         const pendingAnalysis = await StockAnalysis.findOneAndUpdate(
           {
             instrument_key,

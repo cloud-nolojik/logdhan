@@ -387,6 +387,15 @@ monitoringSubscriptionSchema.statics.canUserStartMonitoring = async function (an
     };
   }
 
+  // Ignore invalidated/expired/cancelled subscriptions - user can start fresh
+  if (['invalidated', 'expired', 'cancelled'].includes(subscription.monitoring_status)) {
+    return {
+      can_start: true,
+      reason: null,
+      previous_status: subscription.monitoring_status
+    };
+  }
+
   if (subscription.monitoring_status === 'conditions_met') {
     const timeSinceConditionsMet = Date.now() - subscription.conditions_met_at.getTime();
     const minutesSince = Math.floor(timeSinceConditionsMet / 60000);

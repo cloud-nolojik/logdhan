@@ -135,20 +135,17 @@ async function fetchMarketDataFromCache() {
           const latestCandle = candles[0];
           const [timestamp, open, high, low, close, volume] = latestCandle;
 
-          // Calculate change from previous candle if available
+          // Calculate change from first candle of the day (prev close) if available
           let change = 0;
           let changePercent = 0;
-          let previousClose = open;
 
-          if (candles.length > 1) {
-            const previousCandle = candles[1];
-            previousClose = previousCandle[4];
-            change = close - previousClose;
-            changePercent = previousClose !== 0 ? change / previousClose * 100 : 0;
-          } else {
-            change = close - open;
-            changePercent = open !== 0 ? change / open * 100 : 0;
-          }
+          // candles are newest-first from cache; find earliest candle in the set
+          const lastCandle = candles[candles.length - 1];
+          const dayOpen = lastCandle ? lastCandle[1] : open; // candle[1] = open
+          const reference = dayOpen || open;
+
+          change = close - reference;
+          changePercent = reference !== 0 ? (change / reference) * 100 : 0;
 
           return {
             name: indexInfo.name,

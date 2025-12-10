@@ -171,6 +171,21 @@ router.post('/start', authenticateToken, async (req, res) => {
       });
     }
 
+    // Check if monitoring window is blocked (before 8 AM or after 3:30 PM IST)
+    const windowCheck = await MarketHoursUtil.isMonitoringWindowBlocked();
+    if (windowCheck.blocked) {
+      return res.status(400).json({
+        success: false,
+        error: 'monitoring_window_blocked',
+        message: windowCheck.reason,
+        data: {
+          blocked: true,
+          next_allowed: windowCheck.next_allowed,
+          stock_symbol: analysis.stock_symbol
+        }
+      });
+    }
+
     // Check if we're in market hours using MarketHoursUtil
     // isMarketOpen() already checks isTradingDay() internally
     const isMarketHours = await MarketHoursUtil.isMarketOpen();
@@ -432,8 +447,11 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
       });
     }
 
-    // Block monitoring interactions during 3:15 PM - 3:59:59 PM IST on trading days
-    const { blocked: monitoring_window_blocked, reason: monitoring_window_message } = await MarketHoursUtil.isMonitoringWindowBlocked();
+    // Check monitoring window (8:00 AM - 3:30 PM IST on trading days)
+    const windowCheck = await MarketHoursUtil.isMonitoringWindowBlocked();
+    const monitoring_window_blocked = windowCheck.blocked;
+    const monitoring_window_message = windowCheck.reason;
+    const monitoring_next_allowed = windowCheck.next_allowed;
 
     // Get monitoring status for each strategy in the analysis
     const strategies = analysis.analysis_data?.strategies || [];
@@ -475,6 +493,7 @@ router.get('/status/:analysisId', authenticateToken, async (req, res) => {
 
         monitoring_window_blocked,
         monitoring_window_message: monitoring_window_message || null,
+        monitoring_next_allowed: monitoring_next_allowed || null,
 
         // Agenda-specific info
         monitoring_engine: 'agenda'
