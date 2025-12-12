@@ -1,1278 +1,519 @@
 import StockAnalysis from "../models/stockAnalysis.js";
+import { pickBestStage2Candidate } from "../utils/pickBestCandidate.js";
 
 /**
- * Stage 1: Preflight & Market Summary
- * - Validates MARKET DATA
- * - Computes market_summary (last, trend, volatility, volume)
- * - Reports data_health & what is missing
- * - NO strategy here.
+ * @typedef {"BULLISH" | "BEARISH" | "NEUTRAL"} Stage1Trend
+ * @typedef {"HIGH" | "MEDIUM" | "LOW"} Stage1Volatility
+ * @typedef {"ABOVE_AVERAGE" | "AVERAGE" | "BELOW_AVERAGE" | "UNKNOWN"} Stage1VolumeBand
+ *
+ * @typedef {Object} Stage1MarketSummary
+ * @property {number} last
+ * @property {Stage1Trend} trend
+ * @property {Stage1Volatility} volatility
+ * @property {Stage1VolumeBand} volume
+ *
+ * @typedef {Object} Stage1DataHealth
+ * @property {boolean} have_last
+ * @property {boolean} have_atr14_1D
+ * @property {{ema20_1D: boolean, ema50_1D: boolean, sma200_1D: boolean}} have_ma
+ * @property {string[]} missing
+ *
+ * @typedef {Object} Stage1Result
+ * @property {"1.4-pre"} schema_version
+ * @property {string} symbol
+ * @property {boolean} insufficientData
+ * @property {Stage1MarketSummary} market_summary
+ * @property {Stage1DataHealth} data_health
+ * @property {string[]} notes
  */
-export function buildStage1Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo }) {
-  const system = `You are a professional swing trading analyst for Indian equities.
-Always respond with VALID JSON. No prose. No markdown.`;
-
-  const user = `
-PRE-FLIGHT for ${stock_name} (${stock_symbol}) — swing context (3–7 sessions).
-You MUST use ONLY fields that exist in MARKET DATA. If any required input is missing, set insufficientData=true.
-
-MARKET DATA (authoritative):
-${JSON.stringify(marketPayload, null, 2)}
-
-CONTEXT:
-- Current Price (explicit): ₹${current_price}
-- Sector: ${sectorInfo?.name || 'Unknown'} (${sectorInfo?.code || 'OTHER'})
-- Sector Index: ${sectorInfo?.index || 'NIFTY 50'}
-
-OUTPUT (JSON only):
-{
-  "schema_version": "1.4-pre",
-  "symbol": "${stock_symbol}",
-  "insufficientData": false,
-  "market_summary": {
-    "last": <number>,                         // priceContext.last if present, else Current Price
-    "trend": "BULLISH"|"BEARISH"|"NEUTRAL",   // rule: ema20_1D vs ema50_1D and last vs sma200_1D
-    "volatility": "HIGH"|"MEDIUM"|"LOW",      // rule: atr14_1D / last thresholds: LOW <1%, MED 1–2%, HIGH >2%
-    "volume": "ABOVE_AVERAGE"|"AVERAGE"|"BELOW_AVERAGE"|"UNKNOWN" // prefer volumeContext.classification
-  },
-  "data_health": {
-    "have_last": true|false,
-    "have_atr14_1D": true|false,
-    "have_ma": { "ema20_1D": true|false, "ema50_1D": true|false, "sma200_1D": true|false },
-    "missing": ["<field>", "..."]
-  },
-  "notes": ["<short finding>", "..."]
-}
-`;
-
-  return { system, user };
-}
 
 /**
- * Stage 2: Strategy Skeleton & Triggers
- * - Builds ONE best-fit skeleton (BUY/SELL/NO_TRADE) with entry/stop/target ranges
- * - Defines entry triggers & pre-entry invalidations (evaluatable from MARKET DATA)
- * - RR must be >= 1.5 or return NO_TRADE
+ * Build Stage 1 analysis result
+ * @param {Object} params
+ * @param {string} params.stock_name
+ * @param {string} params.stock_symbol
+ * @param {number} params.current_price
+ * @param {Object} params.marketPayload
+ * @param {{code?: string, name?: string, index?: string}} [params.sectorInfo]
+ * @returns {Stage1Result}
  */
-export function buildStage2Prompt({ stock_name, stock_symbol, current_price, marketPayload, s1 }) {
-  const system = `You are a disciplined swing strategist.
-JSON ONLY. No markdown.`;
+export function buildStage1({
+  stock_name,
+  stock_symbol,
+  current_price,
+  marketPayload,
+  sectorInfo,
+}) {
+  const priceContext = marketPayload?.priceContext ?? {};
+  const trendMomentum = marketPayload?.trendMomentum ?? {};
+  const volumeContext = marketPayload?.volumeContext ?? {};
+  const sentimentContext = marketPayload?.sentimentContext ?? marketPayload?.newsLite?.detailedAnalysis;
 
-  const user = `
-SKELETON for ${stock_name} (${stock_symbol}) — using STAGE-1 result and MARKET DATA.
-Use ONLY fields present in MARKET DATA. Do NOT invent indicators.
+  // -------- core values --------
+  /** @type {number} */
+  const last =
+    typeof priceContext.last === "number" ? priceContext.last : current_price;
 
-MARKET DATA:
-${JSON.stringify(marketPayload, null, 2)}
+  /** @type {number|null} */
+  const atr14_1D =
+    typeof trendMomentum.atr14_1D === "number" ? trendMomentum.atr14_1D : null;
 
-STAGE-1:
-${JSON.stringify(s1, null, 2)}
+  /** @type {number|null} */
+  const ema20_1D =
+    typeof trendMomentum.ema20_1D === "number" ? trendMomentum.ema20_1D : null;
 
-RULES:
-- EXACTLY ONE strategy. If RR < 1.5 after ONE adjustment within bounds → type="NO_TRADE".
-- BUY: target = entry + k*atr14_1D (k in [0.8,1.6]); stop = entry - m*atr14_1D (m in [0.5,1.2]).
-- SELL: symmetric.
-- Use entryType "stop" or "stop-limit" unless actionability is clearly now; avoid raw "market" by default.
-- Triggers must be evaluable from MARKET DATA.
+  /** @type {number|null} */
+  const ema50_1D =
+    typeof trendMomentum.ema50_1D === "number" ? trendMomentum.ema50_1D : null;
 
-OUTPUT:
-{
-  "schema_version": "1.4-s2",
-  "symbol": "${stock_symbol}",
-  "insufficientData": false,
-  "skeleton": {
-    "type": "BUY"|"SELL"|"NO_TRADE",
-    "archetype": "breakout"|"pullback"|"trend-follow"|"mean-reversion"|"range-fade",
-    "alignment": "with_trend"|"counter_trend"|"neutral",
-    "entryType": "limit"|"market"|"range"|"stop"|"stop-limit",
-    "entry": <number>,
-    "entryRange": [<number>,<number>] | null,
-    "target": <number>,
-    "stopLoss": <number>,
-    "riskReward": <number>,
-    "triggers": [
-      {
-        "id": "T1",
-        "scope": "entry",
-        "timeframe": "15m|1h|1d",
-        "left": {"ref": "close|high|low|price|ema20_1D|rsi14_1h"},
-        "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
-        "right": {"ref": "value|ema50_1D|sma200_1D|entry", "value": <number>, "offset": <number>},
-        "occurrences": {"count": 1, "consecutive": true},
-        "within_sessions": 5,
-        "expiry_bars": 20
-      }
-    ],
-    "invalidations_pre_entry": [
-      {
-        "timeframe": "1h"|"15m"|"1d",
-        "left": {"ref": "close|low|price"},
-        "op": "<"|"<="|">"|">=",
-        "right": {"ref": "entry|value", "value": <number>},
-        "occurrences": {"count": 1, "consecutive": false},
-        "action": "cancel_entry"
-      }
-    ]
+  /** @type {number|null} */
+  const sma200_1D =
+    typeof trendMomentum.sma200_1D === "number" ? trendMomentum.sma200_1D : null;
+
+  // -------- trend (BULLISH / BEARISH / NEUTRAL) --------
+  /** @type {Stage1Trend} */
+  let trend = "NEUTRAL";
+
+  if (ema20_1D != null && ema50_1D != null && sma200_1D != null) {
+    if (last > sma200_1D && ema20_1D > ema50_1D) {
+      trend = "BULLISH";
+    } else if (last < sma200_1D && ema20_1D < ema50_1D) {
+      trend = "BEARISH";
+    } else {
+      trend = "NEUTRAL";
+    }
+  } else if (typeof trendMomentum.trendBias === "string") {
+    // fallback to backend's own trendBias if MAs are missing
+    const bias = trendMomentum.trendBias.toLowerCase();
+    if (bias === "bullish") trend = "BULLISH";
+    else if (bias === "bearish") trend = "BEARISH";
+    else trend = "NEUTRAL";
+  }
+
+  // -------- volatility from ATR% --------
+  /** @type {Stage1Volatility} */
+  let volatility = "MEDIUM";
+
+  if (atr14_1D != null && last > 0) {
+    const atrPct = (atr14_1D / last) * 100; // e.g. ~2.55% for this payload
+
+    if (atrPct < 1) {
+      volatility = "LOW";
+    } else if (atrPct <= 2) {
+      volatility = "MEDIUM";
+    } else {
+      volatility = "HIGH";
+    }
+  }
+
+  // -------- volume band --------
+  /** @type {Stage1VolumeBand} */
+  let volume = "UNKNOWN";
+
+  if (typeof volumeContext.classification === "string") {
+    const cls = volumeContext.classification.toUpperCase();
+    if (cls === "ABOVE_AVERAGE" || cls === "AVERAGE" || cls === "BELOW_AVERAGE") {
+      volume = cls;
+    }
+  } else if (typeof volumeContext.band === "string") {
+    const band = volumeContext.band.toUpperCase();
+    if (band === "ABOVE_AVERAGE" || band === "AVERAGE" || band === "BELOW_AVERAGE") {
+      volume = band;
+    }
+  }
+
+  // -------- data health + insufficientData --------
+  const have_last = typeof last === "number" && !Number.isNaN(last);
+  const have_atr14_1D = atr14_1D != null;
+  const have_ma = {
+    ema20_1D: ema20_1D != null,
+    ema50_1D: ema50_1D != null,
+    sma200_1D: sma200_1D != null,
+  };
+
+  /** @type {string[]} */
+  const missing = [];
+  if (!have_last) missing.push("priceContext.last_or_current_price");
+  if (!have_atr14_1D) missing.push("trendMomentum.atr14_1D");
+  if (!have_ma.ema20_1D) missing.push("trendMomentum.ema20_1D");
+  if (!have_ma.ema50_1D) missing.push("trendMomentum.ema50_1D");
+  if (!have_ma.sma200_1D) missing.push("trendMomentum.sma200_1D");
+
+  // your rule: if we miss key fields, later stages should mark insufficientData
+  const insufficientData =
+    !have_last || !have_atr14_1D || !have_ma.ema20_1D || !have_ma.ema50_1D;
+
+  // -------- notes for debugging / Stage-3 context --------
+  /** @type {string[]} */
+  const notes = [];
+
+  notes.push(
+    `Sector: ${sectorInfo?.name || "Unknown"} (${sectorInfo?.code || "OTHER"})`
+  );
+
+  notes.push(
+    `Last price used: ₹${last.toFixed(2)}, trend: ${trend}, volatility: ${volatility}, volume: ${volume}.`
+  );
+
+  if (sentimentContext) {
+    const basicSent =
+      sentimentContext.basicSentiment ||
+      sentimentContext.sentiment ||
+      "unknown";
+    const conf =
+      typeof sentimentContext.confidence === "number"
+        ? sentimentContext.confidence
+        : sentimentContext.metadata?.confidence;
+    notes.push(
+      `News sentiment: ${basicSent} with confidence ${conf ?? "n/a"} based on ${
+        sentimentContext.newsAnalyzed ??
+        sentimentContext.metadata?.newsCount ??
+        "n/a"
+      } articles.`
+    );
+  }
+
+  if (insufficientData) {
+    notes.push(
+      "One or more key indicators are missing; downstream swing structure may need insufficientData=true."
+    );
+  }
+
+  return {
+    schema_version: "1.4-pre",
+    symbol: stock_symbol,
+    insufficientData,
+    market_summary: {
+      last,
+      trend,
+      volatility,
+      volume,
+    },
+    data_health: {
+      have_last,
+      have_atr14_1D,
+      have_ma,
+      missing,
+    },
+    notes,
+  };
+}
+
+function get(obj, path, fallback = undefined) {
+  try {
+    return path.split(".").reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj) ?? fallback;
+  } catch {
+    return fallback;
   }
 }
-`;
 
-  return { system, user };
+function isNum(x) {
+  return typeof x === "number" && Number.isFinite(x);
 }
 
-/**
- * Stage 3: Final Assembly (v1.4)
- * - Combines MARKET DATA + S1 + S2 + sentimentContext (already in payload)
- * - Produces FULL schema v1.4 exactly as your app expects
- */
-// export async function buildStage3Prompt({
-//   stock_name,
-//   stock_symbol,
-//   current_price,
-//   marketPayload,
-//   sectorInfo,
-//   s1,
-//   s2,
-//   instrument_key,
-//   game_mode = "cricket"
-// }) {
-
-//   // Extract existing Stage 3 analysis if present
-//   let existingStage3 = null;
-//   let existingMetadata = null;
-//   if (instrument_key) {
-//     const existingAnalysis = await StockAnalysis.findByInstrument(instrument_key, 'swing');
-//     existingStage3 = existingAnalysis?.analysis_data?.strategies?.[0] || null;
-//     existingMetadata = {
-//       generated_at: existingAnalysis?.analysis_data?.generated_at_ist || null,
-//       previous_price: existingAnalysis?.analysis_data?.market_summary?.last || null,
-//       valid_until: existingAnalysis?.valid_until || null
-//     };
-//   }
-
-//   const system = `You are the best swing trading expert in Indian markets.
-// You ALWAYS return STRICT, VALID JSON ONLY following schema v1.4 exactly.
-// Do NOT add or remove any top-level or nested fields from the schema.
-// Do NOT include comments, explanations, or any extra text outside the JSON.
-// Wherever the schema example uses placeholder-style text (like <...> or {{...}}), you MUST replace it with concrete values.
-// NEVER output the characters "<", ">", "{{", or "}}" anywhere in the final JSON.`;
-
-//   const user = `
-// === 🎯 TL;DR FOR MODEL ===
-// Task: Analyze ${stock_symbol} swing trade - KEEP, ADJUST, or RETIRE existing strategy
-// Current Price: ₹${current_price}
-// Output: Valid JSON only, schema v1.4, single strategy
-// Data Source: Use ONLY provided MARKET DATA, STAGE-1, STAGE-2
-// Hallucination: FORBIDDEN - use insufficientData flag if needed
-// Sport Mode: ${game_mode}
-
-// === CORE MISSION ===
-// Revalidate existing swing strategy OR make minimal adjustments OR retire it.
-// Return schema v1.4 JSON only. Use real data only. Be beginner-friendly.
-// Output MUST be strictly valid JSON with no backticks, no explanations outside JSON.
-
-// === ANALYSIS CONTEXT ===
-
-// You MUST return EXACTLY schema v1.4 (single strategy) using ONLY data present in this prompt.
-
-// ANALYZE: ${stock_name} (${stock_symbol}) — Swing (3–7 sessions)
-// Current Price (explicit): ₹${current_price}
-
-// MARKET DATA:
-// ${JSON.stringify(marketPayload, null, 2)}
-
-// SECTOR INFO:
-// ${JSON.stringify(sectorInfo || {}, null, 2)}
-
-// STAGE-1:
-// ${JSON.stringify(s1, null, 2)}
-
-// STAGE-2:
-// ${JSON.stringify(s2, null, 2)}
-
-// EXISTING_STAGE3 (optional):
-// ${existingStage3 ? JSON.stringify(existingStage3, null, 2) : "None"}
-
-// EXISTING_STRATEGY_METADATA:
-// ${existingMetadata ? JSON.stringify(existingMetadata, null, 2) : "None"}
-
-// ---
-
-// === EXISTING ANALYSIS REVISION POLICY ===
-
-// Goal: Revalidate the existing strategy OR make minimal adjustments OR retire it if invalid.
-
-// Choose exactly ONE of the following outcomes:
-
-// 1) **KEEP (Revalidate)**  
-//    - Conditions: The existing strategy structure still holds (entry/stop/target consistent, RR acceptable, no obvious invalidation).  
-//    - Action: KEEP entry, stopLoss, target, type, alignment, archetype EXACTLY.  
-//    - Recompute runtime, order_gate, money_example, suggested_qty from Current Price.  
-//    - Prefix title with: "[Still Valid] " (include the space after the bracket).
-
-// 2) **ADJUST (Minimal change)**  
-//    - Conditions: Minor update required (e.g., RR broken, entry > stopLoss for BUY, invalid levels).  
-//    - Action: Modify ONLY the minimum needed among: entry, target, stopLoss.  
-//    - Preserve original structure (type, archetype, alignment) unless impossible.  
-//    - If the fundamental direction is wrong (e.g., existing BUY but data strongly suggests SELL), use RETIRE instead.
-//    - Prefix title with: "[Adjusted] " (include the space after the bracket).
-//    - MUST enforce correct geometric structure:
-//    - For BUY: stopLoss < entry < target
-//    - For SELL: target < entry < stopLoss
-//    - If this cannot be satisfied with provided data → choose RETIRE.
-//    - Do NOT reuse old entry/target/stopLoss if any of them violate geometric structure, RR rules, or trend alignment — recompute safely.
-
-// 3) **RETIRE (No Trade Now)**  
-//    - Conditions: Stop-loss hit, target hit, plan clearly invalid, major conflict with Stage-2, expired, or fundamental direction is wrong.  
-//    - Action:  
-//      - type = "NO_TRADE".  
-//      - entry = target = stopLoss = null.  
-//      - riskReward = 0.  
-//      - suggested_qty.qty = 0.  
-//      - actionability.status = "monitor_only".  
-//      - Prefix title with: "[Retired] " (include the space after the bracket).  
-//      - Add a simple reason inside why_best.
-
-// ---
-
-// === ABSOLUTE RULES ===
-
-// - NEVER flip BUY ↔ SELL automatically. If direction is fundamentally wrong, RETIRE instead.
-// - NEVER generate additional strategies (always return exactly one strategy).  
-// - NEVER alter schema structure or field names.  
-// - NEVER hallucinate missing prices, indicators, news, or levels.  
-// - NEVER modify validity.entry.* values (they are fixed for the strategy type).  
-// - ALWAYS use real numbers from provided MARKET DATA, STAGE-1, and STAGE-2 only.  
-// - ALWAYS round all numeric values (entry, target, stopLoss, indicators, RR, percentages, trigger values) to 2 decimal places unless the input data itself uses a different precision.
-// - NEVER output long floating-point numbers such as 431.492838482 or scientific notation.
-// - ALWAYS compute riskReward explicitly:
-//   - For BUY: (target - entry) / (entry - stopLoss)
-//   - For SELL: (entry - target) / (stopLoss - entry)
-// - Round riskReward to 2 decimal places.
-// - ALWAYS ensure money_example calculations match:
-//   - per_share.risk = |entry - stopLoss|
-//   - per_share.reward = |target - entry|
-//   - position.max_loss = qty * per_share.risk
-// ---
-
-// === 🔴 CRITICAL: DATA HONESTY & INSUFFICIENT DATA ===
-
-// 1. You are NOT allowed to fabricate or hallucinate:
-//    - Do NOT invent prices, indicators, volumes, support/resistance levels, or news.
-//    - Use ONLY values provided in MARKET DATA, SECTOR INFO, STAGE-1, and STAGE-2.
-
-// 2. If you cannot confidently populate required numeric fields from given data:
-//    - Set "insufficientData": true.
-//    - Still return FULL schema with safe, neutral values:
-//      - For numbers: use 0 or null (whichever is less misleading).
-//      - For booleans: use false.
-//      - For enums: use neutral options like "NEUTRAL", "AVERAGE", "standard", "moderate".
-//    - Do NOT remove any fields.
-//    - Do NOT leave placeholder text like <...> or {{...}}.
-
-// 3. If sufficient data IS available:
-//    - Set "insufficientData": false.
-//    - Fill all fields consistently and logically from the data.
-
-// ---
-
-// === 🔴 CRITICAL: TRIGGER & INVALIDATION COPYING RULES ===
-
-// 1. strategies[0].triggers:
-//    - If STAGE-2.skeleton.triggers exists and is an array:
-//      - Copy it EXACTLY into strategies[0].triggers.
-//      - Do NOT modify keys, values, structure, or order.
-//      - Do NOT drop any triggers.
-//    - If there are NO triggers in STAGE-2:
-//      - Use an empty array [].
-
-// 2. strategies[0].invalidations:
-//    - Start from STAGE-2.skeleton.invalidations_pre_entry (if present).
-//    - For EACH item:
-//      - Copy all fields exactly.
-//      - Add or override "scope": "pre_entry".
-//    - THEN append EXACTLY ONE additional invalidation object:
-
-//      {
-//        "scope": "post_entry",
-//        "timeframe": "1h",
-//        "left": { "ref": "close" },
-//        "op": "<=",
-//        "right": { "ref": "stopLoss" },
-//        "occurrences": { "count": 1, "consecutive": false },
-//        "action": "close_position"
-//      }
-
-//    - Do NOT add any other post-entry rule unless it is a direct copy from provided data.
-
-// 3. RUNTIME & ORDER GATE CONSISTENCY:
-//    - runtime.triggers_evaluated must reflect and be consistent with strategies[0].triggers.
-//    - order_gate must reflect:
-//      - whether all triggers are true,
-//      - whether any pre-entry invalidations are hit.
-//    - If evaluation is not possible:
-//      - Set "evaluable": false where needed.
-//      - Choose conservative, neutral flags.
-//    - Keep JSON valid at all times.
-//    - Ensure internal logic consistency across runtime and order_gate:
-//    - If all_triggers_true = true AND no_pre_entry_invalidations = true → can_place_order MUST be true.
-//    - If type = "NO_TRADE":
-//          - entry MUST be null,
-//          - target MUST be null,
-//          - stopLoss MUST be null,
-//          - riskReward MUST be 0.
-//     - order_gate.entry_type_sane MUST be true unless entryType is structurally impossible for the level structure.
-
-// ---
-
-// === 🟡 IMPORTANT: TRIGGER EVALUATION EDGE CASES ===
-// - If indicator value is null → evaluable=false, passed=false
-// - If crossing operators used but no history → evaluable=false
-// - If timeframe data missing → use next available timeframe
-
-// === 🟡 IMPORTANT: ERROR HANDLING ===
-// If JSON generation fails:
-// 1. Return minimal valid structure with type="NO_TRADE"
-// 2. Set insufficientData=true
-// 3. Include error details in why_best field
-
-// === 🟢 OPTIONAL: SPORTS ANALOGY GUIDELINES ===
-// - Max 30% of text should be sport-related
-// - Never compromise accuracy for analogy fit
-// - If no natural mapping exists, use plain language
-
-// ---
-
-// === 🟡 IMPORTANT: LANGUAGE MANIFESTO (APPLIES TO ALL TEXT FIELDS) ===
-
-// All human-readable text fields MUST be clear and beginner-friendly.
-
-// Applies to: why_best, reasoning[].because, warnings.text, what_could_go_wrong, beginner_summary,
-// ui_friendly.*, glossary, actionability.checklist, risk_meter.drivers, etc.
-
-// **Rules:**
-// - Use short, simple sentences (10-20 words each).
-// - You MAY use basic trading terms (trend, support, resistance, RSI, moving average, risk-reward), BUT:
-//   - Immediately make their meaning obvious from context.
-//   - Example: "RSI is a simple strength meter" or "moving averages show the overall direction".
-// - NO heavy jargon: avoid terms like "orderblock", "liquidity sweep", "ICT", "smart money", "wyckoff".
-// - NO hype / FOMO / guarantees:
-//   - Do NOT say "sure shot", "guaranteed", "can't lose", "safe bet", "100% profit", "easy money".
-//   - Use "aims for", "can help", "if this fails we exit", "potential target", "manages risk".
-// - Always use concrete values from the actual strategy (real entry, target, stopLoss prices).
-// - Even the most detailed parts must be readable by a careful beginner while remaining accurate for advanced users.
-
-// **Good vs Bad Examples:**
-
-// ❌ Bad: "Liquidity sweep confirms orderblock at discount zone"
-// ✅ Good: "Price bounced off support level showing buyers are active"
-
-// ❌ Bad: "This is a guaranteed winner with massive upside!"
-// ✅ Good: "This aims for ₹450 target while protecting at ₹400 stop-loss"
-
-// ❌ Bad: "Smart money accumulation phase indicates institutional buying"
-// ✅ Good: "Volume increase suggests growing interest at this price level"
-
-// ---
-
-// === RETAIL BEGINNER TRANSLATION WITH SPORTS ANALOGY ===
-
-// User learning preference (game_mode): "${game_mode || "none"}"
-
-// Valid sports:
-// "cricket", "football", "kabaddi", "badminton", "chess", "racing",
-// "battle_royale", "basketball", "tennis", "boxing", "carrom", "hockey", "volleyball"
-
-// If game_mode is one of these valid sports:
-// - strategies[0].ui_friendly MUST:
-//   1. Use ONLY that sport across:
-//      - ui_friendly.why_smart_move
-//      - ui_friendly.ai_will_watch
-//      - ui_friendly.beginner_explanation
-//   2. Map trading concepts naturally:
-//      - Entry trigger → smart moment to attack / make a move
-//      - Stop-loss → defensive line / guard / safe exit
-//      - Risk-reward → high-percentage play / strategic advantage
-//      - Confirmation → patience / build-up / waiting for the right moment
-//      - Invalidation → walk away / reset / retreat
-//   3. Sound natural, like a coach in that sport explaining strategy.
-//   4. Use REAL levels and rules from the strategy (no fake numbers).
-//   5. Stay realistic and educational (no hype).
-
-// If game_mode is "none", empty, null, or not in the valid list:
-// - Use plain, professional, beginner-friendly English (no sports analogies).
-
-// ---
-
-// === STRATEGY ARCHETYPE CONTEXT ===
-
-// Use strategies[0].archetype to keep explanation consistent with structure:
-// - "breakout": attacking a clear break above resistance / below support.
-// - "pullback": waiting for better price after a move.
-// - "trend-follow": going with existing direction.
-// - "mean-reversion": fading stretched moves with caution.
-// - "range-fade": trading edges of a sideways range.
-
-// Archetype must align with MARKET DATA, STAGE-2 skeleton, and chosen entry/target/stopLoss.
-
-// ---
-
-// === ui_friendly STRUCTURE (FOR LAYERED UI) ===
-
-// Use ui_friendly to drive the 3 UI layers:
-
-// 1. **why_smart_move** (Snap view - Layer 1)
-//    - EXACTLY 1 sentence (15–25 words).
-//    - Explain why the setup is a sensible, calculated idea using actual entry/target/stopLoss and trend.
-//    - Use chosen sport language if game_mode is valid; else plain English.
-//    - No hype, no guarantees.
-//    - Example: "Price breaking above ₹420 resistance with strong volume aims for ₹450 while protecting at ₹400."
-
-// 2. **ai_will_watch** (Coach view - Layer 2)
-//    - Array of 2–4 short sentences.
-//    - Each sentence = ONE clear rule in simple language:
-//      - Entry trigger condition(s).
-//      - Pre-entry invalidation(s).
-//      - Post-entry invalidation (stopLoss exit).
-//    - MUST:
-//      - Use real numeric levels from triggers/invalidations/stopLoss.
-//      - Follow this logical order: trigger → pre-entry cancel → post-entry exit.
-//      - Use the same sport language if applicable.
-//    - Example: 
-//      - "I'll alert when price crosses ₹420 with volume confirmation"
-//      - "If price drops below ₹405 before entry, the setup is cancelled"
-//      - "If price hits ₹400 after entry, I'll recommend exiting to protect capital"
-
-// 3. **beginner_explanation** (Coach view - Layer 2)
-//    - 2–3 lines (50–80 words total).
-//    - Explain in simple words:
-//      - We wait for confirmation before entering.
-//      - We use stop-loss to protect capital.
-//      - We aim for potential profit larger than the risk.
-//    - If sport mode is on:
-//      - End with ONE natural sentence tying it to that sport.
-//    - No FOMO, no promises.
-
-// ---
-
-// === REASONING FIELD (EXPLICIT EDUCATIONAL STYLE) ===
-
-// For strategies[0].reasoning:
-// - Provide 3–5 short reasoning objects.
-// - Each "because" MUST:
-//   - Use actual data from MARKET DATA (trend, moving averages, RSI, volume, RR, etc.).
-//   - Immediately explain what that data means in simple words.
-//   - Be concrete (use real numbers, not templates).
-//   - Optionally include a light sport reference consistent with game_mode.
-
-// **Example format (adapt with REAL data):**
-
-// Example 1:
-// { "because": "Price is above the 20-day moving average at ₹395, showing the overall trend supports upward movement." }
-
-// Example 2:
-// { "because": "RSI at 58 is a healthy level showing buyers are active but not exhausted yet." }
-
-// Example 3:
-// { "because": "Target at ₹450 is 2.5x farther than stop at ₹400, giving potential reward of 2.5x the risk." }
-
-// Do NOT leave template-sounding text like "indicator shows X" without concrete values.
-
-// ---
-
-// === EXAMPLE OUTPUT (SELL Scenario with Cricket Mode) ===
-// {
-//   "schema_version": "1.4",
-//   "symbol": "SBIN",
-//   "analysis_type": "swing",
-//   "generated_at_ist": "2024-11-07T14:30:00+05:30",
-//   "insufficientData": false,
-//   "market_summary": {
-//     "last": 433.6,
-//     "trend": "BEARISH",
-//     "volatility": "MEDIUM",
-//     "volume": "AVERAGE"
-//   },
-//   "strategies": [{
-//     "id": "S1",
-//     "type": "SELL",
-//     "archetype": "breakout",
-//     "alignment": "with_trend",
-//     "title": "[Still Valid] With-trend breakdown below 431 toward 416.51",
-//     "confidence": 0.62,
-//     "why_best": "Bearish trend, negative news tone, and clean breakdown plan with 1.75 risk-reward.",
-//     "entryType": "stop",
-//     "entry": 431,
-//     "target": 416.51,
-//     "stopLoss": 439.28,
-//     "riskReward": 1.75,
-//     "ui_friendly": {
-//       "why_smart_move": "Like timing a cut shot, we wait for a clean drop below 431 to aim for 416.51 with guard at 439.28.",
-//       "ai_will_watch": [
-//         "Enter only if 15-minute close crosses below 431, like playing the shot only when ball is wide enough.",
-//         "If any 1-hour close is 439.85 or higher before entry, we walk away and reset the field.",
-//         "After entry, if 1-hour close is at or below 439.28, we cut the trade and protect the wicket."
-//       ],
-//       "beginner_explanation": "We wait for the market to confirm weakness by closing below 431 before selling. Stop-loss at 439.28 protects capital if the move fails. Target at 416.51 offers more upside than risk taken, so math is sensible. In cricket terms, we play only the loose ball, keep safe guard, and look for boundary-sized reward."
-//     },
-//     "reasoning": [
-//       { "because": "Price 433.6 is below the 20, 50, and 200-day averages (437.22, 446.44, 452.48), showing bearish bigger picture." },
-//       { "because": "RSI 1h at 55.14 is only mildly strong, so waiting for break below 431 adds confirmation before selling." },
-//       { "because": "From entry 431 to stop 439.28 risk is 8.28, while reward to 416.51 is 14.49, giving solid 1.75 risk-reward." }
-//     ]
-//   }],
-//   "performance_hints": {
-//     "confidence_drivers": ["Price below all major averages", "Clean breakdown setup", "Good risk-reward ratio"],
-//     "uncertainty_factors": ["RSI not deeply oversold", "Proximity to support levels"],
-//     "data_quality_score": 0.85
-//   }
-// }
-
-// ---
-
-// === STRICT JSON RETURN (schema v1.4) ===
-
-// Now construct and return ONLY this JSON structure:
-
-// {
-//   "schema_version": "1.4",
-//   "symbol": "${stock_symbol}",
-//   "analysis_type": "swing",
-//   "generated_at_ist": "<ISO-8601 timestamp in +05:30 timezone>",
-//   "insufficientData": <boolean>,
-//   "market_summary": {
-//     "last": <number>,
-//     "trend": "BULLISH"|"BEARISH"|"NEUTRAL",
-//     "volatility": "HIGH"|"MEDIUM"|"LOW",
-//     "volume": "ABOVE_AVERAGE"|"AVERAGE"|"BELOW_AVERAGE"|"UNKNOWN"
-//   },
-//   "overall_sentiment": "BULLISH"|"BEARISH"|"NEUTRAL",
-//   "sentiment_analysis": {
-//     "confidence": <number 0-100>,
-//     "strength": "high"|"medium"|"low",
-//     "reasoning": "Short, clear explanation using real values in simple language.",
-//     "key_factors": ["short simple factor 1","short simple factor 2"],
-//     "sector_specific": true|false,
-//     "market_alignment": "aligned"|"contrary"|"neutral",
-//     "trading_bias": "bullish"|"bearish"|"neutral",
-//     "risk_level": "low"|"medium"|"high",
-//     "position_sizing": "increased"|"standard"|"reduced",
-//     "entry_strategy": "aggressive"|"moderate"|"cautious",
-//     "news_count": <number>,
-//     "recent_news_count": <number>,
-//     "sector_news_weight": <number between 0 and 1>
-//   },
-//   "runtime": {
-//     "triggers_evaluated": [
-//       {
-//         "id": "T1",
-//         "timeframe": "15m"|"1h"|"1d",
-//         "left_ref": "close"|"high"|"low"|"price"|"rsi14_1h"|"ema20_1D"|"sma200_1D",
-//         "left_value": <number|null>,
-//         "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
-//         "right_ref": "value"|"entry"|"ema50_1D"|"sma200_1D",
-//         "right_value": <number|null>,
-//         "passed": true|false,
-//         "evaluable": true|false
-//       }
-//     ],
-//     "pre_entry_invalidations_hit": true|false
-//   },
-//   "order_gate": {
-//     "all_triggers_true": true|false,
-//     "no_pre_entry_invalidations": true|false,
-//     "actionability_status": "actionable_now"|"actionable_on_trigger"|"monitor_only",
-//     "entry_type_sane": true|false,
-//     "can_place_order": true|false
-//   },
-//   "strategies": [
-//     {
-//       "id": "S1",
-//       "type": "BUY"|"SELL"|"NO_TRADE",
-//       "archetype": "breakout"|"pullback"|"trend-follow"|"mean-reversion"|"range-fade",
-//       "alignment": "with_trend"|"counter_trend"|"neutral",
-//       "title": "Concise, clear title describing the setup in plain language.",
-//       "confidence": <number between 0 and 1>,
-//       "why_best": "Short, simple sentence explaining why this is the chosen idea.",
-//       "entryType": "limit"|"market"|"range"|"stop"|"stop-limit",
-//       "entry": <number>,
-//       "entryRange": [<number>,<number>] | null,
-//       "target": <number>,
-//       "stopLoss": <number>,
-//       "riskReward": <number>,
-//       "timeframe": "3-7 days",
-//       "indicators": [
-//         {
-//           "name": "ema20_1D"|"ema50_1D"|"sma200_1D"|"rsi14_1h"|"atr14_1D",
-//           "value": "value taken directly from MARKET DATA or null if missing",
-//           "signal": "BUY"|"SELL"|"NEUTRAL"
-//         }
-//       ],
-//       "reasoning": [
-//         {
-//           "because": "Concrete, simple explanation using real trend/average data with actual values."
-//         },
-//         {
-//           "because": "Concrete, simple explanation using real RSI/volume or similar, with meaning made clear."
-//         },
-//         {
-//           "because": "Concrete, simple explanation that risk-reward is acceptable with actual calculation."
-//         }
-//       ],
-//       "warnings": [
-//         {
-//           "code": "GAP_RISK"|"HIGH_VOLATILITY"|"LOW_VOLUME"|"NEWS_EVENT"|"SECTOR_WEAKNESS",
-//           "severity": "low"|"medium"|"high",
-//           "text": "Short caution about a realistic risk in simple language.",
-//           "applies_when": [
-//             {
-//               "timeframe": "1d"|"1h"|"15m",
-//               "left": { "ref": "rsi14_1h"|"ema20_1D"|"price"|"volume" },
-//               "op": "<"|"<="|">"|">="|"crosses_above"|"crosses_below",
-//               "right": { 
-//                 "ref": "value"|"ema50_1D"|"entry"|"stopLoss", 
-//                 "value": <number>, 
-//                 "offset": <number> 
-//               }
-//             }
-//           ],
-//           "mitigation": ["reduce_qty","wider_stop","skip_on_news","wait_for_confirmation"]
-//         }
-//       ],
-//       "triggers": [],
-//       "confirmation": {
-//         "require": "ALL"|"ANY",
-//         "window_bars": 8,
-//         "conditions": []
-//       },
-//       "invalidations": [],
-//       "validity": {
-//         "entry": {
-//           "type": "GTD",
-//           "bars_limit": 0,
-//           "trading_sessions_soft": 5,
-//           "trading_sessions_hard": 8,
-//           "expire_calendar_cap_days": 10
-//         },
-//         "position": {
-//           "time_stop_sessions": 7,
-//           "gap_policy": "exit_at_open_with_slippage"
-//         },
-//         "non_trading_policy": "pause_clock"
-//       },
-//       "beginner_summary": {
-//         "one_liner": "Clear one-line summary: buy/sell near entry, aim for target, cut loss at stop within 3–7 sessions.",
-//         "steps": [
-//           "Wait for all trigger conditions to be met.",
-//           "Place target and stopLoss as given.",
-//           "Use a position size that fits your risk comfort."
-//         ],
-//         "checklist": [
-//           "All triggers satisfied",
-//           "No invalidation hit",
-//           "Order type matches entry plan"
-//         ]
-//       },
-//       "why_in_plain_words": [
-//         {
-//           "point": "Short point explaining why the market structure supports this idea.",
-//           "evidence": "Which indicators or levels support it, named clearly with values."
-//         },
-//         {
-//           "point": "Short point explaining that potential reward is larger than risk.",
-//           "evidence": "Based on actual entry, target, stopLoss distances with calculation."
-//         }
-//       ],
-//       "what_could_go_wrong": [
-//         {
-//           "risk": "Short description of a realistic risk event.",
-//           "likelihood": "LOW"|"MEDIUM"|"HIGH",
-//           "impact": "LOW"|"MEDIUM"|"HIGH",
-//           "mitigation": "Short description of how a careful trader could handle or reduce this risk."
-//         }
-//       ],
-//       "ui_friendly": {
-//         "why_smart_move": "One concise sentence (15-25 words) using chosen sport or plain English that explains why this plan is logical with real levels.",
-//         "ai_will_watch": [
-//           "Entry trigger mapped to real levels, explained simply and optionally in sport terms.",
-//           "Pre-entry invalidation mapped to real levels, explained as a clear 'walk away' condition.",
-//           "Post-entry invalidation based on stopLoss, explained as a clear 'cut loss and protect capital' rule."
-//         ],
-//         "beginner_explanation": "2–3 clear lines (50-80 words): wait for confirmation, protect with stopLoss, aim for better reward than risk, ending with one natural sport or plain-English summary line if applicable."
-//       },
-//       "money_example": {
-//         "per_share": {
-//           "risk": <number>,
-//           "reward": <number>,
-//           "rr": <number>
-//         },
-//         "position": {
-//           "qty": <number>,
-//           "max_loss": <number>,
-//           "potential_profit": <number>,
-//           "distance_to_stop_pct": <number>,
-//           "distance_to_target_pct": <number>
-//         }
-//       },
-//       "suggested_qty": {
-//         "risk_budget_inr": 1000,
-//         "risk_per_share": <number>,
-//         "qty": <number>,
-//         "alternatives": [
-//           { "risk_budget_inr": 500, "qty": <number> },
-//           { "risk_budget_inr": 1000, "qty": <number> },
-//           { "risk_budget_inr": 2500, "qty": <number> }
-//         ],
-//         "note": "Sizing based only on entry to stopLoss distance."
-//       },
-//       "risk_meter": {
-//         "label": "Low"|"Medium"|"High",
-//         "score": <number between 0 and 1>,
-//         "drivers": [
-//           "RR band",
-//           "Trend alignment",
-//           "Volatility vs ATR",
-//           "Volume band",
-//           "News/sentiment tilt"
-//         ]
-//       },
-//       "actionability": {
-//         "label": "Buy idea"|"Sell idea"|"No trade",
-//         "status": "actionable_now"|"actionable_on_trigger"|"monitor_only",
-//         "next_check_in": "15m"|"1h"|"daily",
-//         "checklist": [
-//           "All triggers satisfied",
-//           "No invalidation hit",
-//           "Order type matches entry plan"
-//         ]
-//       },
-//       "glossary": {
-//         "entry": {
-//           "definition": "Price where the trade is planned to start.",
-//           "example": "₹<actual entry price from strategy>"
-//         },
-//         "target": {
-//           "definition": "Price where profits are planned to be booked.",
-//           "example": "₹<actual target price from strategy>"
-//         },
-//         "stopLoss": {
-//           "definition": "Price where the trade will be closed to limit loss.",
-//           "example": "₹<actual stopLoss price from strategy>"
-//         }
-//       }
-//     }
-//   ],
-//   "performance_hints": {
-//     "confidence_drivers": ["what increased confidence"],
-//     "uncertainty_factors": ["what reduced confidence"],
-//     "data_quality_score": <number between 0 and 1>
-//   },
-//   "disclaimer": "AI-generated educational analysis. Not investment advice."
-// }
-
-// === PRE-OUTPUT CHECKLIST ===
-// Before outputting, verify:
-// □ Valid JSON syntax (no trailing commas, proper quotes)
-// □ All required fields present per schema v1.4
-// □ No template text (<...> or {{...}})
-// □ Real numbers from provided data only
-// □ Title has correct prefix: [Still Valid]/[Adjusted]/[Retired] if applicable
-// □ Sport language consistent if game_mode active
-// □ performance_hints populated with actual factors at ROOT level
-// □ Triggers and invalidations copied correctly from STAGE-2
-
-// === FINAL REMINDERS ===
-
-// - Output MUST be strictly valid JSON (no syntax errors).
-// - Do NOT include markdown code fences like \`\`\`json or \`\`\`.
-// - Do NOT include any explanations or commentary outside the JSON.
-// - Do NOT leave any placeholder-style text like <...> or {{...}}; always use concrete values or safe neutral defaults.
-// - NEVER output the literal characters "<", ">", "{{", or "}}" in the JSON values.
-// - All string values must be properly escaped for JSON (use \\" for quotes inside strings).
-// - Use ONLY data from MARKET DATA, SECTOR INFO, STAGE-1, and STAGE-2.
-// - If data is insufficient, set insufficientData: true and use safe neutral values.
-// - Follow the LANGUAGE MANIFESTO for all text fields.
-// - Apply sport analogies consistently if game_mode is valid.
-// - Revalidate, adjust minimally, or retire the existing strategy as appropriate.
-// - Performance hints must be at the ROOT level, NOT inside strategies array.
-// `;
-
-// console.log("Stage 3 prompt built for", stock_symbol);
-// console.log("Stage 3 system:", JSON.stringify(system));
-// console.log("Stage 3 user:", JSON.stringify(user));
-
-//   return { system, user };
-// }
-
-// export async function buildStage3Prompt({
-//   stock_name,
-//   stock_symbol,
-//   current_price,
-//   marketPayload,
-//   sectorInfo,
-//   s1,
-//   s2,
-//   instrument_key
-// }) {
-//   // Extract existing Stage 3 analysis if present
-//   let existingStage3 = null;
-//   let existingMetadata = null;
-//   if (instrument_key) {
-//     const existingAnalysis = await StockAnalysis.findByInstrument(
-//       instrument_key,
-//       "swing"
-//     );
-//     existingStage3 = existingAnalysis?.analysis_data?.strategies?.[0] || null;
-//     existingMetadata = {
-//       generated_at:
-//         existingAnalysis?.analysis_data?.generated_at_ist || null,
-//       previous_price:
-//         existingAnalysis?.analysis_data?.market_summary?.last || null,
-//       valid_until: existingAnalysis?.valid_until || null,
-//     };
-//   }
-
-//   const system = `You are the best swing trading expert in Indian markets.
-// You ALWAYS return STRICT, VALID JSON ONLY following schema v1.4 exactly.
-// Do NOT add or remove any top-level or nested fields from the schema.
-// Do NOT include comments, explanations, or any extra text outside the JSON.
-// Wherever the schema example uses placeholder-style text (like <...> or {{...}}), you MUST replace it with concrete values.
-// NEVER output the characters "<", ">", "{{", or "}}" anywhere in the final JSON.`;
-
-//   const user = `
-// === PROMPT METADATA ===
-// Version: 3.0-traffic-analogy
-// Last Updated: 2025-11-15
-// Schema: v1.4
-// Purpose: Safe, deterministic swing strategy update engine (KEEP / ADJUST / RETIRE)
-// Analogy Mode: TRAFFIC ONLY (No sports. No direct buy/sell instructions.)
-
-// === TL;DR FOR MODEL ===
-// You generate ONE swing strategy for ${stock_symbol} using schema v1.4.
-// Determine whether to KEEP, ADJUST minimally, or RETIRE the existing strategy.
-// Use ONLY provided MARKET DATA, STAGE-1, STAGE-2.
-// If data is missing or unclear, set insufficientData = true and return safe neutral values.
-
-// STRICT RULE: Output VALID JSON ONLY. No text outside JSON.
-
-// === INPUT CONTEXT ===
-// Stock: ${stock_name} (${stock_symbol})
-// Current Price: ₹${current_price}
-
-// MARKET PAYLOAD:
-// ${JSON.stringify(marketPayload)}
-
-// SECTOR INFO:
-// ${JSON.stringify(sectorInfo || {})}
-
-// STAGE-1 (Validation):
-// ${JSON.stringify(s1)}
-
-// STAGE-2 (Structure Skeleton):
-// ${JSON.stringify(s2)}
-
-// Existing Stage-3 Strategy:
-// ${existingStage3 ? JSON.stringify(existingStage3) : "None"}
-
-// Existing Metadata:
-// ${existingMetadata ? JSON.stringify(existingMetadata) : "None"}
-
-// --------------------------------------------------
-// === CRITICAL RULES (READ FIRST) ===
-
-// 1) JSON / SCHEMA ENFORCEMENT
-// - Follow schema v1.4 EXACTLY.
-// - No extra fields. No missing fields.
-// - No markdown, no comments, no placeholders.
-// - All numbers must be normal floats (2 decimals) unless input has different precision.
-// - Do NOT output NaN, Infinity, or scientific notation.
-
-// 2) DATA HONESTY
-// - Use ONLY data provided in MARKET DATA, SECTOR INFO, STAGE-1, and STAGE-2.
-// - You MUST NOT invent any price, average, volume, indicator, or news.
-
-// 3) INSUFFICIENT DATA HANDLING
-// If ANY required numeric field cannot be computed reliably:
-// - Set "insufficientData": true.
-// - Still produce FULL schema.
-// - Use safe neutral values:
-//   - numbers: 0 or null (whichever is less misleading),
-//   - booleans: false,
-//   - enums: "NEUTRAL", "AVERAGE", "standard", or "moderate".
-// If data IS sufficient:
-// - Set "insufficientData": false.
-// - Fill all fields consistently and logically.
-
-// 4) LEVEL GEOMETRY RULES
-// For BUY:
-// - stopLoss < entry < target
-// For SELL:
-// - target < entry < stopLoss
-// If this cannot be satisfied with safe, reasonable levels → choose RETIRE and set type = "NO_TRADE".
-
-// 5) RISK–REWARD CALCULATION
-// For BUY:
-// - riskReward = (target - entry) / (entry - stopLoss)
-// For SELL:
-// - riskReward = (entry - target) / (stopLoss - entry)
-// Always:
-// - Round riskReward to 2 decimals.
-
-// money_example:
-// - per_share.risk   = absolute(entry - stopLoss)
-// - per_share.reward = absolute(target - entry)
-// - position.max_loss = qty * per_share.risk
-
-// 6) NO_TRADE INVARIANTS
-// If strategies[0].type = "NO_TRADE":
-// - entry = null
-// - target = null
-// - stopLoss = null
-// - riskReward = 0
-// - suggested_qty.qty = 0
-// - actionability.status = "monitor_only"
-
-// 7) NON-ADVISORY LANGUAGE (REGULATION-SAFE)
-// Forbidden phrases (do NOT use in ANY text field):
-// - "buy", "sell", "should", "must", "recommend", "advice", "enter trade", "exit trade",
-//   "take position", "sure shot", "guaranteed", "easy money", "can't lose".
-
-// Required TRAFFIC vocabulary mapping:
-// - entry level → "Green Signal Zone"
-// - stopLoss level → "Red Exit Lane"
-// - target level → "Destination Junction"
-// - trend → "traffic flow" or "road direction"
-// - volume → "traffic density"
-// - volatility → "road bumpiness"
-
-// Preferred sentence styles:
-// - "The Green Signal Zone around ₹X–₹Y is where price has often continued the move when traffic was strong."
-// - "The Red Exit Lane near ₹X is where the road is considered risky; many traders choose to leave the road around there to limit damage."
-// - "The Destination Junction around ₹X is a price area where traffic has slowed or reversed in the past."
-// Always describe MARKET BEHAVIOUR, not direct instructions to the user.
-
-// --------------------------------------------------
-// === DECISION ENGINE (KEEP / ADJUST / RETIRE) ===
-
-// You MUST choose exactly ONE outcome: KEEP, ADJUST, or RETIRE.
-
-// 1) KEEP (Revalidate)
-// Use KEEP when:
-// - Existing geometry is valid (BUY or SELL inequalities satisfied).
-// - Trend alignment is not clearly broken by newer data.
-// - Risk–reward is acceptable (positive and not extremely skewed).
-// - There is no major structural conflict with STAGE-2.
-
-// KEEP actions:
-// - Preserve type, entry, stopLoss, target, archetype, alignment EXACTLY.
-// - Recompute runtime, order_gate, money_example, suggested_qty using current data.
-// - Prefix strategies[0].title with "[Still Valid] " (with trailing space).
-
-// 2) ADJUST (Minimal Change)
-// Use ADJUST when:
-// - Existing levels need small correction (for example, geometry slightly off, RR degraded, or price drifted).
-// - Direction (BUY vs SELL) is still valid and aligned with STAGE-2.
-// - Adjustments to entry, target, and/or stopLoss can be done within roughly 10%–15% of original levels.
-
-// ADJUST actions:
-// - Modify ONLY entry, target, and/or stopLoss as needed.
-// - Maintain type, archetype, and alignment if reasonably possible.
-// - Enforce correct geometry and recalculate riskReward.
-// - Prefix title with "[Adjusted] ".
-
-// If fixing the strategy requires moving levels more than about 10%–15% OR makes the structure unnatural, choose RETIRE instead.
-
-// 3) RETIRE (No Trade Now)
-// Use RETIRE when:
-// - StopLoss or target has already been effectively hit relative to current_price.
-// - Trend from STAGE-2 clearly contradicts strategy direction (for example, 3+ strong opposite signals).
-// - Entry zone is too far from current_price (for example, more than ~12% away).
-// - Strategy cannot be safely repaired while keeping a sensible structure.
-// - Data is too weak or missing for a reliable setup.
-
-// RETIRE actions:
-// - strategies[0].type = "NO_TRADE"
-// - entry = target = stopLoss = null
-// - riskReward = 0
-// - suggested_qty.qty = 0
-// - actionability.status = "monitor_only"
-// - Prefix title with "[Retired] ".
-// - Mention a short, clear reason inside why_best.
-
-// --------------------------------------------------
-// === TRIGGERS, INVALIDATIONS, RUNTIME, ORDER_GATE ===
-
-// 1) TRIGGERS (strategies[0].triggers and runtime.triggers_evaluated)
-// - If STAGE-2.skeleton.triggers exists and is an array:
-//   - Copy it EXACTLY into strategies[0].triggers.
-//   - Do NOT modify keys, values, or order.
-// - Otherwise:
-//   - strategies[0].triggers = [].
-
-// For runtime.triggers_evaluated:
-// - Reflect the same triggers with evaluated values:
-//   - If data exists to evaluate a trigger → evaluable = true, set left_value/right_value and passed accordingly.
-//   - If data is missing → evaluable = false, passed = false, left_value/right_value = null.
-
-// 2) INVALIDATIONS (strategies[0].invalidations)
-// - Start from STAGE-2.skeleton.invalidations_pre_entry if present:
-//   - Copy each invalidation object.
-//   - Ensure "scope": "pre_entry" is set.
-// - Then add ONE standard post-entry invalidation IF a similar stopLoss-based rule does NOT already exist:
-//   {
-//     "scope": "post_entry",
-//     "timeframe": "1h",
-//     "left": { "ref": "close" },
-//     "op": "<=",
-//     "right": { "ref": "stopLoss" },
-//     "occurrences": { "count": 1, "consecutive": false },
-//     "action": "close_position"
-//   }
-
-// 3) ORDER GATE LOGIC (order_gate)
-// - If any trigger has evaluable = false:
-//   - all_triggers_true = false.
-// - If all evaluable triggers passed AND no pre-entry invalidations are hit:
-//   - all_triggers_true = true
-//   - no_pre_entry_invalidations = true
-//   - can_place_order = true
-//   - actionability_status = "actionable_on_trigger" or "actionable_now" depending on entryType and trigger nature.
-// - Otherwise:
-//   - can_place_order = false.
-// - If type = "NO_TRADE":
-//   - actionability_status = "monitor_only"
-//   - can_place_order = false.
-
-// --------------------------------------------------
-// === LANGUAGE & ANALOGY REQUIREMENTS ===
-
-// Applies to all human-readable text fields:
-// - why_best
-// - reasoning[].because
-// - warnings[].text
-// - what_could_go_wrong[].risk / mitigation
-// - beginner_summary.*
-// - ui_friendly.*
-// - risk_meter.drivers
-// - actionability.checklist
-// - glossary definitions
-
-// General rules:
-// - Use simple, clear English suitable for a class 8–10 Indian retail trader.
-// - Use TRAFFIC / ROAD metaphors consistently:
-//   - Green Signal Zone (entry region)
-//   - Red Exit Lane (stopLoss region)
-//   - Destination Junction (target region)
-//   - traffic flow / direction (trend)
-//   - traffic density (volume)
-//   - road bumpiness (volatility)
-// - Do NOT give instructions like "you should buy/sell here".
-// - Describe what price has often done in these areas, not what the user must do.
-
-// Example styles to imitate:
-// - "The Green Signal Zone around ₹430–₹432 is where price has often continued the move when traffic was strong in the past."
-// - "The Red Exit Lane near ₹410 marks a stretch where the road has frequently turned risky and many traders have treated it as an exit area."
-// - "The Destination Junction near ₹460 is where earlier drives have slowed or reversed, so the road often loses strength there."
-// - "This is an educational road map of how the price has behaved, not a direct instruction to trade."
-
-// --------------------------------------------------
-// === INDICATORS ARRAY FORMAT ===
-
-// The "indicators" field MUST be an array of objects, NOT strings.
-
-// CORRECT format:
-// "indicators": [
-//   {
-//     "name": "ema20_1D",
-//     "value": "1692.55",
-//     "signal": "BUY"
-//   },
-//   {
-//     "name": "rsi14_1h",
-//     "value": "58.3",
-//     "signal": "NEUTRAL"
-//   }
-// ]
-
-// WRONG format (will cause validation error):
-// "indicators": ["EMA20(1D)=1692.55", "RSI14(1h)=58.3"]
-
-// Each indicator object requires:
-// - name: string (ema20_1D, ema50_1D, sma200_1D, rsi14_1h, atr14_1D)
-// - value: string representation of the numeric value
-// - signal: one of "STRONG_BUY", "BUY", "NEUTRAL", "SELL", "STRONG_SELL", "neutral"
-
-// --------------------------------------------------
-// === UI_FRIENDLY FIELD RULES ===
-
-// 1) ui_friendly.why_smart_move
-// - Exactly 1 sentence (15–25 words).
-// - Must explain why the road map is logical using Green Signal Zone, Red Exit Lane, Destination Junction and the current traffic flow.
-
-// 2) ui_friendly.ai_will_watch
-// - 2–4 short sentences.
-// - Describe:
-//   - What price/traffic behaviour near the Green Signal Zone the AI is monitoring.
-//   - What behaviour cancels or weakens the map before price reaches that zone.
-//   - What behaviour around the Red Exit Lane suggests the road has turned risky.
-
-// 3) ui_friendly.beginner_explanation
-// - 50–80 words.
-// - Explain the chart as a city road:
-//   - Green Signal Zone = area where moves have often continued.
-//   - Red Exit Lane = area where the road has often turned risky.
-//   - Destination Junction = area where drives have often slowed or reversed.
-// - End with an explicit reminder:
-//   - "This is an educational road map of price behaviour, not a personal trading instruction."
-
-// --------------------------------------------------
-// === REASONING FIELD STYLE ===
-
-// strategies[0].reasoning:
-// - Provide 3–5 objects.
-// - Each "because" must:
-//   - Use real numeric data (trend, averages, RSI, volume, risk–reward, etc.).
-//   - Explain its meaning in traffic terms.
-
-// Example structures:
-// - "Because price is above the 20-day average at ₹395, like cars staying on a higher upward lane, the overall road direction remains positive."
-// - "Because RSI around 58 is similar to moderate traffic density, buyers are active but the road is not extremely crowded."
-// - "Because the distance from the Green Signal Zone to the Destination Junction is larger than the distance down to the Red Exit Lane, the potential upward road is longer than the nearby downward path."
-
-// --------------------------------------------------
-// === DISCLAIMER REQUIREMENT ===
-
-// The root-level "disclaimer" field MUST contain exactly:
-// "AI-generated educational road map of price behaviour. Not investment advice or a recommendation to buy or sell any security."
-
-// --------------------------------------------------
-// === OUTPUT SCHEMA v1.4 ===
-
-// You MUST return ONLY a valid JSON object following this EXACT structure (no markdown, no comments, no extra text):
-
-// {
-//   "schema_version": "1.4",
-//   "symbol": "${stock_symbol}",
-//   "analysis_type": "swing",
-//   "generated_at_ist": "<ISO-8601 timestamp in +05:30 timezone>",
-//   "insufficientData": <boolean>, // true if data is weak, else false
-//   "market_summary": {
-//     "last": <number>,
-//     "trend": "BULLISH"|"BEARISH"|"NEUTRAL",
-//     "volatility": "HIGH"|"MEDIUM"|"LOW",
-//     "volume": "ABOVE_AVERAGE"|"AVERAGE"|"BELOW_AVERAGE"|"UNKNOWN"
-//   },
-//   "overall_sentiment": "BULLISH"|"BEARISH"|"NEUTRAL",
-//   "sentiment_analysis": {
-//     "confidence": <number 0-1>,
-//     "strength": "high"|"medium"|"low",
-//     "reasoning": "Short explanation",
-//     "key_factors": ["factor1", "factor2"],
-//     "sector_specific": true|false,
-//     "market_alignment": "aligned"|"contrary"|"neutral",
-//     "trading_bias": "bullish"|"bearish"|"neutral",
-//     "risk_level": "low"|"medium"|"high",
-//     "position_sizing": "increased"|"standard"|"reduced",
-//     "entry_strategy": "aggressive"|"moderate"|"cautious",
-//     "news_count": <number>,
-//     "recent_news_count": <number>,
-//     "sector_news_weight": <number 0-1>
-//   },
-//   "runtime": {
-//     "triggers_evaluated": [],
-//     "pre_entry_invalidations_hit": false
-//   },
-//   "order_gate": {
-//     "all_triggers_true": false,
-//     "no_pre_entry_invalidations": true,
-//     "actionability_status": "actionable_now"|"actionable_on_trigger"|"monitor_only",
-//     "entry_type_sane": true,
-//     "can_place_order": false
-//   },
-//   "strategies": [{
-//     "id": "S1",
-//     "type": "BUY"|"SELL"|"NO_TRADE",
-//     "archetype": "breakout"|"pullback"|"trend-follow"|"mean-reversion"|"range-fade",
-//     "alignment": "with_trend"|"counter_trend"|"neutral",
-//     "title": "[Still Valid|Adjusted|Retired] strategy title",
-//     "confidence": <number 0-1>,
-//     "why_best": "Short explanation",
-//     "entryType": "limit"|"market"|"range"|"stop"|"stop-limit",
-//     "entry": <number>|null,
-//     "entryRange": [<number>, <number>]|null,
-//     "target": <number>|null,
-//     "stopLoss": <number>|null,
-//     "riskReward": <number>,
-//     "timeframe": "3-7 days",
-//     "indicators": [
-//       {
-//         "name": "ema20_1D"|"ema50_1D"|"sma200_1D"|"rsi14_1h"|"atr14_1D",
-//         "value": "numeric value as string",
-//         "signal": "STRONG_BUY"|"BUY"|"NEUTRAL"|"SELL"|"STRONG_SELL"|"neutral"
-//       }
-//     ],
-//     "reasoning": [{"because": "text"}],
-//     "warnings": [],
-//     "triggers": [],
-//     "confirmation": {"require": "NONE"|"ALL"|"ANY", "window_bars": 0, "conditions": []},
-//     "invalidations": [],
-//     "validity": {
-//       "entry": {"type": "GTD", "bars_limit": 0, "trading_sessions_soft": 5, "trading_sessions_hard": 8, "expire_calendar_cap_days": 10},
-//       "position": {"time_stop_sessions": 7, "gap_policy": "exit_at_open_with_slippage"},
-//       "non_trading_policy": "pause_clock"
-//     },
-//     "beginner_summary": {"one_liner": "text", "steps": [], "checklist": []},
-//     "why_in_plain_words": [],
-//     "what_could_go_wrong": [],
-//     "ui_friendly": {
-//       "why_smart_move": "text",
-//       "ai_will_watch": [],
-//       "beginner_explanation": "text"
-//     },
-//     "money_example": {
-//       "per_share": {"risk": <number>, "reward": <number>, "rr": <number>},
-//       "position": {"qty": <number>, "max_loss": <number>, "potential_profit": <number>, "distance_to_stop_pct": <number>, "distance_to_target_pct": <number>}
-//     },
-//     "suggested_qty": {
-//       "risk_budget_inr": 1000,
-//       "risk_per_share": <number>,
-//       "qty": <number>,
-//       "alternatives": [{"risk_budget_inr": 500, "qty": <number>}, {"risk_budget_inr": 1000, "qty": <number>}, {"risk_budget_inr": 2500, "qty": <number>}],
-//       "note": "text"
-//     },
-//     "risk_meter": {"label": "Low"|"Medium"|"High", "score": <number 0-1>, "drivers": []},
-//     "actionability": {"label": "text", "status": "monitor_only"|"actionable_now"|"actionable_on_trigger", "next_check_in": "daily"|"hourly", "checklist": []},
-//     "glossary": {}
-//   }],
-//   "disclaimer": "AI-generated educational road map of price behaviour. Not investment advice or a recommendation to buy or sell any security.",
-//   "meta": {}
-// }
-
-// CRITICAL REQUIRED FIELDS (must be present and valid):
-// - overall_sentiment: "BULLISH"|"BEARISH"|"NEUTRAL" (required at root level)
-// - strategies[0].id: must be "S1" or similar unique string
-// - strategies[0].confidence: must be a number between 0 and 1
-// - strategies[0].indicators: must be array of objects with {name, value, signal}, NOT strings
-//   Example: [{"name": "ema20_1D", "value": "1692.55", "signal": "BUY"}]
-//   WRONG: ["EMA20(1D)=1692.55"]
-
-// --------------------------------------------------
-// === FINAL JSON REQUIREMENTS ===
-
-// Before you output:
-// - Ensure JSON is syntactically valid.
-// - Ensure schema v1.4 is fully populated with ALL required fields.
-// - No placeholder text like <...> or {{...}}.
-// - No forbidden phrases (buy, sell, should, must, recommend, advice, guaranteed, sure shot, easy money, etc.).
-// - All numeric relations (geometry, riskReward, money_example) are internally consistent as far as possible from the data.
-// - Output ONLY the JSON object, with no surrounding text.
-// `;
-
-//   console.log("Stage 3 prompt built for", stock_symbol);
-//   console.log("Stage 3 system:", JSON.stringify(system));
-//   console.log("Stage 3 user:", JSON.stringify(user));
-
-//   return { system, user };
-// }
+function round2(x) {
+  if (!isNum(x)) return x;
+  return Math.round(x * 100) / 100;
+}
+
+function calcClassicPivots(prevHigh, prevLow, prevClose) {
+  // Classic / floor pivots: P=(H+L+C)/3; R1=2P-L; S1=2P-H; etc.  [oai_citation:1‡Investopedia](https://www.investopedia.com/articles/forex/05/fxpivots.asp?utm_source=chatgpt.com)
+  const P = (prevHigh + prevLow + prevClose) / 3;
+  const R1 = (2 * P) - prevLow;
+  const S1 = (2 * P) - prevHigh;
+  const R2 = P + (prevHigh - prevLow);
+  const S2 = P - (prevHigh - prevLow);
+  const R3 = prevHigh + 2 * (P - prevLow);
+  const S3 = prevLow - 2 * (prevHigh - P);
+  return {
+    pivot: round2(P),
+    r1: round2(R1), r2: round2(R2), r3: round2(R3),
+    s1: round2(S1), s2: round2(S2), s3: round2(S3)
+  };
+}
+
+function rrBuy(entry, target, stopLoss) {
+  if (![entry, target, stopLoss].every(isNum)) return 0;
+  const risk = entry - stopLoss;
+  const reward = target - entry;
+  if (risk <= 0 || reward <= 0) return 0;
+  return round2(reward / risk);
+}
+
+function rrSell(entry, target, stopLoss) {
+  // SELL geometry: target < entry < stopLoss
+  if (![entry, target, stopLoss].every(isNum)) return 0;
+  const risk = stopLoss - entry;
+  const reward = entry - target;
+  if (risk <= 0 || reward <= 0) return 0;
+  return round2(reward / risk);
+}
+
+function buildTrigger({ id, timeframe, left_ref, op, right_ref, right_value }) {
+  return {
+    id,
+    scope: "entry",
+    timeframe, // "15m" | "1h" | "1d"
+    left: { ref: left_ref },
+    op,
+    right: { ref: right_ref, value: isNum(right_value) ? round2(right_value) : 0, offset: 0 },
+    occurrences: { count: 1, consecutive: true },
+    within_sessions: 5,
+    expiry_bars: 20
+  };
+}
+
+function buildInvalidation(entry) {
+  return {
+    timeframe: "1h",
+    left: { ref: "close" },
+    op: "<",
+    right: { ref: "entry", value: 0 },
+    occurrences: { count: 1, consecutive: false },
+    action: "cancel_entry"
+  };
+}
+
+function computeDataHealth(marketPayload) {
+  const needed = [
+    "priceContext.last",
+    "trendMomentum.ema20_1D",
+    "trendMomentum.ema50_1D",
+    "trendMomentum.sma200_1D",
+    "trendMomentum.atr14_1D",
+    "swingContext.prevSession.high",
+    "swingContext.prevSession.low",
+    "swingContext.prevSession.close"
+  ];
+
+  const missing = [];
+  for (const p of needed) {
+    const v = get(marketPayload, p);
+    if (!isNum(v) && typeof v !== "string") missing.push(p);
+  }
+
+  return { missing, ok: missing.length === 0 };
+}
+
+export function buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1 }) {
+  const system = `You are a disciplined swing strategist. JSON ONLY. No markdown.`;
+
+  // If you still want an LLM here, keep prompts.
+  // But since you asked for code-first: Stage2 can be fully deterministic and skip LLM.
+
+  const last = get(marketPayload, "priceContext.last", current_price);
+  const ema20 = get(marketPayload, "trendMomentum.ema20_1D");
+  const ema50 = get(marketPayload, "trendMomentum.ema50_1D");
+  const sma200 = get(marketPayload, "trendMomentum.sma200_1D");
+  const rsi1h = get(marketPayload, "trendMomentum.rsi14_1h");
+  const atrD = get(marketPayload, "trendMomentum.atr14_1D");
+
+  const prevH = get(marketPayload, "swingContext.prevSession.high");
+  const prevL = get(marketPayload, "swingContext.prevSession.low");
+  const prevC = get(marketPayload, "swingContext.prevSession.close");
+
+  // Prefer pivots provided; else compute classic pivots from prev session H/L/C  [oai_citation:2‡Investopedia](https://www.investopedia.com/articles/forex/05/fxpivots.asp?utm_source=chatgpt.com)
+  let pivots = get(marketPayload, "swingContext.pivots");
+  if (!pivots && [prevH, prevL, prevC].every(isNum)) {
+    pivots = calcClassicPivots(prevH, prevL, prevC);
+  }
+
+  const recent20High = get(marketPayload, "swingContext.swingLevels.recent20.high");
+  const recent20Low  = get(marketPayload, "swingContext.swingLevels.recent20.low");
+
+  const dataHealth = computeDataHealth(marketPayload);
+  const insufficientData = !dataHealth.ok || !isNum(last) || !isNum(atrD) || !pivots;
+
+  const base = {
+    schema_version: "1.4-s2",
+    symbol: stock_symbol,
+    insufficientData: !!insufficientData,
+    data_health: dataHealth,
+    notes: []
+  };
+
+  if (insufficientData) {
+    base.notes.push("Insufficient inputs to generate reliable multi-candidate skeletons.");
+    base.candidates = [];
+    return { system, user: JSON.stringify(base, null, 2) };
+  }
+
+  // Simple trend bias from S1 (your Stage-1 already computed it)
+  const trend = get(s1, "market_summary.trend", "NEUTRAL"); // "BULLISH" | "BEARISH" | "NEUTRAL"
+
+  const candidates = [];
+
+  // --- C1: Breakout (with trend) ---
+  // Use recent swing high / R1 as reference “activation” level.
+  const c1Entry = round2(Math.max(pivots.r1 || 0, recent20High || 0));
+  const c1Stop  = round2(Math.max(pivots.pivot || 0, ema20 || 0)); // keep below entry
+  const c1Target = round2((pivots.r2 && pivots.r2 > c1Entry) ? pivots.r2 : (c1Entry + 1.2 * atrD));
+  const c1RR = rrBuy(c1Entry, c1Target, c1Stop);
+
+  candidates.push({
+    id: "C1",
+    name: "breakout",
+    score: {
+      rr: c1RR,
+      trend_align: trend === "BULLISH" ? 1 : 0.3,
+      distance_pct: round2((Math.abs(last - c1Entry) / last) * 100)
+    },
+    skeleton: {
+      type: "BUY",
+      archetype: "breakout",
+      alignment: trend === "BULLISH" ? "with_trend" : "neutral",
+      entryType: "stop",
+      entry: c1Entry,
+      entryRange: null,
+      target: c1Target,
+      stopLoss: c1Stop,
+      riskReward: c1RR,
+      triggers: [
+        buildTrigger({ id: "T1", timeframe: "1h", left_ref: "close", op: "crosses_above", right_ref: "entry", right_value: c1Entry })
+      ],
+      invalidations_pre_entry: [ buildInvalidation(c1Entry) ]
+    }
+  });
+
+  // --- C2: Pullback (to EMA20 / Pivot) ---
+  const c2Entry = round2(Math.max(ema20, pivots.pivot));
+  const c2Stop  = round2(pivots.s1 && pivots.s1 < c2Entry ? pivots.s1 : (c2Entry - 0.8 * atrD));
+  const c2Target = round2(recent20High && recent20High > c2Entry ? recent20High : (c2Entry + 1.0 * atrD));
+  const c2RR = rrBuy(c2Entry, c2Target, c2Stop);
+
+  candidates.push({
+    id: "C2",
+    name: "pullback",
+    score: {
+      rr: c2RR,
+      trend_align: trend === "BULLISH" ? 1 : 0.4,
+      distance_pct: round2((Math.abs(last - c2Entry) / last) * 100)
+    },
+    skeleton: {
+      type: "BUY",
+      archetype: "pullback",
+      alignment: trend === "BULLISH" ? "with_trend" : "neutral",
+      entryType: "limit",
+      entry: c2Entry,
+      entryRange: [round2(c2Entry - 0.2 * atrD), round2(c2Entry + 0.2 * atrD)],
+      target: c2Target,
+      stopLoss: c2Stop,
+      riskReward: c2RR,
+      triggers: [
+        buildTrigger({ id: "T1", timeframe: "1h", left_ref: "price", op: ">=", right_ref: "value", right_value: round2(c2Entry - 0.2 * atrD) })
+      ],
+      invalidations_pre_entry: [ buildInvalidation(c2Entry) ]
+    }
+  });
+
+  // --- C3: Mean-reversion (from S1/S2 toward Pivot) ---
+  // Only “high quality” when RSI is low-ish; else score it down.
+  const c3Entry = round2(pivots.s1);
+  const c3Stop  = round2(pivots.s2 ? pivots.s2 : (c3Entry - 0.8 * atrD));
+  const c3Target = round2(pivots.pivot);
+  const c3RR = rrBuy(c3Entry, c3Target, c3Stop);
+
+  candidates.push({
+    id: "C3",
+    name: "mean_reversion",
+    score: {
+      rr: c3RR,
+      trend_align: trend === "NEUTRAL" ? 1 : 0.5,
+      rsi_fit: isNum(rsi1h) ? (rsi1h < 45 ? 1 : 0.3) : 0.4,
+      distance_pct: round2((Math.abs(last - c3Entry) / last) * 100)
+    },
+    skeleton: {
+      type: "BUY",
+      archetype: "mean-reversion",
+      alignment: "neutral",
+      entryType: "limit",
+      entry: c3Entry,
+      entryRange: [round2(c3Entry - 0.2 * atrD), round2(c3Entry + 0.2 * atrD)],
+      target: c3Target,
+      stopLoss: c3Stop,
+      riskReward: c3RR,
+      triggers: [
+        buildTrigger({ id: "T1", timeframe: "1h", left_ref: "price", op: "<=", right_ref: "entry", right_value: c3Entry })
+      ],
+      invalidations_pre_entry: [ buildInvalidation(c3Entry) ]
+    }
+  });
+
+  // --- C4: Range-fade (near R1/R2 back toward Pivot) ---
+  const c4Entry = round2(pivots.r1);
+  const c4Stop  = round2(pivots.r2 ? pivots.r2 : (c4Entry + 0.8 * atrD));
+  const c4Target = round2(pivots.pivot);
+  const c4RR = rrSell(c4Entry, c4Target, c4Stop);
+
+  candidates.push({
+    id: "C4",
+    name: "range_fade",
+    score: {
+      rr: c4RR,
+      trend_align: trend === "NEUTRAL" ? 1 : 0.4,
+      distance_pct: round2((Math.abs(last - c4Entry) / last) * 100)
+    },
+    skeleton: {
+      type: "SELL",
+      archetype: "range-fade",
+      alignment: trend === "BEARISH" ? "with_trend" : "counter_trend",
+      entryType: "stop-limit",
+      entry: c4Entry,
+      entryRange: null,
+      target: c4Target,
+      stopLoss: c4Stop,
+      riskReward: c4RR,
+      triggers: [
+        buildTrigger({ id: "T1", timeframe: "1h", left_ref: "close", op: "crosses_below", right_ref: "entry", right_value: c4Entry })
+      ],
+      invalidations_pre_entry: [
+        {
+          timeframe: "1h",
+          left: { ref: "close" },
+          op: ">",
+          right: { ref: "value", value: c4Stop },
+          occurrences: { count: 1, consecutive: false },
+          action: "cancel_entry"
+        }
+      ]
+    }
+  });
+
+  // Filter obvious invalid candidates (bad geometry or RR too low)
+  const filtered = candidates
+    .map(c => {
+      const sk = c.skeleton;
+      const rr = sk.riskReward;
+      const geomOk =
+        (sk.type === "BUY"  && sk.stopLoss < sk.entry && sk.entry < sk.target) ||
+        (sk.type === "SELL" && sk.target < sk.entry && sk.entry < sk.stopLoss);
+      return { ...c, ok: geomOk && rr > 0 };
+    })
+    .filter(c => c.ok);
+
+  // Optional: label NO_TRADE if nothing passes min RR threshold
+  const MIN_RR = 1.5;
+  const passing = filtered.filter(c => c.skeleton.riskReward >= MIN_RR);
+
+  const out = {
+    ...base,
+    insufficientData: false,
+    candidates: (passing.length ? passing : filtered)
+      .sort((a, b) => {
+        // quick score: RR first, then trend alignment, then closeness
+        const aScore = (a.score.rr || 0) + (a.score.trend_align || 0) - ((a.score.distance_pct || 0) / 100);
+        const bScore = (b.score.rr || 0) + (b.score.trend_align || 0) - ((b.score.distance_pct || 0) / 100);
+        return bScore - aScore;
+      })
+  };
+
+  out.notes.push("Candidates are computed from pivots + swing highs/lows + ATR; pivots are classic H/L/C based.");//  [oai_citation:3‡Investopedia](https://www.investopedia.com/articles/forex/05/fxpivots.asp?utm_source=chatgpt.com)
+  out.notes.push("ATR is used as a volatility proxy for sizing distances.");//  [oai_citation:4‡Fidelity](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/atr?utm_source=chatgpt.com)
+
+  // If you're keeping the "prompt builder" pattern:
+  const user = JSON.stringify(out, null, 2);
+  return { system, user };
+}
 
 export async function buildStage3Prompt({
   stock_name,
@@ -1282,16 +523,14 @@ export async function buildStage3Prompt({
   sectorInfo,
   s1,
   s2,
-  instrument_key
+  instrument_key,
+  userTradeState
 }) {
-
   let existingStage3 = null;
   let existingMetadata = null;
+
   if (instrument_key) {
-    const existingAnalysis = await StockAnalysis.findByInstrument(
-      instrument_key,
-      "swing"
-    );
+    const existingAnalysis = await StockAnalysis.findByInstrument(instrument_key, "swing");
     existingStage3 = existingAnalysis?.analysis_data?.strategies?.[0] || null;
     existingMetadata = {
       generated_at: existingAnalysis?.analysis_data?.generated_at_ist || null,
@@ -1300,420 +539,145 @@ export async function buildStage3Prompt({
     };
   }
 
+  // 1) Code selects best candidate (deterministic)
+  const { best, ranked } = pickBestStage2Candidate(s2);
+
+  const rankedLite = (ranked || []).slice(0, 6).map(r => {
+    const sk = r.c?.skeleton || {};
+    return {
+      id: r.c?.id,
+      name: r.c?.name,
+      totalScore: Number((r.totalScore ?? 0).toFixed(4)),
+      type: sk.type,
+      archetype: sk.archetype,
+      alignment: sk.alignment,
+      entryType: sk.entryType,
+      entry: sk.entry,
+      target: sk.target,
+      stopLoss: sk.stopLoss,
+      riskReward: sk.riskReward
+    };
+  });
+
+  const hasOpen =
+    userTradeState?.hasOpenPosition === true ||
+    userTradeState?.hasOpenOrder === true;
+
+  const analysisMode = hasOpen ? "MANAGE_OPEN" : "DISCOVERY";
+
   const system = `You are a highly reliable swing-market analysis engine for Indian equities.
-Your task is to produce STRICT, VALID JSON that follows schema v1.4 exactly.
-No comments. No markdown. No additional text.
-No placeholders like <...> or {{...}}.
-You must NEVER output "<", ">", "{{", "}}", NaN, Infinity, or scientific notation.
-You must NEVER hallucinate or invent values.`;
+Return STRICT, VALID JSON that follows schema v1.4 exactly.
+No markdown. No extra text.
+Never hallucinate values. Use only provided data and safe derived calculations.`;
 
   const user = `
-=== PROMPT METADATA ===
-Version: 3.0-varsity-neutral
-Last Updated: 2025-11-15
-Schema: v1.4
-Tone: Neutral, factual, simple Indian English similar to Zerodha Varsity.
-Do not use analogies, metaphors, or comparison models.
-Do not provide advice or suggestions.
+=== MODE ===
+analysis_mode: "${analysisMode}"
 
-=== OVERVIEW ===
-Generate ONE swing-market structure for ${stock_symbol} using schema v1.4.
-Your decision must be one of:
-  • KEEP (revalidate existing structure)
-  • ADJUST (minimal and safe modification)
-  • RETIRE (structure no longer suitable)
+If analysis_mode = "MANAGE_OPEN":
+- The user already has an open order/position.
+- You MUST NOT produce "order_gate.can_place_order": true.
+- You MUST set strategies[0].actionability.status = "monitor_only".
+- Prefer KEEP, else ADJUST. RETIRE only if geometry/data breaks.
 
-You must use ONLY these sources:
-  • MARKET DATA (marketPayload)
-  • sectorInfo
-  • STAGE-1 (s1)
-  • STAGE-2 (s2)
-  • existing Stage-3 data if available
-
-STRICT RULE: Output VALID JSON ONLY. No text outside JSON.
+If analysis_mode = "DISCOVERY":
+- No open order/position is present.
+- Choose ONE structure based on SELECTED_CANDIDATE (preferred), or RETIRE if unusable.
 
 === INPUT CONTEXT ===
-
 Stock: ${stock_name} (${stock_symbol})
 Current Observed Price: ₹${current_price}
 
+USER TRADE STATE:
+${JSON.stringify(userTradeState || { hasOpenOrder: false, hasOpenPosition: false }, null, 2)}
+
 MARKET PAYLOAD:
-${JSON.stringify(marketPayload)}
+${JSON.stringify(marketPayload, null, 2)}
 
 SECTOR INFO:
-${JSON.stringify(sectorInfo || {})}
+${JSON.stringify(sectorInfo || {}, null, 2)}
 
-STAGE-1:
-${JSON.stringify(s1)}
+STAGE-1 (preflight):
+${JSON.stringify(s1, null, 2)}
 
-STAGE-2:
-${JSON.stringify(s2)}
+STAGE-2 (candidates):
+${JSON.stringify(s2, null, 2)}
+
+STAGE-2 (ranked summary, code-selected):
+${JSON.stringify({ selectedId: best?.id || null, selectedCandidate: best || null, rankedLite }, null, 2)}
 
 Existing Stage-3 (if available):
-${existingStage3 ? JSON.stringify(existingStage3) : "None"}
+${existingStage3 ? JSON.stringify(existingStage3, null, 2) : "None"}
 
 Existing Metadata:
-${existingMetadata ? JSON.stringify(existingMetadata) : "None"}
-
---------------------------------------------------
-=== CRITICAL RULES (MUST READ FIRST) ===
-
-1) STRICT SCHEMA ENFORCEMENT
-• Follow schema v1.4 EXACTLY.
-• No missing fields, no extra fields.
-• No text outside JSON.
-• All numeric values must be standard floats (2 decimals preferred).
-• Never output undefined, null in wrong places, or inconsistent structure.
-• Never output placeholder text.
-
-2) STRICT DATA HONESTY
-• Use ONLY data provided in MARKET DATA, STAGE-1, STAGE-2, and sectorInfo.
-• Do NOT assume or invent missing levels, missing indicators, missing volume, missing averages, or missing sentiment.
-• If any required value cannot be created reliably → insufficientData = true.
-
-3) INSUFFICIENT DATA RULES
-If ANY part of required numeric fields cannot be calculated:
-• Set: "insufficientData": true
-• Still output FULL schema.
-• Use safe neutral values:
-    numbers: 0 or null
-    booleans: false
-    enums: "NEUTRAL", "AVERAGE", "standard", "moderate"
-If data IS sufficient:
-• "insufficientData": false
-
-4) GEOMETRY REQUIREMENTS
-For BUY structures:
-• lower region < middle region < upper region
-
-For SELL structures:
-• upper region < middle region < lower region
-
-If geometry cannot be created without distortion:
-→ RETIRE the structure.
-
-5) RISK–REWARD CALCULATION
-For BUY:
-  (upper_region - middle_region) / (middle_region - lower_region)
-For SELL:
-  (middle_region - upper_region) / (lower_region - middle_region)
-
-Round riskReward to 2 decimals.
-
-money_example must follow:
-• per_share.risk   = |middle_region - lower_region|
-• per_share.reward = |upper_region - middle_region|
-• max_loss = qty * per_share.risk
-
-For JSON fields, always map:
-• middle_region → entry
-• upper_region  → target
-• lower_region  → stopLoss
-
-Use these field names only inside JSON. In human-readable text, continue using
-“upper price region”, “middle price zone”, and “lower price region” instead.
-
-6) NEUTRAL HUMAN TEXT (NO ADVICE)
-You MUST NOT use ANY of these words:
-“buy”, “sell”, “entry”, “exit”, “stoploss”, “target”, “recommend”, “should”, “must”, “take”, “action”, 
-“long”, “short”, “go long”, “go short”, “position”, “trade”, “strategy advice”.
-
-Instead, describe ALL MARKET LEVELS ONLY AS:
-• “upper price region”
-• “lower price region”
-• “middle price zone”
-• “area where price has reacted earlier”
-• “region that has shown support/pressure in past sessions”
-• “historical reaction zone”
-
-Example writing style:
-• “The lower price region near ₹X has earlier shown weakness.”
-• “The upper region near ₹Y has slowed movement in previous sessions.”
-• “The middle zone near ₹Z has acted as a reference area.”
-
-NO metaphors (traffic, sports, weather, etc.).
-NO recommendations.
-NO instructions to the user.
-Only factual observation-based language.
-
---------------------------------------------------
-=== CORE PURPOSE ===
-Revalidate or adjust an existing structure without giving trading instructions.
-You describe behaviours around price regions.
-
---------------------------------------------------
-=== DECISION ENGINE (KEEP / ADJUST / RETIRE) ===
-
-You MUST choose exactly one of these:
-
-1) KEEP (Revalidate)
-Use KEEP when:
-• The existing structure remains logically consistent.
-• The level relationships (lower < middle < upper for upward structure, or reversed for downward structure) are intact.
-• Observed data does not contradict the earlier directional bias.
-• The distance between regions remains reasonable.
-• MARKET DATA and STAGE-2 do not show any major conflict.
-
-KEEP actions:
-• Preserve all price regions (middle, upper, lower) exactly as in the existing structure.
-• Preserve type, alignment, and archetype.
-• Recompute runtime, order_gate, money_example, and suggested_qty only.
-• Prefix the title with “[Still Valid] ”.
-
-2) ADJUST (Minimal Modification)
-Use ADJUST when:
-• Levels need small adjustment to respect updated MARKET DATA.
-• Existing geometry is slightly inconsistent or risk–reward is significantly affected.
-• Trend direction from STAGE-2 is not contradicted.
-• Adjustments remain within a generally acceptable range (about 10–15% from original levels).
-
-ADJUST actions:
-• Update only the affected levels (middle, upper, or lower).
-• Maintain previous structure if still reasonable.
-• Enforce correct geometry.
-• Prefix the title with “[Adjusted] ”.
-
-If achieving a safe, clean geometry requires large changes, or contradicts STAGE-2 data,
-→ choose RETIRE.
-
-3) RETIRE (Structure No Longer Suitable)
-Use RETIRE when:
-• Current observed price has already crossed a region that invalidates the structure.
-• New data strongly contradicts earlier directional interpretation.
-• Middle region is too far from current observed price (extreme divergence).
-• Key indicators show conflicting or insufficient evidence.
-• Geometry cannot be repaired safely.
-
-RETIRE actions:
-• type = “NO_TRADE”
-• All level fields (middle, upper, lower) = null
-• riskReward = 0
-• suggested_qty.qty = 0
-• actionability.status = “monitor_only”
-• Prefix title with “[Retired] ”.
-• Provide a brief factual reason inside why_best.
-
---------------------------------------------------
-=== TRIGGERS, INVALIDATIONS, RUNTIME, ORDER GATE ===
-
-1) TRIGGERS
-• If STAGE-2.skeleton.triggers exists:
-  → Copy them EXACTLY into strategies[0].triggers.
-• Do not alter structure, values, or order.
-• If no triggers exist:
-  → strategies[0].triggers = [].
-
-runtime.triggers_evaluated:
-• For each trigger:
-  - If required data exists → evaluable = true, passed = true/false based on actual comparison.
-  - If data does not exist → evaluable = false, passed = false, values = null.
-
-2) INVALIDATIONS
-Start with STAGE-2.skeleton.invalidations_pre_entry:
-• Copy each object exactly.
-• Set "scope": "pre_entry".
-
-Then add one standard post-entry invalidation ONLY if not already present:
-{
-  "scope": "post_entry",
-  "timeframe": "1h",
-  "left": { "ref": "close" },
-  "op": "<=",
-  "right": { "ref": "stopLoss" },
-  "occurrences": { "count": 1, "consecutive": false },
-  "action": "close_position"
-}
-
-3) ORDER GATE LOGIC
-• If any trigger has evaluable = false:
-  - all_triggers_true = false
-• If all evaluable triggers passed AND no pre-entry invalidation is hit:
-  - all_triggers_true = true
-  - no_pre_entry_invalidations = true
-  - can_place_order = true
-• Otherwise:
-  - can_place_order = false
-
-If structure type = “NO_TRADE”:
-• actionability_status must be “monitor_only”
-• can_place_order = false
-
---------------------------------------------------
-=== LANGUAGE RULES (Zerodha Varsity Tone) ===
-
-Human-readable text fields:
-• why_best
-• reasoning[].because
-• warnings.text
-• what_could_go_wrong
-• beginner_summary
-• ui_friendly fields
-• glossary definitions
-• actionability.checklist
-• risk_meter.drivers
-
-All MUST follow:
-
-1. Tone:
-• Neutral, factual, descriptive.
-• Simple Indian English.
-• No emotional language.
-• No persuasive language.
-
-2. Forbidden Words:
-Do NOT use:
-“buy”, “sell”, “should”, “must”, “recommend”, “advice”,  
-“entry”, “exit”, “stoploss”, “target”,  
-“position”, “trade”, “go long”, “go short”,  
-“take action”, “act now”, “opportunity”, “signal”.
-
-3. Allowed Language:
-Use ONLY neutral market behaviour terms:
-• “upper price region”
-• “lower price region”
-• “middle price area”
-• “recent reaction zone”
-• “area where movement slowed earlier”
-• “region with earlier pressure”
-• “region with earlier support”
-
-4. No analogies or metaphors:
-NO traffic  
-NO sports  
-NO weather  
-NO storyline  
-Only real market behaviour.
-
-5. Keep sentences short and clear:
-• Prefer 10–18 word sentences.
-• Avoid complex clauses.
-
-6. Make meanings obvious from context:
-Example:
-• “The upper region near ₹X is where price has slowed earlier.”
-• “The lower region near ₹Y has shown weakness in previous sessions.”
-
---------------------------------------------------
-=== UI_FRIENDLY SECTION RULES ===
-
-1) ui_friendly.why_smart_move
-• Exactly one sentence (15–25 words).
-• Describe why the structure is logically arranged using:
-  - upper region  
-  - middle region  
-  - lower region  
-  - recent movement  
-• No instructions. Only factual description.
-
-Example construction:
-“The middle area near ₹X has remained important, while the region near ₹Y has shown pressure and the upper region near ₹Z has slowed movement earlier.”
-
-2) ui_friendly.ai_will_watch
-• 2–4 sentences.
-• Each sentence must describe:
-  - What is being monitored near key regions.
-  - What behaviour weakens the structure.
-  - What behaviour indicates risk around the lower region.
-
-Example patterns:
-• “Price behaviour around the middle zone will be monitored closely.”
-• “Movement weakening below the lower region reduces the strength of this structure.”
-• “If price approaches the upper region with reduced momentum, the structure may need review.”
-
-3) ui_friendly.beginner_explanation
-• 50–80 words.
-• Explain simply:
-  - What the upper/middle/lower regions represent.
-  - How price has behaved near these areas earlier.
-  - Why these regions matter for understanding movement.
-• End with a reminder:
-  “This is an educational interpretation of observed price behaviour, not a personal instruction.”
-
---------------------------------------------------
-=== REASONING FIELD RULES ===
-
-strategies[0].reasoning must contain 3–5 objects.
-
-Each "because" must:
-• Use actual numeric data from MARKET DATA.
-• Be purely observational.
-• No instructions.
-• No directional words like buy/sell.
-• No analogies.
-
-Example patterns:
-• “Because the observed price is above the 20-day average near ₹X, it indicates continued strength.”
-• “Because movement near ₹Y earlier created pressure, this area remains relevant.”
-• “Because the distance between middle and upper regions is larger than the distance to the lower region, the structure maintains a balanced proportion.”
-
---------------------------------------------------
-=== WARNINGS / RISKS RULES ===
-
-For warnings[].text:
-• Mention real sources of uncertainty:
-  - volatility  
-  - sudden volume changes  
-  - sector-wide movement  
-  - news concentration  
-• Use simple language.
-
-Example:
-• “Movement may become unstable if volatility increases.”
-• “Sector-wide weakness can affect price behaviour near major regions.”
-
-what_could_go_wrong:
-• Mention a realistic risk event.
-• Provide:
-  - likelihood
-  - impact
-  - short neutral mitigation statement
-
-Example:
-• “Price may fluctuate sharply during results announcements.”  
-• “A careful observer may choose to wait for clearer movement before relying on recent levels.”  
-(NOTE: No instructions — only behaviour descriptions.)
-
---------------------------------------------------
-=== GLOSSARY RULES ===
-Replace trading concepts with neutral region-based definitions:
-
-entry → “middle price zone used in this structure”
-target → “upper price region observed earlier”
-stopLoss → “lower price region that has shown weakness earlier”
-
-Glossary format:
-• definition: short, neutral explanation
-• example: real numeric example from strategy
-
---------------------------------------------------
-=== ACTIONABILITY RULES ===
-
-actionability.label must be one of:
-• “Observation structure”
-• “Upward-leaning structure”
-• “Downward-leaning structure”
-• “No structure”
-
-actionability.status:
-• “monitor_only”
-• “actionable_on_trigger”
-• “actionable_now”
-
-checklist:
-• Use purely observational items, example:
-  - “Recent movement is consistent with the structure.”
-  - “No major weakening near the lower region.”
-  - “Middle zone remains relevant based on latest data.”
---------------------------------------------------
-=== OUTPUT SCHEMA v1.4 (STRUCTURE) ===
-
-You MUST output ONLY one valid JSON object with EXACTLY this structure.
-
-Note:
-• Field names like "entry", "target", "stopLoss" are part of the technical schema.
-• In all human-readable text fields, you still follow the neutral wording rules from above.
-
-The JSON must follow this form:
+${existingMetadata ? JSON.stringify(existingMetadata, null, 2) : "None"}
+
+=== STRICT SOURCE RULE ===
+You must use ONLY:
+- marketPayload
+- sectorInfo
+- s1
+- s2 (and rankedLite summary)
+- existingStage3 if present
+
+Do NOT invent indicators, levels, volume, sentiment, or triggers.
+If required values cannot be produced reliably -> insufficientData = true (still output FULL schema).
+
+=== SELECTION RULE ===
+- In DISCOVERY mode: Base the main structure on SELECTED_CANDIDATE if present.
+- Allowed archetypes ONLY: breakout, pullback, trend-follow, mean-reversion, range-fade.
+- Do NOT invent a new archetype outside this list.
+
+=== OPEN-STATE RULE (VERY IMPORTANT) ===
+If userTradeState.hasOpenOrder=true OR userTradeState.hasOpenPosition=true:
+- order_gate.can_place_order = false
+- strategies[0].actionability.status = "monitor_only"
+- You MAY still evaluate triggers/invalidations in runtime/order_gate, but do NOT suggest placing a new order.
+
+=== EXPLANATION REQUIREMENTS (MUST DO) ===
+You must clearly explain:
+1) Why this candidate was chosen (vs other candidates)
+2) Why these exact levels (entry/target/stopLoss) were selected
+3) How long the structure is intended to remain valid (sessions/days) and what behaviour would cause review/retire
+
+IMPORTANT LANGUAGE RULE (human-readable fields):
+- Do NOT use: "buy", "sell", "trade", "entry", "exit", "stoploss", "target", "recommend", "should", "must", "advice".
+- In human-readable text, refer to:
+  - entry as "middle price zone"
+  - target as "upper price region"
+  - stopLoss as "lower price region"
+- You MAY use the numeric values (₹...) and indicator names (ema20_1D, atr14_1D, pivots.r1, etc.).
+
+Where to place the explanations (schema fields you MUST fill well):
+A) strategies[0].why_best:
+   - Mention selectedId and selectedCandidate.name.
+   - Compare against 1–2 alternatives from rankedLite (by id + name).
+   - Use numeric evidence (riskReward, distance_pct if present, trend alignment, ATR/levels).
+
+B) strategies[0].reasoning (3–5 items):
+   - Each "because" must contain at least ONE real number from marketPayload/s1/s2.
+   - At least one "because" must justify the level selection using pivots/swingLevels/supports/resistances.
+
+C) strategies[0].why_in_plain_words (2 items minimum):
+   - Point #1: Explain why the three regions (lower/middle/upper) are anchored to specific provided levels
+     (example sources: swingContext.pivots, levels.supports/resistances, swingLevels.recent20/recent50).
+   - Point #2: Explain time horizon using validity + timeframe fields:
+     - strategies[0].timeframe in human words (e.g., trading -sessions "3-7 days" and also why that fits)
+     - validity.entry.trading_sessions_soft + trading_sessions_hard
+     - validity.position.time_stop_sessions
+     Use these numbers directly.
+
+D) strategies[0].ui_friendly.beginner_explanation:
+   - 50–80 words.
+   - Must mention the intended review window in sessions/days using the validity fields.
+   - Must mention what behaviour weakens the structure (neutral phrasing).
+
+E) strategies[0].what_could_go_wrong (at least 1 item):
+   - Include one realistic risk linked to provided data (e.g., HIGH volatility if atr/price is high, gap risk from swingContext.gap, news concentration).
+
+=== OUTPUT SCHEMA v1.4 (REQUIRED STRUCTURE) ===
+
+You MUST output ONLY one valid JSON object with EXACTLY this structure:
 
 {
   "schema_version": "1.4",
@@ -1731,8 +695,8 @@ The JSON must follow this form:
   "sentiment_analysis": {
     "confidence": <number between 0 and 1>,
     "strength": "high" | "medium" | "low",
-    "reasoning": "Short, neutral explanation using real values in simple language.",
-    "key_factors": ["short factor 1", "short factor 2"],
+    "reasoning": "Short, neutral explanation using real values.",
+    "key_factors": ["factor 1", "factor 2"],
     "sector_specific": true | false,
     "market_alignment": "aligned" | "contrary" | "neutral",
     "trading_bias": "bullish" | "bearish" | "neutral",
@@ -1744,20 +708,8 @@ The JSON must follow this form:
     "sector_news_weight": <number between 0 and 1>
   },
   "runtime": {
-    "triggers_evaluated": [
-      {
-        "id": "T1",
-        "timeframe": "15m" | "1h" | "1d",
-        "left_ref": "close" | "high" | "low" | "price" | "rsi14_1h" | "ema20_1D" | "sma200_1D",
-        "left_value": <number | null>,
-        "op": "<" | "<=" | ">" | ">=" | "crosses_above" | "crosses_below",
-        "right_ref": "value" | "entry" | "ema50_1D" | "sma200_1D",
-        "right_value": <number | null>,
-        "passed": true | false,
-        "evaluable": true | false
-      }
-    ],
-    "pre_entry_invalidations_hit": true | false
+    "triggers_evaluated": [],
+    "pre_entry_invalidations_hit": false
   },
   "order_gate": {
     "all_triggers_true": true | false,
@@ -1774,7 +726,7 @@ The JSON must follow this form:
       "alignment": "with_trend" | "counter_trend" | "neutral",
       "title": "Short, neutral title describing the structure.",
       "confidence": <number between 0 and 1>,
-      "why_best": "Short, neutral explanation of why this structure has been chosen.",
+      "why_best": "Short, neutral explanation of why this structure was chosen.",
       "entryType": "limit" | "market" | "range" | "stop" | "stop-limit",
       "entry": <number | null>,
       "entryRange": [<number>, <number>] | null,
@@ -1785,32 +737,19 @@ The JSON must follow this form:
       "indicators": [
         {
           "name": "ema20_1D" | "ema50_1D" | "sma200_1D" | "rsi14_1h" | "atr14_1D",
-          "value": "value taken directly from MARKET DATA or null if missing",
+          "value": "<value from MARKET DATA or null>",
           "signal": "BUY" | "SELL" | "NEUTRAL"
         }
       ],
       "reasoning": [
-        { "because": "Neutral explanation using actual values in simple language." },
-        { "because": "Neutral explanation based on indicator or price behaviour." },
-        { "because": "Neutral explanation referring to the distance between regions and risk–reward." }
+        { "because": "Neutral explanation using actual values." }
       ],
       "warnings": [
         {
           "code": "GAP_RISK" | "HIGH_VOLATILITY" | "LOW_VOLUME" | "NEWS_EVENT" | "SECTOR_WEAKNESS",
           "severity": "low" | "medium" | "high",
-          "text": "Short, factual caution about a realistic risk in simple language.",
-          "applies_when": [
-            {
-              "timeframe": "1d" | "1h" | "15m",
-              "left": { "ref": "rsi14_1h" | "ema20_1D" | "price" | "volume" },
-              "op": "<" | "<=" | ">" | ">=" | "crosses_above" | "crosses_below",
-              "right": {
-                "ref": "value" | "ema50_1D" | "entry" | "stopLoss",
-                "value": <number>,
-                "offset": <number>
-              }
-            }
-          ],
+          "text": "Short, factual caution.",
+          "applies_when": [],
           "mitigation": ["reduce_qty", "wider_stop", "skip_on_news", "wait_for_confirmation"]
         }
       ],
@@ -1836,44 +775,28 @@ The JSON must follow this form:
         "non_trading_policy": "pause_clock"
       },
       "beginner_summary": {
-        "one_liner": "One simple line explaining the structure in neutral terms.",
-        "steps": [
-          "Observe how price behaves near the main levels.",
-          "Check that recent movement is consistent with the structure.",
-          "Confirm that no invalidation condition is active."
-        ],
-        "checklist": [
-          "Recent data is consistent with key regions.",
-          "No invalidation conditions are active.",
-          "All required inputs are present."
-        ]
+        "one_liner": "One simple line explaining the structure.",
+        "steps": ["step 1", "step 2", "step 3"],
+        "checklist": ["check 1", "check 2", "check 3"]
       },
       "why_in_plain_words": [
         {
-          "point": "Short point summarising why recent behaviour fits this structure.",
-          "evidence": "Which indicators or regions support it, with actual values."
-        },
-        {
-          "point": "Short point about distance between regions being reasonable.",
-          "evidence": "Based on actual differences between levels."
+          "point": "Short point about level selection.",
+          "evidence": "Evidence with actual values."
         }
       ],
       "what_could_go_wrong": [
         {
-          "risk": "Short description of a realistic risk event.",
+          "risk": "Short description of a realistic risk.",
           "likelihood": "LOW" | "MEDIUM" | "HIGH",
           "impact": "LOW" | "MEDIUM" | "HIGH",
-          "mitigation": "Short neutral explanation of how a careful observer might handle this situation."
+          "mitigation": "How to handle this."
         }
       ],
       "ui_friendly": {
-        "why_smart_move": "One neutral sentence (15–25 words) describing why this structure is logically arranged based on the regions.",
-        "ai_will_watch": [
-          "Short neutral line on what is monitored around the main regions.",
-          "Short neutral line on what weakens the structure.",
-          "Short neutral line on what indicates risk near the lower region."
-        ],
-        "beginner_explanation": "50–80 words explaining what the upper, middle and lower regions represent and how price has reacted around them earlier. End with: 'This is an educational interpretation of observed price behaviour, not a personal instruction.'"
+        "why_smart_move": "One neutral sentence (15–25 words).",
+        "ai_will_watch": ["monitoring point 1", "monitoring point 2"],
+        "beginner_explanation": "50–80 words explanation."
       },
       "money_example": {
         "per_share": {
@@ -1898,104 +821,52 @@ The JSON must follow this form:
           { "risk_budget_inr": 1000, "qty": <number> },
           { "risk_budget_inr": 2500, "qty": <number> }
         ],
-        "note": "Short neutral note that this sizing is based only on distances between regions."
+        "note": "Short neutral note."
       },
       "risk_meter": {
         "label": "Low" | "Medium" | "High",
         "score": <number between 0 and 1>,
-        "drivers": [
-          "Distance between regions",
-          "Trend alignment",
-          "Volatility compared with ATR",
-          "Volume band",
-          "News or sentiment tilt"
-        ]
+        "drivers": ["driver 1", "driver 2"]
       },
       "actionability": {
         "label": "Observation structure" | "Upward-leaning structure" | "Downward-leaning structure" | "No structure",
         "status": "actionable_now" | "actionable_on_trigger" | "monitor_only",
         "next_check_in": "15m" | "1h" | "daily",
-        "checklist": [
-          "Recent movement is consistent with the structure.",
-          "No invalidation condition has been hit.",
-          "Regions and indicators are based on available data."
-        ]
+        "checklist": ["check 1", "check 2"]
       },
       "glossary": {
         "entry": {
-          "definition": "Middle price zone used as a central reference in this structure.",
-          "example": "₹<actual numeric middle price level>"
+          "definition": "Middle price zone used as a central reference.",
+          "example": "₹<entry value>"
         },
         "target": {
-          "definition": "Upper price region where movement has slowed or reacted earlier.",
-          "example": "₹<actual numeric upper price level>"
+          "definition": "Upper price region where movement has slowed.",
+          "example": "₹<target value>"
         },
         "stopLoss": {
-          "definition": "Lower price region where weakness has appeared in earlier sessions.",
-          "example": "₹<actual numeric lower price level>"
+          "definition": "Lower price region where weakness has appeared.",
+          "example": "₹<stopLoss value>"
         }
       }
     }
   ],
   "performance_hints": {
-    "confidence_drivers": ["Short items describing what increased confidence."],
-    "uncertainty_factors": ["Short items describing what reduced confidence."],
+    "confidence_drivers": ["driver 1", "driver 2"],
+    "uncertainty_factors": ["factor 1", "factor 2"],
     "data_quality_score": <number between 0 and 1>
   },
   "disclaimer": "AI-generated educational interpretation of price behaviour. Not investment advice or a recommendation to buy or sell any security."
 }
 
---------------------------------------------------
-=== FINAL VALIDATION CHECKLIST ===
+=== CRITICAL REQUIRED FIELDS ===
+These fields MUST be present and non-null:
+- overall_sentiment (root level)
+- strategies[0].type
+- strategies[0].title
+- strategies[0].confidence
 
-Before you output the JSON, verify:
-
-1) JSON SYNTAX
-• No trailing commas.
-• All keys and string values are in double quotes.
-• No comments, no markdown, no extra text.
-
-2) SCHEMA COMPLETENESS
-• All required top-level fields present.
-• strategies array has exactly one main structure (S1).
-• All nested required fields exist and follow allowed values.
-
-3) DATA HONESTY
-• All numeric values come from MARKET DATA, STAGE-1, STAGE-2, or safe derived calculations.
-• No invented price levels, no imagined indicators, no fake volume or sentiment.
-
-4) GEOMETRY AND RISK–REWARD
-• For BUY type:
-  lower region (stopLoss) < middle region (entry) < upper region (target).
-• For SELL type:
-  upper region (target) < middle region (entry) < lower region (stopLoss).
-• riskReward matches the required formula.
-• money_example values are consistent with distances between levels.
-
-5) NO_TRADE CASE
-• If type = "NO_TRADE":
-  - entry, target, stopLoss are null.
-  - riskReward = 0.
-  - suggested_qty.qty = 0.
-  - order_gate.can_place_order = false.
-  - actionability.status = "monitor_only".
-
-6) LANGUAGE RULES
-• No use of: buy, sell, entry, exit, stoploss, target, recommend, should, must, advice, trade, position, long, short.
-• Tone is neutral, simple, and descriptive.
-• No metaphors or analogies.
-• Explanations talk only about how price has behaved around regions.
-
-7) DISCLAIMER
-• Root-level disclaimer exactly matches:
-  "AI-generated educational interpretation of price behaviour. Not investment advice or a recommendation to buy or sell any security."
-
-8) OUTPUT FORMAT
-• Output ONLY the JSON object.
-• No code fences, no markdown, no extra commentary.
-
---------------------------------------------------
-END OF INSTRUCTIONS FOR MODEL.
+=== OUTPUT ===
+Return exactly ONE JSON object matching the schema above. No markdown, no extra text.
 `;
 
   return { system, user };

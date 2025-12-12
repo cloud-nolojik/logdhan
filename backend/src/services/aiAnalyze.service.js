@@ -13,7 +13,7 @@ import { messagingService } from './messaging/messaging.service.js';
 import { User } from '../models/user.js';
 import modelSelectorService from './ai/modelSelector.service.js';
 import AnalysisSession from '../models/analysisSession.js';
-import { buildStage1Prompt, buildStage2Prompt, buildStage3Prompt } from '../prompts/swingPrompts.js';
+import { buildStage1, buildStage2, buildStage3Prompt } from '../prompts/swingPrompts.js';
 import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
 import FineTuneData from '../models/fineTuneData.js';
@@ -30,9 +30,9 @@ class AIAnalyzeService {
     this.rssParser = new Parser();
 
     // Model configuration
-    this.analysisModel = "gpt-4o";
-    this.basicModel = "gpt-5.1-2025-11-13";
-    this.advancedModel = "gpt-5.1-2025-11-13";
+    this.analysisModel = "gpt-5-mini-2025-08-07";
+    this.basicModel = "gpt-5.2-2025-12-11";
+    this.advancedModel = "gpt-5.2-2025-12-11";
 
     // Use existing term-to-frames mapping from aiReview
     this.termToFrames = {
@@ -785,9 +785,13 @@ class AIAnalyzeService {
         confidence: 50,
         reasoning: 'No news data available',
         keyFactors: [],
-        sectorSpecific: false
+        sectorSpecific: false,
+        tokenUsage: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 }
       };
       const sentimentTime = Date.now() - sentimentStart;
+
+      // Extract sentiment token usage for tracking
+      const sentimentTokenUsage = sentimentAnalysis?.tokenUsage || { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 };
 
       // Extract simple sentiment for backward compatibility
       const sentiment = typeof sentimentAnalysis === 'string' ? sentimentAnalysis : sentimentAnalysis.sentiment;
@@ -908,7 +912,8 @@ class AIAnalyzeService {
         analysis_type,
         marketPayload: payload,
         sentiment,
-        sectorInfo
+        sectorInfo,
+        sentimentTokenUsage
       });
 
       const aiGenerationTime = Date.now() - aiGenerationStart;
@@ -1044,11 +1049,15 @@ class AIAnalyzeService {
 
   /**
    * Analyze news sentiment
+   * @param {Array} newsItems - Array of news items with title property
+   * @param {string} term - Term for sentiment analysis (e.g., 'short', 'medium', 'long')
+   * @returns {Promise<{sentiment: string, tokenUsage: {input_tokens: number, output_tokens: number, cached_tokens: number, total_tokens: number}}>}
    */
   async analyzeSentiment(newsItems, term) {
+    const emptyTokenUsage = { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 };
+
     if (!newsItems || newsItems.length === 0) {
-      //             console.log('📊 No news items for sentiment analysis, returning neutral');
-      return 'neutral';
+      return { sentiment: 'neutral', tokenUsage: emptyTokenUsage };
     }
 
     const titles = newsItems.slice(0, 5).map((item) => item.title).join('\n');
@@ -1080,9 +1089,6 @@ class AIAnalyzeService {
             8) OUTPUT MUST BE ONLY one of: positive, neutral, negative. No quotes, no punctuation, no extra words.
             `;
 
-    //         console.log(`📊 Analyzing sentiment for ${newsItems.length} news items using ${this.sentimentalModel}`);
-    //         console.log(`📊 Sample titles for sentiment:`, newsItems.slice(0, 2).map(item => item.title));
-
     try {
       const formattedMessages = this.formatMessagesForModel(this.sentimentalModel, prompt);
 
@@ -1100,14 +1106,21 @@ class AIAnalyzeService {
       }
       );
 
+      // Extract token usage from response
+      const usage = response.data?.usage || {};
+      const tokenUsage = {
+        input_tokens: usage.prompt_tokens || 0,
+        output_tokens: usage.completion_tokens || 0,
+        cached_tokens: usage.prompt_tokens_details?.cached_tokens || 0,
+        total_tokens: usage.total_tokens || 0
+      };
+
       const sentiment = response.data.choices[0].message.content.toLowerCase().trim();
       const validSentiment = ['positive', 'negative', 'neutral'].includes(sentiment) ? sentiment : 'neutral';
 
-      //             console.log(`📊 Sentiment analysis result: "${sentiment}" -> "${validSentiment}"`);
-      return validSentiment;
+      return { sentiment: validSentiment, tokenUsage };
     } catch (error) {
-      //             console.error('❌ Sentiment analysis failed:', error.message);
-      return 'neutral';
+      return { sentiment: 'neutral', tokenUsage: emptyTokenUsage };
     }
   }
 
@@ -1115,6 +1128,8 @@ class AIAnalyzeService {
    * Analyze news sentiment with sector context
    */
   async analyzeSectorSentiment(newsItems, term, sectorInfo) {
+    const emptyTokenUsage = { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 };
+
     if (!newsItems || newsItems.length === 0) {
       //             console.log('📊 No news items for sector sentiment analysis, returning neutral');
       return {
@@ -1126,6 +1141,7 @@ class AIAnalyzeService {
         positiveSignals: [],
         negativeSignals: [],
         marketAlignment: 'neutral',
+        tokenUsage: emptyTokenUsage,
         metadata: {
           sectorName: sectorInfo?.name || 'General Market',
           sectorCode: sectorInfo?.code,
@@ -1235,6 +1251,15 @@ class AIAnalyzeService {
       }
       );
 
+      // Extract token usage from response
+      const usage = response.data?.usage || {};
+      const tokenUsage = {
+        input_tokens: usage.prompt_tokens || 0,
+        output_tokens: usage.completion_tokens || 0,
+        cached_tokens: usage.prompt_tokens_details?.cached_tokens || 0,
+        total_tokens: usage.total_tokens || 0
+      };
+
       const responseContent = response.data.choices[0].message.content;
       let analysisResult;
 
@@ -1255,6 +1280,7 @@ class AIAnalyzeService {
           negativeSignals: Array.isArray(analysisResult.negativeSignals) ? analysisResult.negativeSignals.slice(0, 3) : [],
           marketAlignment: ['aligned', 'contrary', 'neutral'].includes(analysisResult.marketAlignment) ?
           analysisResult.marketAlignment : 'neutral',
+          tokenUsage,
           metadata: {
             sectorName,
             sectorCode: sectorInfo?.code,
@@ -1281,6 +1307,7 @@ class AIAnalyzeService {
           positiveSignals: [],
           negativeSignals: [],
           marketAlignment: 'neutral',
+          tokenUsage,
           metadata: {
             sectorName,
             sectorCode: sectorInfo?.code,
@@ -1296,7 +1323,7 @@ class AIAnalyzeService {
       // Fallback to basic analysis
       const basicResult = await this.analyzeSentiment(newsItems, term);
       return {
-        sentiment: typeof basicResult === 'string' ? basicResult : 'neutral',
+        sentiment: basicResult?.sentiment || 'neutral',
         confidence: 40,
         reasoning: 'Fallback analysis due to API error',
         keyFactors: ['API error fallback'],
@@ -1304,6 +1331,7 @@ class AIAnalyzeService {
         positiveSignals: [],
         negativeSignals: [],
         marketAlignment: 'neutral',
+        tokenUsage: basicResult?.tokenUsage || { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 },
         metadata: {
           sectorName,
           fallback: true,
@@ -2288,60 +2316,47 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
 
   /**
    * Stage 1: Preflight & Market Summary
-   * Validates MARKET DATA and computes market_summary
+   * Validates MARKET DATA and computes market_summary (no LLM call - pure code)
    */
-  async stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo }) {
+  stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo }) {
     try {
-      const { system, user } = buildStage1Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
-      const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
-
-      const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
+      // buildStage1 returns data directly - no LLM call needed
+      const s1 = buildStage1({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
 
       // Gate quickly
-      if (out.insufficientData === true) {
-
-        return { ok: false, s1: out, tokenUsage };
+      if (s1.insufficientData === true) {
+        return { ok: false, s1 };
       }
 
-      return { ok: true, s1: out, tokenUsage };
+      return { ok: true, s1 };
     } catch (error) {
       console.error(`❌ [STAGE 1] ${stock_symbol} - FAILED`);
       console.error(`❌ [STAGE 1] Error message: ${error.message}`);
       console.error(`❌ [STAGE 1] Error stack: ${error.stack}`);
-      if (error.response) {
-        console.error(`❌ [STAGE 1] OpenAI Response Status: ${error.response.status}`);
-        console.error(`❌ [STAGE 1] OpenAI Response Data:`, JSON.stringify(error.response.data, null, 2));
-      }
       throw error;
     }
   }
 
   /**
    * Stage 2: Strategy Skeleton & Triggers
-   * Builds ONE best-fit skeleton (BUY/SELL/NO_TRADE) with entry/stop/target ranges
+   * Builds candidate skeletons (BUY/SELL/NO_TRADE) with entry/stop/target ranges (no LLM call - pure code)
    */
-  async stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1 }) {
+  stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1 }) {
     try {
-      const { system, user } = buildStage2Prompt({ stock_name, stock_symbol, current_price, marketPayload, s1 });
-      const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
+      // buildStage2 now returns { system, user } where user is JSON string of computed data
+      const { user } = buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1 });
+      const s2 = JSON.parse(user);
 
-      const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
-
-      // Gate: if NO_TRADE is returned we still go to Stage 3 (final will carry NO_TRADE)
-      if (out.insufficientData === true) {
-
-        return { ok: false, s2: out, tokenUsage };
+      // Gate: if insufficientData is returned
+      if (s2.insufficientData === true) {
+        return { ok: false, s2 };
       }
 
-      return { ok: true, s2: out, tokenUsage };
+      return { ok: true, s2 };
     } catch (error) {
       console.error(`❌ [STAGE 2] ${stock_symbol} - FAILED`);
       console.error(`❌ [STAGE 2] Error message: ${error.message}`);
       console.error(`❌ [STAGE 2] Error stack: ${error.stack}`);
-      if (error.response) {
-        console.error(`❌ [STAGE 2] OpenAI Response Status: ${error.response.status}`);
-        console.error(`❌ [STAGE 2] OpenAI Response Data:`, JSON.stringify(error.response.data, null, 2));
-      }
       throw error;
     }
   }
@@ -2393,31 +2408,32 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     }
   }
 
+
   /**
    * NEW ORCHESTRATOR (3-call) - Generates stock analysis using 3-stage process
    * Includes token tracking for cost calculation
+   * @param {Object} params
+   * @param {Object} [params.sentimentTokenUsage] - Token usage from sentiment analysis LLM call
    */
-  async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo, instrument_key }) {
+  async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo, instrument_key, sentimentTokenUsage }) {
     const t0 = Date.now();
 
-    // Initialize token tracking
+    // Initialize token tracking (stage1 & stage2 are now code-based, only stage3 uses LLM)
+    // sentiment tokens come from analyzeSectorSentiment which is called before this function
+    const emptyTokenUsage = { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 };
     const tokenTracking = {
-      stage1: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 },
-      stage2: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 },
+      sentiment: sentimentTokenUsage || emptyTokenUsage,
       stage3: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 },
       total: { input_tokens: 0, output_tokens: 0, cached_tokens: 0, total_tokens: 0 }
     };
 
-    // STAGE 1
+    // STAGE 1 (code-based, no LLM call)
     const stage1Start = Date.now();
-
-    const stage1Prompts = buildStage1Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
 
     let s1r;
     let stage1Time = 0;
     try {
-      s1r = await this.stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
-      tokenTracking.stage1 = s1r.tokenUsage;
+      s1r = this.stage1Preflight({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo });
       stage1Time = Date.now() - stage1Start;
 
     } catch (error) {
@@ -2427,34 +2443,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
       throw error;
     }
 
-    // Save Stage 1 fine-tune data
-    if (instrument_key) {
-      this.saveFineTuneData({
-        instrument_key,
-        stock_symbol,
-        stock_name,
-        analysis_type,
-        current_price,
-        stage: 'stage1',
-        prompt: stage1Prompts.user,
-        response: s1r.s1,
-        model_used: this.analysisModel,
-        token_usage: tokenTracking.stage1,
-        analysis_status: s1r.ok ? 'completed' : 'insufficient_data',
-        market_context: {
-          trend: marketPayload?.market_summary?.trend,
-          volatility: marketPayload?.market_summary?.volatility,
-          volume: marketPayload?.market_summary?.volume,
-          sentiment: marketPayload?.sentimentContext?.basicSentiment
-        }
-      }).catch((err) => console.error('Failed to save stage1 fine-tune data:', err));
-    }
-
     if (!s1r.ok) {
-      // Calculate totals
-      Object.keys(tokenTracking.total).forEach((key) => {
-        tokenTracking.total[key] = tokenTracking.stage1[key];
-      });
 
       // Return minimal v1.4-shaped NO_TRADE with insufficientData flag
       return {
@@ -2562,16 +2551,13 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
       };
     }
 
-    // STAGE 2
+    // STAGE 2 (code-based, no LLM call)
     const stage2Start = Date.now();
-
-    const stage2Prompts = buildStage2Prompt({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
 
     let s2r;
     let stage2Time = 0;
     try {
-      s2r = await this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
-      tokenTracking.stage2 = s2r.tokenUsage;
+      s2r = this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
       stage2Time = Date.now() - stage2Start;
 
     } catch (error) {
@@ -2581,28 +2567,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
       throw error;
     }
 
-    // Save Stage 2 fine-tune data
-    if (instrument_key) {
-      this.saveFineTuneData({
-        instrument_key,
-        stock_symbol,
-        stock_name,
-        analysis_type,
-        current_price,
-        stage: 'stage2',
-        prompt: stage2Prompts.user,
-        response: s2r.s2,
-        model_used: this.analysisModel,
-        token_usage: tokenTracking.stage2,
-        analysis_status: s2r.ok ? 'completed' : 'insufficient_data',
-        market_context: {
-          trend: marketPayload?.market_summary?.trend,
-          volatility: marketPayload?.market_summary?.volatility,
-          volume: marketPayload?.market_summary?.volume,
-          sentiment: marketPayload?.sentimentContext?.basicSentiment
-        }
-      }).catch((err) => console.error('Failed to save stage2 fine-tune data:', err));
-    }
+
     let s3result;
     let stage3Time = 0;
 
@@ -2612,9 +2577,17 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     const stage3Start = Date.now();
 
     try {
-      s3result = await this.stage3Finalize({
-        stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1: s1r.s1, s2: s2r.s2, instrument_key, game_mode
-      });
+     s3result = await this.stage3Finalize({
+  stock_name,
+  stock_symbol,
+  current_price,
+  marketPayload,
+  sectorInfo,
+  s1: s1r.s1,
+  s2:s2r,   // 👈 pass only Top-1 (or empty)
+  instrument_key,
+  game_mode
+});
       tokenTracking.stage3 = s3result.tokenUsage;
       stage3Time = Date.now() - stage3Start;
 
@@ -2624,6 +2597,8 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
       console.error(`❌ [STAGE 3 ERROR] ${stock_symbol}:`, error.message);
       throw error;
     }
+
+
 
     // Generate Stage 3 prompts for fine-tune data
     const stage3Prompts = await buildStage3Prompt({
@@ -2663,17 +2638,15 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
 
     const finalOut = s3result.data;
 
-    // Calculate total token usage
+    // Calculate total token usage (sentiment + stage3 LLM calls)
     Object.keys(tokenTracking.total).forEach((key) => {
-      tokenTracking.total[key] =
-      tokenTracking.stage1[key] +
-      tokenTracking.stage2[key] +
-      tokenTracking.stage3[key];
+      tokenTracking.total[key] = (tokenTracking.sentiment[key] || 0) + (tokenTracking.stage3[key] || 0);
     });
 
     // Attach meta with token tracking
     if (!finalOut.meta) finalOut.meta = {};
     finalOut.meta.model_used = this.analysisModel;
+    finalOut.meta.sentiment_model_used = this.sentimentalModel;
     finalOut.meta.processing_time_ms = Date.now() - t0;
     finalOut.meta.stage_chain = ["s1", "s2", "s3"];
     finalOut.meta.token_usage = tokenTracking;
@@ -2708,19 +2681,65 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
         risk_reward: strategy?.riskReward || 0
       };
 
-      // OpenAI pricing (as of Jan 2025 for gpt-4o)
+      // OpenAI pricing per model (prices per 1K tokens)
+      const MODEL_PRICING = {
+        'gpt-5.2': {
+          input_price_per_1k: 0.00175,   // $1.75 per 1M input tokens
+          cached_price_per_1k: 0.000175, // $0.175 per 1M cached tokens
+          output_price_per_1k: 0.014     // $14.00 per 1M output tokens
+        },
+        'gpt-5-mini': {
+          input_price_per_1k: 0.00025,   // $0.25 per 1M input tokens
+          cached_price_per_1k: 0.000025, // $0.025 per 1M cached tokens
+          output_price_per_1k: 0.002     // $2.00 per 1M output tokens
+        }
+      };
+
+      // Helper to get base model name (strips version dates like -2025-08-07)
+      const getBaseModelName = (modelName) => {
+        if (!modelName) return 'gpt-5-mini';
+        // Match gpt-5.2-YYYY-MM-DD or gpt-5-mini-YYYY-MM-DD patterns
+        if (modelName.startsWith('gpt-5.2')) return 'gpt-5.2';
+        if (modelName.startsWith('gpt-5-mini')) return 'gpt-5-mini';
+        return modelName;
+      };
+
+      // Get pricing for the model used (default to gpt-5-mini if unknown)
+      const analysisModelName = this.analysisModel || 'gpt-5-mini';
+      const sentimentModelName = this.sentimentalModel || 'gpt-5-mini';
+      const analysisBaseModel = getBaseModelName(analysisModelName);
+      const sentimentBaseModel = getBaseModelName(sentimentModelName);
+
+      // Use analysis model pricing for stage3, sentiment model pricing for sentiment
+      const analysisPricing = MODEL_PRICING[analysisBaseModel] || MODEL_PRICING['gpt-5-mini'];
+      const sentimentPricing = MODEL_PRICING[sentimentBaseModel] || MODEL_PRICING['gpt-5-mini'];
+
       const pricing = {
-        model_name: 'gpt-4o',
-        input_price_per_1k: 0.0025, // $2.50 per 1M input tokens
-        output_price_per_1k: 0.010, // $10.00 per 1M output tokens
-        cached_price_per_1k: 0.00125, // 50% discount for cached
+        analysis_model: analysisModelName,
+        sentiment_model: sentimentModelName,
+        analysis_pricing: analysisPricing,
+        sentiment_pricing: sentimentPricing,
         usd_to_inr_rate: 83.0
       };
 
-      // Calculate costs
-      const inputCost = tokenTracking.total.input_tokens / 1000 * pricing.input_price_per_1k;
-      const outputCost = tokenTracking.total.output_tokens / 1000 * pricing.output_price_per_1k;
-      const cachedCost = tokenTracking.total.cached_tokens / 1000 * pricing.cached_price_per_1k;
+      // Calculate costs separately for sentiment and stage3 (different models may have different prices)
+      const sentimentTokens = tokenTracking.sentiment || { input_tokens: 0, output_tokens: 0, cached_tokens: 0 };
+      const stage3Tokens = tokenTracking.stage3 || { input_tokens: 0, output_tokens: 0, cached_tokens: 0 };
+
+      // Sentiment cost (using sentiment model pricing)
+      const sentimentInputCost = sentimentTokens.input_tokens / 1000 * sentimentPricing.input_price_per_1k;
+      const sentimentOutputCost = sentimentTokens.output_tokens / 1000 * sentimentPricing.output_price_per_1k;
+      const sentimentCachedCost = sentimentTokens.cached_tokens / 1000 * sentimentPricing.cached_price_per_1k;
+
+      // Stage3 cost (using analysis model pricing)
+      const stage3InputCost = stage3Tokens.input_tokens / 1000 * analysisPricing.input_price_per_1k;
+      const stage3OutputCost = stage3Tokens.output_tokens / 1000 * analysisPricing.output_price_per_1k;
+      const stage3CachedCost = stage3Tokens.cached_tokens / 1000 * analysisPricing.cached_price_per_1k;
+
+      // Total costs
+      const inputCost = sentimentInputCost + stage3InputCost;
+      const outputCost = sentimentOutputCost + stage3OutputCost;
+      const cachedCost = sentimentCachedCost + stage3CachedCost;
       const totalCostUsd = inputCost + outputCost + cachedCost;
       const totalCostInr = totalCostUsd * pricing.usd_to_inr_rate;
 
@@ -2730,16 +2749,41 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
       tokenTracking.total.cached_tokens / (tokenTracking.total.cached_tokens + totalNonCachedTokens) * 100 :
       0;
 
+      // Calculate individual model costs for detailed breakdown
+      const sentimentTotalCost = sentimentInputCost + sentimentOutputCost + sentimentCachedCost;
+      const analysisTotalCost = stage3InputCost + stage3OutputCost + stage3CachedCost;
+
       const usageData = {
         token_usage: tokenTracking,
         cost_breakdown: {
-          input_cost: inputCost,
-          output_cost: outputCost,
-          cached_cost: cachedCost,
+          // Sentiment model costs
+          sentiment_input_cost: sentimentInputCost,
+          sentiment_output_cost: sentimentOutputCost,
+          sentiment_cached_cost: sentimentCachedCost,
+          sentiment_total_cost_usd: sentimentTotalCost,
+          // Analysis model costs
+          analysis_input_cost: stage3InputCost,
+          analysis_output_cost: stage3OutputCost,
+          analysis_cached_cost: stage3CachedCost,
+          analysis_total_cost_usd: analysisTotalCost,
+          // Combined totals
           total_cost_usd: totalCostUsd,
           total_cost_inr: totalCostInr
         },
-        pricing_model: pricing,
+        pricing_model: {
+          // Sentiment model pricing
+          sentiment_model: sentimentModelName,
+          sentiment_input_price_per_1k: sentimentPricing.input_price_per_1k,
+          sentiment_output_price_per_1k: sentimentPricing.output_price_per_1k,
+          sentiment_cached_price_per_1k: sentimentPricing.cached_price_per_1k,
+          // Analysis model pricing
+          analysis_model: analysisModelName,
+          analysis_input_price_per_1k: analysisPricing.input_price_per_1k,
+          analysis_output_price_per_1k: analysisPricing.output_price_per_1k,
+          analysis_cached_price_per_1k: analysisPricing.cached_price_per_1k,
+          // Exchange rate
+          usd_to_inr_rate: pricing.usd_to_inr_rate
+        },
         performance: {
           total_duration_ms: processingTime,
           stage1_duration_ms: 0,

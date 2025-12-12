@@ -34,30 +34,23 @@ const userAnalyticsUsageSchema = new mongoose.Schema({
         required: true,
         index: true
     },
-    // Token usage breakdown
+    // Token usage breakdown (now with separate sentiment model tracking)
     token_usage: {
-        // Stage 1: Preflight & Market Summary
-        stage1: {
+        // Sentiment Analysis (uses sentiment model - e.g., gpt-5-mini)
+        sentiment: {
             input_tokens: { type: Number, default: 0 },
             output_tokens: { type: Number, default: 0 },
             cached_tokens: { type: Number, default: 0 },
             total_tokens: { type: Number, default: 0 }
         },
-        // Stage 2: Strategy Skeleton
-        stage2: {
-            input_tokens: { type: Number, default: 0 },
-            output_tokens: { type: Number, default: 0 },
-            cached_tokens: { type: Number, default: 0 },
-            total_tokens: { type: Number, default: 0 }
-        },
-        // Stage 3: Final Assembly
+        // Stage 3: Final Assembly (uses analysis model - e.g., gpt-5.2)
         stage3: {
             input_tokens: { type: Number, default: 0 },
             output_tokens: { type: Number, default: 0 },
             cached_tokens: { type: Number, default: 0 },
             total_tokens: { type: Number, default: 0 }
         },
-        // Total across all stages
+        // Total across all LLM calls (sentiment + stage3)
         total: {
             input_tokens: { type: Number, default: 0 },
             output_tokens: { type: Number, default: 0 },
@@ -65,22 +58,36 @@ const userAnalyticsUsageSchema = new mongoose.Schema({
             total_tokens: { type: Number, default: 0 }
         }
     },
-    // Cost calculation (OpenAI pricing as of 2025)
-    // These can be updated based on current pricing
+    // Cost calculation with separate tracking per model
     cost_breakdown: {
-        input_cost: { type: Number, default: 0 },      // Input tokens cost in USD
-        output_cost: { type: Number, default: 0 },     // Output tokens cost in USD
-        cached_cost: { type: Number, default: 0 },     // Cached tokens cost in USD (usually 50% discount)
-        total_cost_usd: { type: Number, default: 0 },  // Total cost in USD
-        total_cost_inr: { type: Number, default: 0 }   // Total cost in INR (for local currency tracking)
+        // Sentiment model costs
+        sentiment_input_cost: { type: Number, default: 0 },
+        sentiment_output_cost: { type: Number, default: 0 },
+        sentiment_cached_cost: { type: Number, default: 0 },
+        sentiment_total_cost_usd: { type: Number, default: 0 },
+        // Analysis model costs
+        analysis_input_cost: { type: Number, default: 0 },
+        analysis_output_cost: { type: Number, default: 0 },
+        analysis_cached_cost: { type: Number, default: 0 },
+        analysis_total_cost_usd: { type: Number, default: 0 },
+        // Combined totals
+        total_cost_usd: { type: Number, default: 0 },
+        total_cost_inr: { type: Number, default: 0 }
     },
-    // Pricing model used for this analysis
+    // Pricing models used (now tracks both sentiment and analysis models)
     pricing_model: {
-        model_name: { type: String, default: 'gpt-4o' },  // e.g., 'gpt-4o', 'gpt-4o-mini'
-        input_price_per_1k: { type: Number, default: 0.0025 },   // USD per 1K input tokens
-        output_price_per_1k: { type: Number, default: 0.010 },   // USD per 1K output tokens
-        cached_price_per_1k: { type: Number, default: 0.00125 }, // USD per 1K cached tokens
-        usd_to_inr_rate: { type: Number, default: 83.0 }         // Exchange rate used
+        // Sentiment model (e.g., gpt-5-mini for news analysis)
+        sentiment_model: { type: String, default: 'gpt-5-mini' },
+        sentiment_input_price_per_1k: { type: Number, default: 0.00025 },   // $0.25 per 1M
+        sentiment_output_price_per_1k: { type: Number, default: 0.002 },    // $2.00 per 1M
+        sentiment_cached_price_per_1k: { type: Number, default: 0.000025 }, // $0.025 per 1M
+        // Analysis model (e.g., gpt-5.2 for main analysis)
+        analysis_model: { type: String, default: 'gpt-5.2' },
+        analysis_input_price_per_1k: { type: Number, default: 0.00175 },    // $1.75 per 1M
+        analysis_output_price_per_1k: { type: Number, default: 0.014 },     // $14.00 per 1M
+        analysis_cached_price_per_1k: { type: Number, default: 0.000175 },  // $0.175 per 1M
+        // Exchange rate
+        usd_to_inr_rate: { type: Number, default: 83.0 }
     },
     // Performance metrics
     performance: {
@@ -300,25 +307,38 @@ userAnalyticsUsageSchema.statics.getUserUsageInDateRange = async function(userId
 // Instance methods
 
 /**
- * Calculate cost based on token usage and pricing model
+ * Calculate cost based on token usage and pricing model (supports two-model pricing)
  */
 userAnalyticsUsageSchema.methods.calculateCost = function(usdToInrRate = 83.0) {
-    const { total } = this.token_usage;
+    const { sentiment, stage3 } = this.token_usage;
     const pricing = this.pricing_model;
 
-    // Calculate costs
-    const inputCost = (total.input_tokens / 1000) * pricing.input_price_per_1k;
-    const outputCost = (total.output_tokens / 1000) * pricing.output_price_per_1k;
-    const cachedCost = (total.cached_tokens / 1000) * pricing.cached_price_per_1k;
+    // Calculate sentiment model costs
+    const sentimentInputCost = (sentiment.input_tokens / 1000) * pricing.sentiment_input_price_per_1k;
+    const sentimentOutputCost = (sentiment.output_tokens / 1000) * pricing.sentiment_output_price_per_1k;
+    const sentimentCachedCost = (sentiment.cached_tokens / 1000) * pricing.sentiment_cached_price_per_1k;
+    const sentimentTotalCost = sentimentInputCost + sentimentOutputCost + sentimentCachedCost;
 
-    const totalCostUsd = inputCost + outputCost + cachedCost;
+    // Calculate analysis model costs
+    const analysisInputCost = (stage3.input_tokens / 1000) * pricing.analysis_input_price_per_1k;
+    const analysisOutputCost = (stage3.output_tokens / 1000) * pricing.analysis_output_price_per_1k;
+    const analysisCachedCost = (stage3.cached_tokens / 1000) * pricing.analysis_cached_price_per_1k;
+    const analysisTotalCost = analysisInputCost + analysisOutputCost + analysisCachedCost;
+
+    // Combined totals
+    const totalCostUsd = sentimentTotalCost + analysisTotalCost;
     const totalCostInr = totalCostUsd * usdToInrRate;
 
     // Update cost breakdown
     this.cost_breakdown = {
-        input_cost: inputCost,
-        output_cost: outputCost,
-        cached_cost: cachedCost,
+        sentiment_input_cost: sentimentInputCost,
+        sentiment_output_cost: sentimentOutputCost,
+        sentiment_cached_cost: sentimentCachedCost,
+        sentiment_total_cost_usd: sentimentTotalCost,
+        analysis_input_cost: analysisInputCost,
+        analysis_output_cost: analysisOutputCost,
+        analysis_cached_cost: analysisCachedCost,
+        analysis_total_cost_usd: analysisTotalCost,
         total_cost_usd: totalCostUsd,
         total_cost_inr: totalCostInr
     };

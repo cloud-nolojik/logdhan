@@ -467,14 +467,24 @@ subscriptionSchema.statics.findDueForRenewal = function() {
 // Static method to check if user can add stock to watchlist
 subscriptionSchema.statics.canUserAddStock = async function(userId, currentStockCount) {
   const subscription = await this.findActiveForUser(userId);
-  
+
   if (!subscription) {
-    throw new Error('No active subscription found');
+    // Check if user has an expired subscription
+    const expiredSubscription = await this.findOne({
+      userId,
+      status: { $in: ['EXPIRED', 'CANCELLED'] }
+    }).sort({ createdAt: -1 });
+
+    if (expiredSubscription) {
+      throw new Error('Your subscription has expired. Please renew to continue adding stocks.');
+    }
+
+    throw new Error('No subscription found. Please subscribe to add stocks to your watchlist.');
   }
-  
+
   // Check and update trial expiry
   subscription.checkAndUpdateTrialExpiry();
-  
+
   return {
     canAdd: subscription.canAddStock(currentStockCount),
     stockLimit: subscription.stockLimit,
