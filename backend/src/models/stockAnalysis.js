@@ -43,7 +43,11 @@ const strategyV14Schema = new mongoose.Schema(
     target: { type: Number, default: null },
     stopLoss: { type: Number, default: null },
 
-    riskReward: { type: Number, required: true },
+    riskReward: {
+      type: Number,
+      required: true,
+      set: (v) => (v == null ? v : Number(v))
+    },
 
     timeframe: { type: String, enum: ['3-7 days'], required: true },
 
@@ -156,7 +160,7 @@ const analysisDataV14Schema = new mongoose.Schema(
       entry_strategy: { type: String, enum: ['aggressive', 'moderate', 'cautious'] },
       news_count: Number,
       recent_news_count: Number,
-      sector_news_weight: Number
+      sector_news_weight: { type: Number, min: 0, max: 1 }
     },
     runtime: {
       triggers_evaluated: { type: [mongoose.Schema.Types.Mixed], default: [] },
@@ -176,7 +180,7 @@ const analysisDataV14Schema = new mongoose.Schema(
     performance_hints: {
       confidence_drivers: [String],
       uncertainty_factors: [String],
-      data_quality_score: Number
+      data_quality_score: { type: Number, min: 0, max: 1 }
     },
     disclaimer: {
       type: String,

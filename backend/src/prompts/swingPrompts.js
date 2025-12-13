@@ -764,12 +764,13 @@ IMPORTANT LANGUAGE RULE (human-readable fields):
   - target as "upper price region"
   - stopLoss as "lower price region"
 - You MAY use the numeric values (₹...) and indicator names (ema20_1D, atr14_1D, pivots.r1, etc.).
-- This word-ban applies ONLY to free-text fields. Disclaimer text is exempt (keep the provided compliance sentence even though it includes "buy/sell"). Schema enum fields (strategies[0].type, indicators[].signal, etc.) must use the exact schema values even if they contain those words.
+- Word-ban scope: apply to free-text fields only (why_best, reasoning[].because, warnings[].text, beginner_summary.*, why_in_plain_words, ui_friendly.*, suggested_qty.note, performance_hints strings, sentiment_analysis.reasoning/key_factors). Disclaimer text is exempt (keep the provided compliance sentence even though it includes "buy/sell"). Schema/enums and structured strings (gap_policy, actionability labels/status, order_gate fields, strategy.type/archetype/entryType, indicators[].signal) must use their schema values even if they contain banned words.
 
 === BEGINNER TEXT RULE (FOR beginner_summary + ui_friendly ONLY) ===
 - In beginner_summary.one_liner, beginner_summary.steps, beginner_summary.checklist, ui_friendly.why_smart_move, ui_friendly.beginner_explanation:
   - Avoid jargon terms: pivot, vwap, atr, ema, sma, rsi, distance_pct, trend_align, window_bars.
   - Use plain equivalents like: "reference level", "intraday average", "daily swing range", "short-term average", "long-term average", "momentum gauge".
+- In ui_friendly.ai_will_watch, phrase as "Over the next <confirmation.window_bars> × 1h candles" (or use the provided window_bars value; default to "20 × 1h candles" if missing).
 
 === TITLE RULE ===
 - strategies[0].title must be short and plain; avoid jargon (pivot/VWAP/ATR/EMA).
@@ -787,6 +788,9 @@ MONEY MATH (deterministic formulas, round to 2 decimals):
 
 === RISKREWARD CONSISTENCY ===
 - Set strategies[0].riskReward = money_example.per_share.rr (rounded to 2 decimals).
+
+=== CONFIDENCE CONSISTENCY (DETERMINISTIC) ===
+- Set strategies[0].confidence from selection_trace: use selectedId's totalScore, clamped to [0,1] and rounded to 2 decimals. If missing, fallback to 0.5.
 
 === PERFORMANCE_HINTS (REQUIRED) ===
 - Must always populate performance_hints.
