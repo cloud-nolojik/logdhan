@@ -1,5 +1,5 @@
 import StockAnalysis from "../models/stockAnalysis.js";
-import { pickBestStage2Candidate } from "../utils/pickBestCandidate.js";
+import { pickBestStage2Candidate, shrinkCandidateForPrompt } from "../utils/pickBestCandidate.js";
 
 /**
  * @typedef {"BULLISH" | "BEARISH" | "NEUTRAL"} Stage1Trend
@@ -524,7 +524,8 @@ export async function buildStage3Prompt({
   s1,
   s2,
   instrument_key,
-  userTradeState
+  userTradeState,
+  generatedAtIst
 }) {
   let existingStage3 = null;
   let existingMetadata = null;
@@ -542,28 +543,73 @@ export async function buildStage3Prompt({
   // 1) Code selects best candidate (deterministic)
   const { best, ranked } = pickBestStage2Candidate(s2);
 
-  const rankedLite = (ranked || []).slice(0, 6).map(r => {
-    const sk = r.c?.skeleton || {};
+  // Selection trace for transparency (matches pickBestStage2Candidate weights)
+  const selectionTrace = (ranked || []).map((r, idx) => {
+    const c = r.c || {};
+    const sk = c.skeleton || {};
+    const sc = c.score || {};
+    const rr = typeof sc.rr === "number" ? sc.rr : (sk.riskReward || 0);
+    const trend = typeof sc.trend_align === "number" ? sc.trend_align : 0;
+    const dist = typeof sc.distance_pct === "number" ? sc.distance_pct : 999;
+    const rrPart = Number((rr * 0.55).toFixed(4));
+    const trendPart = Number((trend * 0.35).toFixed(4));
+    const distPenalty = Number((Math.min(dist, 5) * 0.10).toFixed(4));
+    const total = Number((rrPart + trendPart - distPenalty).toFixed(4));
     return {
-      id: r.c?.id,
-      name: r.c?.name,
-      totalScore: Number((r.totalScore ?? 0).toFixed(4)),
+      rank: idx + 1,
+      id: c.id,
+      name: c.name,
+      rr,
+      trend_align: trend,
+      distance_pct: dist,
+      rrPart,
+      trendPart,
+      distPenalty,
+      totalScore: total,
       type: sk.type,
       archetype: sk.archetype,
-      alignment: sk.alignment,
-      entryType: sk.entryType,
       entry: sk.entry,
       target: sk.target,
-      stopLoss: sk.stopLoss,
-      riskReward: sk.riskReward
+      stopLoss: sk.stopLoss
     };
   });
+
+  const scoreBreakdown = selectionTrace.reduce((acc, st) => {
+    const key = st.id || `rank_${st.rank}`;
+    acc[key] = {
+      rr: st.rr,
+      trend_align: st.trend_align,
+      distance_pct: st.distance_pct,
+      rrPart: st.rrPart,
+      trendPart: st.trendPart,
+      distPenalty: st.distPenalty,
+      totalScore: st.totalScore
+    };
+    return acc;
+  }, {});
+
+  const selectedLite = shrinkCandidateForPrompt(best);
+  const comparisonLite = selectionTrace
+    .filter(st => !best || st.id !== best.id)
+    .slice(0, 3)
+    .map(st => ({
+      id: st.id,
+      name: st.name,
+      totalScore: st.totalScore,
+      type: st.type,
+      archetype: st.archetype
+    }));
 
   const hasOpen =
     userTradeState?.hasOpenPosition === true ||
     userTradeState?.hasOpenOrder === true;
 
   const analysisMode = hasOpen ? "MANAGE_OPEN" : "DISCOVERY";
+
+  if (analysisMode === "DISCOVERY") {
+    // Avoid leaking non-schema keys from prior runs; prompt will also instruct not to copy.
+    existingStage3 = null;
+  }
 
   const system = `You are a highly reliable swing-market analysis engine for Indian equities.
 Return STRICT, VALID JSON that follows schema v1.4 exactly.
@@ -578,11 +624,13 @@ If analysis_mode = "MANAGE_OPEN":
 - The user already has an open order/position.
 - You MUST NOT produce "order_gate.can_place_order": true.
 - You MUST set strategies[0].actionability.status = "monitor_only".
-- Prefer KEEP, else ADJUST. RETIRE only if geometry/data breaks.
+- Prefer KEEP, else ADJUST. If geometry/data breaks, switch to NO_TRADE per rules below.
 
 If analysis_mode = "DISCOVERY":
 - No open order/position is present.
-- Choose ONE structure based on SELECTED_CANDIDATE (preferred), or RETIRE if unusable.
+- selectedCandidate is final and was selected by deterministic code.
+- Do NOT re-rank or swap to other candidates. Use selectedId unless NO_TRADE is forced by geometry/invalid data.
+- Choose ONE structure based on SELECTED_CANDIDATE (preferred), or output NO_TRADE if unusable.
 
 === INPUT CONTEXT ===
 Stock: ${stock_name} (${stock_symbol})
@@ -600,14 +648,26 @@ ${JSON.stringify(sectorInfo || {}, null, 2)}
 STAGE-1 (preflight):
 ${JSON.stringify(s1, null, 2)}
 
-STAGE-2 (candidates):
-${JSON.stringify(s2, null, 2)}
-
-STAGE-2 (ranked summary, code-selected):
-${JSON.stringify({ selectedId: best?.id || null, selectedCandidate: best || null, rankedLite }, null, 2)}
+STAGE-2 (code-selected summary):
+${JSON.stringify({
+  selectedId: best?.id || null,
+  selectedCandidate: selectedLite || null,
+  selection_trace: {
+    formula: "score = (rr*0.55) + (trend_align*0.35) - (min(distance_pct,5)*0.10)",
+    rr_priority_note: "Pool prefers RR>=1.5 if available; otherwise uses all ok candidates.",
+    score_breakdown: scoreBreakdown,
+    top_alternatives: comparisonLite
+  },
+  s2_notes: s2?.notes || [],
+  s2_data_health: s2?.data_health || null,
+  s2_insufficient: s2?.insufficientData || false
+}, null, 2)}
 
 Existing Stage-3 (if available):
 ${existingStage3 ? JSON.stringify(existingStage3, null, 2) : "None"}
+
+GENERATED_AT_IST_INPUT (must echo exactly):
+${generatedAtIst}
 
 Existing Metadata:
 ${existingMetadata ? JSON.stringify(existingMetadata, null, 2) : "None"}
@@ -617,22 +677,51 @@ You must use ONLY:
 - marketPayload
 - sectorInfo
 - s1
-- s2 (and rankedLite summary)
+- STAGE-2 selection summary provided above (selectedCandidate + selection_trace)
 - existingStage3 if present
+- GENERATED_AT_IST_INPUT must be echoed exactly as generated_at_ist.
 
 Do NOT invent indicators, levels, volume, sentiment, or triggers.
 If required values cannot be produced reliably -> insufficientData = true (still output FULL schema).
+
+=== OUTPUT STRICTNESS (HARD RULE) ===
+- Output must include ONLY the keys defined in the schema below.
+- Do NOT output any extra keys at any nesting level.
+- Do NOT output database/serialization types (ObjectId, NumberInt, ISODate, __v, _id).
+- Do NOT duplicate keys (e.g., two "why_best").
+
+=== TYPE RULES (HARD) ===
+- Any field described as <number> must be a JSON number (not a quoted string).
+- indicators[].value must be a number or null (never a string).
+- market_summary.last must be a number.
+
+=== EXISTING STAGE-3 RULE ===
+- If existingStage3 is present, treat it as reference-only.
+- Do NOT copy keys from existingStage3 unless that key exists in the schema.
 
 === SELECTION RULE ===
 - In DISCOVERY mode: Base the main structure on SELECTED_CANDIDATE if present.
 - Allowed archetypes ONLY: breakout, pullback, trend-follow, mean-reversion, range-fade.
 - Do NOT invent a new archetype outside this list.
+- If selectedCandidate.skeleton entry/target/stopLoss is missing or violates required ordering (BUY: stop < entry < target; SELL: target < entry < stop), set type="NO_TRADE", entry=null, entryRange=null, target=null, stopLoss=null, riskReward=0, and mark insufficientData=true.
+- If all required values exist but the structure is not acceptable (e.g., RR < 1.0), set type="NO_TRADE" but keep insufficientData=false.
 
 === OPEN-STATE RULE (VERY IMPORTANT) ===
 If userTradeState.hasOpenOrder=true OR userTradeState.hasOpenPosition=true:
 - order_gate.can_place_order = false
 - strategies[0].actionability.status = "monitor_only"
-- You MAY still evaluate triggers/invalidations in runtime/order_gate, but do NOT suggest placing a new order.
+- Do not simulate triggers; keep runtime.triggers_evaluated = [].
+
+ORDER GATE RULE (DETERMINISTIC, since triggers are not evaluated here):
+- If runtime.triggers_evaluated is empty:
+  - order_gate.all_triggers_true = false
+  - order_gate.no_pre_entry_invalidations = true
+  - order_gate.can_place_order = false
+  - order_gate.actionability_status = (analysis_mode === "MANAGE_OPEN") ? "monitor_only" : "actionable_on_trigger"
+  - order_gate.entry_type_sane = true only if geometry ordering is valid and entryType is in allowed schema values; otherwise false.
+
+ACTIONABILITY SYNC RULE:
+- strategies[0].actionability.status MUST equal order_gate.actionability_status.
 
 === EXPLANATION REQUIREMENTS (MUST DO) ===
 You must clearly explain:
@@ -640,18 +729,75 @@ You must clearly explain:
 2) Why these exact levels (entry/target/stopLoss) were selected
 3) How long the structure is intended to remain valid (sessions/days) and what behaviour would cause review/retire
 
+RUNTIME RULE:
+- runtime.triggers_evaluated = [] (do NOT simulate trigger evaluation in this version)
+
+=== SENTIMENT MAPPING (DETERMINISTIC) ===
+- Build sentiment_analysis from marketPayload.sentimentContext:
+  - confidence = sentimentContext.confidence / 100
+  - strength = sentimentContext.strength
+  - key_factors = sentimentContext.keyFactors (use first 2 if longer)
+  - sector_specific = sentimentContext.sectorSpecific
+  - market_alignment = sentimentContext.marketAlignment
+  - trading_bias = sentimentContext.tradingImplications.bias
+  - risk_level = sentimentContext.tradingImplications.riskLevel
+  - position_sizing = sentimentContext.tradingImplications.positionSizing
+  - entry_strategy = sentimentContext.tradingImplications.entryStrategy
+  - news_count = sentimentContext.newsAnalyzed
+  - recent_news_count = sentimentContext.recentNewsCount
+  - sector_news_weight = sentimentContext.sectorNewsWeight (must be 0–1)
+
+INDICATOR SIGNALS (DETERMINISTIC):
+- Use priceContext.last (fallback to current_price) against each indicator value when numeric; if either side is missing, set signal "NEUTRAL".
+- For ema20_1D, ema50_1D, sma200_1D: if priceContext.last > value => signal "BUY"; if priceContext.last < value => "SELL"; else "NEUTRAL".
+- For rsi14_1h: if value >= 55 => "BUY"; if value <= 45 => "SELL"; else "NEUTRAL".
+- For atr14_1D: signal is always "NEUTRAL".
+
+SENTIMENT REASONING SAFETY:
+- Keep sentiment_analysis.reasoning numeric and generic (e.g., confidence, newsAnalyzed count, bias, risk level); do NOT cite publication names or external sources even if present in the data.
+
 IMPORTANT LANGUAGE RULE (human-readable fields):
+- RULE: Do NOT rename any schema keys. The word-ban applies only to values of free-text fields, not JSON keys.
 - Do NOT use: "buy", "sell", "trade", "entry", "exit", "stoploss", "target", "recommend", "should", "must", "advice".
 - In human-readable text, refer to:
   - entry as "middle price zone"
   - target as "upper price region"
   - stopLoss as "lower price region"
 - You MAY use the numeric values (₹...) and indicator names (ema20_1D, atr14_1D, pivots.r1, etc.).
+- This word-ban applies ONLY to free-text fields. Disclaimer text is exempt (keep the provided compliance sentence even though it includes "buy/sell"). Schema enum fields (strategies[0].type, indicators[].signal, etc.) must use the exact schema values even if they contain those words.
+
+=== BEGINNER TEXT RULE (FOR beginner_summary + ui_friendly ONLY) ===
+- In beginner_summary.one_liner, beginner_summary.steps, beginner_summary.checklist, ui_friendly.why_smart_move, ui_friendly.beginner_explanation:
+  - Avoid jargon terms: pivot, vwap, atr, ema, sma, rsi, distance_pct, trend_align, window_bars.
+  - Use plain equivalents like: "reference level", "intraday average", "daily swing range", "short-term average", "long-term average", "momentum gauge".
+
+=== TITLE RULE ===
+- strategies[0].title must be short and plain; avoid jargon (pivot/VWAP/ATR/EMA).
+- Suggested pattern: "Upward-leaning structure between ₹<lower> and ₹<upper>".
+
+CONFIDENCE NORMALIZATION:
+- If any confidence is provided in 0–100 scale, divide by 100 to fit the 0–1 requirement before outputting.
+
+MONEY MATH (deterministic formulas, round to 2 decimals):
+- For BUY: risk_per_share = entry - stopLoss; reward_per_share = target - entry; rr = (risk_per_share > 0) ? reward_per_share / risk_per_share : 0.
+- distance_to_stop_pct = (risk_per_share / entry) * 100; distance_to_target_pct = (reward_per_share / entry) * 100.
+- qty = (risk_per_share > 0) ? floor(risk_budget_inr / risk_per_share) : 0.
+- Apply analogous geometry for SELL: risk_per_share = stopLoss - entry; reward_per_share = entry - target; rr = (risk_per_share > 0) ? reward_per_share / risk_per_share : 0.
+- Round INR and percentage outputs to 2 decimals.
+
+=== RISKREWARD CONSISTENCY ===
+- Set strategies[0].riskReward = money_example.per_share.rr (rounded to 2 decimals).
+
+=== PERFORMANCE_HINTS (REQUIRED) ===
+- Must always populate performance_hints.
+- confidence_drivers: derive from 2 concrete facts (e.g., "last 782 > ema20_1D 764.90", "distance_pct 0.28").
+- uncertainty_factors: derive from 1–2 risks (e.g., "atr14_1D 20.13", "gap -1.51%").
+- data_quality_score: 1.0 if s1.data_health.missing is empty else 0.7 (deterministic).
 
 Where to place the explanations (schema fields you MUST fill well):
 A) strategies[0].why_best:
    - Mention selectedId and selectedCandidate.name.
-   - Compare against 1–2 alternatives from rankedLite (by id + name).
+   - Compare against 1–2 alternatives from selection_trace.top_alternatives (by id + name).
    - Use numeric evidence (riskReward, distance_pct if present, trend alignment, ATR/levels).
 
 B) strategies[0].reasoning (3–5 items):
@@ -683,7 +829,7 @@ You MUST output ONLY one valid JSON object with EXACTLY this structure:
   "schema_version": "1.4",
   "symbol": "${stock_symbol}",
   "analysis_type": "swing",
-  "generated_at_ist": "<ISO-8601 timestamp in +05:30 timezone>",
+  "generated_at_ist": "<ISO-8601 timestamp in +05:30 timezone> (must equal GENERATED_AT_IST_INPUT)",
   "insufficientData": <boolean>,
   "market_summary": {
     "last": <number>,

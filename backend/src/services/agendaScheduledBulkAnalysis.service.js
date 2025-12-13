@@ -389,7 +389,11 @@ class AgendaScheduledBulkAnalysisService {
 
                 }
                 if (!candleLogged.has(stock.instrument_key) && result.data) {
-                  const candleInfo = result.data?.analysis_data?.meta?.candle_info || result.data?.meta?.candle_info;
+                  const candleInfo =
+                    result.data?.analysis_meta?.candle_info ||
+                    result.data?.analysis_data?.analysis_meta?.candle_info ||
+                    result.data?.analysis_data?.meta?.candle_info ||
+                    result.data?.meta?.candle_info;
                   if (candleInfo) {
                     const frames = (candleInfo.timeframes_used || [])
                       .map((tf) => `${tf.key || tf.timeframe || 'n/a'}:${tf.last_candle_time || 'n/a'}`)

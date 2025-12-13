@@ -29,10 +29,10 @@ class AIAnalyzeService {
     this.openaiApiKey = process.env.OPENAI_API_KEY;
     this.rssParser = new Parser();
 
-    // Model configuration
-    this.analysisModel = "gpt-5-mini-2025-08-07";
-    this.basicModel = "gpt-5.2-2025-12-11";
-    this.advancedModel = "gpt-5.2-2025-12-11";
+    // Models are set dynamically from modelSelectorService.determineAIModel()
+    // See: backend/src/services/ai/modelSelector.service.js for the SINGLE SOURCE OF TRUTH
+    this.analysisModel = null;     // Set in generateStockAnalysisWithPayload()
+    this.sentimentalModel = null;  // Set in generateStockAnalysisWithPayload()
 
     // Use existing term-to-frames mapping from aiReview
     this.termToFrames = {
@@ -296,13 +296,14 @@ class AIAnalyzeService {
                 last_updated: new Date()
               },
               analysis_data: {
-                schema_version: '1.3',
+                schema_version: '1.4',
                 symbol: stock_symbol,
                 analysis_type,
                 insufficientData: false,
                 strategies: [],
                 overall_sentiment: 'NEUTRAL'
               },
+              analysis_meta: {},
               created_at: new Date()
             }
           },
@@ -401,7 +402,11 @@ class AIAnalyzeService {
       : (scheduled_release_time || 'immediate');
     const runContext = skipNotification ? 'bulk_scheduled' : 'on_demand';
     const logCandleMeta = (label, analysisData) => {
-      const meta = analysisData?.meta || analysisData?.analysis_data?.meta;
+      const meta =
+        analysisData?.analysis_meta ||
+        analysisData?.meta ||
+        analysisData?.analysis_data?.analysis_meta ||
+        analysisData?.analysis_data?.meta;
       const candleInfo = meta?.candle_info;
       if (!candleInfo) {
         console.log(`[ANALYZE] ${label} candle metadata missing for ${stock_symbol || instrument_key}`);
@@ -548,7 +553,15 @@ class AIAnalyzeService {
         const aiAnalysisTime = Date.now() - aiAnalysisStart;
 
         // Update analysis with results and mark completed or failed based on data sufficiency
-        pendingAnalysis.analysis_data = analysisResult;
+        const {
+          meta: resultMeta,
+          analysis_meta: resultAnalysisMeta,
+          _tokenTracking,
+          _processingTime,
+          ...analysisData
+        } = analysisResult || {};
+        pendingAnalysis.analysis_meta = resultAnalysisMeta || resultMeta || {};
+        pendingAnalysis.analysis_data = analysisData;
 
         // Check if AI returned insufficientData and mark as failed if so
         if (analysisResult.insufficientData === true) {
@@ -2362,12 +2375,48 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
   }
 
   /**
+   * Slim market payload for Stage 3 to cut token bloat while keeping needed context
+   */
+  slimMarketPayloadForStage3(marketPayload) {
+    if (!marketPayload || typeof marketPayload !== 'object') return {};
+
+    const {
+      priceContext,
+      trendMomentum,
+      swingContext,
+      levels,
+      sentimentContext,
+      volumeContext
+    } = marketPayload;
+
+    // Strip recommendation-like text to avoid LLM echoing advice
+    let cleanSentiment = sentimentContext ? { ...sentimentContext } : undefined;
+    if (cleanSentiment?.tradingImplications?.recommendations) {
+      const { recommendations, ...rest } = cleanSentiment.tradingImplications;
+      cleanSentiment = {
+        ...cleanSentiment,
+        tradingImplications: rest
+      };
+    }
+
+    return {
+      priceContext,
+      trendMomentum,
+      swingContext,
+      levels,
+      sentimentContext: cleanSentiment,
+      volumeContext
+    };
+  }
+
+  /**
    * Stage 3: Final Assembly (v1.4)
    * Combines MARKET DATA + S1 + S2 + sentimentContext
    */
   async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode = 'cricket' }) {
     try {
-      const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode });
+      const generatedAtIst = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
+      const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode, generatedAtIst });
       const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
 
       const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
@@ -2572,6 +2621,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     let stage3Time = 0;
 
     let game_mode = "badminton";
+    const stage3Payload = this.slimMarketPayloadForStage3(marketPayload);
 
     // STAGE 3
     const stage3Start = Date.now();
@@ -2581,10 +2631,10 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
   stock_name,
   stock_symbol,
   current_price,
-  marketPayload,
+  marketPayload: stage3Payload,
   sectorInfo,
   s1: s1r.s1,
-  s2:s2r,   // 👈 pass only Top-1 (or empty)
+  s2: s2r.s2,   // 👈 pass only Top-1 (or empty)
   instrument_key,
   game_mode
 });
@@ -2605,7 +2655,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
       stock_name,
       stock_symbol,
       current_price,
-      marketPayload,
+      marketPayload: stage3Payload,
       sectorInfo,
       s1: s1r.s1,
       s2: s2r.s2,
@@ -2637,6 +2687,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     }
 
     const finalOut = s3result.data;
+    const analysisMeta = finalOut.analysis_meta || finalOut.meta || {};
 
     // Calculate total token usage (sentiment + stage3 LLM calls)
     Object.keys(tokenTracking.total).forEach((key) => {
@@ -2644,15 +2695,16 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     });
 
     // Attach meta with token tracking
-    if (!finalOut.meta) finalOut.meta = {};
-    finalOut.meta.model_used = this.analysisModel;
-    finalOut.meta.sentiment_model_used = this.sentimentalModel;
-    finalOut.meta.processing_time_ms = Date.now() - t0;
-    finalOut.meta.stage_chain = ["s1", "s2", "s3"];
-    finalOut.meta.token_usage = tokenTracking;
+    analysisMeta.model_used = this.analysisModel;
+    analysisMeta.sentiment_model_used = this.sentimentalModel;
+    analysisMeta.processing_time_ms = Date.now() - t0;
+    analysisMeta.stage_chain = ["s1", "s2", "s3"];
+    analysisMeta.token_usage = tokenTracking;
 
     // Add candle metadata for UI display
-    finalOut.meta.candle_info = this.extractCandleMetadata(marketPayload);
+    analysisMeta.candle_info = this.extractCandleMetadata(marketPayload);
+    finalOut.analysis_meta = analysisMeta;
+    delete finalOut.meta;
 
     const total3StageTime = Date.now() - t0;
 

@@ -1,139 +1,221 @@
 import mongoose from 'mongoose';
 import MarketHoursUtil from '../utils/marketHours.js';
 
-const indicatorSignalSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true
-  },
-  value: {
-    type: String,
-    required: true
-  },
-  signal: {
-    type: String,
-    enum: ['STRONG_BUY', 'BUY', 'NEUTRAL', 'SELL', 'STRONG_SELL', 'neutral'],
-    required: true
-  }
-});
-
-const strategySchema = new mongoose.Schema({
-  id: {
-    type: String,
-    required: true
-  },
-  type: {
-    type: String,
-    enum: ['BUY', 'SELL', 'HOLD', 'NO_TRADE'],
-    required: true
-  },
-  alignment: {
-    type: String,
-    enum: ['with_trend', 'counter_trend', 'neutral'],
-    default: 'neutral'
-  },
-  title: {
-    type: String,
-    required: true
-  },
-  confidence: {
-    type: Number,
-    required: true,
-    min: 0,
-    max: 1
-  },
-  entryType: {
-    type: String,
-    enum: ['market', 'limit', 'range', 'stop', 'stop-limit', 'none'],
-    default: 'limit'
-  },
-  entry: {
-    type: Number,
-    required: function () {
-      return this.type !== 'NO_TRADE';
-    },
-    default: 0
-  },
-  entryRange: [{
-    type: Number
-  }],
-  target: {
-    type: Number,
-    required: function () {
-      return this.type !== 'NO_TRADE';
-    },
-    default: 0
-  },
-  stopLoss: {
-    type: Number,
-    required: function () {
-      return this.type !== 'NO_TRADE';
-    },
-    default: 0
-  },
-  riskReward: {
-    type: Number,
-    required: function () {
-      return this.type !== 'NO_TRADE';
-    },
-    default: 0
-  },
-  timeframe: {
-    type: String,
-    required: true,
-    default: '3-7 days' // Default for swing analysis
-  },
-  indicators: [indicatorSignalSchema],
-  reasoning: [mongoose.Schema.Types.Mixed], // Accept objects or strings
-  warnings: [mongoose.Schema.Types.Mixed], // Accept objects or strings
-  triggers: [mongoose.Schema.Types.Mixed], // Accept objects or strings
-  invalidations: [mongoose.Schema.Types.Mixed], // Accept objects or strings
-  beginner_summary: mongoose.Schema.Types.Mixed, // Accept object or string
-  why_in_plain_words: [mongoose.Schema.Types.Mixed], // Accept objects or strings
-  what_could_go_wrong: mongoose.Schema.Types.Mixed, // Accept array or string
-  money_example: mongoose.Schema.Types.Mixed, // Accept any object structure
-  suggested_qty: mongoose.Schema.Types.Mixed, // Accept object or number
-  risk_meter: mongoose.Schema.Types.Mixed, // Accept object or string
-  actionability: mongoose.Schema.Types.Mixed, // Accept object or string
-  glossary: mongoose.Schema.Types.Mixed, // Accept any object structure
-  score: Number,
-  score_band: {
-    type: String,
-    enum: ['High', 'Medium', 'Low']
-  },
-  score_components: mongoose.Schema.Types.Mixed,
-  isTopPick: {
-    type: Boolean,
-    default: false
-  },
-  archetype: {
-    type: String,
-    enum: ['breakout', 'pullback', 'trend-follow', 'mean-reversion', 'range-fade'],
-    required: false
-  },
-  why_best: {
-    type: String,
-    required: false
-  },
-  confirmation: mongoose.Schema.Types.Mixed, // Accept object or string
-  validity: mongoose.Schema.Types.Mixed, // Accept any object structure
-
-  // UI-friendly fields for non-technical retail traders
-  ui_friendly: {
-    why_smart_move: {
+const indicatorSignalSchema = new mongoose.Schema(
+  {
+    name: {
       type: String,
-      required: false
+      enum: ['ema20_1D', 'ema50_1D', 'sma200_1D', 'rsi14_1h', 'atr14_1D'],
+      required: true
     },
-    ai_will_watch: [{
+    value: {
+      type: Number,
+      default: null
+    },
+    signal: {
       type: String,
-      required: false
-    }],
-    beginner_explanation: {
-      type: String,
-      required: false
+      enum: ['BUY', 'SELL', 'NEUTRAL'],
+      required: true
     }
-  }
-});
+  },
+  { _id: false, strict: 'throw' }
+);
+
+const strategyV14Schema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    type: { type: String, enum: ['BUY', 'SELL', 'NO_TRADE'], required: true },
+    archetype: {
+      type: String,
+      enum: ['breakout', 'pullback', 'trend-follow', 'mean-reversion', 'range-fade'],
+      required: true
+    },
+    alignment: { type: String, enum: ['with_trend', 'counter_trend', 'neutral'], required: true },
+
+    title: { type: String, required: true },
+    confidence: { type: Number, required: true, min: 0, max: 1 },
+
+    why_best: { type: String, required: true },
+
+    entryType: { type: String, enum: ['limit', 'market', 'range', 'stop', 'stop-limit'], required: true },
+    entry: { type: Number, default: null },
+    entryRange: { type: [Number], default: null },
+    target: { type: Number, default: null },
+    stopLoss: { type: Number, default: null },
+
+    riskReward: { type: Number, required: true },
+
+    timeframe: { type: String, enum: ['3-7 days'], required: true },
+
+    indicators: { type: [indicatorSignalSchema], default: [] },
+
+    reasoning: { type: [{ because: String }], default: [] },
+
+    warnings: {
+      type: [
+        {
+          code: { type: String, enum: ['GAP_RISK', 'HIGH_VOLATILITY', 'LOW_VOLUME', 'NEWS_EVENT', 'SECTOR_WEAKNESS'] },
+          severity: { type: String, enum: ['low', 'medium', 'high'] },
+          text: String,
+          applies_when: { type: [mongoose.Schema.Types.Mixed], default: [] },
+          mitigation: { type: [String], default: [] }
+        }
+      ],
+      default: []
+    },
+
+    triggers: { type: [mongoose.Schema.Types.Mixed], default: [] },
+
+    confirmation: {
+      require: { type: String, enum: ['ALL', 'ANY', 'NONE'], required: true },
+      window_bars: { type: Number, required: true },
+      conditions: { type: [mongoose.Schema.Types.Mixed], default: [] }
+    },
+
+    invalidations: { type: [mongoose.Schema.Types.Mixed], default: [] },
+
+    validity: {
+      entry: {
+        type: {
+          type: String,
+          enum: ['GTD'],
+          required: true
+        },
+        bars_limit: { type: Number, required: true },
+        trading_sessions_soft: { type: Number, required: true },
+        trading_sessions_hard: { type: Number, required: true },
+        expire_calendar_cap_days: { type: Number, required: true }
+      },
+      position: {
+        time_stop_sessions: { type: Number, required: true },
+        gap_policy: { type: String, enum: ['exit_at_open_with_slippage'], required: true }
+      },
+      non_trading_policy: { type: String, enum: ['pause_clock'], required: true }
+    },
+
+    beginner_summary: mongoose.Schema.Types.Mixed,
+    why_in_plain_words: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    what_could_go_wrong: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    ui_friendly: mongoose.Schema.Types.Mixed,
+
+    money_example: mongoose.Schema.Types.Mixed,
+    suggested_qty: mongoose.Schema.Types.Mixed,
+    risk_meter: mongoose.Schema.Types.Mixed,
+    actionability: mongoose.Schema.Types.Mixed,
+    glossary: mongoose.Schema.Types.Mixed
+  },
+  { _id: false, strict: 'throw' }
+);
+
+const analysisDataV14Schema = new mongoose.Schema(
+  {
+    schema_version: {
+      type: String,
+      default: '1.4'
+    },
+    symbol: String,
+    analysis_type: {
+      type: String,
+      enum: ['swing', 'intraday']
+    },
+    generated_at_ist: String,
+    insufficientData: {
+      type: Boolean,
+      default: false
+    },
+    market_summary: {
+      last: Number,
+      trend: {
+        type: String,
+        enum: ['BULLISH', 'BEARISH', 'NEUTRAL']
+      },
+      volatility: {
+        type: String,
+        enum: ['HIGH', 'MEDIUM', 'LOW']
+      },
+      volume: {
+        type: String,
+        enum: ['ABOVE_AVERAGE', 'AVERAGE', 'BELOW_AVERAGE', 'UNKNOWN']
+      }
+    },
+    overall_sentiment: {
+      type: String,
+      enum: ['BULLISH', 'BEARISH', 'NEUTRAL'],
+      required: true
+    },
+    sentiment_analysis: {
+      confidence: Number,
+      strength: { type: String, enum: ['high', 'medium', 'low'] },
+      reasoning: String,
+      key_factors: [String],
+      sector_specific: Boolean,
+      market_alignment: { type: String, enum: ['aligned', 'contrary', 'neutral'] },
+      trading_bias: { type: String, enum: ['bullish', 'bearish', 'neutral'] },
+      risk_level: { type: String, enum: ['low', 'medium', 'high'] },
+      position_sizing: { type: String, enum: ['increased', 'standard', 'reduced'] },
+      entry_strategy: { type: String, enum: ['aggressive', 'moderate', 'cautious'] },
+      news_count: Number,
+      recent_news_count: Number,
+      sector_news_weight: Number
+    },
+    runtime: {
+      triggers_evaluated: { type: [mongoose.Schema.Types.Mixed], default: [] },
+      pre_entry_invalidations_hit: Boolean
+    },
+    order_gate: {
+      all_triggers_true: Boolean,
+      no_pre_entry_invalidations: Boolean,
+      actionability_status: {
+        type: String,
+        enum: ['actionable_now', 'actionable_on_trigger', 'monitor_only']
+      },
+      entry_type_sane: Boolean,
+      can_place_order: Boolean
+    },
+    strategies: { type: [strategyV14Schema], default: [] },
+    performance_hints: {
+      confidence_drivers: [String],
+      uncertainty_factors: [String],
+      data_quality_score: Number
+    },
+    disclaimer: {
+      type: String,
+      default: 'AI-generated educational interpretation of price behaviour. Not investment advice or a recommendation to buy or sell any security.'
+    }
+  },
+  { _id: false, strict: 'throw' }
+);
+
+const timeframeInfoSchema = new mongoose.Schema(
+  {
+    timeframe: String,
+    key: String,
+    bars_count: Number,
+    last_candle_time: String
+  },
+  { _id: false, strict: false }
+);
+
+const candleInfoSchema = new mongoose.Schema(
+  {
+    timeframes_used: { type: [timeframeInfoSchema], default: [] },
+    primary_timeframe: String,
+    last_candle_time: String,
+    data_quality: mongoose.Schema.Types.Mixed
+  },
+  { _id: false, strict: false }
+);
+
+const analysisMetaSchema = new mongoose.Schema(
+  {
+    data_as_of_ist: String,
+    stalePrice: Boolean,
+    generated_at_ist: String,
+    candle_info: candleInfoSchema,
+    debug: mongoose.Schema.Types.Mixed
+  },
+  { _id: false, strict: false }
+);
 
 const stockAnalysisSchema = new mongoose.Schema({
   instrument_key: {
@@ -172,97 +254,8 @@ const stockAnalysisSchema = new mongoose.Schema({
       message: 'current_price must be a positive number for non-failed analyses'
     }
   },
-  analysis_data: {
-    schema_version: {
-      type: String,
-      default: '1.4'
-    },
-    symbol: String,
-    analysis_type: String,
-    generated_at_ist: String,
-    insufficientData: {
-      type: Boolean,
-      default: false
-    },
-    market_summary: {
-      last: Number,
-      trend: {
-        type: String,
-        enum: ['BULLISH', 'BEARISH', 'NEUTRAL']
-      },
-      volatility: {
-        type: String,
-        enum: ['HIGH', 'MEDIUM', 'LOW']
-      },
-      volume: {
-        type: String,
-        enum: ['ABOVE_AVERAGE', 'AVERAGE', 'BELOW_AVERAGE', 'UNKNOWN']
-      }
-    },
-    overall_sentiment: {
-      type: String,
-      enum: ['BULLISH', 'BEARISH', 'NEUTRAL'],
-      required: true
-    },
-    runtime: {
-      triggers_evaluated: [{
-        id: String,
-        timeframe: String,
-        left_ref: String,
-        left_value: mongoose.Schema.Types.Mixed,
-        op: String,
-        right_ref: String,
-        right_value: mongoose.Schema.Types.Mixed,
-        passed: Boolean,
-        evaluable: Boolean
-      }],
-      pre_entry_invalidations_hit: Boolean
-    },
-    order_gate: {
-      all_triggers_true: Boolean,
-      no_pre_entry_invalidations: Boolean,
-      actionability_status: {
-        type: String,
-        enum: ['actionable_now', 'actionable_on_trigger', 'monitor_only']
-      },
-      entry_type_sane: Boolean,
-      can_place_order: Boolean
-    },
-    strategies: [strategySchema],
-    disclaimer: {
-      type: String,
-      default: 'AI-generated educational analysis. Not investment advice.'
-    },
-    meta: {
-      data_as_of_ist: String,
-      stalePrice: Boolean,
-      generated_at_ist: String,
-      candle_info: {
-        timeframes_used: [{
-          timeframe: String, // "15-min", "1-hour", "daily"
-          key: String, // "15m", "1h", "1d"
-          bars_count: Number,
-          last_candle_time: String // ISO timestamp
-        }],
-        primary_timeframe: String, // "daily", "1-hour", "15-min"
-        last_candle_time: String, // ISO timestamp
-        data_quality: mongoose.Schema.Types.Mixed // { bars_15m, bars_1h, bars_1d }
-      },
-      debug: {
-        ai_request: {
-          model: String,
-          formatted_messages: mongoose.Schema.Types.Mixed, // The formatted messages sent to AI
-          request_payload: mongoose.Schema.Types.Mixed, // The full request payload built
-          prompt_hash: String // Hash of the prompt for quick identification
-        },
-        market_payload: mongoose.Schema.Types.Mixed, // The market data used for analysis
-        processing_time: {
-          total_ms: Number,
-          steps: mongoose.Schema.Types.Mixed // Timing for each analysis step
-        }
-      }
-    }
-  },
+  analysis_data: { type: analysisDataV14Schema, default: {} },
+  analysis_meta: { type: analysisMetaSchema, default: {} },
   status: {
     type: String,
     enum: ['pending', 'in_progress', 'completed', 'failed'],
@@ -362,6 +355,17 @@ const stockAnalysisSchema = new mongoose.Schema({
   last_order_placed_at: Date
 });
 
+stockAnalysisSchema.set('toJSON', {
+  virtuals: true,
+  versionKey: false,
+  transform: (_doc, ret) => {
+    delete ret.__v;
+    return ret;
+  }
+});
+
+stockAnalysisSchema.set('toObject', { virtuals: true });
+
 // Compound index for efficient queries - shared across all users
 stockAnalysisSchema.index({
   instrument_key: 1,
@@ -438,44 +442,90 @@ stockAnalysisSchema.methods.markFailed = function (error = 'Analysis failed') {
   this.progress.last_updated = new Date();
 
   // Ensure analysis_data has minimum required fields to pass validation
-  if (!this.analysis_data) {
-    this.analysis_data = {};
-  }
+  const fallbackStrategy = {
+    id: 'failed-analysis',
+    type: 'NO_TRADE',
+    archetype: 'mean-reversion',
+    alignment: 'neutral',
+    title: 'Analysis Failed',
+    confidence: 0,
+    why_best: error,
+    entryType: 'limit',
+    entry: null,
+    entryRange: null,
+    target: null,
+    stopLoss: null,
+    riskReward: 0,
+    timeframe: '3-7 days',
+    indicators: [],
+    reasoning: [{ because: error }],
+    warnings: [],
+    triggers: [],
+    confirmation: { require: 'NONE', window_bars: 0, conditions: [] },
+    invalidations: [],
+    validity: {
+      entry: { type: 'GTD', bars_limit: 0, trading_sessions_soft: 0, trading_sessions_hard: 0, expire_calendar_cap_days: 0 },
+      position: { time_stop_sessions: 0, gap_policy: 'exit_at_open_with_slippage' },
+      non_trading_policy: 'pause_clock'
+    },
+    beginner_summary: {},
+    why_in_plain_words: [],
+    what_could_go_wrong: [],
+    ui_friendly: {},
+    money_example: {},
+    suggested_qty: {},
+    risk_meter: {},
+    actionability: { label: 'No structure', status: 'monitor_only', next_check_in: 'daily', checklist: [] },
+    glossary: {}
+  };
 
-  // Set required overall_sentiment field
-  if (!this.analysis_data.overall_sentiment) {
-    this.analysis_data.overall_sentiment = 'NEUTRAL';
-  }
-
-  // Ensure strategies array exists and has at least one valid strategy
-  if (!this.analysis_data.strategies || this.analysis_data.strategies.length === 0) {
-    this.analysis_data.strategies = [{
-      id: 'failed-analysis',
-      type: 'NO_TRADE',
-      title: 'Analysis Failed',
+  this.analysis_data = {
+    schema_version: '1.4',
+    symbol: this.stock_symbol,
+    analysis_type: this.analysis_type,
+    generated_at_ist: this.analysis_data?.generated_at_ist || new Date().toISOString(),
+    insufficientData: true,
+    market_summary: {
+      last: this.current_price || 0,
+      trend: 'NEUTRAL',
+      volatility: 'MEDIUM',
+      volume: 'UNKNOWN'
+    },
+    overall_sentiment: 'NEUTRAL',
+    sentiment_analysis: {
       confidence: 0,
-      entry: 0,
-      target: 0,
-      stopLoss: 0,
-      riskReward: 0,
-      timeframe: 'N/A',
-      indicators: [],
-      reasoning: [error],
-      warnings: ['Analysis could not be completed'],
-      triggers: [],
-      invalidations: []
-    }];
-  } else {
-    // Fix existing strategies that might be missing required fields
-    this.analysis_data.strategies = this.analysis_data.strategies.map((strategy) => ({
-      ...strategy,
-      id: strategy.id || 'strategy-incomplete',
-      title: strategy.title || 'Incomplete Strategy',
-      confidence: strategy.confidence ?? 0,
-      type: strategy.type || 'NO_TRADE',
-      timeframe: strategy.timeframe || 'N/A'
-    }));
-  }
+      strength: 'low',
+      reasoning: error,
+      key_factors: [],
+      sector_specific: false,
+      market_alignment: 'neutral',
+      trading_bias: 'neutral',
+      risk_level: 'high',
+      position_sizing: 'reduced',
+      entry_strategy: 'cautious',
+      news_count: 0,
+      recent_news_count: 0,
+      sector_news_weight: 0
+    },
+    runtime: {
+      triggers_evaluated: [],
+      pre_entry_invalidations_hit: true
+    },
+    order_gate: {
+      all_triggers_true: false,
+      no_pre_entry_invalidations: false,
+      actionability_status: 'monitor_only',
+      entry_type_sane: false,
+      can_place_order: false
+    },
+    strategies: [fallbackStrategy],
+    performance_hints: {
+      confidence_drivers: [],
+      uncertainty_factors: [error],
+      data_quality_score: 0
+    },
+    disclaimer: 'AI-generated educational interpretation of price behaviour. Not investment advice or a recommendation to buy or sell any security.'
+  };
 
   return this.save();
 };
