@@ -789,8 +789,69 @@ MONEY MATH (deterministic formulas, round to 2 decimals):
 === RISKREWARD CONSISTENCY ===
 - Set strategies[0].riskReward = money_example.per_share.rr (rounded to 2 decimals).
 
-=== CONFIDENCE CONSISTENCY (DETERMINISTIC) ===
-- Set strategies[0].confidence from selection_trace: use selectedId's totalScore, clamped to [0,1] and rounded to 2 decimals. If missing, fallback to 0.5.
+=== CONFIDENCE CALCULATION (HYBRID - IMPORTANT) ===
+Confidence is calculated using a hybrid approach: deterministic base + bounded AI adjustments.
+
+STEP 1: BASE CONFIDENCE (from code)
+- base_confidence = selectedId's totalScore from selection_trace.score_breakdown
+- If missing, base_confidence = 0.50
+
+STEP 2: AI ADJUSTMENTS (bounded, must justify each)
+Apply these adjustments ONLY when the condition is met. Each adjustment can only be applied ONCE.
+
+NEGATIVE ADJUSTMENTS (penalties):
+| Condition | Adjustment | Code |
+|-----------|------------|------|
+| sentiment.trading_bias conflicts with strategy.type (e.g., bearish sentiment + BUY strategy) | -0.08 | SENT_CONFLICT |
+| volatility = "HIGH" AND riskReward < 1.5 | -0.05 | HIGH_VOL_LOW_RR |
+| 3+ indicators show signals opposite to strategy.type | -0.06 | IND_CONFLICT |
+| sentiment_analysis.confidence < 0.50 | -0.04 | LOW_SENT_CONF |
+| volume = "BELOW_AVERAGE" | -0.03 | LOW_VOLUME |
+| gap.pct magnitude > 2% (abs value) | -0.03 | GAP_RISK |
+| riskReward < 1.0 | -0.07 | POOR_RR |
+| distance_pct > 3% (price far from entry) | -0.04 | FAR_ENTRY |
+
+POSITIVE ADJUSTMENTS (bonuses):
+| Condition | Adjustment | Code |
+|-----------|------------|------|
+| All 5 indicators align with strategy.type direction | +0.05 | IND_ALIGNED |
+| sentiment.trading_bias matches strategy.type AND sentiment confidence >= 0.75 | +0.04 | SENT_ALIGNED |
+| riskReward >= 2.0 | +0.04 | STRONG_RR |
+| volume = "ABOVE_AVERAGE" | +0.02 | HIGH_VOLUME |
+| distance_pct < 0.5% (price very close to entry) | +0.03 | CLOSE_ENTRY |
+
+STEP 3: CALCULATE FINAL CONFIDENCE
+- final_confidence = clamp(base_confidence + sum(adjustments), 0.30, 0.95)
+- Round to 2 decimals
+
+STEP 4: OUTPUT confidence_breakdown (REQUIRED)
+You MUST output the confidence_breakdown object showing your calculation:
+{
+  "base_score": <number from totalScore>,
+  "adjustments": [
+    { "code": "<adjustment code>", "reason": "<brief explanation with values>", "delta": <number> }
+  ],
+  "final": <final clamped confidence>
+}
+
+EXAMPLE:
+If base_score = 0.872, HIGH volatility with RR=1.0, and bearish sentiment with BUY strategy:
+{
+  "base_score": 0.872,
+  "adjustments": [
+    { "code": "HIGH_VOL_LOW_RR", "reason": "volatility HIGH with riskReward 1.0 < 1.5", "delta": -0.05 },
+    { "code": "SENT_CONFLICT", "reason": "sentiment bias bearish conflicts with BUY type", "delta": -0.08 }
+  ],
+  "final": 0.74
+}
+
+CRITICAL RULES FOR CONFIDENCE:
+- strategies[0].confidence MUST equal confidence_breakdown.final
+- If no adjustments apply, adjustments array should be empty: []
+- Never apply the same adjustment code twice
+- Always justify with actual values from the data
+- Maximum total negative adjustment: -0.40
+- Maximum total positive adjustment: +0.18
 
 === PERFORMANCE_HINTS (REQUIRED) ===
 - Must always populate performance_hints.
@@ -868,6 +929,13 @@ You MUST output ONLY one valid JSON object with EXACTLY this structure:
     "entry_type_sane": true | false,
     "can_place_order": true | false
   },
+  "confidence_breakdown": {
+    "base_score": <number from selection_trace totalScore>,
+    "adjustments": [
+      { "code": "<adjustment code>", "reason": "<brief explanation with values>", "delta": <number> }
+    ],
+    "final": <final clamped confidence>
+  },
   "strategies": [
     {
       "id": "S1",
@@ -875,7 +943,7 @@ You MUST output ONLY one valid JSON object with EXACTLY this structure:
       "archetype": "breakout" | "pullback" | "trend-follow" | "mean-reversion" | "range-fade",
       "alignment": "with_trend" | "counter_trend" | "neutral",
       "title": "Short, neutral title describing the structure.",
-      "confidence": <number between 0 and 1>,
+      "confidence": <number between 0 and 1, MUST equal confidence_breakdown.final>,
       "why_best": "Short, neutral explanation of why this structure was chosen.",
       "entryType": "limit" | "market" | "range" | "stop" | "stop-limit",
       "entry": <number | null>,
@@ -887,7 +955,7 @@ You MUST output ONLY one valid JSON object with EXACTLY this structure:
       "indicators": [
         {
           "name": "ema20_1D" | "ema50_1D" | "sma200_1D" | "rsi14_1h" | "atr14_1D",
-          "value": "<value from MARKET DATA or null>",
+          "value": <value from MARKET DATA or null>,
           "signal": "BUY" | "SELL" | "NEUTRAL"
         }
       ],
@@ -1011,9 +1079,10 @@ You MUST output ONLY one valid JSON object with EXACTLY this structure:
 === CRITICAL REQUIRED FIELDS ===
 These fields MUST be present and non-null:
 - overall_sentiment (root level)
+- confidence_breakdown (root level)
 - strategies[0].type
 - strategies[0].title
-- strategies[0].confidence
+- strategies[0].confidence (MUST equal confidence_breakdown.final)
 
 === OUTPUT ===
 Return exactly ONE JSON object matching the schema above. No markdown, no extra text.

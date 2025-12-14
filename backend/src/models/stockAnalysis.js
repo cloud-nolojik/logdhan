@@ -176,6 +176,15 @@ const analysisDataV14Schema = new mongoose.Schema(
       entry_type_sane: Boolean,
       can_place_order: Boolean
     },
+    confidence_breakdown: {
+      base_score: Number,
+      adjustments: [{
+        code: String,
+        reason: String,
+        delta: Number
+      }],
+      final: Number
+    },
     strategies: { type: [strategyV14Schema], default: [] },
     performance_hints: {
       confidence_drivers: [String],
