@@ -295,7 +295,35 @@ function computeDataHealth(marketPayload) {
   return { missing, ok: missing.length === 0 };
 }
 
-export function buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1 }) {
+/**
+ * Maps ChartInk scan_type to preferred candidate IDs
+ * Used to boost matching candidates when scan_type is provided
+ */
+const SCAN_TYPE_TO_CANDIDATES = {
+  "breakout": ["C1"],
+  "pullback": ["C2"],
+  "momentum": ["C1", "C2"],           // Momentum can use breakout or pullback
+  "consolidation_breakout": ["C1"],   // Similar to breakout
+  // Uppercase versions
+  "BREAKOUT": ["C1"],
+  "PULLBACK": ["C2"],
+  "MOMENTUM": ["C1", "C2"],
+  "CONSOLIDATION_BREAKOUT": ["C1"]
+};
+
+// Bonus score for matching scan_type (significant but not overwhelming)
+const SCAN_TYPE_HINT_BONUS = 0.25;
+
+/**
+ * Check if a candidate matches the scan_type hint
+ */
+function candidateMatchesScanType(candidateId, scanType) {
+  if (!scanType) return false;
+  const preferred = SCAN_TYPE_TO_CANDIDATES[scanType] || SCAN_TYPE_TO_CANDIDATES[scanType.toUpperCase()];
+  return preferred ? preferred.includes(candidateId) : false;
+}
+
+export function buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1, scan_type = null, setup_score = null }) {
   const system = `You are a disciplined swing strategist. JSON ONLY. No markdown.`;
 
   // If you still want an LLM here, keep prompts.
@@ -353,10 +381,12 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   candidates.push({
     id: "C1",
     name: "breakout",
+    matches_scan_type: candidateMatchesScanType("C1", scan_type),
     score: {
       rr: c1RR,
       trend_align: trend === "BULLISH" ? 1 : 0.3,
-      distance_pct: round2((Math.abs(last - c1Entry) / last) * 100)
+      distance_pct: round2((Math.abs(last - c1Entry) / last) * 100),
+      scan_type_bonus: candidateMatchesScanType("C1", scan_type) ? SCAN_TYPE_HINT_BONUS : 0
     },
     skeleton: {
       type: "BUY",
@@ -384,10 +414,12 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   candidates.push({
     id: "C2",
     name: "pullback",
+    matches_scan_type: candidateMatchesScanType("C2", scan_type),
     score: {
       rr: c2RR,
       trend_align: trend === "BULLISH" ? 1 : 0.4,
-      distance_pct: round2((Math.abs(last - c2Entry) / last) * 100)
+      distance_pct: round2((Math.abs(last - c2Entry) / last) * 100),
+      scan_type_bonus: candidateMatchesScanType("C2", scan_type) ? SCAN_TYPE_HINT_BONUS : 0
     },
     skeleton: {
       type: "BUY",
@@ -416,11 +448,13 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   candidates.push({
     id: "C3",
     name: "mean_reversion",
+    matches_scan_type: candidateMatchesScanType("C3", scan_type),
     score: {
       rr: c3RR,
       trend_align: trend === "NEUTRAL" ? 1 : 0.5,
       rsi_fit: isNum(rsi1h) ? (rsi1h < 45 ? 1 : 0.3) : 0.4,
-      distance_pct: round2((Math.abs(last - c3Entry) / last) * 100)
+      distance_pct: round2((Math.abs(last - c3Entry) / last) * 100),
+      scan_type_bonus: candidateMatchesScanType("C3", scan_type) ? SCAN_TYPE_HINT_BONUS : 0
     },
     skeleton: {
       type: "BUY",
@@ -448,10 +482,12 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   candidates.push({
     id: "C4",
     name: "range_fade",
+    matches_scan_type: candidateMatchesScanType("C4", scan_type),
     score: {
       rr: c4RR,
       trend_align: trend === "NEUTRAL" ? 1 : 0.4,
-      distance_pct: round2((Math.abs(last - c4Entry) / last) * 100)
+      distance_pct: round2((Math.abs(last - c4Entry) / last) * 100),
+      scan_type_bonus: candidateMatchesScanType("C4", scan_type) ? SCAN_TYPE_HINT_BONUS : 0
     },
     skeleton: {
       type: "SELL",
@@ -498,17 +534,22 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   const out = {
     ...base,
     insufficientData: false,
+    // Include scan_type hint if provided (for downstream reference)
+    ...(scan_type && { scan_type_hint: scan_type }),
     candidates: (passing.length ? passing : filtered)
       .sort((a, b) => {
-        // quick score: RR first, then trend alignment, then closeness
-        const aScore = (a.score.rr || 0) + (a.score.trend_align || 0) - ((a.score.distance_pct || 0) / 100);
-        const bScore = (b.score.rr || 0) + (b.score.trend_align || 0) - ((b.score.distance_pct || 0) / 100);
+        // quick score: RR first, then trend alignment, then closeness, plus scan_type bonus
+        const aScore = (a.score.rr || 0) + (a.score.trend_align || 0) - ((a.score.distance_pct || 0) / 100) + (a.score.scan_type_bonus || 0);
+        const bScore = (b.score.rr || 0) + (b.score.trend_align || 0) - ((b.score.distance_pct || 0) / 100) + (b.score.scan_type_bonus || 0);
         return bScore - aScore;
       })
   };
 
   out.notes.push("Candidates are computed from pivots + swing highs/lows + ATR; pivots are classic H/L/C based.");//  [oai_citation:3‡Investopedia](https://www.investopedia.com/articles/forex/05/fxpivots.asp?utm_source=chatgpt.com)
   out.notes.push("ATR is used as a volatility proxy for sizing distances.");//  [oai_citation:4‡Fidelity](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/atr?utm_source=chatgpt.com)
+  if (scan_type) {
+    out.notes.push(`ChartInk scan_type hint applied: ${scan_type} → preferred candidates boosted by ${SCAN_TYPE_HINT_BONUS}.`);
+  }
 
   // If you're keeping the "prompt builder" pattern:
   const user = JSON.stringify(out, null, 2);
@@ -525,7 +566,11 @@ export async function buildStage3Prompt({
   s2,
   instrument_key,
   userTradeState,
-  generatedAtIst
+  generatedAtIst,
+  analysisMode: passedAnalysisMode = null,
+  // ChartInk screening context (optional)
+  scan_type = null,
+  setup_score = null
 }) {
   let existingStage3 = null;
   let existingMetadata = null;
@@ -601,10 +646,14 @@ export async function buildStage3Prompt({
     }));
 
   const hasOpen =
+    userTradeState?.has_position === true ||
     userTradeState?.hasOpenPosition === true ||
     userTradeState?.hasOpenOrder === true;
 
-  const analysisMode = hasOpen ? "MANAGE_OPEN" : "DISCOVERY";
+  // Use passed analysisMode if provided, otherwise derive from userTradeState
+  const analysisMode = passedAnalysisMode === 'POSITION_MANAGEMENT'
+    ? "MANAGE_OPEN"
+    : (hasOpen ? "MANAGE_OPEN" : "DISCOVERY");
 
   if (analysisMode === "DISCOVERY") {
     // Avoid leaking non-schema keys from prior runs; prompt will also instruct not to copy.
@@ -635,7 +684,12 @@ If analysis_mode = "DISCOVERY":
 === INPUT CONTEXT ===
 Stock: ${stock_name} (${stock_symbol})
 Current Observed Price: ₹${current_price}
-
+${scan_type ? `
+CHARTINK SCREENING CONTEXT:
+- Scan Type: ${scan_type} (This stock was identified by ChartInk ${scan_type} scan)
+- Setup Score: ${setup_score || 'N/A'}/100
+- Note: The scan type indicates the expected setup pattern. Validate if current price action supports this setup.
+` : ''}
 USER TRADE STATE:
 ${JSON.stringify(userTradeState || { hasOpenOrder: false, hasOpenPosition: false }, null, 2)}
 
@@ -771,6 +825,127 @@ IMPORTANT LANGUAGE RULE (human-readable fields):
   - Avoid jargon terms: pivot, vwap, atr, ema, sma, rsi, distance_pct, trend_align, window_bars.
   - Use plain equivalents like: "reference level", "intraday average", "daily swing range", "short-term average", "long-term average", "momentum gauge".
 - In ui_friendly.ai_will_watch, phrase as "Over the next <confirmation.window_bars> × 1h candles" (or use the provided window_bars value; default to "20 × 1h candles" if missing).
+
+=== HUMAN-FRIENDLY TONE RULES (beginner_summary, ui_friendly, why_in_plain_words) ===
+For the following fields ONLY: beginner_summary.*, ui_friendly.*, why_in_plain_words[].point, why_in_plain_words[].evidence
+
+1) RUPEE VALUES OVER PERCENTAGES
+   - Instead of "distance_pct: 0.28%" or "2.5% from entry", say "about ₹2 from the middle zone".
+   - Keep reasoning concrete; beginner-friendly text must anchor to ₹ amounts whenever possible.
+
+2) PLAIN LANGUAGE
+   - Replace jargon with everyday words:
+     | Jargon | Beginner Equivalent |
+     |--------|---------------------|
+     | pivot/support/resistance | reference level / floor / ceiling |
+     | ATR | typical daily swing |
+     | EMA/SMA | moving price average |
+     | RSI | momentum gauge |
+     | R:R or risk-reward | potential gain vs. potential loss |
+     | trend alignment | direction match |
+     | insufficient data | not enough info |
+
+3) EMOTIONAL VALIDATION
+   - If the structure looks risky (low RR, HIGH volatility), add a reassuring note in beginner_explanation:
+     Example: "It's okay to skip this one—waiting for a clearer setup is always a valid choice."
+
+4) CONCRETE EXAMPLES IN STEPS
+   - beginner_summary.steps should include concrete ₹ values when possible.
+   - Bad: "Wait for price to reach entry zone."
+   - Good: "Watch for the price to approach ₹782. If it does, the middle zone is active."
+
+5) CHECKLIST MUST BE YES/NO CHECKABLE
+   - Each item in beginner_summary.checklist should be phrased so a beginner can answer YES or NO.
+   - Bad: "Confirm volume is high."
+   - Good: "Is today's volume at least average? (check a simple volume bar chart)"
+
+6) WHY_IN_PLAIN_WORDS MUST BE TRULY PLAIN
+   - why_in_plain_words[].point should be one short sentence a non-trader can understand.
+   - why_in_plain_words[].evidence should cite a concrete value and explain what it means.
+   - Bad: { "point": "Entry is near pivot.", "evidence": "last 782 > pivot 776." }
+   - Good: { "point": "The current price is close to a commonly watched reference level.", "evidence": "Current price ₹782 is just ₹6 above a key reference (₹776), meaning potential support is nearby." }
+
+=== UI_FRIENDLY FIELD INSTRUCTIONS (NEW FIELDS) ===
+
+simple_verdict (REQUIRED):
+- Must be ONE of these action-oriented patterns:
+  * "WAIT for ₹<entry> - not in zone yet"
+  * "READY at ₹<entry> - price is in the zone"
+  * "SKIP - setup not strong enough today"
+  * "HOLD - structure intact, approaching ₹<target>"
+  * "EXIT - structure broken below ₹<stopLoss>"
+- Use actual ₹ values from entry/target/stopLoss
+
+why_this_makes_sense (REQUIRED, array of 3 strings):
+- Item 1: What the stock is doing right now (plain English, no jargon)
+  Example: "Stock pulled back to a level where it bounced before (₹770-780)"
+- Item 2: Why the risk/reward is acceptable (use ₹ amounts)
+  Example: "Risking ₹22 per share to potentially gain ₹46 - reasonable deal"
+- Item 3: Why even a loss would be "okay" (emotional validation)
+  Example: "Even if wrong, ₹22 loss is small and planned - not gambling"
+
+what_to_do_now (REQUIRED, object):
+- if_not_in_trade: Clear action for someone not yet in the position
+  Example: "Set alert at ₹775. When it hits, consider placing order with stop at ₹760."
+- if_already_in: Clear action for someone already holding
+  Example: "HOLD. Consider trailing stop to ₹770 after price crosses ₹800."
+
+permission_slip (REQUIRED, string):
+- Based on confidence level, provide emotional validation:
+  * confidence >= 0.70: "This is a calculated setup with defined risk. You know your levels."
+  * confidence 0.50-0.69: "This setup is okay but not ideal. Consider smaller size."
+  * confidence < 0.50: "Skip this one. Waiting for clearer setups is a valid strategy."
+
+if_it_fails (REQUIRED, object):
+- loss_amount: "₹X,XXX" based on suggested_qty.qty × risk_per_share
+- loss_percent: "X.X% of ₹1L capital" (use suggested_qty.risk_budget_inr)
+- why_its_okay: Reassurance that this is normal
+  Example: "This is a normal, planned loss. You followed your rules - that's what matters."
+
+notification_summary (REQUIRED, string):
+- One line suitable for push notification (max 60 chars)
+- Format: "<SYMBOL>: <action> at ₹<price>. Risk ₹<risk>, gain ₹<reward>."
+- Example: "RELIANCE: Wait for ₹775. Risk ₹22, gain ₹46."
+
+=== WHAT_COULD_GO_WRONG RULE ===
+- Each risk MUST include "why_its_still_okay" field
+- Frame losses/risks as NORMAL and MANAGEABLE, not scary
+- Example:
+  {
+    "risk": "Stock might gap down tomorrow morning",
+    "likelihood": "LOW",
+    "impact": "MEDIUM",
+    "why_its_still_okay": "Gaps happen to everyone. Your max loss is still only ~2% - that's recoverable.",
+    "mitigation": "Consider smaller position if overnight gaps make you nervous."
+  }
+
+=== BEGINNER_SUMMARY RULES (ENHANCED) ===
+
+one_liner:
+- Must be understandable by someone who has never traded
+- Include ₹ amounts for risk/reward
+- BAD: "Pullback to EMA20 with RSI confirmation suggests upward bias."
+- GOOD: "Stock dipped to a support level. Good spot if you're okay risking ₹22 to make ₹46."
+
+steps (array of 3 action items):
+- Each step must be a concrete ACTION with ₹ prices
+- Use verbs: "Set alert", "Place order", "Move stop", "Take profits"
+- BAD: ["Wait for RSI confirmation", "Check volume", "Enter position"]
+- GOOD: [
+    "Set a price alert at ₹775 (the middle zone)",
+    "If alert triggers, place order with stop-loss at ₹760",
+    "When price reaches ₹810, consider taking half profits"
+  ]
+
+checklist (array of 3 yes/no questions):
+- Each item must be answerable with YES or NO
+- Focus on emotional readiness, not technical confirmations
+- BAD: ["RSI > 55", "Volume above average", "Price > EMA20"]
+- GOOD: [
+    "Am I okay losing ₹2,200 if this doesn't work out?",
+    "Have I decided my exact stop-loss level (₹760)?",
+    "Do I know when I'll take profits (₹820)?"
+  ]
 
 === TITLE RULE ===
 - strategies[0].title must be short and plain; avoid jargon (pivot/VWAP/ATR/EMA).
@@ -1005,16 +1180,34 @@ You MUST output ONLY one valid JSON object with EXACTLY this structure:
       ],
       "what_could_go_wrong": [
         {
-          "risk": "Short description of a realistic risk.",
+          "risk": "Plain English description of the risk.",
           "likelihood": "LOW" | "MEDIUM" | "HIGH",
           "impact": "LOW" | "MEDIUM" | "HIGH",
-          "mitigation": "How to handle this."
+          "why_its_still_okay": "Reassurance that this is manageable.",
+          "mitigation": "Specific action to reduce this risk."
         }
       ],
       "ui_friendly": {
+        "simple_verdict": "WAIT for ₹XXX | READY at ₹XXX | SKIP | HOLD | EXIT",
+        "why_this_makes_sense": [
+          "What the stock is doing (plain English)",
+          "Why risk/reward is acceptable (₹ amounts)",
+          "Why even a loss is okay (validation)"
+        ],
+        "what_to_do_now": {
+          "if_not_in_trade": "Clear action with ₹ prices",
+          "if_already_in": "Clear action with ₹ prices"
+        },
+        "permission_slip": "Emotional validation based on confidence level",
+        "if_it_fails": {
+          "loss_amount": "₹X,XXX",
+          "loss_percent": "X.X% of ₹1L capital",
+          "why_its_okay": "Reassurance that this is normal"
+        },
         "why_smart_move": "One neutral sentence (15–25 words).",
         "ai_will_watch": ["monitoring point 1", "monitoring point 2"],
-        "beginner_explanation": "50–80 words explanation."
+        "beginner_explanation": "50–80 words explanation.",
+        "notification_summary": "One line for push notifications (max 60 chars)"
       },
       "money_example": {
         "per_share": {

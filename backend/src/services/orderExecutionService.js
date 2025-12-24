@@ -1,6 +1,7 @@
 import * as upstoxService from './upstox.service.js';
 import triggerOrderService from './triggerOrderService.js';
 import UpstoxUser from '../models/upstoxUser.js';
+import UserPosition from '../models/userPosition.js';
 import { decrypt } from '../utils/encryption.js';
 import mongoose from 'mongoose';
 
@@ -464,8 +465,45 @@ class OrderExecutionService {
       const allOrders = orderResult.data?.data || orderResult.data || [];
 
       allOrders.forEach((order, index) => {
-
+        // Orders logged for debugging
       });
+
+      // Create UserPosition if this is an entry order with stop-loss and target
+      if (hasStopLossAndTarget && orderId && userId && analysisId) {
+        try {
+          const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+          const analysis = await StockAnalysis.findById(analysisId);
+
+          if (analysis) {
+            // Check if position already exists
+            const existingPosition = await UserPosition.findOpenPosition(userId, instrumentToken);
+
+            if (!existingPosition) {
+              const entryPrice = orderData.orderType === 'MARKET'
+                ? parseFloat(strategy.entry) // Use strategy entry for market orders
+                : parseFloat(orderData.price);
+
+              await UserPosition.createFromAnalysis(
+                userId,
+                analysis,
+                entryPrice,
+                parseInt(orderData.quantity),
+                {
+                  main_order_id: orderId,
+                  sl_order_id: allOrders.find(o => o.correlation_id?.startsWith('SL'))?.order_id,
+                  target_order_id: allOrders.find(o => o.correlation_id?.startsWith('TG'))?.order_id
+                }
+              );
+              console.log(`📊 Position created for ${stockSymbol} - Entry: ₹${entryPrice}, Qty: ${orderData.quantity}`);
+            } else {
+              console.log(`📊 Position already exists for ${stockSymbol}, skipping creation`);
+            }
+          }
+        } catch (positionError) {
+          console.error('⚠️ Failed to create position (order still placed):', positionError.message);
+          // Don't fail the order if position creation fails - order is already placed
+        }
+      }
 
       // Register for webhook processing if using webhook mode (not immediate bracket mode)
       if (hasStopLossAndTarget && !orderData.placeImmediateBracket && orderId && userId && instrumentToken && analysisType) {

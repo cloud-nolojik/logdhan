@@ -61,6 +61,44 @@
             "envFile": "/Users/nolojik/Documents/logdhan-app/backend/.env",
             "console": "integratedTerminal",
             "cwd": "/Users/nolojik/Documents/logdhan-app/backend"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Weekend Screening Test (Dry Run)",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/backend/src/scripts/testWeekendScreening.js",
+            "args": ["--dry-run"],
+            "envFile": "${workspaceFolder}/backend/.env",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/backend"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Weekend Screening Test (Dry Run + Debug)",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/backend/src/scripts/testWeekendScreening.js",
+            "args": ["--dry-run", "--debug"],
+            "envFile": "${workspaceFolder}/backend/.env",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/backend"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Weekend Screening Test (Live)",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/backend/src/scripts/testWeekendScreening.js",
+            "envFile": "${workspaceFolder}/backend/.env",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/backend"
         }
     ]
 }

@@ -9,6 +9,8 @@ import MarketHoursUtil from '../utils/marketHours.js';
 import { getExactStock } from '../utils/stockDb.js';
 import priceCacheService from '../services/priceCache.service.js';
 import { getMonitoringState } from '../services/monitoringState.service.js';
+import WeeklyWatchlist from '../models/weeklyWatchlist.js';
+import { checkEntryZoneProximity } from '../utils/setupScoreCalculator.js';
 import pLimit from 'p-limit';
 // Upstox allows 50 requests/second, so 20 concurrent is safe with 10s timeouts
 const limit = pLimit(20); // Optimized for better performance while staying within rate limits
@@ -209,8 +211,95 @@ router.get('/', auth, async (req, res) => {
     // Get cache statistics for last update time
     const cacheStats = priceCacheService.getStats();
 
+    // Fetch WeeklyWatchlist (global ChartInk-screened stocks)
+    let weeklyWatchlistData = null;
+    try {
+      const weeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
+      if (weeklyWatchlist && weeklyWatchlist.stocks?.length > 0) {
+        // Get prices for weekly watchlist stocks
+        const weeklyInstrumentKeys = weeklyWatchlist.stocks.map(s => s.instrument_key);
+        const weeklyPriceMap = await priceCacheService.getLatestPrices(weeklyInstrumentKeys);
+
+        // Enrich weekly watchlist stocks
+        const enrichedWeeklyStocks = await Promise.all(
+          weeklyWatchlist.stocks
+            .filter(stock => ['WATCHING', 'APPROACHING', 'TRIGGERED'].includes(stock.status))
+            .map(async (stock) => {
+              const currentPrice = weeklyPriceMap[stock.instrument_key] || null;
+
+              // Check entry zone proximity
+              let zoneStatus = null;
+              if (currentPrice && stock.entry_zone) {
+                zoneStatus = checkEntryZoneProximity(currentPrice, stock.entry_zone);
+              }
+
+              // Fetch latest analysis for this stock
+              let analysis = null;
+              if (!isInScheduledWindow) {
+                analysis = await StockAnalysis.findOne({
+                  instrument_key: stock.instrument_key
+                }).sort({ created_at: -1 }).lean();
+              }
+
+              // Get monitoring state
+              const monitoringInfo = await getMonitoringState({ analysis, userId: req.user._id });
+
+              // Calculate AI confidence
+              let ai_confidence = null;
+              let strategy_type = null;
+              if (analysis?.analysis_data?.strategies?.length > 0) {
+                const strategies = analysis.analysis_data.strategies;
+                const confidences = strategies.filter(s => s.confidence != null).map(s => s.confidence);
+                if (confidences.length > 0) {
+                  ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
+                }
+                strategy_type = strategies[0]?.type || null;
+              }
+
+              return {
+                _id: stock._id,
+                instrument_key: stock.instrument_key,
+                trading_symbol: stock.symbol,
+                name: stock.stock_name,
+                addedAt: stock.added_at,
+                added_source: 'chartink',
+                scan_type: stock.scan_type,
+                setup_score: stock.setup_score,
+                grade: stock.grade,
+                entry_zone: stock.entry_zone,
+                zone_status: zoneStatus,
+                current_price: currentPrice,
+                status: stock.status,
+                // Analysis fields
+                has_analysis: !!analysis,
+                analysis_status: analysis?.status || null,
+                ai_confidence,
+                strategy_type,
+                is_monitoring: monitoringInfo.is_monitoring,
+                monitoring_strategy_id: monitoringInfo.strategy_id,
+                monitoring_state: monitoringInfo.state,
+                monitoring_analysis_id: monitoringInfo.analysis_id,
+                monitoring_conditions_met_at: monitoringInfo.conditions_met_at,
+                auto_order: monitoringInfo.auto_order
+              };
+            })
+        );
+
+        weeklyWatchlistData = {
+          week_start: weeklyWatchlist.week_start,
+          week_end: weeklyWatchlist.week_end,
+          screening_run_at: weeklyWatchlist.screening_run_at,
+          stocks: enrichedWeeklyStocks,
+          total_count: enrichedWeeklyStocks.length
+        };
+      }
+    } catch (weeklyError) {
+      console.warn('Error fetching weekly watchlist:', weeklyError.message);
+    }
+
     res.json({
       data: watchlistWithPrices,
+      weeklyWatchlist: weeklyWatchlistData,
       stockLimitInfo,
       isInScheduledWindow,
       priceUpdate: {

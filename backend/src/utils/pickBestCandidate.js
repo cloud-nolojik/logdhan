@@ -23,9 +23,10 @@ export function pickBestStage2Candidate(s2) {
     const rr = typeof s.rr === "number" ? s.rr : (c.skeleton.riskReward || 0);
     const trend = typeof s.trend_align === "number" ? s.trend_align : 0;
     const dist = typeof s.distance_pct === "number" ? s.distance_pct : 999;
+    const scanTypeBonus = typeof s.scan_type_bonus === "number" ? s.scan_type_bonus : 0;
 
-    // weights: prioritize RR + trend alignment, penalize very large distance
-    return (rr * 0.55) + (trend * 0.35) - (Math.min(dist, 5) * 0.10);
+    // weights: prioritize RR + trend alignment, penalize very large distance, add scan_type bonus
+    return (rr * 0.55) + (trend * 0.35) - (Math.min(dist, 5) * 0.10) + scanTypeBonus;
   };
 
   // Create ranked array with scores

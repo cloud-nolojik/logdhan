@@ -28,14 +28,9 @@ import { subscriptionService } from './services/subscription/subscriptionService
 import { azureStorageService } from './services/storage/azureStorage.service.js';
 import { messagingService } from './services/messaging/messaging.service.js';
 import priceCacheService from './services/priceCache.service.js'; // In-memory price caching service
-import agendaDailyReminderService from './services/agendaDailyReminderService.js'; // Using Agenda instead of BullMQ
-import agendaMonitoringService from './services/agendaMonitoringService.js';
-import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // Using Agenda for data pre-fetching
-import agendaBulkAnalysisNotificationService from './services/agendaBulkAnalysisNotificationService.js'; // Daily 5 PM bulk analysis notifications
-import agendaBulkAnalysisReminderService from './services/agendaBulkAnalysisReminderService.js'; // Daily 8 AM bulk analysis expiry reminder
-import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // Daily 7:30 AM pre-analysis of all watchlist stocks (Agenda)
-import agendaMonitoringCleanupService from './services/agendaMonitoringCleanupService.js'; // Daily 4 AM cleanup of expired monitoring subscriptions
-// Removed condition monitoring - direct order placement only
+import agendaMonitoringService from './services/agendaMonitoringService.js'; // check-triggers-batch (every 15 min)
+import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // watchlist-bulk-analysis (7:30 AM Mon-Fri)
+import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM, Sun 10AM)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -60,6 +55,11 @@ import publicRoutes from './routes/public.js';
 import consentRoutes from './routes/consent.js';
 import appRedirectRoutes from './routes/app-redirect.js';
 import feedbackRoutes from './routes/feedback.js';
+import positionsRoutes from './routes/positions.js';
+import dashboardRoutes from './routes/dashboard.js';
+import weeklyWatchlistRoutes from './routes/weeklyWatchlist.js';
+import screenerRoutes from './routes/screener.js';
+import journalRoutes from './routes/journal.js';
 
 const app = express();
 
@@ -160,6 +160,11 @@ app.use('/api/v1/monitoring', monitoringRoutes);
 app.use('/api/v1/feedback', feedbackRoutes);
 app.use('/api/v1/public', publicRoutes);
 app.use('/api/v1/consent', consentRoutes);
+app.use('/api/v1/positions', positionsRoutes);
+app.use('/api/v1/dashboard', dashboardRoutes);
+app.use('/api/v1/weekly-watchlist', weeklyWatchlistRoutes);
+app.use('/api/v1/screener', screenerRoutes);
+app.use('/api/v1/journal', journalRoutes);
 
 // App redirect routes for WhatsApp deep links
 app.use('/app', appRedirectRoutes);
@@ -207,17 +212,6 @@ async function initializeMessagingService() {
   }
 }
 
-// Initialize Agenda daily reminder service
-async function initializeAgendaDailyReminderService() {
-  try {
-
-    await agendaDailyReminderService.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize Agenda daily reminder service:', error);
-  }
-}
-
 // Initialize Agenda monitoring service
 async function initializeAgendaMonitoringService() {
   try {
@@ -226,39 +220,6 @@ async function initializeAgendaMonitoringService() {
 
   } catch (error) {
     console.error('❌ Failed to initialize Agenda monitoring service:', error);
-  }
-}
-
-// Initialize Agenda data pre-fetch service
-async function initializeAgendaDataPrefetchService() {
-  try {
-
-    await agendaDataPrefetchService.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize Agenda data pre-fetch service:', error);
-  }
-}
-
-// Initialize Agenda bulk analysis notification service
-async function initializeAgendaBulkAnalysisNotificationService() {
-  try {
-
-    await agendaBulkAnalysisNotificationService.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize Agenda bulk analysis notification service:', error);
-  }
-}
-
-// Initialize Agenda bulk analysis reminder service (8 AM expiry reminder)
-async function initializeAgendaBulkAnalysisReminderService() {
-  try {
-
-    await agendaBulkAnalysisReminderService.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize Agenda bulk analysis reminder service:', error);
   }
 }
 
@@ -273,14 +234,14 @@ async function initializeAgendaScheduledBulkAnalysisService() {
   }
 }
 
-// Initialize monitoring cleanup service (4 AM daily cleanup)
-async function initializeAgendaMonitoringCleanupService() {
+// Initialize weekend screening job (Sat 6PM, Sun 10AM IST)
+async function initializeWeekendScreeningJob() {
   try {
 
-    await agendaMonitoringCleanupService.initialize();
+    await weekendScreeningJob.initialize();
 
   } catch (error) {
-    console.error('❌ Failed to initialize monitoring cleanup service:', error);
+    console.error('❌ Failed to initialize weekend screening job:', error);
   }
 }
 
@@ -309,14 +270,11 @@ app.listen(PORT, async () => {
   // await initializeSubscriptionSystem();
   await initializeMessagingService();
   await initializePriceCacheService(); // Start price caching for watchlist + indices
-  await initializeAgendaDailyReminderService();
-  await initializeAgendaMonitoringService();
-  await initializeAgendaDataPrefetchService();
-  await initializeAgendaBulkAnalysisNotificationService();
-  await initializeAgendaBulkAnalysisReminderService();
-  await initializeAgendaScheduledBulkAnalysisService();
-  await initializeAgendaMonitoringCleanupService(); // Cleanup expired monitoring subscriptions
-  // BullMQ condition monitoring removed - now using Agenda
+
+  // Scheduled jobs (keeping only 3):
+  await initializeAgendaMonitoringService(); // check-triggers-batch (every 15 min)
+  await initializeAgendaScheduledBulkAnalysisService(); // watchlist-bulk-analysis (4:30 PM Mon-Fri)
+  await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM, Sun 10AM)
 
 });
 
@@ -329,16 +287,11 @@ process.on('SIGINT', async () => {
     priceCacheService.stop();
 
     // Stop all Agenda services gracefully
-
     await Promise.all([
-    agendaDataPrefetchService.stop(),
-    agendaDailyReminderService.agenda?.stop?.(),
-    agendaMonitoringService.agenda?.stop?.(),
-    agendaBulkAnalysisNotificationService.shutdown(),
-    agendaBulkAnalysisReminderService.shutdown(),
-    agendaScheduledBulkAnalysisService.stop(),
-    agendaMonitoringCleanupService.shutdown()]
-    );
+      agendaMonitoringService.agenda?.stop?.(),
+      agendaScheduledBulkAnalysisService.stop(),
+      weekendScreeningJob.shutdown()
+    ]);
 
     // Close MongoDB connection
     await mongoose.connection.close();
@@ -351,23 +304,16 @@ process.on('SIGINT', async () => {
 });
 
 process.on('SIGTERM', async () => {
-
   try {
     // Stop price cache service
-
     priceCacheService.stop();
 
     // Stop all Agenda services gracefully
-
     await Promise.all([
-    agendaDataPrefetchService.stop(),
-    agendaDailyReminderService.agenda?.stop?.(),
-    agendaMonitoringService.agenda?.stop?.(),
-    agendaBulkAnalysisNotificationService.shutdown(),
-    agendaBulkAnalysisReminderService.shutdown(),
-    agendaScheduledBulkAnalysisService.stop(),
-    agendaMonitoringCleanupService.shutdown()]
-    );
+      agendaMonitoringService.agenda?.stop?.(),
+      agendaScheduledBulkAnalysisService.stop(),
+      weekendScreeningJob.shutdown()
+    ]);
 
     // Close MongoDB connection
     await mongoose.connection.close();

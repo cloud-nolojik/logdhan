@@ -65,6 +65,13 @@ export function calculateTechnicalIndicators(candles) {
       indicators.sma501d = sma50[sma50.length - 1];
     }
 
+    if (closes.length >= 200) {
+      const sma200 = TI.SMA.calculate({ period: 200, values: closes });
+      indicators.sma200 = sma200[sma200.length - 1];
+      indicators.sma200_1d = sma200[sma200.length - 1];
+      indicators.sma2001d = sma200[sma200.length - 1];
+    }
+
     // RSI calculation
     if (closes.length >= 14) {
       const rsi = TI.RSI.calculate({ period: 14, values: closes });

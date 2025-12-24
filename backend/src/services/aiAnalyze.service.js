@@ -21,6 +21,7 @@ import { getIstDayRange } from '../utils/tradingDay.js';
 import priceCacheService from '../services/priceCache.service.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 import UserAnalyticsUsage from '../models/userAnalyticsUsage.js';
+import positionManagementService from './ai/positionManagement.service.js';
 
 class AIAnalyzeService {
   constructor() {
@@ -388,8 +389,10 @@ class AIAnalyzeService {
     userId, // Accept both user_id and userId for compatibility
     skipNotification = false,
     scheduled_release_time = null,
-    skipIntraday = false
-
+    skipIntraday = false,
+    // ChartInk screening context (optional)
+    scan_type = null,  // breakout, pullback, momentum, consolidation_breakout
+    setup_score = null
   }) {
     // ⏱️ START TIMING
     const analysisStartTime = Date.now();
@@ -518,6 +521,35 @@ class AIAnalyzeService {
         console.log(`[ANALYZE] 💵 Price fetched for ${stock_symbol || instrument_key} from cache: ${current_price}`);
       }
 
+      // Check for open position to determine analysis mode
+      let analysisMode = 'DISCOVERY';
+      let userPosition = null;
+      let userTradeState = null;
+
+      if (normalizedUserId) {
+        try {
+          const modeResult = await positionManagementService.determineAnalysisMode(
+            normalizedUserId,
+            instrument_key
+          );
+          analysisMode = modeResult.mode;
+          userPosition = modeResult.position;
+
+          if (userPosition) {
+            userTradeState = positionManagementService.formatUserTradeState(userPosition, current_price);
+            console.log(
+              `[ANALYZE] 📊 Position found for ${stock_symbol || instrument_key}: ` +
+              `Entry: ₹${userPosition.actual_entry}, SL: ₹${userPosition.current_sl}, ` +
+              `Target: ₹${userPosition.current_target}, Days: ${userPosition.days_in_trade}`
+            );
+          }
+        } catch (positionError) {
+          console.error(`[ANALYZE] ⚠️ Position check failed (continuing in DISCOVERY mode):`, positionError.message);
+        }
+      }
+
+      console.log(`[ANALYZE] 🎯 Analysis mode: ${analysisMode} for ${stock_symbol || instrument_key}`);
+
       // Create pending analysis record using common method
       const pendingAnalysis = await this.createPendingAnalysisRecord({
         instrument_key,
@@ -545,7 +577,12 @@ class AIAnalyzeService {
             current_price,
             analysis_type,
             skipIntraday,
-            game_mode: favoriteSport
+            game_mode: favoriteSport,
+            analysisMode,
+            userTradeState,
+            // ChartInk screening context
+            scan_type,
+            setup_score
           },
           pendingAnalysis // Pass analysis record for progress updates
         );
@@ -722,10 +759,10 @@ class AIAnalyzeService {
   /**
    * Generate AI analysis using real market data
    */
-  async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key, skipIntraday }) {
+  async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key, skipIntraday, analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null }) {
     const methodStart = Date.now();
     const traceId = `${stock_symbol || instrument_key}`;
-    console.log(`[ANALYZE] ↪️ Enter generateAIAnalysis for ${traceId} skipIntraday=${skipIntraday}`);
+    console.log(`[ANALYZE] ↪️ Enter generateAIAnalysis for ${traceId} skipIntraday=${skipIntraday} mode=${analysisMode}`);
 
     try {
       // Create trade data structure for API calls
@@ -926,7 +963,12 @@ class AIAnalyzeService {
         marketPayload: payload,
         sentiment,
         sectorInfo,
-        sentimentTokenUsage
+        sentimentTokenUsage,
+        analysisMode,
+        userTradeState,
+        // ChartInk screening context
+        scan_type,
+        setup_score
       });
 
       const aiGenerationTime = Date.now() - aiGenerationStart;
@@ -2413,10 +2455,10 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
    * Stage 3: Final Assembly (v1.4)
    * Combines MARKET DATA + S1 + S2 + sentimentContext
    */
-  async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode = 'cricket' }) {
+  async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode = 'cricket', analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null }) {
     try {
       const generatedAtIst = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
-      const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode, generatedAtIst });
+      const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode, generatedAtIst, analysisMode, userTradeState, scan_type, setup_score });
       const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
 
       const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
@@ -2464,8 +2506,13 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
    * @param {Object} params
    * @param {Object} [params.sentimentTokenUsage] - Token usage from sentiment analysis LLM call
    */
-  async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo, instrument_key, sentimentTokenUsage }) {
+  async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo, instrument_key, sentimentTokenUsage, analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null }) {
     const t0 = Date.now();
+
+    // Log analysis mode
+    if (analysisMode === 'POSITION_MANAGEMENT' && userTradeState) {
+      console.log(`[STAGE 3] 📊 Position Management mode for ${stock_symbol} - Entry: ₹${userTradeState.position_summary?.entry}, Days: ${userTradeState.position_summary?.days_held}`);
+    }
 
     // Initialize token tracking (stage1 & stage2 are now code-based, only stage3 uses LLM)
     // sentiment tokens come from analyzeSectorSentiment which is called before this function
@@ -2636,7 +2683,12 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
   s1: s1r.s1,
   s2: s2r.s2,   // 👈 pass only Top-1 (or empty)
   instrument_key,
-  game_mode
+  game_mode,
+  analysisMode,
+  userTradeState,
+  // ChartInk screening context
+  scan_type,
+  setup_score
 });
       tokenTracking.stage3 = s3result.tokenUsage;
       stage3Time = Date.now() - stage3Start;
@@ -2700,6 +2752,13 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     analysisMeta.processing_time_ms = Date.now() - t0;
     analysisMeta.stage_chain = ["s1", "s2", "s3"];
     analysisMeta.token_usage = tokenTracking;
+
+    // Add ChartInk screening context if available
+    if (scan_type) {
+      analysisMeta.screening_source = 'chartink';
+      analysisMeta.scan_type = scan_type;  // breakout, pullback, momentum, consolidation_breakout
+      analysisMeta.setup_score = setup_score;
+    }
 
     // Add candle metadata for UI display
     analysisMeta.candle_info = this.extractCandleMetadata(marketPayload);
