@@ -1,8 +1,10 @@
 import express from "express";
+import axios from "axios";
 import UserPosition from "../models/userPosition.js";
 import LatestPrice from "../models/latestPrice.js";
 import { calculateTrailingStop, checkExitConditions, calculateRiskReduction } from "../utils/trailingStopLoss.js";
 import { auth } from "../middleware/auth.js";
+import candleFetcherService from "../services/candleFetcher.service.js";
 
 const router = express.Router();
 
@@ -18,15 +20,18 @@ router.get("/", auth, async (req, res) => {
       success: true,
       count: positions.length,
       positions: positions.map(p => ({
+        _id: p._id,
         id: p._id,
         symbol: p.symbol,
         instrument_key: p.instrument_key,
+        stock_name: p.stock_name,
         actual_entry: p.actual_entry,
         qty: p.qty,
         current_sl: p.current_sl,
         current_target: p.current_target,
         entered_at: p.entered_at,
         days_in_trade: p.days_in_trade,
+        status: p.status,
         original_analysis: p.original_analysis,
         sl_trail_count: p.sl_trail_history.length
       }))
@@ -131,7 +136,9 @@ router.post("/", auth, async (req, res) => {
       success: true,
       message: "Position created successfully",
       position: {
+        _id: position._id,
         id: position._id,
+        instrument_key: position.instrument_key,
         symbol: position.symbol,
         stock_name: position.stock_name,
         actual_entry: position.actual_entry,
@@ -139,7 +146,10 @@ router.post("/", auth, async (req, res) => {
         current_sl: position.current_sl,
         current_target: position.current_target,
         riskReward,
-        entered_at: position.entered_at
+        entered_at: position.entered_at,
+        status: position.status,
+        days_in_trade: 0,
+        sl_trail_count: 0
       }
     });
   } catch (error) {
@@ -224,8 +234,11 @@ router.get("/history", auth, async (req, res) => {
       count: positions.length,
       total,
       positions: positions.map(p => ({
+        _id: p._id,
         id: p._id,
         symbol: p.symbol,
+        instrument_key: p.instrument_key,
+        stock_name: p.stock_name,
         actual_entry: p.actual_entry,
         exit_price: p.exit_price,
         qty: p.qty,
@@ -234,7 +247,8 @@ router.get("/history", auth, async (req, res) => {
         close_reason: p.close_reason,
         entered_at: p.entered_at,
         closed_at: p.closed_at,
-        days_in_trade: p.days_in_trade
+        days_in_trade: p.days_in_trade,
+        status: p.status
       }))
     });
   } catch (error) {
@@ -302,18 +316,10 @@ router.get("/:id", auth, async (req, res) => {
 /**
  * POST /api/v1/positions/:id/check-trail
  * Check if trailing stop is recommended based on current price
+ * Uses AI for personalized explanations
  */
 router.post("/:id/check-trail", auth, async (req, res) => {
   try {
-    const { current_price, atr, swing_low, ema20 } = req.body;
-
-    if (!current_price || typeof current_price !== "number") {
-      return res.status(400).json({
-        success: false,
-        message: "current_price is required and must be a number"
-      });
-    }
-
     const position = await UserPosition.findOne({
       _id: req.params.id,
       user_id: req.user._id,
@@ -327,7 +333,31 @@ router.post("/:id/check-trail", auth, async (req, res) => {
       });
     }
 
-    // Calculate trailing recommendation
+    // 🆕 Fetch fresh market data with technical indicators
+    let marketData = null;
+    let indicators = {};
+    let current_price = position.actual_entry;
+
+    try {
+      marketData = await candleFetcherService.getMarketDataForTriggers(
+        position.instrument_key,
+        [{ timeframe: '1d' }, { timeframe: '1h' }]
+      );
+      current_price = marketData.current_price || position.actual_entry;
+      indicators = marketData.indicators?.['1d'] || marketData.indicators?.['1h'] || {};
+    } catch (fetchError) {
+      console.warn(`⚠️ [TRAIL CHECK] Failed to fetch market data: ${fetchError.message}`);
+      const priceDoc = await LatestPrice.findOne({ instrument_key: position.instrument_key });
+      current_price = priceDoc?.last_traded_price || priceDoc?.close || position.actual_entry;
+    }
+
+    // Extract indicators
+    const atr = indicators.atr14 || indicators.atr || null;
+    const ema20 = indicators.ema20 || indicators.ema20_1d || null;
+    const rsi = indicators.rsi14 || indicators.rsi || null;
+    const adx = indicators.adx14 || indicators.adx || null;
+
+    // Calculate trailing recommendation using utility
     const trailResult = calculateTrailingStop({
       position: {
         actual_entry: position.actual_entry,
@@ -336,7 +366,7 @@ router.post("/:id/check-trail", auth, async (req, res) => {
       },
       current_price,
       atr,
-      swing_low,
+      swing_low: null,
       ema20
     });
 
@@ -365,6 +395,73 @@ router.post("/:id/check-trail", auth, async (req, res) => {
     // Calculate unrealized P&L
     const pnl = position.calculateUnrealizedPnl(current_price);
     const riskMetrics = position.calculateRiskMetrics(current_price);
+    const profit_pct = pnl.unrealized_pnl_pct;
+
+    // 🆕 Use AI for personalized trail explanation
+    let aiReason = trailResult.reason || "";
+    let aiExplanation = "";
+
+    try {
+      const aiPrompt = `You are a swing trading coach. Give a brief, helpful explanation for trailing stop decision.
+
+POSITION:
+- Symbol: ${position.symbol}
+- Entry: ₹${position.actual_entry}
+- Current Price: ₹${current_price}
+- Current SL: ₹${position.current_sl}
+- Target: ₹${position.current_target}
+- P&L: ${profit_pct >= 0 ? '+' : ''}${profit_pct.toFixed(2)}%
+- Days held: ${position.days_in_trade}
+
+TECHNICAL:
+- RSI: ${rsi ? rsi.toFixed(1) : 'N/A'}
+- 20 EMA: ₹${ema20 ? ema20.toFixed(2) : 'N/A'}
+- ATR: ₹${atr ? atr.toFixed(2) : 'N/A'}
+- ADX: ${adx ? adx.toFixed(1) : 'N/A'}
+
+TRAIL RECOMMENDATION: ${trailResult.should_trail ? `Move SL to ₹${trailResult.new_sl} (${trailResult.method})` : 'No trail recommended'}
+REASON: ${trailResult.reason || 'N/A'}
+
+Respond in JSON:
+{
+  "reason": "1-2 sentence explanation of the recommendation using the actual numbers",
+  "explanation": "1 sentence about why this protects the trade"
+}`;
+
+      const aiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You are a concise trading coach. Always respond in valid JSON. Be specific with numbers.' },
+          { role: 'user', content: aiPrompt }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.7,
+        max_tokens: 200
+      }, {
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      });
+
+      const aiContent = aiResponse.data.choices[0]?.message?.content;
+      if (aiContent) {
+        const parsed = JSON.parse(aiContent);
+        aiReason = parsed.reason || trailResult.reason;
+        aiExplanation = parsed.explanation || "";
+      }
+    } catch (aiError) {
+      console.warn(`⚠️ [TRAIL CHECK] AI call failed: ${aiError.message}`);
+      // Keep original reason from utility
+    }
+
+    // Enhance trail result with AI reason
+    const enhancedTrailResult = {
+      ...trailResult,
+      reason: aiReason,
+      explanation: aiExplanation
+    };
 
     res.json({
       success: true,
@@ -378,9 +475,15 @@ router.post("/:id/check-trail", auth, async (req, res) => {
       },
       unrealized_pnl: pnl,
       risk_metrics: riskMetrics,
-      trail_recommendation: trailResult,
+      trail_recommendation: enhancedTrailResult,
       risk_reduction: riskReduction,
-      alerts
+      alerts,
+      technical_indicators: {
+        rsi: rsi ? round2(rsi) : null,
+        ema20: ema20 ? round2(ema20) : null,
+        atr: atr ? round2(atr) : null,
+        adx: adx ? round2(adx) : null
+      }
     });
   } catch (error) {
     console.error("Error checking trail:", error);
@@ -530,6 +633,7 @@ router.post("/:id/close", auth, async (req, res) => {
 /**
  * POST /api/v1/positions/:id/exit-coach
  * Exit decision helper - provides options and recommendations
+ * Uses fresh candle data + technical indicators for smarter decisions
  */
 router.post("/:id/exit-coach", auth, async (req, res) => {
   try {
@@ -545,9 +649,31 @@ router.post("/:id/exit-coach", auth, async (req, res) => {
       return res.status(404).json({ success: false, error: "Open position not found" });
     }
 
-    // Get current price
-    const priceDoc = await LatestPrice.findOne({ instrument_key: position.instrument_key });
-    const current_price = priceDoc?.last_traded_price || priceDoc?.close || position.actual_entry;
+    // 🆕 Fetch fresh market data with technical indicators using candleFetcherService
+    let marketData = null;
+    let indicators = {};
+    let current_price = position.actual_entry; // Fallback
+
+    try {
+      // Fetch candles and calculate indicators (1d timeframe for swing positions)
+      marketData = await candleFetcherService.getMarketDataForTriggers(
+        position.instrument_key,
+        [{ timeframe: '1d' }, { timeframe: '1h' }]
+      );
+
+      // Get real-time current price from 1m candle
+      current_price = marketData.current_price || position.actual_entry;
+
+      // Get indicators from daily timeframe
+      indicators = marketData.indicators?.['1d'] || marketData.indicators?.['1h'] || {};
+
+      console.log(`📊 [EXIT COACH] ${position.symbol}: Price ₹${current_price}, RSI: ${indicators.rsi14?.toFixed(1)}, EMA20: ${indicators.ema20?.toFixed(2)}`);
+    } catch (fetchError) {
+      console.warn(`⚠️ [EXIT COACH] Failed to fetch market data, using cached price: ${fetchError.message}`);
+      // Fallback to LatestPrice collection
+      const priceDoc = await LatestPrice.findOne({ instrument_key: position.instrument_key });
+      current_price = priceDoc?.last_traded_price || priceDoc?.close || position.actual_entry;
+    }
 
     // Calculate current state
     const pnl = position.calculateUnrealizedPnl(current_price);
@@ -557,6 +683,13 @@ router.post("/:id/exit-coach", auth, async (req, res) => {
     const distance_to_target = ((current_target - current_price) / current_price) * 100;
     const distance_to_sl = ((current_price - current_sl) / current_price) * 100;
     const profit_pct = pnl.unrealized_pnl_pct;
+
+    // 🆕 Extract technical indicators for smarter decisions
+    const rsi = indicators.rsi14 || indicators.rsi || null;
+    const ema20 = indicators.ema20 || indicators.ema20_1d || null;
+    const ema50 = indicators.ema50 || indicators.ema50_1d || null;
+    const atr = indicators.atr14 || indicators.atr || null;
+    const adx = indicators.adx14 || indicators.adx || null;
 
     // Generate options
     const options = [];
@@ -621,42 +754,161 @@ router.post("/:id/exit-coach", auth, async (req, res) => {
       best_for: profit_pct >= 0 ? "Risk-averse, need the capital" : "Thesis broken, cut loss"
     });
 
-    // Determine AI suggestion
+    // Technical conditions for context
+    const isAboveEma20 = ema20 && current_price > ema20;
+    const isAboveEma50 = ema50 && current_price > ema50;
+    const isOverbought = rsi && rsi > 70;
+    const isOversold = rsi && rsi < 30;
+    const isStrongTrend = adx && adx > 25;
+    const isWeakTrend = adx && adx < 20;
+
+    // 🆕 Use real AI for exit coaching
     let ai_suggestion = "TRAIL_HOLD";
     let ai_reasoning = "";
-
-    if (profit_pct >= 3 && distance_to_target <= 1) {
-      ai_suggestion = "EXIT_FULL";
-      ai_reasoning = "Very close to target with good profit. Consider booking.";
-    } else if (profit_pct >= 2 && profit_pct < 3) {
-      ai_suggestion = "BOOK_50";
-      ai_reasoning = "Good profit accumulated. Lock half, let half run.";
-    } else if (profit_pct > 0 && profit_pct < 2) {
-      ai_suggestion = "TRAIL_HOLD";
-      ai_reasoning = "Profit building but room to target. Trail stop and hold.";
-    } else if (profit_pct <= -3) {
-      ai_suggestion = "EXIT_FULL";
-      ai_reasoning = "Significant drawdown. Consider if thesis is still valid.";
-    } else {
-      ai_suggestion = "TRAIL_HOLD";
-      ai_reasoning = "Position developing. Stick to original plan.";
-    }
-
-    // Emotional acknowledgment based on their thinking
     let emotional_note = "";
-    switch (thinking) {
-      case "not_sure":
-        emotional_note = "It's okay to feel uncertain. Let's look at this objectively.";
-        break;
-      case "want_to_book":
-        emotional_note = "The urge to lock in gains is natural. Here are your options.";
-        break;
-      case "want_to_hold":
-        emotional_note = "Conviction is good, but let's make sure the structure supports it.";
-        break;
-      default:
-        emotional_note = "Let me help you think through this decision.";
+    let ai_options = [];
+
+    try {
+      const aiPrompt = `You are an expert swing trading coach for Indian stock markets. Analyze this position and provide exit coaching.
+
+POSITION DATA:
+- Symbol: ${position.symbol}
+- Entry Price: ₹${actual_entry}
+- Current Price: ₹${current_price}
+- Stop Loss: ₹${current_sl}
+- Target: ₹${current_target}
+- Quantity: ${qty} shares
+- Days Held: ${position.days_in_trade} days
+- Current P&L: ${profit_pct >= 0 ? '+' : ''}${profit_pct.toFixed(2)}% (₹${round2(pnl.unrealized_pnl)})
+- Distance to Target: ${distance_to_target.toFixed(2)}%
+- Distance to Stop: ${distance_to_sl.toFixed(2)}%
+
+TECHNICAL INDICATORS:
+- RSI(14): ${rsi ? rsi.toFixed(1) : 'N/A'}${isOverbought ? ' (Overbought >70)' : isOversold ? ' (Oversold <30)' : ''}
+- 20 EMA: ₹${ema20 ? ema20.toFixed(2) : 'N/A'} (Price ${isAboveEma20 ? 'ABOVE' : 'BELOW'})
+- 50 EMA: ₹${ema50 ? ema50.toFixed(2) : 'N/A'} (Price ${isAboveEma50 ? 'ABOVE' : 'BELOW'})
+- ADX(14): ${adx ? adx.toFixed(1) : 'N/A'} (${isStrongTrend ? 'Strong Trend' : isWeakTrend ? 'Weak Trend' : 'Moderate'})
+- ATR(14): ₹${atr ? atr.toFixed(2) : 'N/A'}
+
+USER'S CURRENT THINKING: ${thinking || 'not_sure'}
+
+Respond in JSON format:
+{
+  "suggestion": "TRAIL_HOLD" | "BOOK_50" | "EXIT_FULL",
+  "reasoning": "2-3 sentence explanation of why this action based on technicals and position state",
+  "emotional_note": "1 sentence empathetic acknowledgment of their feeling",
+  "options": [
+    {
+      "action": "TRAIL_HOLD",
+      "title": "Trail stop & hold",
+      "description": "Specific description with numbers",
+      "pros": ["Pro 1", "Pro 2"],
+      "cons": ["Con 1", "Con 2"],
+      "best_for": "Who this suits"
+    },
+    {
+      "action": "BOOK_50",
+      "title": "Book 50% profit",
+      "description": "Specific description with numbers",
+      "pros": ["Pro 1", "Pro 2"],
+      "cons": ["Con 1", "Con 2"],
+      "best_for": "Who this suits"
+    },
+    {
+      "action": "EXIT_FULL",
+      "title": "Exit fully",
+      "description": "Specific description with numbers",
+      "pros": ["Pro 1", "Pro 2"],
+      "cons": ["Con 1", "Con 2"],
+      "best_for": "Who this suits"
     }
+  ],
+  "reminder": "1 sentence motivational reminder about process"
+}`;
+
+      const aiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You are a swing trading exit coach. Always respond in valid JSON. Be specific with numbers and prices. Be concise but helpful.' },
+          { role: 'user', content: aiPrompt }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.7,
+        max_tokens: 800
+      }, {
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      });
+
+      const aiContent = aiResponse.data.choices[0]?.message?.content;
+      if (aiContent) {
+        const parsed = JSON.parse(aiContent);
+        ai_suggestion = parsed.suggestion || "TRAIL_HOLD";
+        ai_reasoning = parsed.reasoning || "Position analysis complete.";
+        emotional_note = parsed.emotional_note || "";
+        ai_options = parsed.options || options;
+
+        // Merge AI options with computed data (pnl_if_exit, qty_to_sell, etc.)
+        if (ai_options.length > 0) {
+          ai_options = ai_options.map(opt => {
+            const baseOpt = options.find(o => o.action === opt.action) || {};
+            return {
+              ...opt,
+              new_sl: baseOpt.new_sl,
+              risk_after: baseOpt.risk_after,
+              qty_to_sell: baseOpt.qty_to_sell,
+              profit_locked: baseOpt.profit_locked,
+              pnl_if_exit: baseOpt.pnl_if_exit
+            };
+          });
+        }
+
+        console.log(`🤖 [EXIT COACH AI] ${position.symbol}: ${ai_suggestion}`);
+      }
+    } catch (aiError) {
+      console.warn(`⚠️ [EXIT COACH] AI call failed, using fallback: ${aiError.message}`);
+
+      // Fallback to rule-based logic
+      if (profit_pct >= 3 && distance_to_target <= 1) {
+        ai_suggestion = "EXIT_FULL";
+        ai_reasoning = "Very close to target with good profit. Consider booking.";
+      } else if (profit_pct >= 2 && isOverbought) {
+        ai_suggestion = "EXIT_FULL";
+        ai_reasoning = `RSI at ${rsi?.toFixed(0)} indicates overbought. Good time to book profits.`;
+      } else if (profit_pct >= 2 && isWeakTrend) {
+        ai_suggestion = "BOOK_50";
+        ai_reasoning = `Good profit but trend weakening. Lock half.`;
+      } else if (profit_pct >= 2 && isStrongTrend && isAboveEma20) {
+        ai_suggestion = "TRAIL_HOLD";
+        ai_reasoning = `Strong trend and above 20 EMA. Trail stop and let it run.`;
+      } else if (profit_pct > 0 && profit_pct < 2) {
+        ai_suggestion = "TRAIL_HOLD";
+        ai_reasoning = "Profit building. Trail stop and hold.";
+      } else if (profit_pct < 0 && isOversold) {
+        ai_suggestion = "TRAIL_HOLD";
+        ai_reasoning = "Oversold conditions. Potential bounce ahead.";
+      } else if (profit_pct <= -2 && !isAboveEma20 && !isAboveEma50) {
+        ai_suggestion = "EXIT_FULL";
+        ai_reasoning = "Price below key moving averages. Consider exit.";
+      } else {
+        ai_suggestion = "TRAIL_HOLD";
+        ai_reasoning = "Position developing. Stick to original plan.";
+      }
+
+      emotional_note = thinking === "want_to_book"
+        ? "The urge to lock in gains is natural. Here are your options."
+        : thinking === "want_to_hold"
+        ? "Conviction is good, but let's make sure the structure supports it."
+        : "Let me help you think through this decision.";
+
+      ai_options = options;
+    }
+
+    // Use AI options if available, otherwise use computed options
+    const finalOptions = ai_options.length > 0 ? ai_options : options;
 
     res.json({
       success: true,
@@ -673,8 +925,21 @@ router.post("/:id/exit-coach", auth, async (req, res) => {
         distance_to_target_pct: round2(distance_to_target),
         distance_to_sl_pct: round2(distance_to_sl)
       },
+      // 🆕 Technical indicators for transparency
+      technical_indicators: {
+        rsi: rsi ? round2(rsi) : null,
+        ema20: ema20 ? round2(ema20) : null,
+        ema50: ema50 ? round2(ema50) : null,
+        atr: atr ? round2(atr) : null,
+        adx: adx ? round2(adx) : null,
+        price_vs_ema20: ema20 ? round2(((current_price - ema20) / ema20) * 100) : null,
+        is_above_ema20: isAboveEma20,
+        is_overbought: isOverbought,
+        is_oversold: isOversold,
+        trend_strength: isStrongTrend ? "strong" : isWeakTrend ? "weak" : "moderate"
+      },
       emotional_note,
-      options,
+      options: finalOptions,
       ai_suggestion,
       ai_reasoning,
       reminder: "Whatever you decide, you're following a process. That's what matters."
