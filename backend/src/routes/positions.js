@@ -42,6 +42,162 @@ router.get("/", auth, async (req, res) => {
 });
 
 /**
+ * POST /api/v1/positions
+ * Create a new position manually (without analysis)
+ */
+router.post("/", auth, async (req, res) => {
+  try {
+    const {
+      instrument_key,
+      symbol,
+      stock_name,
+      actual_entry,
+      qty,
+      stop_loss,
+      target,
+      archetype,
+      linked_orders
+    } = req.body;
+
+    // Validate required fields
+    if (!instrument_key || !symbol || !actual_entry || !qty || !stop_loss || !target) {
+      return res.status(400).json({
+        success: false,
+        message: "Required fields: instrument_key, symbol, actual_entry, qty, stop_loss, target"
+      });
+    }
+
+    // Validate numeric fields
+    if (typeof actual_entry !== "number" || typeof qty !== "number" ||
+        typeof stop_loss !== "number" || typeof target !== "number") {
+      return res.status(400).json({
+        success: false,
+        message: "actual_entry, qty, stop_loss, and target must be numbers"
+      });
+    }
+
+    // Validate stop_loss < entry < target
+    if (stop_loss >= actual_entry) {
+      return res.status(400).json({
+        success: false,
+        message: "Stop loss must be below entry price"
+      });
+    }
+    if (target <= actual_entry) {
+      return res.status(400).json({
+        success: false,
+        message: "Target must be above entry price"
+      });
+    }
+
+    // Check if position already exists
+    const existingPosition = await UserPosition.findOpenPosition(req.user._id, instrument_key);
+    if (existingPosition) {
+      return res.status(400).json({
+        success: false,
+        message: `Open position already exists for ${symbol}`
+      });
+    }
+
+    // Calculate risk/reward
+    const risk = actual_entry - stop_loss;
+    const reward = target - actual_entry;
+    const riskReward = Math.round((reward / risk) * 100) / 100;
+
+    // Create position
+    const position = await UserPosition.create({
+      user_id: req.user._id,
+      instrument_key,
+      symbol,
+      stock_name: stock_name || symbol,
+      original_analysis: {
+        recommended_entry: actual_entry,
+        recommended_target: target,
+        recommended_sl: stop_loss,
+        archetype: archetype || "manual",
+        confidence: null,
+        riskReward,
+        generated_at: new Date()
+      },
+      actual_entry,
+      qty,
+      current_sl: stop_loss,
+      current_target: target,
+      linked_orders: linked_orders || {},
+      status: "OPEN"
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Position created successfully",
+      position: {
+        id: position._id,
+        symbol: position.symbol,
+        stock_name: position.stock_name,
+        actual_entry: position.actual_entry,
+        qty: position.qty,
+        current_sl: position.current_sl,
+        current_target: position.current_target,
+        riskReward,
+        entered_at: position.entered_at
+      }
+    });
+  } catch (error) {
+    console.error("Error creating position:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create position",
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/v1/positions/by-instrument/:instrumentKey
+ * Get open position for a specific instrument (useful for analysis routing)
+ * NOTE: Must be defined BEFORE /:id to avoid route matching issues
+ */
+router.get("/by-instrument/:instrumentKey", auth, async (req, res) => {
+  try {
+    const position = await UserPosition.findOpenPosition(
+      req.user._id,
+      req.params.instrumentKey
+    );
+
+    if (!position) {
+      return res.json({
+        success: true,
+        has_position: false,
+        position: null
+      });
+    }
+
+    res.json({
+      success: true,
+      has_position: true,
+      position: {
+        id: position._id,
+        symbol: position.symbol,
+        stock_name: position.stock_name,
+        actual_entry: position.actual_entry,
+        qty: position.qty,
+        current_sl: position.current_sl,
+        current_target: position.current_target,
+        days_in_trade: position.days_in_trade,
+        original_analysis: position.original_analysis
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching position by instrument:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch position",
+      error: error.message
+    });
+  }
+});
+
+/**
  * GET /api/v1/positions/history
  * List closed positions for authenticated user
  */
@@ -537,48 +693,5 @@ function round2(x) {
   if (typeof x !== 'number' || !Number.isFinite(x)) return x;
   return Math.round(x * 100) / 100;
 }
-
-/**
- * GET /api/v1/positions/by-instrument/:instrumentKey
- * Get open position for a specific instrument (useful for analysis routing)
- */
-router.get("/by-instrument/:instrumentKey", auth, async (req, res) => {
-  try {
-    const position = await UserPosition.findOpenPosition(
-      req.user._id,
-      req.params.instrumentKey
-    );
-
-    if (!position) {
-      return res.json({
-        success: true,
-        has_position: false,
-        position: null
-      });
-    }
-
-    res.json({
-      success: true,
-      has_position: true,
-      position: {
-        id: position._id,
-        symbol: position.symbol,
-        actual_entry: position.actual_entry,
-        qty: position.qty,
-        current_sl: position.current_sl,
-        current_target: position.current_target,
-        days_in_trade: position.days_in_trade,
-        original_analysis: position.original_analysis
-      }
-    });
-  } catch (error) {
-    console.error("Error fetching position by instrument:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch position",
-      error: error.message
-    });
-  }
-});
 
 export default router;

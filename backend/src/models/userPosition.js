@@ -31,6 +31,7 @@ const userPositionSchema = new mongoose.Schema({
   },
   instrument_key: { type: String, required: true },
   symbol: { type: String, required: true },
+  stock_name: { type: String },  // Human-readable name e.g. "Tata Motors Ltd"
 
   // Original recommendation (FROZEN at entry, never modified)
   original_analysis: { type: originalAnalysisSchema, required: true },
@@ -118,6 +119,7 @@ userPositionSchema.statics.createFromAnalysis = async function(
     user_id,
     instrument_key: stockAnalysis.instrument_key,
     symbol: stockAnalysis.stock_symbol,
+    stock_name: stockAnalysis.stock_name || options.stock_name || stockAnalysis.stock_symbol,
     original_analysis: {
       analysis_id: stockAnalysis._id,
       recommended_entry: strategy.entry,

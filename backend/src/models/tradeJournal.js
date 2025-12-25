@@ -275,18 +275,17 @@ tradeJournalSchema.statics.createFromPosition = async function(position, exitDat
     trade_type: "SWING",
 
     entry: {
-      date: position.created_at,
+      date: position.entered_at,
       price: position.actual_entry,
       quantity: position.qty,
-      planned_sl: position.original_analysis?.stop_loss,
-      planned_target: position.original_analysis?.target,
-      setup_type: position.original_analysis?.pattern_type,
-      setup_score: position.original_analysis?.confidence,
-      notes: position.original_analysis?.reasoning
+      planned_sl: position.original_analysis?.recommended_sl,
+      planned_target: position.original_analysis?.recommended_target,
+      setup_type: position.original_analysis?.archetype,
+      setup_score: position.original_analysis?.confidence
     },
 
     execution: {
-      planned_entry: position.original_analysis?.entry,
+      planned_entry: position.original_analysis?.recommended_entry,
       actual_entry: position.actual_entry
     },
 
