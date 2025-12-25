@@ -235,52 +235,78 @@ export default function Pricing() {
           <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-6 text-center">
             What&apos;s included in every plan
           </h2>
-          <div className="grid gap-6 md:grid-cols-2">
-            <div className="rounded-2xl bg-slate-50 p-5">
-              <div className="text-2xl mb-2 text-center">⚡</div>
-              <h3 className="text-base font-semibold text-slate-900 mb-1 text-center">
-                AI swing setups
-              </h3>
-              <p className="text-xs text-slate-600 text-center">
-                Entry, SL, targets, R:R, expiry window and AI confidence – same analysis for all
-                plans.
-              </p>
+
+          {/* Feature Categories */}
+          <div className="space-y-6">
+            {/* DISCOVERY */}
+            <div className="rounded-2xl bg-blue-50 border border-blue-100 p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xl">🔍</span>
+                <h3 className="text-base font-semibold text-blue-900">DISCOVERY</h3>
+              </div>
+              <ul className="text-xs text-blue-800 space-y-1">
+                <li className="flex gap-2"><span>✓</span> Weekly Grade A stock picks (Saturday)</li>
+                <li className="flex gap-2"><span>✓</span> 4 setup types: Breakout, Pullback, Momentum, Consolidation</li>
+              </ul>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-5">
-              <div className="text-2xl mb-2 text-center">📱</div>
-              <h3 className="text-base font-semibold text-slate-900 mb-1 text-center">
-                Optional WhatsApp alerts
-              </h3>
-              <p className="text-xs text-slate-600 text-center">
-                Get notified when new setups are ready or when important changes happen in your
-                watchlist.
-              </p>
+
+            {/* ANALYSIS */}
+            <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xl">📊</span>
+                <h3 className="text-base font-semibold text-emerald-900">ANALYSIS</h3>
+              </div>
+              <ul className="text-xs text-emerald-800 space-y-1">
+                <li className="flex gap-2"><span>✓</span> Daily post-market analysis (5 PM)</li>
+                <li className="flex gap-2"><span>✓</span> Clear verdicts: &quot;WAIT&quot;, &quot;SKIP&quot;, &quot;HOLD&quot;, &quot;EXIT&quot;</li>
+                <li className="flex gap-2"><span>✓</span> Exact ₹ risk/reward amounts</li>
+                <li className="flex gap-2"><span>✓</span> Beginner-friendly explanations</li>
+              </ul>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-5">
-              <div className="text-2xl mb-2 text-center">📊</div>
-              <h3 className="text-base font-semibold text-slate-900 mb-1 text-center">
-                Watchlist capacity
-              </h3>
-              <p className="text-xs text-slate-600 text-center">
-                Only difference between plans is how many stocks you can track – from a small
-                starter watchlist to 100 stocks.
-              </p>
+
+            {/* MANAGEMENT */}
+            <div className="rounded-2xl bg-violet-50 border border-violet-100 p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xl">🎯</span>
+                <h3 className="text-base font-semibold text-violet-900">MANAGEMENT</h3>
+              </div>
+              <ul className="text-xs text-violet-800 space-y-1">
+                <li className="flex gap-2"><span>✓</span> Position tracking with trail stop suggestions</li>
+                <li className="flex gap-2"><span>✓</span> Exit coaching when structure breaks</li>
+                <li className="flex gap-2"><span>✓</span> Trade journal with P&amp;L</li>
+              </ul>
             </div>
-            <div className="rounded-2xl bg-slate-50 p-5">
-              <div className="text-2xl mb-2 text-center">🎯</div>
-              <h3 className="text-base font-semibold text-slate-900 mb-1 text-center">
-                Cash-market focus
-              </h3>
-              <p className="text-xs text-slate-600 text-center">
-                Short-term swing structures on NSE &amp; BSE cash-market stocks, for educational
-                learning.
-              </p>
+
+            {/* ALERTS & EMOTIONAL SUPPORT */}
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="rounded-2xl bg-amber-50 border border-amber-100 p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xl">🔔</span>
+                  <h3 className="text-base font-semibold text-amber-900">ALERTS</h3>
+                </div>
+                <ul className="text-xs text-amber-800 space-y-1">
+                  <li className="flex gap-2"><span>✓</span> WhatsApp notifications (optional)</li>
+                  <li className="flex gap-2"><span>✓</span> Price alerts when stock reaches zone</li>
+                </ul>
+              </div>
+
+              <div className="rounded-2xl bg-pink-50 border border-pink-100 p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xl">🛡️</span>
+                  <h3 className="text-base font-semibold text-pink-900">EMOTIONAL SUPPORT</h3>
+                </div>
+                <ul className="text-xs text-pink-800 space-y-1">
+                  <li className="flex gap-2"><span>✓</span> Permission to skip weak setups</li>
+                  <li className="flex gap-2"><span>✓</span> &quot;Why it&apos;s okay&quot; when trades fail</li>
+                  <li className="flex gap-2"><span>✓</span> No FOMO - quality over quantity</li>
+                </ul>
+              </div>
             </div>
           </div>
 
-          <div className="mt-6 rounded-2xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-xs text-emerald-800 text-center">
-            💡 Pro tip: Start with the free trial, explore how the AI analysis works with a few
-            stocks, then upgrade only if it fits your style.
+          <div className="mt-6 rounded-2xl bg-slate-100 border border-slate-200 px-4 py-3 text-xs text-slate-700 text-center">
+            💡 <span className="font-medium">Only difference between plans:</span> How many stocks you can track (3 to 100).
+            All features are the same.
           </div>
         </div>
 

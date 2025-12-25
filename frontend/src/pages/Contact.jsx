@@ -143,6 +143,27 @@ export default function Contact() {
           </div>
         </motion.div>
 
+        {/* Need help understanding */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5, duration: 0.5 }}
+          className="mt-10 bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center"
+        >
+          <div className="text-2xl mb-3">💬</div>
+          <h3 className="text-lg font-semibold text-emerald-900 mb-2">
+            Need help understanding an analysis?
+          </h3>
+          <p className="text-sm text-emerald-700 max-w-xl mx-auto">
+            We speak plain English, not trading jargon. If anything in the app confuses you,
+            email us at{" "}
+            <a href="mailto:hello@nolojik.com" className="font-semibold underline underline-offset-2">
+              hello@nolojik.com
+            </a>{" "}
+            and we&apos;ll explain it like we&apos;re chatting over coffee.
+          </p>
+        </motion.div>
+
         {/* Bottom tagline */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -151,7 +172,7 @@ export default function Contact() {
           className="text-center mt-10"
         >
           <p className="text-slate-500 text-sm">
-            Track your watchlist with{" "}
+            Trade with clarity using{" "}
             <span className="text-transparent bg-gradient-to-r from-blue-600 to-emerald-500 bg-clip-text font-semibold">
               SwingSetups
             </span>

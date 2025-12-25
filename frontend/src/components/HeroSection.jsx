@@ -14,20 +14,20 @@ export default function HeroSection() {
         {/* LEFT – text */}
         <div className="w-full lg:w-1/2 space-y-6">
           <p className="inline-flex items-center rounded-full bg-blue-500/20 backdrop-blur-sm px-3 py-1 text-xs font-medium text-blue-300 border border-blue-400/30">
-            AI swing analysis · Educational only
+            Your calm, experienced trading friend
           </p>
 
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-white">
-            Daily swing analysis{" "}
+            Clear actions,{" "}
             <span className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-              for your watchlist stocks
+              not confusing charts
             </span>
           </h1>
 
           <p className="max-w-xl text-sm sm:text-base text-slate-300">
-            Add the stocks you follow. SwingSetups reviews them after market
-            close and marks important price regions in simple English.
-            It is an educational view of price behaviour, not a trading tip.
+            "WAIT for ₹775" beats "RSI divergence with EMA crossover."
+            We find Grade A setups weekly and tell you exactly what to do —
+            including when to skip.
           </p>
 
           <ul className="space-y-2 text-sm text-slate-200">
@@ -35,14 +35,14 @@ export default function HeroSection() {
               <span className="mt-0.5 h-4 w-4 rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center text-xs border border-emerald-400/30">
                 ✓
               </span>
-              <span>Works on NSE &amp; BSE stocks.</span>
+              <span>Weekly discovery of Grade A setups (breakout, pullback, momentum)</span>
             </li>
             <li className="flex gap-2">
               <span className="mt-0.5 h-4 w-4 rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center text-xs border border-emerald-400/30">
                 ✓
               </span>
               <span>
-                Neutral, educational explanations – no "sure-shot" calls or tips.
+                Clear verdicts: "WAIT for ₹775" or "SKIP today"
               </span>
             </li>
             <li className="flex gap-2">
@@ -50,7 +50,15 @@ export default function HeroSection() {
                 ✓
               </span>
               <span>
-                Track from 3 to 100 stocks in your watchlist, depending on plan.
+                Know exactly what to risk (₹22) to potentially gain (₹46)
+              </span>
+            </li>
+            <li className="flex gap-2">
+              <span className="mt-0.5 h-4 w-4 rounded-full bg-amber-500/20 text-amber-300 flex items-center justify-center text-xs border border-amber-400/30">
+                ✓
+              </span>
+              <span>
+                Permission to NOT trade when there's no good setup
               </span>
             </li>
           </ul>
@@ -72,72 +80,75 @@ export default function HeroSection() {
                 to="/how-it-works"
                 className="inline-flex items-center justify-center rounded-xl border border-slate-600/50 bg-slate-800/40 backdrop-blur-sm px-5 py-3 text-sm font-semibold text-white hover:bg-slate-700/40 transition"
               >
-                See an example analysis
+                See how it works
               </Link>
             </div>
           </div>
 
           <p className="text-[11px] text-slate-400 pt-1">
-            No brokerage integration. SwingSetups does not execute orders or
-            manage money. It only explains price regions for learning.
+            Educational only. SwingSetups does not execute orders or manage money.
           </p>
         </div>
 
         {/* RIGHT – sample card */}
         <div className="w-full lg:w-1/2 flex justify-center">
           <div className="w-full max-w-sm rounded-[28px] bg-gradient-to-b from-slate-800/80 to-slate-900/80 backdrop-blur-xl shadow-2xl shadow-blue-900/30 border border-slate-700/50 overflow-hidden">
-            {/* Fake tab bar to make it feel app-like */}
+            {/* Header with grade */}
             <div className="bg-slate-800/60 backdrop-blur-sm px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
-              <p className="text-xs font-medium text-slate-300">SwingSetups · Example view</p>
-              <div className="flex gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-white">TATASTEEL</p>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold border border-emerald-500/30">
+                  Grade A (85/100)
+                </span>
               </div>
+              <span className="text-xs text-slate-400">Pullback</span>
             </div>
 
-            <div className="p-5">
-              <h2 className="text-sm font-semibold text-white">
-                TATASTEEL · Upward-leaning structure
-              </h2>
-              <p className="mt-1 text-xs text-slate-400">
-                Educational map of recent price behaviour
-              </p>
+            <div className="p-5 space-y-4">
+              {/* Main verdict */}
+              <div className="rounded-xl bg-blue-500/10 border border-blue-500/30 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-lg">🎯</span>
+                  <p className="text-blue-300 font-semibold">WAIT for ₹142</p>
+                </div>
+                <p className="text-xs text-slate-300">Not in zone yet — set an alert</p>
+              </div>
 
-            <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
-              <div className="rounded-xl bg-slate-700/40 backdrop-blur-sm border border-slate-600/30 p-3">
-                <p className="text-[11px] text-slate-400">Middle zone</p>
-                <p className="text-sm font-semibold text-white">
-                  ₹184.10
-                </p>
+              {/* Why this makes sense */}
+              <div className="space-y-2">
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Why this makes sense</p>
+                <ul className="text-xs text-slate-300 space-y-1">
+                  <li className="flex gap-2">
+                    <span className="text-emerald-400">•</span>
+                    Stock pulled back to support (₹140-145)
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-emerald-400">•</span>
+                    Risk ₹4.50 to potentially gain ₹9.50
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-emerald-400">•</span>
+                    Even if wrong, that's a small planned loss
+                  </li>
+                </ul>
               </div>
-              <div className="rounded-xl bg-emerald-500/10 backdrop-blur-sm border border-emerald-500/30 p-3">
-                <p className="text-[11px] text-emerald-300">Upper region</p>
-                <p className="text-sm font-semibold text-emerald-400">
-                  ₹190.79
-                </p>
-              </div>
-              <div className="rounded-xl bg-rose-500/10 backdrop-blur-sm border border-rose-500/30 p-3">
-                <p className="text-[11px] text-rose-300">Lower region</p>
-                <p className="text-sm font-semibold text-rose-400">
-                  ₹180.75
-                </p>
-              </div>
-            </div>
 
-            <div className="mt-4 rounded-xl bg-slate-700/30 backdrop-blur-sm border border-slate-600/30 p-3 text-xs text-slate-300 space-y-1">
-              <p>
-                Price has respected the area near ₹184.10 in recent sessions.
-              </p>
-              <p>
-                Movement has slowed around ₹190.79 and weakened near ₹180.75 in
-                the past.
-              </p>
-              <p className="text-[11px] text-slate-400 pt-1">
-                This is only an educational interpretation of past price
-                behaviour, not a recommendation.
-              </p>
-            </div>
+              {/* What to do */}
+              <div className="rounded-xl bg-slate-700/30 border border-slate-600/30 p-3 space-y-2">
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">What to do</p>
+                <div className="text-xs text-slate-200 space-y-1">
+                  <p>→ Set alert at ₹142</p>
+                  <p>→ When it hits, place order with stop at ₹138</p>
+                  <p>→ Target: ₹152</p>
+                </div>
+              </div>
+
+              {/* If it fails */}
+              <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3">
+                <p className="text-[11px] text-amber-200">
+                  <span className="font-semibold">If it fails:</span> ₹450 loss (on 100 shares) = 0.45% of ₹1L capital. That's normal. You followed your rules.
+                </p>
+              </div>
             </div>
           </div>
         </div>

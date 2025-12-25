@@ -17,23 +17,23 @@ export default function HowItWorks() {
           className="text-center mb-14"
         >
           <p className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-            How it works · Step by step
+            How it works
           </p>
           <h1 className="mt-4 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight text-slate-900">
-            How SwingSetups{" "}
+            From discovery to{" "}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-emerald-500">
-              analyzes your watchlist
+              confident action
             </span>
           </h1>
           <p className="mt-4 max-w-2xl mx-auto text-sm sm:text-base text-slate-600">
-            One calm, AI-powered review after market close. No noisy intraday
-            pings – just clear levels you can use as an educational reference.
+            Clear verdicts, honest risk assessment, and guidance at every step —
+            including when the right move is to wait.
           </p>
         </motion.div>
 
         {/* STEP-BY-STEP */}
         <div className="space-y-6 mb-16">
-          {/* Step 1 */}
+          {/* Step 1 - DISCOVER */}
           <motion.div
             initial={{ opacity: 0, x: -24 }}
             whileInView={{ opacity: 1, x: 0 }}
@@ -45,20 +45,40 @@ export default function HowItWorks() {
               <div className="flex h-12 w-12 sm:h-14 sm:w-14 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700 text-lg font-semibold">
                 1
               </div>
-              <div>
-                <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-2">
-                  Add your watchlist
-                </h2>
-                <p className="text-sm sm:text-base text-slate-600">
-                  Pick the stocks you already follow. You can start with just a
-                  few names and adjust anytime. Your plan decides how many
-                  stocks you can track (3 to 100 stocks, depending on plan).
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  <h2 className="text-xl sm:text-2xl font-semibold text-slate-900">
+                    DISCOVER
+                  </h2>
+                  <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+                    Saturday
+                  </span>
+                </div>
+                <p className="text-sm sm:text-base text-slate-600 mb-4">
+                  Every weekend, we scan 1000+ stocks using proven patterns.
+                  Only Grade A setups (score 80+) make the cut.
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { name: "Breakout", desc: "Pushing to new highs" },
+                    { name: "Pullback", desc: "Dipping to support" },
+                    { name: "Momentum", desc: "Running strong" },
+                    { name: "Consolidation", desc: "Tight range breakout" },
+                  ].map((type) => (
+                    <div key={type.name} className="bg-slate-50 rounded-xl p-3 text-center">
+                      <p className="text-sm font-semibold text-slate-900">{type.name}</p>
+                      <p className="text-[11px] text-slate-500">{type.desc}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-emerald-600 mt-4 font-medium">
+                  You get 5-15 quality picks, not 50 random stocks.
                 </p>
               </div>
             </div>
           </motion.div>
 
-          {/* Step 2 */}
+          {/* Step 2 - ADD TO WATCHLIST */}
           <motion.div
             initial={{ opacity: 0, x: 24 }}
             whileInView={{ opacity: 1, x: 0 }}
@@ -72,18 +92,25 @@ export default function HowItWorks() {
               </div>
               <div>
                 <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-2">
-                  Daily AI review after market close
+                  ADD TO WATCHLIST
                 </h2>
-                <p className="text-sm sm:text-base text-slate-600">
-                  Each trading day (usually around 5 PM), SwingSetups reviews
-                  your watchlist and builds simple structures using recent price
-                  data. No intraday noise – just one clean update per day.
+                <p className="text-sm sm:text-base text-slate-600 mb-3">
+                  Review our discoveries, add what interests you. Or add your own stocks —
+                  we'll analyze them too.
                 </p>
+                <div className="flex flex-wrap gap-2">
+                  <span className="px-3 py-1 bg-emerald-50 text-emerald-700 text-xs font-medium rounded-full">
+                    3 stocks (Free trial)
+                  </span>
+                  <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-medium rounded-full">
+                    Up to 100 stocks (Paid plans)
+                  </span>
+                </div>
               </div>
             </div>
           </motion.div>
 
-          {/* Step 3 */}
+          {/* Step 3 - DAILY ANALYSIS */}
           <motion.div
             initial={{ opacity: 0, x: -24 }}
             whileInView={{ opacity: 1, x: 0 }}
@@ -95,20 +122,50 @@ export default function HowItWorks() {
               <div className="flex h-12 w-12 sm:h-14 sm:w-14 flex-shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-700 text-lg font-semibold">
                 3
               </div>
-              <div>
-                <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-2">
-                  See clear regions, not confusing calls
-                </h2>
-                <p className="text-sm sm:text-base text-slate-600">
-                  You see upper, middle, and lower price regions with plain
-                  explanations of how price has behaved earlier – plus short
-                  notes on recent trend, volatility, and why regions were chosen.
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  <h2 className="text-xl sm:text-2xl font-semibold text-slate-900">
+                    DAILY ANALYSIS
+                  </h2>
+                  <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+                    5 PM after market close
+                  </span>
+                </div>
+                <p className="text-sm sm:text-base text-slate-600 mb-4">
+                  For each stock, you get a clear verdict — not confusing charts.
                 </p>
+
+                {/* Sample verdicts */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-lg">🎯</span>
+                      <p className="font-semibold text-blue-700">WAIT for ₹775</p>
+                    </div>
+                    <p className="text-xs text-blue-600">Not in zone yet — set an alert</p>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-lg">⏸️</span>
+                      <p className="font-semibold text-amber-700">SKIP today</p>
+                    </div>
+                    <p className="text-xs text-amber-600">Not a strong setup right now</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 bg-slate-50 rounded-xl p-4">
+                  <p className="text-xs text-slate-600 mb-2 font-medium">Every analysis includes:</p>
+                  <ul className="text-xs text-slate-600 space-y-1">
+                    <li className="flex gap-2"><span className="text-emerald-500">✓</span> Exact ₹ amounts for risk and reward</li>
+                    <li className="flex gap-2"><span className="text-emerald-500">✓</span> What to do if you're in the trade vs not yet</li>
+                    <li className="flex gap-2"><span className="text-emerald-500">✓</span> Why the setup makes sense (in plain English)</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </motion.div>
 
-          {/* Step 4 */}
+          {/* Step 4 - MANAGE POSITIONS */}
           <motion.div
             initial={{ opacity: 0, x: 24 }}
             whileInView={{ opacity: 1, x: 0 }}
@@ -120,73 +177,82 @@ export default function HowItWorks() {
               <div className="flex h-12 w-12 sm:h-14 sm:w-14 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700 text-lg font-semibold">
                 4
               </div>
-              <div>
+              <div className="flex-1">
                 <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-2">
-                  Use it as a reference
+                  MANAGE POSITIONS
                 </h2>
-                <p className="text-sm sm:text-base text-slate-600">
-                  Use these regions as an educational guide while planning your
-                  own trades. SwingSetups never places orders – you stay in
-                  control and decide what to do based on your own risk profile
-                  and time frame.
+                <p className="text-sm sm:text-base text-slate-600 mb-4">
+                  Once you're in a trade, we help you manage it with clear guidance.
                 </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-center">
+                    <p className="font-semibold text-emerald-700 mb-1">HOLD</p>
+                    <p className="text-[11px] text-emerald-600">Structure intact, stay in</p>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-center">
+                    <p className="font-semibold text-blue-700 mb-1">TRAIL STOP</p>
+                    <p className="text-[11px] text-blue-600">Move stop to ₹785</p>
+                  </div>
+                  <div className="bg-rose-50 border border-rose-100 rounded-xl p-4 text-center">
+                    <p className="font-semibold text-rose-700 mb-1">EXIT</p>
+                    <p className="text-[11px] text-rose-600">Broken below ₹760</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 bg-amber-50 border border-amber-100 rounded-xl p-4">
+                  <p className="text-xs text-amber-700">
+                    <span className="font-semibold">When trades fail:</span> We show exactly what you lost (e.g., "₹2,200 = 2.2%")
+                    and remind you that planned losses are normal. Following your rules matters more than any single trade.
+                  </p>
+                </div>
               </div>
             </div>
           </motion.div>
         </div>
 
-        {/* WHAT YOU GET */}
+        {/* WHAT MAKES US DIFFERENT */}
         <motion.div
           initial={{ opacity: 0, y: 24 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
-          className="rounded-3xl bg-white border border-slate-100 shadow-sm p-6 sm:p-8 mb-16"
+          className="rounded-3xl bg-slate-900 text-white p-6 sm:p-8 mb-16"
         >
-          <h2 className="text-2xl sm:text-3xl font-semibold text-slate-900 mb-6 text-center">
-            What you get with SwingSetups
+          <h2 className="text-2xl sm:text-3xl font-semibold mb-6 text-center">
+            What makes us different
           </h2>
-          <div className="grid gap-6 md:grid-cols-2">
-            <div className="rounded-2xl bg-slate-50 p-5">
-              <div className="text-2xl mb-2">📍</div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-1">
-                Simple price regions
-              </h3>
-              <p className="text-sm text-slate-600">
-                Middle zone, upper region, and lower region explained in plain
-                English. No heavy jargon or complex indicators.
-              </p>
-            </div>
-            <div className="rounded-2xl bg-slate-50 p-5">
-              <div className="text-2xl mb-2">🔄</div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-1">
-                Updated once per day
-              </h3>
-              <p className="text-sm text-slate-600">
-                Fresh analysis after market close – not noisy intraday signals.
-                Calm, structured view for swing trading.
-              </p>
-            </div>
-            <div className="rounded-2xl bg-slate-50 p-5">
-              <div className="text-2xl mb-2">💡</div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-1">
-                Reasoning &amp; context
-              </h3>
-              <p className="text-sm text-slate-600">
-                Short notes on recent trend, volatility, and why regions were
-                chosen. Understand the “why” behind each analysis.
-              </p>
-            </div>
-            <div className="rounded-2xl bg-slate-50 p-5">
-              <div className="text-2xl mb-2">⚡</div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-1">
-                Alerts for key changes
-              </h3>
-              <p className="text-sm text-slate-600">
-                Highlights when behaviour near a region weakens the structure,
-                helping you stay informed.
-              </p>
-            </div>
+
+          <div className="space-y-4">
+            {[
+              {
+                other: '"RSI divergence with EMA crossover suggests bullish momentum"',
+                us: '"Stock pulled back. Risk ₹22 to make ₹46."'
+              },
+              {
+                other: '"Here are 50 stocks!"',
+                us: '"5 Grade A setups this week. No FOMO, quality over quantity."'
+              },
+              {
+                other: '"Your stop loss was hit"',
+                us: '"Stop hit. You lost ₹2,200 (2.2%). That\'s normal. You followed your plan."'
+              },
+              {
+                other: 'Confusing charts and indicators',
+                us: '"WAIT for ₹775, then BUY with stop at ₹760"'
+              },
+            ].map((item, i) => (
+              <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-800/50 rounded-xl">
+                <div className="flex items-start gap-3">
+                  <span className="text-rose-400 text-sm mt-0.5">✗</span>
+                  <p className="text-slate-400 text-sm">{item.other}</p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="text-emerald-400 text-sm mt-0.5">✓</span>
+                  <p className="text-emerald-300 text-sm font-medium">{item.us}</p>
+                </div>
+              </div>
+            ))}
           </div>
         </motion.div>
 
@@ -205,9 +271,9 @@ export default function HowItWorks() {
             {[
               "Works on NSE & BSE equities",
               "Focus on multi-day swing moves, not hyper-active intraday",
-              "Language similar to Zerodha Varsity – clear and simple",
-              "No heavy jargon, no complex indicators on the screen",
-              "You stay in control – we don't place any orders for you",
+              "Simple English — like chatting with an experienced friend",
+              "Know your risk in ₹ amounts before every trade",
+              "You stay in control — we don't place any orders for you",
             ].map((text) => (
               <div key={text} className="flex items-start gap-3">
                 <span className="mt-0.5 text-emerald-600">✓</span>
@@ -252,24 +318,24 @@ export default function HowItWorks() {
         >
           <div className="text-4xl mb-3">🚀</div>
           <h2 className="text-2xl sm:text-3xl font-semibold text-slate-900 mb-3">
-            Ready to get started?
+            Ready to trade with clarity?
           </h2>
           <p className="text-sm sm:text-base text-slate-600 mb-6 max-w-2xl mx-auto">
-            Start with 3 stocks free for 30 days, or choose a bigger plan for
-            your entire watchlist.
+            Start with 3 stocks free for 30 days. See exactly how we turn confusing charts
+            into clear actions.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link
               to="/download"
               className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-emerald-500 px-8 py-3 text-sm font-semibold text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:brightness-105 transition"
             >
-              📱 Start Free
+              Start Free Trial
             </Link>
             <Link
               to="/pricing"
               className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-8 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 transition"
             >
-              💰 View Pricing
+              View Pricing
             </Link>
           </div>
         </motion.div>

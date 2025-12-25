@@ -3,28 +3,40 @@ import { motion } from 'framer-motion';
 
 const faqs = [
   {
+    q: 'What are Grade A setups?',
+    a: 'We score every stock from 0-100 based on trend strength, volatility, volume, and distance from key levels. Only stocks scoring 80+ (Grade A) get detailed AI analysis. This means fewer but higher-quality setups — no FOMO, quality over quantity.'
+  },
+  {
+    q: 'What setup types do you find?',
+    a: 'Four patterns that work for swing trading: Breakout (stock pushing to new highs with volume), Pullback (stock dipping to support in an uptrend), Momentum (stock running strong above its averages), and Consolidation Breakout (tight range about to expand).'
+  },
+  {
+    q: 'What does "WAIT for ₹775" mean?',
+    a: 'It\'s a clear action. The stock isn\'t at the ideal entry yet. Set an alert at ₹775. When it reaches that level, consider taking a position with the suggested stop-loss. No confusing jargon — just what to do.'
+  },
+  {
+    q: 'What if the app says "SKIP"?',
+    a: 'That\'s valuable information! Not every day has good setups. "SKIP — not a strong setup today" means waiting is the smart move. We\'ll alert you when something is ready. Permission to NOT trade is a feature.'
+  },
+  {
+    q: 'How do you handle losses?',
+    a: 'We show you exactly what you could lose (e.g., "₹2,200 if stopped out") and remind you that planned losses are normal. Following your rules matters more than any single trade. We help you stay emotionally grounded.'
+  },
+  {
     q: 'Is this stock advice or tips?',
-    a: 'No. SwingSetups is an educational tool. We show how price has behaved near important regions and explain it in simple language. We do not give buy or sell calls. You decide what to do based on your own risk profile, capital, and time frame.'
+    a: 'No. SwingSetups is an educational tool. We provide clear verdicts and risk/reward analysis, but we do not give buy or sell calls. You decide what to do based on your own risk profile, capital, and time frame.'
   },
   {
-    q: 'Do you support intraday trading?',
-    a: 'No. SwingSetups focuses on multi-day swing moves, not very frequent intraday trading. Analysis is updated once per day after market close, so you get a calm, structured view instead of constant signals.'
-  },
-  {
-    q: 'How many stocks can I track on each plan?',
-    a: 'The free trial lets you track up to 3 stocks for 30 days. Paid plans allow larger watchlists, from 3 to 100 stocks depending on your subscription tier. For the latest details, please refer to the Pricing page.'
+    q: 'How many stocks can I track?',
+    a: 'The free trial lets you track up to 3 stocks for 30 days. Paid plans allow larger watchlists, from 3 to 100 stocks depending on your subscription tier. Every Saturday, we also share our discovery of Grade A setups.'
   },
   {
     q: 'What time is analysis updated?',
-    a: 'SwingSetups reviews your watchlist after market close (usually around 5 PM IST) and generates fresh analysis for the next trading day. You see updated regions, context, and reasoning once per day.'
-  },
-  {
-    q: 'What stocks are supported?',
-    a: 'NSE and BSE equities are supported. You can add any listed stock from these exchanges to your watchlist. Focus is on reasonably liquid stocks where swing structures are more meaningful.'
+    a: 'SwingSetups reviews your watchlist after market close (usually around 5 PM IST). You get clear verdicts like "WAIT for ₹775" or "HOLD — structure intact" once per day. No noisy intraday signals.'
   },
   {
     q: 'Do you place trades or connect to my broker?',
-    a: 'No. SwingSetups does not connect to any broker, does not place orders, and does not handle your money. We only show educational price analysis. You remain in full control of all trading decisions and execution with your own broker.'
+    a: 'No. SwingSetups does not connect to any broker, does not place orders, and does not handle your money. You remain in full control of all trading decisions and execution with your own broker.'
   },
   {
     q: 'Is my data secure?',
