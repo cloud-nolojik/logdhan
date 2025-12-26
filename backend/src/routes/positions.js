@@ -10,16 +10,38 @@ const router = express.Router();
 
 /**
  * GET /api/v1/positions
- * List all open positions for authenticated user
+ * List all open positions for authenticated user with real-time P&L
  */
 router.get("/", auth, async (req, res) => {
   try {
     const positions = await UserPosition.findAllOpenPositions(req.user._id);
 
-    res.json({
-      success: true,
-      count: positions.length,
-      positions: positions.map(p => ({
+    // Fetch current prices for all positions
+    const positionsWithPnL = await Promise.all(positions.map(async (p) => {
+      let current_price = p.actual_entry; // Default to entry price
+
+      try {
+        // Try to get fresh price from market data service
+        const marketData = await candleFetcherService.getMarketDataForTriggers(p.instrument_key);
+        if (marketData?.ltp) {
+          current_price = marketData.ltp;
+        } else {
+          // Fallback to LatestPrice collection
+          const priceDoc = await LatestPrice.findOne({ instrument_key: p.instrument_key });
+          if (priceDoc?.last_traded_price) {
+            current_price = priceDoc.last_traded_price;
+          } else if (priceDoc?.close) {
+            current_price = priceDoc.close;
+          }
+        }
+      } catch (priceError) {
+        console.warn(`Could not fetch price for ${p.symbol}:`, priceError.message);
+      }
+
+      // Calculate unrealized P&L
+      const pnl = p.calculateUnrealizedPnl(current_price);
+
+      return {
         _id: p._id,
         id: p._id,
         symbol: p.symbol,
@@ -29,12 +51,20 @@ router.get("/", auth, async (req, res) => {
         qty: p.qty,
         current_sl: p.current_sl,
         current_target: p.current_target,
+        current_price: current_price,
         entered_at: p.entered_at,
         days_in_trade: p.days_in_trade,
         status: p.status,
         original_analysis: p.original_analysis,
-        sl_trail_count: p.sl_trail_history.length
-      }))
+        sl_trail_count: p.sl_trail_history.length,
+        pnl: pnl
+      };
+    }));
+
+    res.json({
+      success: true,
+      count: positionsWithPnL.length,
+      positions: positionsWithPnL
     });
   } catch (error) {
     console.error("Error fetching positions:", error);
