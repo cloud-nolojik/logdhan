@@ -247,8 +247,8 @@ userPositionSchema.methods.calculateUnrealizedPnl = function(current_price) {
   const pnl = (current_price - this.actual_entry) * this.qty;
   const pnl_pct = ((current_price - this.actual_entry) / this.actual_entry) * 100;
   return {
-    unrealized_pnl: Math.round(pnl * 100) / 100,
-    unrealized_pnl_pct: Math.round(pnl_pct * 100) / 100
+    unrealized_pnl: pnl,
+    unrealized_pnl_pct: pnl_pct
   };
 };
 
