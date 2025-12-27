@@ -36,18 +36,18 @@ const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
 export const SCAN_QUERIES = {
   // Breakout Candidates - Near 20-day high with volume surge
   // EMA20 > EMA50 > SMA200, RSI 55-70, Volume 1.5x avg
-  breakout: `( {cash} (
+breakout: `( {cash} (
     latest ema( close, 20 ) > latest ema( close, 50 )
     and latest ema( close, 50 ) > latest sma( close, 200 )
     and latest close > latest ema( close, 20 )
-    and latest close >= highest( high, 20 ) * 0.97
-    and latest close <= highest( high, 20 ) * 1.03
+    and latest close >= max( 20, latest high ) * 0.97
+    and latest close <= max( 20, latest high ) * 1.03
     and latest volume > 1.5 * latest sma( volume, 20 )
     and latest rsi( 14 ) > 55
     and latest rsi( 14 ) < 70
     and latest sma( volume, 20 ) > 300000
     and market cap > 10000
-  ) )`,
+) )`,
 
   // Pullback to EMA20 - Price pulling back to support
   // Close within 3% of EMA20, RSI 40-55 (cooled off)
@@ -81,14 +81,14 @@ export const SCAN_QUERIES = {
     latest ema( close, 20 ) > latest ema( close, 50 )
     and latest ema( close, 50 ) > latest sma( close, 200 )
     and latest close > latest ema( close, 20 )
-    and latest close >= highest( high, 20 ) * 0.97
-    and latest close <= highest( high, 20 ) * 1.03
+    and latest close >= max( 20, latest high ) * 0.97
+    and latest close <= max( 20, latest high ) * 1.03
     and ( latest high - latest low ) < latest close * 0.025
     and latest rsi( 14 ) >= 50
     and latest rsi( 14 ) <= 65
     and latest sma( volume, 20 ) > 300000
     and market cap > 10000
-  ) )`
+) )`
 };
 
 /**

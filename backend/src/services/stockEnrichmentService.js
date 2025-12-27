@@ -356,9 +356,10 @@ export async function getNiftyReturn1M() {
     const { default: candleFetcherService } = await import('./candleFetcher.service.js');
 
     // Calculate date range for ~1 month of daily data
+    // Use 45 calendar days to ensure we get 22 trading days (accounts for weekends + holidays)
     const toDate = new Date();
     const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 30); // 30 days back
+    fromDate.setDate(fromDate.getDate() - 45); // 45 days back to ensure enough trading days
 
     const formatDate = (d) => d.toISOString().split('T')[0];
 

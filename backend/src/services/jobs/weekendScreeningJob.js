@@ -247,19 +247,19 @@ class WeekendScreeningJob {
       console.log(`[SCREENING JOB] Enriched ${allEnrichedStocks.length} stocks`);
       console.log(`[SCREENING JOB] Grade distribution: A=${metadata.grade_distribution.A}, B=${metadata.grade_distribution.B}, C=${metadata.grade_distribution.C}`);
 
-      // Filter for Grade A (80+) only - no fallback to lower grades
-      const GRADE_A_MIN = 75;
+      // Filter for quality stocks - minimum score threshold
+      const MIN_SCORE = 60;
       const MAX_STOCKS = 15;
 
       const enrichedStocks = allEnrichedStocks
-        .filter(s => s.setup_score >= GRADE_A_MIN)
+        .filter(s => s.setup_score >= MIN_SCORE)
         .sort((a, b) => b.setup_score - a.setup_score)
         .slice(0, MAX_STOCKS);
 
-      console.log(`[SCREENING JOB] Grade A (${GRADE_A_MIN}+): ${enrichedStocks.length} stocks`);
+      console.log(`[SCREENING JOB] Qualified stocks (${MIN_SCORE}+): ${enrichedStocks.length} stocks`);
 
       if (enrichedStocks.length === 0) {
-        console.log('[SCREENING JOB] No Grade A stocks found this week');
+        console.log('[SCREENING JOB] No qualified stocks found this week');
         return result;
       }
 

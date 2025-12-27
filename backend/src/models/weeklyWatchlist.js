@@ -86,11 +86,36 @@ weeklyWatchlistSchema.index({ "stocks.instrument_key": 1 });
 
 /**
  * Get week boundaries (Monday to Friday IST)
+ * On weekends (Sat/Sun), returns NEXT week's boundaries for screening prep
  * @param {Date} date
+ * @param {boolean} forScreening - If true, on weekends returns next week
  * @returns {{ weekStart: Date, weekEnd: Date, weekLabel: string }}
  */
-function getWeekBoundaries(date) {
+function getWeekBoundaries(date, forScreening = false) {
   const d = new Date(date);
+  const dayOfWeek = d.getDay(); // 0 = Sunday, 6 = Saturday
+
+  // On weekends during screening, get NEXT week boundaries
+  if (forScreening && (dayOfWeek === 0 || dayOfWeek === 6)) {
+    // Calculate days until next Monday
+    const daysUntilMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+    const weekStart = new Date(d);
+    weekStart.setDate(d.getDate() + daysUntilMonday);
+    weekStart.setHours(0, 0, 0, 0);
+
+    // Get Friday of that week
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 4);
+    weekEnd.setHours(23, 59, 59, 999);
+
+    // Week label
+    const options = { month: 'short', day: 'numeric' };
+    const startStr = weekStart.toLocaleDateString('en-IN', options);
+    const endStr = weekEnd.toLocaleDateString('en-IN', { ...options, year: 'numeric' });
+    const weekLabel = `${startStr} - ${endStr}`;
+
+    return { weekStart, weekEnd, weekLabel };
+  }
 
   // Get Monday of current week
   const day = d.getDay();
@@ -113,21 +138,42 @@ function getWeekBoundaries(date) {
 }
 
 // Static: Get current week's watchlist (global - no user_id)
+// On weekdays: returns the current week
+// On weekends: returns NEXT week's watchlist (for screening prep)
 weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
   const now = new Date();
+  const dayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
+
+  // On weekdays (Mon-Fri), use strict week boundaries
+  if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+    return this.findOne({
+      week_start: { $lte: now },
+      week_end: { $gte: now },
+      status: "ACTIVE"
+    });
+  }
+
+  // On weekends (Sat/Sun), get NEXT week's watchlist for screening prep
+  const { weekStart, weekEnd } = getWeekBoundaries(now, true);
   return this.findOne({
-    week_start: { $lte: now },
-    week_end: { $gte: now },
+    week_start: weekStart,
     status: "ACTIVE"
   });
 };
 
 // Static: Get or create current week (global)
+// On weekends, creates NEXT week's watchlist for screening prep
 weeklyWatchlistSchema.statics.getOrCreateCurrentWeek = async function() {
   let watchlist = await this.getCurrentWeek();
 
   if (!watchlist) {
-    const { weekStart, weekEnd, weekLabel } = getWeekBoundaries(new Date());
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    // On weekends, create next week's watchlist
+    const { weekStart, weekEnd, weekLabel } = getWeekBoundaries(now, isWeekend);
+
     watchlist = await this.create({
       week_start: weekStart,
       week_end: weekEnd,
@@ -135,6 +181,8 @@ weeklyWatchlistSchema.statics.getOrCreateCurrentWeek = async function() {
       stocks: [],
       status: "ACTIVE"
     });
+
+    console.log(`[WeeklyWatchlist] Created new watchlist: ${weekLabel} (isWeekend: ${isWeekend})`);
   }
 
   return watchlist;

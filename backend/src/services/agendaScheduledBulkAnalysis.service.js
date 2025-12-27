@@ -182,13 +182,13 @@ class AgendaScheduledBulkAnalysisService {
     const istNow = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
     console.log(`${runLabel} 🚀 Starting scheduled bulk analysis (source=${source}) at ${istNow}`);
 
-    if (!skipTradingDayCheck) {
-      const isTradingDay = await MarketHoursUtil.isTradingDay(today);
-      if (!isTradingDay) {
-        console.log(`⏭️  [SCHEDULED BULK] ${today.toISOString().split('T')[0]} is not a trading day, skipping analysis`);
-        return;
-      }
-    }
+    // if (!skipTradingDayCheck) {
+    //   const isTradingDay = await MarketHoursUtil.isTradingDay(today);
+    //   if (!isTradingDay) {
+    //     console.log(`⏭️  [SCHEDULED BULK] ${today.toISOString().split('T')[0]} is not a trading day, skipping analysis`);
+    //     return;
+    //   }
+    // }
 
     this.isRunning = true;
     this.stats.totalRuns++;
