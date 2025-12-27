@@ -139,7 +139,8 @@ function getWeekBoundaries(date, forScreening = false) {
 
 // Static: Get current week's watchlist (global - no user_id)
 // On weekdays: returns the current week
-// On weekends: returns NEXT week's watchlist (for screening prep)
+// On weekends: returns the most recently completed week (so users can still see stocks)
+//              OR returns next week if it has stocks (after weekend screening runs)
 weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
   const now = new Date();
   const dayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
@@ -153,12 +154,24 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
     });
   }
 
-  // On weekends (Sat/Sun), get NEXT week's watchlist for screening prep
-  const { weekStart, weekEnd } = getWeekBoundaries(now, true);
-  return this.findOne({
-    week_start: weekStart,
+  // On weekends (Sat/Sun):
+  // 1. First check if next week's watchlist exists and has stocks (screening already ran)
+  const { weekStart: nextWeekStart } = getWeekBoundaries(now, true);
+  const nextWeekWatchlist = await this.findOne({
+    week_start: nextWeekStart,
     status: "ACTIVE"
   });
+
+  if (nextWeekWatchlist && nextWeekWatchlist.stocks?.length > 0) {
+    // Weekend screening already ran, show next week's stocks
+    return nextWeekWatchlist;
+  }
+
+  // 2. Otherwise, show the most recent watchlist (the just-completed week)
+  //    This allows users to still see Friday's stocks on Saturday/Sunday
+  return this.findOne({
+    status: "ACTIVE"
+  }).sort({ week_start: -1 });
 };
 
 // Static: Get or create current week (global)
