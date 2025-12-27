@@ -196,30 +196,20 @@ class AgendaDataPrefetchService {
 
   /**
    * Schedule all recurring jobs
+   * NOTE: Bulk analysis is now handled by agendaScheduledBulkAnalysis.service.js at 4:30 PM
+   * This service only handles manual triggers and admin operations
    */
   async scheduleRecurringJobs() {
     try {
       // Cancel any existing recurring jobs to avoid duplicates
+      // These jobs are no longer scheduled - bulk analysis handles everything at 4:30 PM
       await this.agenda.cancel({
-        name: { $in: ['current-day-prefetch', 'trigger-analysis'] }
+        name: { $in: ['current-day-prefetch', 'trigger-analysis', 'chart-cleanup'] }
       });
 
-      // REMOVED: daily-data-prefetch job scheduling (not required)
-
-      // Current day data pre-fetch: 4:05 PM IST on weekdays (after market close)
-      await this.agenda.every('5 16 * * 1-5', 'current-day-prefetch', {}, {
-        timezone: 'Asia/Kolkata'
-      });
-
-      // NEW: AI Analysis trigger: 4:30 PM IST on weekdays (start analysis with fresh data)
-      await this.agenda.every('30 16 * * 1-5', 'trigger-analysis', {}, {
-        timezone: 'Asia/Kolkata'
-      });
-
-      // Chart cleanup: Every hour
-      await this.agenda.every('0 * * * *', 'chart-cleanup', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // REMOVED: current-day-prefetch (4:05 PM) - redundant, bulk analysis fetches data
+      // REMOVED: trigger-analysis (4:30 PM) - redundant, agendaScheduledBulkAnalysis handles this
+      // REMOVED: chart-cleanup - MongoDB TTL index handles this
 
     } catch (error) {
       console.error('❌ [AGENDA DATA] Failed to schedule recurring jobs:', error);

@@ -273,8 +273,12 @@ subscriptionSchema.methods.canAddStock = function(currentStockCount) {
 
 // Method to check if user can analyze stocks (trial expiry check)
 subscriptionSchema.methods.canAnalyzeStock = function() {
-  // For trial plans, check if trial is expired
-  if (this.planId === 'trial_free') {
+  // Free plan (free_plan) has no expiry - always allow
+  if (this.planId === 'free_plan') {
+    return true;
+  }
+  // For legacy trial plans, check if trial is expired
+  if (this.planId === 'trial_free' || this.planId === 'trial_3_stocks') {
     return this.isTrialActive && !this.isTrialExpired;
   }
   // For paid plans, always allow if subscription is active
@@ -283,7 +287,12 @@ subscriptionSchema.methods.canAnalyzeStock = function() {
 
 // Method to check trial expiry and update status
 subscriptionSchema.methods.checkAndUpdateTrialExpiry = function() {
-  if (this.planId === 'trial_free' && this.trialExpiryDate) {
+  // Free plan has no expiry - skip check
+  if (this.planId === 'free_plan') {
+    return false;
+  }
+  // For legacy trial plans with expiry dates
+  if ((this.planId === 'trial_free' || this.planId === 'trial_3_stocks') && this.trialExpiryDate) {
     const now = new Date();
     if (now >= this.trialExpiryDate && !this.isTrialExpired) {
       this.isTrialExpired = true;

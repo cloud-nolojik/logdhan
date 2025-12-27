@@ -116,12 +116,12 @@ router.post('/verify-otp', async (req, res) => {
     if (!existingSubscription) {
       try {
 
-        // Create trial subscription for new users (30-day free trial with 3 stocks)
+        // Create free plan subscription for new users (5 stocks, free forever)
         await subscriptionService.createSubscription(
           user._id,
-          'trial_3_stocks',
+          'free_plan',
           {
-            source: 'new_user_login'
+            source: 'new_user_registration'
           }
         );
 

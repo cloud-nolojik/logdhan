@@ -217,9 +217,14 @@ class SubscriptionService {
 
       // Calculate endDate based on plan type
       if (plan.type === 'TRIAL') {
-        // Trial plans last for specified trial duration
-        const trialDays = plan.restrictions?.trialDurationDays || 30;
-        endDate = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
+        const trialDays = plan.restrictions?.trialDurationDays;
+        if (trialDays === null || trialDays === undefined) {
+          // Free forever plan (no expiry) - set to 100 years
+          endDate = new Date(now.getFullYear() + 100, now.getMonth(), now.getDate());
+        } else {
+          // Trial plans with specified duration
+          endDate = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
+        }
       } else if (plan.billingCycle === 'MONTHLY') {
         // Monthly plans
         endDate = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
@@ -251,7 +256,8 @@ class SubscriptionService {
           endDate: endDate,
           nextBillingDate: endDate
         },
-        trialExpiryDate: plan.type === 'TRIAL' ? endDate : null,
+        // trialExpiryDate is null for free forever plans (no expiry)
+        trialExpiryDate: (plan.type === 'TRIAL' && plan.restrictions?.trialDurationDays) ? endDate : null,
         isTrialExpired: false,
         restrictions: plan.restrictions || {},
         paymentMethod: {
@@ -311,17 +317,22 @@ class SubscriptionService {
   async checkAndUpdateSubscriptionStatus(subscription) {
     if (!subscription) return subscription;
 
+    // Free plan never expires - skip all checks
+    if (subscription.planId === 'free_plan') {
+      return subscription;
+    }
+
     const now = new Date();
     const endDate = new Date(subscription.billing.endDate);
 
-    // Skip status updates for trial plans that are already expired
-    if (subscription.planId === 'trial_3_stocks' && subscription.status === 'EXPIRED') {
+    // Skip status updates for legacy trial plans that are already expired
+    if ((subscription.planId === 'trial_3_stocks' || subscription.planId === 'trial_free') && subscription.status === 'EXPIRED') {
       return subscription;
     }
 
     if (now > endDate && subscription.status === 'ACTIVE') {
-      if (subscription.planId === 'trial_3_stocks') {
-        // Trial expired - keep as expired
+      if (subscription.planId === 'trial_3_stocks' || subscription.planId === 'trial_free') {
+        // Legacy trial expired - keep as expired
         subscription.status = 'EXPIRED';
         subscription.isTrialExpired = true;
         await subscription.save();

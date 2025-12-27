@@ -8,8 +8,11 @@ class ModelSelectorService {
         // ========== SINGLE SOURCE OF TRUTH FOR ALL AI MODELS ==========
         // Update these values when changing models across the application
         this.models = {
-            analysis: "gpt-5.2-2025-12-11",   // Main analysis model (Stage 3)
-            sentiment: "gpt-5-mini-2025-08-07" // Sentiment analysis model (news/sector)
+            // analysis: "gpt-5.2-2025-12-11",   // Main analysis model (Stage 3)
+            // sentiment: "gpt-5-mini-2025-08-07" // Sentiment analysis model (news/sector)
+
+            analysis: "gpt-4.1-mini-2025-04-14",   // Main analysis model (Stage 3)
+            sentiment: "gpt-4o-mini-2024-07-18" // Sentiment analysis 
         };
     }
 

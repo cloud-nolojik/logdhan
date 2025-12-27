@@ -1,6 +1,6 @@
 /**
  * Agenda-based Scheduled Bulk Analysis Service
- * Runs at 4:30 PM every trading day to analyze watchlist stocks
+ * Runs at 4:00 PM every trading day to analyze watchlist stocks
  *
  * Sources:
  * - User.watchlist: Per-user stocks from Screener.in sync
@@ -146,9 +146,9 @@ class AgendaScheduledBulkAnalysisService {
         name: 'watchlist-bulk-analysis'
       });
 
-      // Schedule for 4:30 PM IST every day (Monday-Friday)
+      // Schedule for 4:00 PM IST every day (Monday-Friday)
       // Cron format: minute hour * * day-of-week
-      await this.agenda.every('30 16 * * 1-5', 'watchlist-bulk-analysis', {}, {
+      await this.agenda.every('0 16 * * 1-5', 'watchlist-bulk-analysis', {}, {
         timezone: 'Asia/Kolkata'
       });
 
