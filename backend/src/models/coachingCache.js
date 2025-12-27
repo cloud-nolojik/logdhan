@@ -42,6 +42,13 @@ const coachingCacheSchema = new mongoose.Schema({
     atr: Number
   },
 
+  // Token usage from original OpenAI call
+  tokens: {
+    prompt_tokens: { type: Number, default: 0 },
+    completion_tokens: { type: Number, default: 0 },
+    total_tokens: { type: Number, default: 0 }
+  },
+
   // Metadata
   created_at: {
     type: Date,
@@ -112,8 +119,9 @@ coachingCacheSchema.statics.getCached = async function(positionId, cacheType) {
  * @param {String} cacheType - 'trail_check' or 'exit_coach'
  * @param {Object} responseData - The AI response to cache
  * @param {Object} marketContext - Current market data for reference
+ * @param {Object} tokens - OpenAI token usage { prompt_tokens, completion_tokens, total_tokens }
  */
-coachingCacheSchema.statics.setCache = async function(positionId, cacheType, responseData, marketContext = {}) {
+coachingCacheSchema.statics.setCache = async function(positionId, cacheType, responseData, marketContext = {}, tokens = {}) {
   const cacheHour = this.getCurrentHour();
 
   try {
@@ -126,13 +134,18 @@ coachingCacheSchema.statics.setCache = async function(positionId, cacheType, res
       {
         response_data: responseData,
         market_context: marketContext,
+        tokens: {
+          prompt_tokens: tokens.prompt_tokens || 0,
+          completion_tokens: tokens.completion_tokens || 0,
+          total_tokens: tokens.total_tokens || 0
+        },
         created_at: new Date(),
         hit_count: 0
       },
       { upsert: true, new: true }
     );
 
-    console.log(`[CACHE SET] ${cacheType} for position ${positionId} (hour: ${cacheHour})`);
+    console.log(`[CACHE SET] ${cacheType} for position ${positionId} (hour: ${cacheHour}, tokens: ${tokens.total_tokens || 0})`);
   } catch (error) {
     // Ignore duplicate key errors (race condition)
     if (error.code !== 11000) {

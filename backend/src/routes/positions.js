@@ -3,6 +3,7 @@ import axios from "axios";
 import UserPosition from "../models/userPosition.js";
 import LatestPrice from "../models/latestPrice.js";
 import CoachingCache from "../models/coachingCache.js";
+import AIUsageLog from "../models/aiUsageLog.js";
 import { calculateTrailingStop, checkExitConditions, calculateRiskReduction } from "../utils/trailingStopLoss.js";
 import { auth } from "../middleware/auth.js";
 import candleFetcherService from "../services/candleFetcher.service.js";
@@ -437,8 +438,18 @@ router.post("/:id/check-trail", auth, async (req, res) => {
     if (cachedResponse) {
       aiReason = cachedResponse.reason || trailResult.reason;
       aiExplanation = cachedResponse.explanation || "";
+
+      // Log cache hit (no tokens consumed)
+      await AIUsageLog.logUsage({
+        endpoint: 'trail_check',
+        model: 'gpt-4o-mini',
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        context: { user_id: req.user._id, position_id: position._id, symbol: position.symbol },
+        was_cached: true
+      });
     } else {
       // No cache hit - call OpenAI
+      const startTime = Date.now();
       try {
         const aiPrompt = `You are a swing trading coach. Give a brief, helpful explanation for trailing stop decision.
 
@@ -483,19 +494,33 @@ Respond in JSON:
           timeout: 10000
         });
 
+        const responseTime = Date.now() - startTime;
+        const usage = aiResponse.data.usage || {};
+
         const aiContent = aiResponse.data.choices[0]?.message?.content;
         if (aiContent) {
           const parsed = JSON.parse(aiContent);
           aiReason = parsed.reason || trailResult.reason;
           aiExplanation = parsed.explanation || "";
 
-          // Cache the response for 1 hour
+          // Cache the response for 1 hour (with tokens)
           await CoachingCache.setCache(
             position._id,
             'trail_check',
             { reason: aiReason, explanation: aiExplanation },
-            { current_price, rsi, ema20, atr }
+            { current_price, rsi, ema20, atr },
+            usage
           );
+
+          // Log AI usage
+          await AIUsageLog.logUsage({
+            endpoint: 'trail_check',
+            model: 'gpt-4o-mini',
+            usage,
+            context: { user_id: req.user._id, position_id: position._id, symbol: position.symbol },
+            was_cached: false,
+            response_time_ms: responseTime
+          });
         }
       } catch (aiError) {
         console.warn(`⚠️ [TRAIL CHECK] AI call failed: ${aiError.message}`);
@@ -839,10 +864,20 @@ router.post("/:id/exit-coach", auth, async (req, res) => {
           };
         });
       }
+
+      // Log cache hit (no tokens consumed)
+      await AIUsageLog.logUsage({
+        endpoint: 'exit_coach',
+        model: 'gpt-4o-mini',
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        context: { user_id: req.user._id, position_id: position._id, symbol: position.symbol },
+        was_cached: true
+      });
     }
 
     if (!usedCache) {
       // No cache hit - call OpenAI
+      const startTime = Date.now();
       try {
         const aiPrompt = `You are an expert swing trading coach for Indian stock markets. Analyze this position and provide exit coaching.
 
@@ -918,6 +953,9 @@ Respond in JSON format:
           timeout: 15000
         });
 
+        const responseTime = Date.now() - startTime;
+        const usage = aiResponse.data.usage || {};
+
         const aiContent = aiResponse.data.choices[0]?.message?.content;
         if (aiContent) {
           const parsed = JSON.parse(aiContent);
@@ -926,7 +964,7 @@ Respond in JSON format:
           emotional_note = parsed.emotional_note || "";
           ai_options = parsed.options || options;
 
-          // Cache the response for 1 hour
+          // Cache the response for 1 hour (with tokens)
           await CoachingCache.setCache(
             position._id,
             'exit_coach',
@@ -937,8 +975,19 @@ Respond in JSON format:
               options: ai_options,
               reminder: parsed.reminder
             },
-            { current_price, rsi, ema20, atr }
+            { current_price, rsi, ema20, atr },
+            usage
           );
+
+          // Log AI usage
+          await AIUsageLog.logUsage({
+            endpoint: 'exit_coach',
+            model: 'gpt-4o-mini',
+            usage,
+            context: { user_id: req.user._id, position_id: position._id, symbol: position.symbol },
+            was_cached: false,
+            response_time_ms: responseTime
+          });
 
           // Merge AI options with computed data (pnl_if_exit, qty_to_sell, etc.)
           if (ai_options.length > 0) {
