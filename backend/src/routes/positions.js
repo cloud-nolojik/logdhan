@@ -2,6 +2,7 @@ import express from "express";
 import axios from "axios";
 import UserPosition from "../models/userPosition.js";
 import LatestPrice from "../models/latestPrice.js";
+import CoachingCache from "../models/coachingCache.js";
 import { calculateTrailingStop, checkExitConditions, calculateRiskReduction } from "../utils/trailingStopLoss.js";
 import { auth } from "../middleware/auth.js";
 import candleFetcherService from "../services/candleFetcher.service.js";
@@ -427,12 +428,19 @@ router.post("/:id/check-trail", auth, async (req, res) => {
     const riskMetrics = position.calculateRiskMetrics(current_price);
     const profit_pct = pnl.unrealized_pnl_pct;
 
-    // 🆕 Use AI for personalized trail explanation
+    // 🆕 Use AI for personalized trail explanation (with 1-hour caching)
     let aiReason = trailResult.reason || "";
     let aiExplanation = "";
 
-    try {
-      const aiPrompt = `You are a swing trading coach. Give a brief, helpful explanation for trailing stop decision.
+    // Check cache first
+    const cachedResponse = await CoachingCache.getCached(position._id, 'trail_check');
+    if (cachedResponse) {
+      aiReason = cachedResponse.reason || trailResult.reason;
+      aiExplanation = cachedResponse.explanation || "";
+    } else {
+      // No cache hit - call OpenAI
+      try {
+        const aiPrompt = `You are a swing trading coach. Give a brief, helpful explanation for trailing stop decision.
 
 POSITION:
 - Symbol: ${position.symbol}
@@ -458,32 +466,41 @@ Respond in JSON:
   "explanation": "1 sentence about why this protects the trade"
 }`;
 
-      const aiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: 'You are a concise trading coach. Always respond in valid JSON. Be specific with numbers.' },
-          { role: 'user', content: aiPrompt }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.7,
-        max_tokens: 200
-      }, {
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
+        const aiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are a concise trading coach. Always respond in valid JSON. Be specific with numbers.' },
+            { role: 'user', content: aiPrompt }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.7,
+          max_tokens: 200
+        }, {
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        });
 
-      const aiContent = aiResponse.data.choices[0]?.message?.content;
-      if (aiContent) {
-        const parsed = JSON.parse(aiContent);
-        aiReason = parsed.reason || trailResult.reason;
-        aiExplanation = parsed.explanation || "";
+        const aiContent = aiResponse.data.choices[0]?.message?.content;
+        if (aiContent) {
+          const parsed = JSON.parse(aiContent);
+          aiReason = parsed.reason || trailResult.reason;
+          aiExplanation = parsed.explanation || "";
+
+          // Cache the response for 1 hour
+          await CoachingCache.setCache(
+            position._id,
+            'trail_check',
+            { reason: aiReason, explanation: aiExplanation },
+            { current_price, rsi, ema20, atr }
+          );
+        }
+      } catch (aiError) {
+        console.warn(`⚠️ [TRAIL CHECK] AI call failed: ${aiError.message}`);
+        // Keep original reason from utility
       }
-    } catch (aiError) {
-      console.warn(`⚠️ [TRAIL CHECK] AI call failed: ${aiError.message}`);
-      // Keep original reason from utility
     }
 
     // Enhance trail result with AI reason
@@ -792,14 +809,42 @@ router.post("/:id/exit-coach", auth, async (req, res) => {
     const isStrongTrend = adx && adx > 25;
     const isWeakTrend = adx && adx < 20;
 
-    // 🆕 Use real AI for exit coaching
+    // 🆕 Use real AI for exit coaching (with 1-hour caching)
     let ai_suggestion = "TRAIL_HOLD";
     let ai_reasoning = "";
     let emotional_note = "";
     let ai_options = [];
+    let usedCache = false;
 
-    try {
-      const aiPrompt = `You are an expert swing trading coach for Indian stock markets. Analyze this position and provide exit coaching.
+    // Check cache first
+    const cachedResponse = await CoachingCache.getCached(position._id, 'exit_coach');
+    if (cachedResponse) {
+      ai_suggestion = cachedResponse.suggestion || "TRAIL_HOLD";
+      ai_reasoning = cachedResponse.reasoning || "Position analysis complete.";
+      emotional_note = cachedResponse.emotional_note || "";
+      ai_options = cachedResponse.options || options;
+      usedCache = true;
+
+      // Merge cached AI options with fresh computed data
+      if (ai_options.length > 0) {
+        ai_options = ai_options.map(opt => {
+          const baseOpt = options.find(o => o.action === opt.action) || {};
+          return {
+            ...opt,
+            new_sl: baseOpt.new_sl,
+            risk_after: baseOpt.risk_after,
+            qty_to_sell: baseOpt.qty_to_sell,
+            profit_locked: baseOpt.profit_locked,
+            pnl_if_exit: baseOpt.pnl_if_exit
+          };
+        });
+      }
+    }
+
+    if (!usedCache) {
+      // No cache hit - call OpenAI
+      try {
+        const aiPrompt = `You are an expert swing trading coach for Indian stock markets. Analyze this position and provide exit coaching.
 
 POSITION DATA:
 - Symbol: ${position.symbol}
@@ -856,85 +901,100 @@ Respond in JSON format:
   "reminder": "1 sentence motivational reminder about process"
 }`;
 
-      const aiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: 'You are a swing trading exit coach. Always respond in valid JSON. Be specific with numbers and prices. Be concise but helpful.' },
-          { role: 'user', content: aiPrompt }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.7,
-        max_tokens: 800
-      }, {
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 15000
-      });
+        const aiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are a swing trading exit coach. Always respond in valid JSON. Be specific with numbers and prices. Be concise but helpful.' },
+            { role: 'user', content: aiPrompt }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.7,
+          max_tokens: 800
+        }, {
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        });
 
-      const aiContent = aiResponse.data.choices[0]?.message?.content;
-      if (aiContent) {
-        const parsed = JSON.parse(aiContent);
-        ai_suggestion = parsed.suggestion || "TRAIL_HOLD";
-        ai_reasoning = parsed.reasoning || "Position analysis complete.";
-        emotional_note = parsed.emotional_note || "";
-        ai_options = parsed.options || options;
+        const aiContent = aiResponse.data.choices[0]?.message?.content;
+        if (aiContent) {
+          const parsed = JSON.parse(aiContent);
+          ai_suggestion = parsed.suggestion || "TRAIL_HOLD";
+          ai_reasoning = parsed.reasoning || "Position analysis complete.";
+          emotional_note = parsed.emotional_note || "";
+          ai_options = parsed.options || options;
 
-        // Merge AI options with computed data (pnl_if_exit, qty_to_sell, etc.)
-        if (ai_options.length > 0) {
-          ai_options = ai_options.map(opt => {
-            const baseOpt = options.find(o => o.action === opt.action) || {};
-            return {
-              ...opt,
-              new_sl: baseOpt.new_sl,
-              risk_after: baseOpt.risk_after,
-              qty_to_sell: baseOpt.qty_to_sell,
-              profit_locked: baseOpt.profit_locked,
-              pnl_if_exit: baseOpt.pnl_if_exit
-            };
-          });
+          // Cache the response for 1 hour
+          await CoachingCache.setCache(
+            position._id,
+            'exit_coach',
+            {
+              suggestion: ai_suggestion,
+              reasoning: ai_reasoning,
+              emotional_note,
+              options: ai_options,
+              reminder: parsed.reminder
+            },
+            { current_price, rsi, ema20, atr }
+          );
+
+          // Merge AI options with computed data (pnl_if_exit, qty_to_sell, etc.)
+          if (ai_options.length > 0) {
+            ai_options = ai_options.map(opt => {
+              const baseOpt = options.find(o => o.action === opt.action) || {};
+              return {
+                ...opt,
+                new_sl: baseOpt.new_sl,
+                risk_after: baseOpt.risk_after,
+                qty_to_sell: baseOpt.qty_to_sell,
+                profit_locked: baseOpt.profit_locked,
+                pnl_if_exit: baseOpt.pnl_if_exit
+              };
+            });
+          }
+
+          console.log(`🤖 [EXIT COACH AI] ${position.symbol}: ${ai_suggestion}`);
+        }
+      } catch (aiError) {
+        console.warn(`⚠️ [EXIT COACH] AI call failed, using fallback: ${aiError.message}`);
+
+        // Fallback to rule-based logic
+        if (profit_pct >= 3 && distance_to_target <= 1) {
+          ai_suggestion = "EXIT_FULL";
+          ai_reasoning = "Very close to target with good profit. Consider booking.";
+        } else if (profit_pct >= 2 && isOverbought) {
+          ai_suggestion = "EXIT_FULL";
+          ai_reasoning = `RSI at ${rsi?.toFixed(0)} indicates overbought. Good time to book profits.`;
+        } else if (profit_pct >= 2 && isWeakTrend) {
+          ai_suggestion = "BOOK_50";
+          ai_reasoning = `Good profit but trend weakening. Lock half.`;
+        } else if (profit_pct >= 2 && isStrongTrend && isAboveEma20) {
+          ai_suggestion = "TRAIL_HOLD";
+          ai_reasoning = `Strong trend and above 20 EMA. Trail stop and let it run.`;
+        } else if (profit_pct > 0 && profit_pct < 2) {
+          ai_suggestion = "TRAIL_HOLD";
+          ai_reasoning = "Profit building. Trail stop and hold.";
+        } else if (profit_pct < 0 && isOversold) {
+          ai_suggestion = "TRAIL_HOLD";
+          ai_reasoning = "Oversold conditions. Potential bounce ahead.";
+        } else if (profit_pct <= -2 && !isAboveEma20 && !isAboveEma50) {
+          ai_suggestion = "EXIT_FULL";
+          ai_reasoning = "Price below key moving averages. Consider exit.";
+        } else {
+          ai_suggestion = "TRAIL_HOLD";
+          ai_reasoning = "Position developing. Stick to original plan.";
         }
 
-        console.log(`🤖 [EXIT COACH AI] ${position.symbol}: ${ai_suggestion}`);
+        emotional_note = thinking === "want_to_book"
+          ? "The urge to lock in gains is natural. Here are your options."
+          : thinking === "want_to_hold"
+          ? "Conviction is good, but let's make sure the structure supports it."
+          : "Let me help you think through this decision.";
+
+        ai_options = options;
       }
-    } catch (aiError) {
-      console.warn(`⚠️ [EXIT COACH] AI call failed, using fallback: ${aiError.message}`);
-
-      // Fallback to rule-based logic
-      if (profit_pct >= 3 && distance_to_target <= 1) {
-        ai_suggestion = "EXIT_FULL";
-        ai_reasoning = "Very close to target with good profit. Consider booking.";
-      } else if (profit_pct >= 2 && isOverbought) {
-        ai_suggestion = "EXIT_FULL";
-        ai_reasoning = `RSI at ${rsi?.toFixed(0)} indicates overbought. Good time to book profits.`;
-      } else if (profit_pct >= 2 && isWeakTrend) {
-        ai_suggestion = "BOOK_50";
-        ai_reasoning = `Good profit but trend weakening. Lock half.`;
-      } else if (profit_pct >= 2 && isStrongTrend && isAboveEma20) {
-        ai_suggestion = "TRAIL_HOLD";
-        ai_reasoning = `Strong trend and above 20 EMA. Trail stop and let it run.`;
-      } else if (profit_pct > 0 && profit_pct < 2) {
-        ai_suggestion = "TRAIL_HOLD";
-        ai_reasoning = "Profit building. Trail stop and hold.";
-      } else if (profit_pct < 0 && isOversold) {
-        ai_suggestion = "TRAIL_HOLD";
-        ai_reasoning = "Oversold conditions. Potential bounce ahead.";
-      } else if (profit_pct <= -2 && !isAboveEma20 && !isAboveEma50) {
-        ai_suggestion = "EXIT_FULL";
-        ai_reasoning = "Price below key moving averages. Consider exit.";
-      } else {
-        ai_suggestion = "TRAIL_HOLD";
-        ai_reasoning = "Position developing. Stick to original plan.";
-      }
-
-      emotional_note = thinking === "want_to_book"
-        ? "The urge to lock in gains is natural. Here are your options."
-        : thinking === "want_to_hold"
-        ? "Conviction is good, but let's make sure the structure supports it."
-        : "Let me help you think through this decision.";
-
-      ai_options = options;
     }
 
     // Use AI options if available, otherwise use computed options
