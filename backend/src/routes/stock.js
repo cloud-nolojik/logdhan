@@ -66,6 +66,17 @@ router.get('/:instrument_key', auth, async (req, res) => {
       currentPrice = null; // Set to null if price fetch fails
     }
 
+    // Check if stock is in user's watchlist
+    let isInWatchlist = false;
+    try {
+      const user = await User.findById(req.user.id);
+      if (user && user.watchlist) {
+        isInWatchlist = user.watchlist.some((item) => item.instrument_key === instrument_key);
+      }
+    } catch (watchlistError) {
+      console.warn('Error checking watchlist:', watchlistError);
+    }
+
     res.status(200).json({
       success: true,
       data: {
@@ -74,7 +85,8 @@ router.get('/:instrument_key', auth, async (req, res) => {
         name: stock.name,
         exchange: stock.exchange,
         currentPrice: currentPrice,
-        tradingViewLink: `https://www.tradingview.com/chart?symbol=${stock.exchange}:${stock.trading_symbol}`
+        tradingViewLink: `https://www.tradingview.com/chart?symbol=${stock.exchange}:${stock.trading_symbol}`,
+        is_in_watchlist: isInWatchlist
       }
     });
   } catch (error) {
