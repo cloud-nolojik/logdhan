@@ -232,7 +232,7 @@ class DateCalculator {
 
   /**
    * Check if current time is in post-market window for intraday data
-   * Post-market window: After 5.00 PM but before 9:00 AM next day (pre-market)
+   * Post-market window: After 4:00 PM but before 9:00 AM next day (pre-market)
    */
   isAfterMarketClose() {
     // ✅ FIX: Use IST timezone instead of server timezone
@@ -241,13 +241,13 @@ class DateCalculator {
     const minutes = now.getMinutes();
     const currentTimeMinutes = hours * 60 + minutes;
 
-    const marketCloseTime = 16 * 60; // 5.00 PM IST (960 minutes)
+    const marketCloseTime = 16 * 60; // 4:00 PM IST (960 minutes)
     const nextDayPreMarketStart = 9 * 60; // 9:00 AM IST (540 minutes)
 
     // Valid post-market window:
-    // 1. After 5.00 PM same day (16:00 - 23:59)
+    // 1. After 4:00 PM same day (16:00 - 23:59)
     // 2. OR Before 9:00 AM next day (00:00 - 08:59)
-    const afterClose = currentTimeMinutes >= marketCloseTime; // 5.00 PM - 11:59 PM
+    const afterClose = currentTimeMinutes >= marketCloseTime; // 4:00 PM - 11:59 PM
     const beforePreMarket = currentTimeMinutes < nextDayPreMarketStart; // 12:00 AM - 8:59 AM
 
     return afterClose || beforePreMarket;
@@ -263,7 +263,7 @@ class DateCalculator {
 
     // Determine which trading day to check:
     // - Before 9:00 AM: Check YESTERDAY (we're in post-market window of previous day)
-    // - After 5.00 PM: Check TODAY (we're in post-market window of current day)
+    // - After 4:00 PM: Check TODAY (we're in post-market window of current day)
     let tradingDateToCheck;
     const hours = now.getHours();
     const minutes = now.getMinutes();
@@ -305,7 +305,7 @@ class DateCalculator {
         yesterday.setDate(yesterday.getDate() - 1);
         return yesterday;
       } else {
-        // After 5.00 PM → Fetch TODAY's intraday data
+        // After 4:00 PM → Fetch TODAY's intraday data
         return now;
       }
     } else {

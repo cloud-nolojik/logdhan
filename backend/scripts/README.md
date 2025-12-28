@@ -131,9 +131,8 @@ db.stockanalyses.findOne(
 
 | Time IST | Time UTC | Description |
 |----------|----------|-------------|
-| 3:59:59 PM | 10:29:59 AM | Market close cutoff |
-| 4:00 PM | 10:30 AM | Bulk analysis runs |
-| 5:00 PM | 11:30 AM | Users see results |
+| 3:30 PM | 10:00 AM | Market close |
+| 4:00 PM | 10:30 AM | Bulk analysis runs & users see results |
 
 ---
 

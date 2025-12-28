@@ -245,11 +245,14 @@ class AgendaScheduledBulkAnalysisService {
         console.log(`[SCHEDULED BULK] 📋 Collected ${stockMap.size} stocks from User.watchlist`);
       }
 
-      // 2b. Collect from WeeklyWatchlist (ChartInk screened stocks - GLOBAL, no user_id)
+      // 2b. Collect from WeeklyWatchlist (ChartInk screened stocks)
+      // IMPORTANT: Only re-analyze ChartInk stocks that users have added to their personal watchlist
+      // Stocks no one cares about (not in any user's watchlist) are skipped to save API credits
       let activeWeeklyWatchlist = null;
       let weeklyWatchlistStocksAdded = 0;
+      let weeklyWatchlistStocksSkipped = 0;
       if (source === 'chartink' || source === 'all') {
-        console.log('[SCHEDULED BULK] 📊 Collecting stocks from WeeklyWatchlist (ChartInk - Global)...');
+        console.log('[SCHEDULED BULK] 📊 Collecting stocks from WeeklyWatchlist (ChartInk)...');
         // Get current week's global watchlist
         activeWeeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
 
@@ -261,24 +264,26 @@ class AgendaScheduledBulkAnalysisService {
             }
 
             if (stock.instrument_key) {
-              totalWatchlistItems++;
-
-              if (!stockMap.has(stock.instrument_key)) {
-                stockMap.set(stock.instrument_key, {
-                  instrument_key: stock.instrument_key,
-                  trading_symbol: stock.symbol || '',
-                  name: stock.stock_name || '',
-                  users: [],  // Empty - global watchlist, analyzed once for all users
-                  source: 'chartink',
-                  scan_type: stock.scan_type,  // breakout, pullback, momentum, consolidation_breakout
-                  setup_score: stock.setup_score,
-                  weeklyWatchlistStockId: stock._id  // Track for linking analysis later
-                });
+              // Check if this ChartInk stock is already in stockMap (from User.watchlist)
+              // If yes → a user cares about it → re-analyze for P&L, stop-loss updates
+              // If no → no user added it → skip (weekend screening already analyzed it)
+              if (stockMap.has(stock.instrument_key)) {
+                // Stock is in a user's watchlist - enrich with ChartInk metadata
+                const existingStock = stockMap.get(stock.instrument_key);
+                existingStock.source = 'both';  // Mark as both screener + chartink
+                existingStock.scan_type = stock.scan_type;
+                existingStock.setup_score = stock.setup_score;
+                existingStock.weeklyWatchlistStockId = stock._id;
                 weeklyWatchlistStocksAdded++;
+                totalWatchlistItems++;
+              } else {
+                // Stock not in any user's watchlist - skip daily re-analysis
+                // Weekend screening already provided initial analysis
+                weeklyWatchlistStocksSkipped++;
               }
             }
           }
-          console.log(`[SCHEDULED BULK] 📊 Added ${weeklyWatchlistStocksAdded} unique stocks from global WeeklyWatchlist`);
+          console.log(`[SCHEDULED BULK] 📊 ChartInk stocks: ${weeklyWatchlistStocksAdded} in user watchlists (will analyze), ${weeklyWatchlistStocksSkipped} skipped (not in any watchlist)`);
         } else {
           console.log('[SCHEDULED BULK] 📊 No active WeeklyWatchlist found or no stocks in it');
         }
@@ -506,8 +511,8 @@ class AgendaScheduledBulkAnalysisService {
       const bulkTotalTime = Date.now() - bulkStartTime;
 
       // 4. Summary
-      const screenerStocks = uniqueStocks.filter(s => s.source === 'screener').length;
-      const chartinkStocks = uniqueStocks.filter(s => s.source === 'chartink').length;
+      const screenerOnlyStocks = uniqueStocks.filter(s => s.source === 'screener').length;
+      const bothSourceStocks = uniqueStocks.filter(s => s.source === 'both').length;  // In user watchlist + ChartInk
       const summary = {
         date: today.toISOString().split('T')[0],
         totalAnalyses: analysisCount,
@@ -515,16 +520,17 @@ class AgendaScheduledBulkAnalysisService {
         skipped: skippedCount,
         failed: failureCount,
         uniqueStocks: uniqueStocks.length,
-        screenerStocks,
-        chartinkStocks,
+        screenerOnlyStocks,
+        chartinkInWatchlist: bothSourceStocks,  // ChartInk stocks that users added to watchlist
+        chartinkSkipped: weeklyWatchlistStocksSkipped,  // ChartInk stocks not in any watchlist (skipped)
         totalUsers: users.length,
         hasActiveWeeklyWatchlist: !!activeWeeklyWatchlist,
-        weeklyWatchlistStocks: activeWeeklyWatchlist?.stocks?.length || 0
+        weeklyWatchlistTotalStocks: activeWeeklyWatchlist?.stocks?.length || 0
       };
       console.log(
-        `${runLabel} 🧾 Summary: uniqueStocks=${summary.uniqueStocks} (screener=${screenerStocks}, chartink=${chartinkStocks}), ` +
+        `${runLabel} 🧾 Summary: uniqueStocks=${summary.uniqueStocks} (screener=${screenerOnlyStocks}, chartink_in_watchlist=${bothSourceStocks}, chartink_skipped=${weeklyWatchlistStocksSkipped}), ` +
         `totalAnalyses=${summary.totalAnalyses}, success=${summary.successful}, skipped=${summary.skipped}, failed=${summary.failed}, ` +
-        `users=${summary.totalUsers}, weeklyWatchlistStocks=${summary.weeklyWatchlistStocks}, duration_ms=${bulkTotalTime}`
+        `users=${summary.totalUsers}, weeklyWatchlistTotal=${summary.weeklyWatchlistTotalStocks}, duration_ms=${bulkTotalTime}`
       );
 
       // Update stats

@@ -91,7 +91,7 @@ router.post('/analyze-all', auth, async (req, res) => {
     });
     //console.log(`🗑️ [ANALYZE-ALL] Deleted ${sessionDeleteResult.deletedCount} existing sessions`);
 
-    // Check if bulk analysis is allowed (5.00 PM on market close till next 8.59 AM)
+    // Check if bulk analysis is allowed (4:00 PM on market close till next 8.59 AM)
     const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
 
     if (!analysisPermission.allowed) {

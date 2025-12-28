@@ -32,7 +32,7 @@ const faqs = [
   },
   {
     q: 'What time is analysis updated?',
-    a: 'SwingSetups reviews your watchlist after market close (usually around 5 PM IST). You get clear verdicts like "WAIT for ₹775" or "HOLD — structure intact" once per day. No noisy intraday signals.'
+    a: 'SwingSetups reviews your watchlist after market close (usually around 4 PM IST). You get clear verdicts like "WAIT for ₹775" or "HOLD — structure intact" once per day. No noisy intraday signals.'
   },
   {
     q: 'Do you place trades or connect to my broker?',

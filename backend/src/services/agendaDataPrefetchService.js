@@ -91,7 +91,7 @@ class AgendaDataPrefetchService {
       }
     });
 
-    // Current day data pre-fetch job (runs after 5.00 PM on trading days)
+    // Current day data pre-fetch job (runs after 4:00 PM on trading days)
     this.agenda.define('current-day-prefetch', async (job) => {
 
       try {

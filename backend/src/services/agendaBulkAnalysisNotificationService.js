@@ -46,8 +46,8 @@ class AgendaBulkAnalysisNotificationService {
       await this.agenda.start();
       this.initialized = true;
 
-      // Schedule the job to run every day at 5:00 PM IST
-      await this.scheduleDaily5PMNotification();
+      // Schedule the job to run every day at 4:00 PM IST (after bulk analysis completes)
+      await this.scheduleDaily4PMNotification();
 
     } catch (error) {
       console.error('❌ [BULK ANALYSIS NOTIFICATION] Failed to initialize agenda service:', error);
@@ -56,15 +56,15 @@ class AgendaBulkAnalysisNotificationService {
   }
 
   /**
-   * Schedule daily 5 PM notification job
+   * Schedule daily 4 PM notification job (after bulk analysis completes at 4 PM)
    */
-  async scheduleDaily5PMNotification() {
+  async scheduleDaily4PMNotification() {
     try {
       // Cancel existing jobs first
       await this.agenda.cancel({ name: 'send-bulk-analysis-available-notification' });
 
-      // Schedule job to run every day at 5:00 PM IST
-      await this.agenda.every('0 17 * * *', 'send-bulk-analysis-available-notification', {}, {
+      // Schedule job to run every day at 4:15 PM IST (15 mins after bulk analysis starts at 4 PM)
+      await this.agenda.every('15 16 * * *', 'send-bulk-analysis-available-notification', {}, {
         timezone: TIMEZONE,
         skipImmediate: true
       });
@@ -136,10 +136,10 @@ class AgendaBulkAnalysisNotificationService {
             await Notification.createNotification({
               userId: user._id,
               title: 'Bulk Analysis Available',
-              message: `Hello ${userName}! Your daily bulk stock analysis is now ready and available in the LogDhan app. View comprehensive AI analysis for multiple stocks with entry/exit triggers and risk-reward ratios.`,
+              message: `Hello ${userName}! Your daily bulk stock analysis is now ready and available in the SwingSetups app. View comprehensive AI analysis for multiple stocks with entry/exit triggers and risk-reward ratios.`,
               type: 'alert',
               metadata: {
-                availableAt: '5:00 PM',
+                availableAt: '4:00 PM',
                 date: new Date().toISOString()
               }
             });
@@ -149,7 +149,7 @@ class AgendaBulkAnalysisNotificationService {
               await firebaseService.sendToUser(
                 user._id,
                 'Bulk Analysis Available',
-                `Hello ${userName}! Your daily bulk stock analysis is now ready at 5:00 PM.`,
+                `Hello ${userName}! Your daily bulk stock analysis is now ready at 4:00 PM.`,
                 {
                   type: 'BULK_ANALYSIS',
                   route: '/bulk-analysis',

@@ -38,7 +38,7 @@ export default function WhatIsSwingSetupsSection() {
     {
       icon: "📅",
       title: "Daily Updates",
-      desc: "Analysis refreshed after market close (~5 PM). One calm update per day.",
+      desc: "Analysis refreshed after market close (~4 PM). One calm update per day.",
       color: "text-cyan-300",
       bgColor: "bg-cyan-500/10",
       borderColor: "border-cyan-500/30"

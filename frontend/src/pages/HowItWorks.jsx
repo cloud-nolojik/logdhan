@@ -128,7 +128,7 @@ export default function HowItWorks() {
                     DAILY ANALYSIS
                   </h2>
                   <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
-                    5 PM after market close
+                    4 PM after market close
                   </span>
                 </div>
                 <p className="text-sm sm:text-base text-slate-600 mb-4">

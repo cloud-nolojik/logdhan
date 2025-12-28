@@ -273,8 +273,8 @@ app.listen(PORT, async () => {
 
   // Scheduled jobs (keeping only 3):
   await initializeAgendaMonitoringService(); // check-triggers-batch (every 15 min)
-  await initializeAgendaScheduledBulkAnalysisService(); // watchlist-bulk-analysis (4:30 PM Mon-Fri)
-  await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM, Sun 10AM)
+  await initializeAgendaScheduledBulkAnalysisService(); // watchlist-bulk-analysis (4:00 PM Mon-Fri)
+  await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST only)
 
 });
 

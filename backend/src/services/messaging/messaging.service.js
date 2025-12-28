@@ -121,7 +121,7 @@ export class MessagingService {
         templateName: 'bulk_analysis_available',
         templateData: {
           userName: notificationData.userName || 'User',
-          time: notificationData.time || '5:00 PM'
+          time: notificationData.time || '4:00 PM'
         }
       });
     } catch (error) {

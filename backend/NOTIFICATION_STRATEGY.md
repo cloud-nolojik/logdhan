@@ -13,7 +13,7 @@
 - **Current:** In-app notification + Firebase push
 - **Location:** `agendaBulkAnalysisNotificationService.js`
 - **WhatsApp:** Removed (was planned, now using Firebase only)
-- **Schedule:** Daily 5 PM IST (trading days)
+- **Schedule:** Daily 4 PM IST (trading days)
 
 ## Recommended Strategy
 
@@ -41,7 +41,7 @@ firebaseService.sendAIReviewNotification(
 **Recommendation:** Current approach is perfect
 
 **Reasoning:**
-1. **Scheduled Event** - User expects it at 5 PM
+1. **Scheduled Event** - User expects it at 4 PM
 2. **Historical Record** - In-app notification preserves history
 3. **Non-Urgent** - User can view when convenient
 4. **Cost Effective** - No WhatsApp cost for bulk notifications
@@ -78,8 +78,8 @@ firebaseService.sendAIReviewNotification(
 
 **Option 1: Pre-Expiry Reminder (Recommended)**
 ```
-Time: 4:30 PM IST (30 mins before 5 PM)
-Message: "⏰ Bulk analysis will be available in 30 minutes at 5:00 PM. Complete pending analyses now!"
+Time: 3:30 PM IST (30 mins before 4 PM)
+Message: "⏰ Bulk analysis will be available in 30 minutes at 4:00 PM. Complete pending analyses now!"
 Type: In-app notification + Firebase push
 ```
 
@@ -98,7 +98,7 @@ Type: In-app notification + Firebase push
 - Better user experience
 
 **Implementation:**
-1. Add new Agenda job at 4:30 PM IST
+1. Add new Agenda job at 3:30 PM IST
 2. Send to users who haven't done bulk analysis today
 3. In-app notification + Firebase push
 4. Message: Reminder to complete pending work
@@ -108,8 +108,8 @@ Type: In-app notification + Firebase push
 | Feature | WhatsApp | Firebase Push | In-App Notification | Recommended |
 |---------|----------|---------------|---------------------|-------------|
 | **Individual Analysis Complete** | ❌ | ✅ | ❌ | Firebase only |
-| **Bulk Analysis Available (5 PM)** | ❌ | ✅ | ✅ | Both |
-| **30-Min Reminder (4:30 PM)** | ❌ | ✅ | ✅ | Both |
+| **Bulk Analysis Available (4 PM)** | ❌ | ✅ | ✅ | Both |
+| **30-Min Reminder (3:30 PM)** | ❌ | ✅ | ✅ | Both |
 | **OTP Verification** | ✅ | ❌ | ❌ | WhatsApp only |
 | **Monitoring Alert** | ✅ | ✅ | ✅ | All three |
 | **Payment Confirmation** | ✅ | ❌ | ✅ | WhatsApp + In-app |
@@ -155,7 +155,7 @@ Type: In-app notification + Firebase push
 
 ### Immediate Actions
 1. ✅ Keep current setup (no changes needed for individual/bulk)
-2. ✅ Implement 30-minute reminder at 4:30 PM
+2. ✅ Implement 30-minute reminder at 3:30 PM
 3. ✅ Add in-app notification for individual analysis (optional but recommended)
 
 ### Future Enhancements
@@ -191,7 +191,7 @@ await Notification.createNotification({
     title: 'Bulk Analysis Available',
     message: `Hello ${userName}! Your daily bulk stock analysis is now ready...`,
     type: 'alert',
-    metadata: { availableAt: '5:00 PM', date: new Date().toISOString() }
+    metadata: { availableAt: '4:00 PM', date: new Date().toISOString() }
 });
 
 // Send Firebase push
@@ -203,7 +203,7 @@ if (user.fcmTokens && user.fcmTokens.length > 0) {
 ## Next Steps
 
 Would you like me to implement:
-1. **30-minute reminder** at 4:30 PM?
+1. **30-minute reminder** at 3:30 PM?
 2. **In-app notification** for individual analysis completion?
 3. Both?
 

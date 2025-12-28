@@ -748,21 +748,21 @@ stockAnalysisSchema.statics.isAnalysisAllowed = function () {
 
   // Never allow analysis on Saturday evening (after 4 PM) or Sunday
   if (currentDay === 6 && currentTime >= 16 * 60) {
-    return { allowed: false, reason: "weekend_restriction", nextAllowed: "Monday 5.00 PM" };
+    return { allowed: false, reason: "weekend_restriction", nextAllowed: "Monday 4:00 PM" };
   }
   if (currentDay === 0) {
-    return { allowed: false, reason: "weekend_restriction", nextAllowed: "Monday 5.00 PM" };
+    return { allowed: false, reason: "weekend_restriction", nextAllowed: "Monday 4:00 PM" };
   }
 
   // Trading days (Monday-Friday)
   if (currentDay >= 1 && currentDay <= 5) {
     // Allow: 4 PM - 11:59 PM OR 12 AM - 9 AM
-    const eveningStart = 16 * 60; // 5.00 PM
+    const eveningStart = 16 * 60; // 4:00 PM
     const morningEnd = 9 * 60; // 9:00 AM
     const marketPreClose = 15 * 60; // 3:00 PM
     const marketClose = 15 * 60 + 30; // 3:30 PM
 
-    // Special window: 3:00 PM - 5.00 PM (allowed on trading days only)
+    // Special window: 3:00 PM - 4:00 PM (allowed on trading days only)
     if (currentTime >= marketPreClose && currentTime < eveningStart) {
       return { allowed: true, reason: "pre_close_window" };
     }
@@ -795,7 +795,7 @@ stockAnalysisSchema.statics.isAnalysisAllowed = function () {
     return { allowed: true, reason: "saturday_morning" };
   }
 
-  return { allowed: false, reason: "general_restriction", nextAllowed: "Today 5.00 PM" };
+  return { allowed: false, reason: "general_restriction", nextAllowed: "Today 4:00 PM" };
 };
 
 // Method to check if bulk analysis is allowed (4 PM to next trading day 8.59 AM)

@@ -86,7 +86,7 @@ await firebaseService.sendToUser(
 **File:** [agendaBulkAnalysisNotificationService.js:127-151](src/services/agendaBulkAnalysisNotificationService.js#L127-151)
 
 **Implementation:**
-- Runs daily at 5:00 PM IST on trading days
+- Runs daily at 4:00 PM IST on trading days
 - Creates in-app notification (type: `alert`)
 - Sends Firebase push to all devices
 - Skips on weekends/holidays
@@ -226,7 +226,7 @@ Authorization: Bearer <token>
 All services are automatically initialized on server startup in [index.js:284](src/index.js#L284):
 
 ```javascript
-await initializeAgendaBulkAnalysisNotificationService(); // 5 PM notification
+await initializeAgendaBulkAnalysisNotificationService(); // 4 PM notification
 await initializeAgendaBulkAnalysisReminderService();     // 8 AM reminder
 ```
 
@@ -320,7 +320,7 @@ curl -X GET http://localhost:5650/api/v1/monitoring/bulk-reminder/status \
 | Time | Job | Type | Trading Days Only |
 |------|-----|------|-------------------|
 | 8:00 AM IST | Bulk Analysis Expiry Reminder | In-app + Firebase | ✅ Yes |
-| 5:00 PM IST | Bulk Analysis Available | In-app + Firebase | ✅ Yes |
+| 4:00 PM IST | Bulk Analysis Available | In-app + Firebase | ✅ Yes |
 | On Demand | Individual Analysis Complete | In-app + Firebase | ❌ No |
 | On Demand | Bulk Session Complete | In-app + Firebase | ❌ No |
 | Real-time | Monitoring Conditions Met | In-app + Firebase | ❌ No |
@@ -332,7 +332,7 @@ curl -X GET http://localhost:5650/api/v1/monitoring/bulk-reminder/status \
 
 ### Backend
 1. ✅ [aiAnalyze.service.js](src/services/aiAnalyze.service.js) - Individual & bulk session notifications
-2. ✅ [agendaBulkAnalysisNotificationService.js](src/services/agendaBulkAnalysisNotificationService.js) - Bulk notifications at 5 PM
+2. ✅ [agendaBulkAnalysisNotificationService.js](src/services/agendaBulkAnalysisNotificationService.js) - Bulk notifications at 4 PM
 3. ✅ [agendaBulkAnalysisReminderService.js](src/services/agendaBulkAnalysisReminderService.js) - NEW: Expiry reminders at 8 AM
 4. ✅ [agendaMonitoringService.js](src/services/agendaMonitoringService.js) - NEW: Monitoring alerts & stopped notifications
 5. ✅ [index.js](src/index.js) - Service initialization
@@ -387,7 +387,7 @@ All notification features have been successfully implemented:
 
 1. ✅ Individual analysis completion uses in-app + Firebase (no WhatsApp)
 2. ✅ Bulk session completion uses in-app + Firebase (no WhatsApp)
-3. ✅ Bulk analysis available at 5 PM (in-app + Firebase)
+3. ✅ Bulk analysis available at 4 PM (in-app + Firebase)
 4. ✅ Bulk analysis expiry reminder at 8 AM (in-app + Firebase)
 5. ✅ Monitoring conditions met uses in-app + Firebase (no WhatsApp) - **NEW**
 6. ✅ Monitoring stopped uses in-app + Firebase (no WhatsApp) - **NEW**

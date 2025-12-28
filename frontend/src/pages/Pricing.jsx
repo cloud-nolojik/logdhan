@@ -257,7 +257,7 @@ export default function Pricing() {
                 <h3 className="text-base font-semibold text-emerald-900">ANALYSIS</h3>
               </div>
               <ul className="text-xs text-emerald-800 space-y-1">
-                <li className="flex gap-2"><span>✓</span> Daily post-market analysis (5 PM)</li>
+                <li className="flex gap-2"><span>✓</span> Daily post-market analysis (4 PM)</li>
                 <li className="flex gap-2"><span>✓</span> Clear verdicts: &quot;WAIT&quot;, &quot;SKIP&quot;, &quot;HOLD&quot;, &quot;EXIT&quot;</li>
                 <li className="flex gap-2"><span>✓</span> Exact ₹ risk/reward amounts</li>
                 <li className="flex gap-2"><span>✓</span> Beginner-friendly explanations</li>

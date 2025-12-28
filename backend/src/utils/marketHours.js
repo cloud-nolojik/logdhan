@@ -20,7 +20,7 @@ const MARKET_HOURS = {
   // Post-market session  
   POST_MARKET: {
     start: { hour: 15, minute: 30 }, // 3:30 PM IST
-    end: { hour: 16, minute: 0 } // 5.00 PM IST
+    end: { hour: 16, minute: 0 } // 4:00 PM IST
   }
 };
 
@@ -110,7 +110,7 @@ class MarketHoursUtil {
     const minute = istDate.getMinutes();
     const currentTime = hour * 60 + minute; // Convert to minutes
 
-    // Market hours: 9:00 AM to 5.00 PM IST (including pre/post market)
+    // Market hours: 9:00 AM to 4:00 PM IST (including pre/post market)
     const startTime = MARKET_HOURS.PRE_MARKET.start.hour * 60 + MARKET_HOURS.PRE_MARKET.start.minute;
     const endTime = MARKET_HOURS.POST_MARKET.end.hour * 60 + MARKET_HOURS.POST_MARKET.end.minute;
 
@@ -214,7 +214,7 @@ class MarketHoursUtil {
    * @returns {number}
    */
   static calculateMaxAttemptsForMarketHours(frequencySeconds, tradingDays = 5) {
-    // Market hours per day: 9:00 AM to 5.00 PM = 7 hours = 25,200 seconds
+    // Market hours per day: 9:00 AM to 4:00 PM = 7 hours = 25,200 seconds
     const marketSecondsPerDay = 7 * 60 * 60; // 7 hours
 
     // Total market seconds for specified trading days
@@ -269,7 +269,7 @@ class MarketHoursUtil {
     } else if (currentTime < regularEnd) {
       return { session: 'regular', hours: '9:15 AM - 3:30 PM IST' };
     } else if (currentTime < postMarketEnd) {
-      return { session: 'post-market', hours: '3:30 PM - 5.00 PM IST' };
+      return { session: 'post-market', hours: '3:30 PM - 4:00 PM IST' };
     } else {
       return { session: 'closed', reason: 'after market hours' };
     }
@@ -635,7 +635,7 @@ class MarketHoursUtil {
             return {
               allowed: false,
               reason: "before_session",
-              nextAllowed: "Today 5.00 PM IST"
+              nextAllowed: "Today 4:00 PM IST"
             };
           }
 
@@ -664,7 +664,7 @@ class MarketHoursUtil {
       return {
         allowed: false,
         reason: "outside_window",
-        nextAllowed: "Today 5.00 PM IST"
+        nextAllowed: "Today 4:00 PM IST"
       };
     } catch (error) {
       console.error('❌ [BULK ANALYSIS CHECK] Error checking bulk analysis window:', error);
@@ -983,15 +983,15 @@ class MarketHoursUtil {
 
         // Scenario 1: During downtime (4:00-5:00 PM) on a trading day
         if (downtimeCheck.isDowntime && isTodayTradingDay) {
-          userMessage = `You've reached your daily limit of ${stockLimit} analyses. We're processing today's bulk analysis right now! Quota resets at 5:00 PM today. 💡 Add stocks to watchlist - analysis will be ready at 5:00 PM today.`;
+          userMessage = `You've reached your daily limit of ${stockLimit} analyses. We're processing today's bulk analysis right now! Quota resets at 4:00 PM today. 💡 Add stocks to watchlist - analysis will be ready at 4:00 PM today.`;
         }
-        // Scenario 2: Before 5:00 PM on a trading day (but not in downtime)
-        else if (istMinutes < 17 * 60 && isTodayTradingDay) {
-          userMessage = `You've reached your daily limit of ${stockLimit} analyses. Quota resets at 5:00 PM today. 💡 Add stocks to watchlist now - analysis will be ready at 5:00 PM today.`;
+        // Scenario 2: Before 4:00 PM on a trading day (but not in downtime)
+        else if (istMinutes < 16 * 60 && isTodayTradingDay) {
+          userMessage = `You've reached your daily limit of ${stockLimit} analyses. Quota resets at 4:00 PM today. 💡 Add stocks to watchlist now - analysis will be ready at 4:00 PM today.`;
         }
-        // Scenario 3: After 5:00 PM or non-trading day (weekend/holiday)
+        // Scenario 3: After 4:00 PM or non-trading day (weekend/holiday)
         else {
-          userMessage = `You've reached your daily limit of ${stockLimit} analyses. Quota resets on ${nextTradingDayStr} at 5:00 PM. 💡 Add stocks to watchlist now - analysis will be ready on ${nextTradingDayStr} at 5:00 PM.`;
+          userMessage = `You've reached your daily limit of ${stockLimit} analyses. Quota resets on ${nextTradingDayStr} at 4:00 PM. 💡 Add stocks to watchlist now - analysis will be ready on ${nextTradingDayStr} at 4:00 PM.`;
         }
 
         return {

@@ -43,14 +43,14 @@ LogDhan - Educational Trading Tools
 ### Template Variables
 
 1. `{{1}}` - **userName**: User's name or email prefix
-2. `{{2}}` - **time**: Time when analysis becomes available (e.g., "5:00 PM")
+2. `{{2}}` - **time**: Time when analysis becomes available (e.g., "4:00 PM")
 
 ### Example Output
 
 ```
 Hello Rahul! 📊
 
-Your daily bulk stock analysis is now ready and available in the LogDhan app at 5:00 PM.
+Your daily bulk stock analysis is now ready and available in the SwingSetups app at 4:00 PM.
 
 ✅ Comprehensive AI analysis for multiple stocks
 ✅ Entry/exit triggers with risk-reward ratios
@@ -113,7 +113,7 @@ async sendBulkAnalysisAvailable(mobileNumber, notificationData) {
         templateName: 'bulk_analysis_available',
         templateData: {
             userName: notificationData.userName || 'User',
-            time: notificationData.time || '5:00 PM'
+            time: notificationData.time || '4:00 PM'
         }
     });
 }
@@ -122,7 +122,7 @@ async sendBulkAnalysisAvailable(mobileNumber, notificationData) {
 ### File: `src/services/agendaBulkAnalysisNotificationService.js`
 
 The service automatically:
-- Runs daily at 5:00 PM IST
+- Runs daily at 4:00 PM IST
 - Fetches all active users with mobile numbers
 - Sends notifications in batches of 10 with 2-second delays
 - Logs success/failure for each notification
@@ -213,7 +213,7 @@ The service provides comprehensive logging:
 **On Trading Days:**
 ```
 ✅ [BULK ANALYSIS NOTIFICATION] Agenda service initialized successfully
-✅ [BULK ANALYSIS NOTIFICATION] Scheduled daily 5 PM notification job
+✅ [BULK ANALYSIS NOTIFICATION] Scheduled daily 4 PM notification job
 📱 [BULK ANALYSIS NOTIFICATION] Starting to send notifications to all users
 ✅ [BULK ANALYSIS NOTIFICATION] Today is a trading day - proceeding with notifications
 📱 [BULK ANALYSIS NOTIFICATION] Found 150 users with mobile numbers
@@ -250,7 +250,7 @@ INFOBIP_WEBHOOK_URL=https://api.logdhan.com/api/v1/webhook/infobip
 
 ## Scheduled Job Details
 
-- **Cron Pattern**: `0 17 * * *` (every day at 5:00 PM)
+- **Cron Pattern**: `0 16 * * *` (every day at 4:00 PM)
 - **Timezone**: `Asia/Kolkata` (IST)
 - **Trading Day Check**: Automatically skips notifications on holidays and weekends
 - **Collection**: `bulk_analysis_notification_jobs` in MongoDB

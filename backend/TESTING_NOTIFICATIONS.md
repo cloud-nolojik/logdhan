@@ -7,7 +7,7 @@ This guide explains how to test the bulk analysis notification system.
 The bulk analysis notification system:
 - Creates in-app notifications for all active users
 - Sends Firebase push notifications to user devices
-- Runs automatically daily at 5:00 PM IST (on trading days only)
+- Runs automatically daily at 4:00 PM IST (on trading days only)
 - Can be manually triggered for testing
 
 ## Prerequisites
@@ -137,7 +137,7 @@ When you trigger the notification, you should see:
 
 1. **Push Notification:**
    - Title: "Bulk Analysis Available"
-   - Body: "Hello {UserName}! Your daily bulk stock analysis is now ready at 5:00 PM."
+   - Body: "Hello {UserName}! Your daily bulk stock analysis is now ready at 4:00 PM."
    - Tapping navigates to bulk analysis screen
 
 2. **In-App Notification:**
@@ -234,10 +234,10 @@ node test-bulk-notification.js "production-auth-token"
 ## Automated Testing Schedule
 
 The system automatically runs daily at:
-- **Time:** 5:00 PM IST (17:00)
+- **Time:** 4:00 PM IST (16:00)
 - **Days:** Trading days only (Mon-Fri, excluding holidays)
 - **Timezone:** Asia/Kolkata
-- **Cron:** `0 17 * * *`
+- **Cron:** `0 16 * * *`
 
 ## Additional Notes
 

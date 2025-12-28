@@ -241,7 +241,7 @@ class DailyDataPrefetchService {
     const hours = now.getHours();
     const minutes = now.getMinutes();
     const currentTimeMinutes = hours * 60 + minutes;
-    const PREFETCH_AFTER = 16 * 60; // 5.00 PM
+    const PREFETCH_AFTER = 16 * 60; // 4:00 PM
 
     if (currentTimeMinutes < PREFETCH_AFTER) {
 

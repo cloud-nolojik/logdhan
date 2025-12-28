@@ -1503,11 +1503,11 @@ class AIReviewService {
     const { instrument_key, term } = tradeData;
     const t = (term || '').toLowerCase();
 
-    // SMART DATA SELECTION: Current day intraday data after 5.00 PM, historical data before
+    // SMART DATA SELECTION: Current day intraday data after 4:00 PM, historical data before
     const now = this.getCurrentIST('date'); // IST Date object
     const { hours, minutes } = this.getCurrentIST('object');
     const currentTimeMinutes = hours * 60 + minutes;
-    const ANALYSIS_ALLOWED_AFTER = 16 * 60; // 5.00 PM (16:00)
+    const ANALYSIS_ALLOWED_AFTER = 16 * 60; // 4:00 PM (16:00)
 
     // Determine if we should use current day intraday data or historical data
     const isAfter4PM = currentTimeMinutes >= ANALYSIS_ALLOWED_AFTER;
@@ -1523,7 +1523,7 @@ class AIReviewService {
       live = true; // Enable intraday endpoints
 
     } else {
-      // Use historical data only (for morning runs or before 5.00 PM)
+      // Use historical data only (for morning runs or before 4:00 PM)
       const previousDay = this.addDays(now, -1); // Force previous day
       todayISO = this.isoIST(previousDay); // Use previous day as "today"
       yesterdayISO = this.isoIST(this.addDays(previousDay, -1));
@@ -1552,7 +1552,7 @@ class AIReviewService {
 
         if (target > 0) {
           if (useCurrentDayData && (f === '5m' || f === '15m' || f === '1h')) {
-            // Use V3 Intraday API for current day data (after 5.00 PM)
+            // Use V3 Intraday API for current day data (after 4:00 PM)
             const intradayUrl = this.buildIntradayV3Url(instrument_key, f);
 
             endpoints.push({
@@ -1579,7 +1579,7 @@ class AIReviewService {
 
             }
           } else {
-            // Use Historical API (before 5.00 PM, non-business day, or daily data)
+            // Use Historical API (before 4:00 PM, non-business day, or daily data)
             if (perDay > 0) {
               const businessDaysNeeded = Math.ceil(target / perDay);
               const referenceDate = useCurrentDayData ? yesterdayISO : todayISO;
