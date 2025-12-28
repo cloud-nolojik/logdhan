@@ -3293,7 +3293,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     mongoose.Types.ObjectId(userId) :
     userId;
 
-    // ⚡ NEW: Use quota window (5 PM IST Day T → 4 PM IST Day T+1) instead of IST day range
+    
     const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
     const { startUtc, endUtc, quotaDate } = await MarketHoursUtil.getQuotaWindowUTC();
 

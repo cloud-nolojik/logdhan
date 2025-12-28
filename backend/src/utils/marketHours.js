@@ -912,7 +912,7 @@ class MarketHoursUtil {
       new mongoose.Types.ObjectId(userId) :
       userId;
 
-      // Get quota window (5 PM IST Day T → 4 PM IST Day T+1)
+     
       const { startUtc, endUtc, quotaDate } = await this.getQuotaWindowUTC();
 
       // Query usage within quota window
@@ -1036,4 +1036,4 @@ class MarketHoursUtil {
   }
 }
 
-export default MarketHoursUtil;
+export default MarketHoursUtil;;
