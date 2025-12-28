@@ -196,14 +196,14 @@ class CashfreeSubscriptionService {
           payment_methods: ["upi"]
         },
         subscription_meta: {
-          return_url: `https://www.nolojik.com/logdhan/thankyou`,
-          notification_url: `https://cooling-sciences-silence-strikes.trycloudflare.com/api/v1/subscriptions/webhook`
+          return_url: `https://www.nolojik.com/swingsetups/thankyou`,
+          notification_url: `https://swingsetups.com/api/v1/subscriptions/webhook`
         },
         subscription_first_charge_time: null,
         subscription_expiry_time: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() // 1 day from now
       };
 
-      const returnUrl = `https://www.nolojik.com/logdhan/thankyou`;
+      const returnUrl = `https://www.nolojik.com/swingsetups/thankyou`;
 
       const response = await axios.post(
         `${this.baseURL}/subscriptions`,

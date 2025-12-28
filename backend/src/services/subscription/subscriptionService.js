@@ -418,7 +418,7 @@ class SubscriptionService {
         environment: process.env.ENVIRONMENT || 'PRODUCTION'
       });
 
-      const paymentUrl = `https://nolojik.com/logdhan/checkout?${checkoutParams.toString()}`;
+      const paymentUrl = `https://nolojik.com/swingsetups/checkout?${checkoutParams.toString()}`;
 
       return {
         paymentUrl,

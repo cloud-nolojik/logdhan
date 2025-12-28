@@ -61,7 +61,7 @@ class CashfreeService {
 
       // Add return URL for Cashfree to redirect after payment
       orderData.order_meta = {
-        return_url: `https://www.nolojik.com/logdhan/thankyou`,
+        return_url: `https://www.nolojik.com/swingsetups/thankyou`,
         notify_url: `${process.env.BACKEND_URL}/api/payments/webhook`
       };
 
@@ -98,7 +98,7 @@ class CashfreeService {
           paymentSessionId: payment_session_id,
           amount: amount,
           credits: credits,
-          paymentUrl: `https://www.nolojik.com/logdhan/checkout?sessionId=${payment_session_id}&amount=${amount}&orderId=${order_id}&type=payment`,
+          paymentUrl: `https://www.nolojik.com/swingsetups/checkout?sessionId=${payment_session_id}&amount=${amount}&orderId=${order_id}&type=payment`,
           returnUrl: orderData.order_meta.return_url
         }
       };

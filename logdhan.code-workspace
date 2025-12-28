@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../swingsetups-app"
+		},
+		{
+			"path": "../nolojik-webapp"
 		}
 	],
 	"settings": {}
