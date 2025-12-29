@@ -102,6 +102,7 @@ const strategyV14Schema = new mongoose.Schema(
     what_could_go_wrong: { type: [mongoose.Schema.Types.Mixed], default: [] },
     ui_friendly: mongoose.Schema.Types.Mixed,
 
+    notification_summary: { type: String, default: null },
     money_example: mongoose.Schema.Types.Mixed,
     suggested_qty: mongoose.Schema.Types.Mixed,
     risk_meter: mongoose.Schema.Types.Mixed,
