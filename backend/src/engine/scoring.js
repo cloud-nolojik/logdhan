@@ -289,10 +289,11 @@ export function pickBestCandidate(stage2Result) {
 
   // Score each candidate
   // Formula: (RR * 0.55) + (trend_align * 0.35) - (min(distance_pct, 5) * 0.10) + scan_type_bonus
+  // rawScore typically ranges 1.5-3.5 for viable candidates
   const scored = pool.map(c => {
     const { rr, trend_align = 0.5, distance_pct = 0, scan_type_bonus = 0 } = c.score || {};
 
-    const totalScore = round2(
+    const rawScore = round2(
       (rr * 0.55) +
       (trend_align * 0.35) -
       (Math.min(distance_pct, 5) * 0.10) +
@@ -301,7 +302,8 @@ export function pickBestCandidate(stage2Result) {
 
     return {
       ...c,
-      totalScore
+      totalScore: rawScore,  // Keep raw for ranking (higher = better)
+      rawScore               // Store raw for confidence normalization
     };
   });
 
@@ -335,12 +337,17 @@ export function calculateConfidence({
     return { confidence: 0.3, adjustments: [], breakdown: 'No candidate' };
   }
 
-  const { skeleton, score, totalScore } = candidate;
+  const { skeleton, score, rawScore } = candidate;
   const { type, riskReward } = skeleton || {};
   const { trend_align = 0.5 } = score || {};
 
-  // Base confidence from candidate total score
-  let baseConfidence = totalScore ? Math.min(totalScore, 1) : 0.5;
+  // Normalize rawScore to 0.50-0.85 range for base confidence
+  // rawScore typically ranges 1.5-3.5 for viable candidates
+  // Formula: 0.35 + (rawScore / 6) maps 1.5-3.5 → 0.60-0.93, clamped to 0.50-0.85
+  // This ensures good candidates start with solid confidence while leaving room for adjustments
+  // Example: RR=3.14, trend=0.4 → rawScore≈1.83 → base = 0.35 + 0.305 = 0.655 (65.5%)
+  const normalizedScore = rawScore ? 0.35 + (rawScore / 6) : 0.5;
+  let baseConfidence = Math.min(0.85, Math.max(0.50, normalizedScore));
 
   const adjustments = [];
 
