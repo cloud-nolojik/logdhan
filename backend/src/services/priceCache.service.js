@@ -600,10 +600,9 @@ class PriceCacheService {
 
   /**
    * Get latest prices for multiple instruments
-   * Priority: API (getCurrentPrice) → Database fallback
    *
-   * API is preferred because getCurrentPrice() fetches live intraday data from Upstox,
-   * while LatestPrice collection may have stale data from previous sessions.
+   * Market Hours: API (getCurrentPrice) → saves to LatestPrice → returns fresh data
+   * Non-Market Hours: LatestPrice collection only (fast, no API calls)
    *
    * @param {Array<string>} instrumentKeys - Array of instrument keys to fetch prices for
    * @returns {Promise<Object>} Map of instrument_key → current_price
@@ -622,63 +621,112 @@ class PriceCacheService {
 
     const priceMap = {};
 
-    // Step 1: Fetch from API (getCurrentPrice) - most accurate, live data
-    const apiStart = Date.now();
-    const apiPromises = instrumentKeys.map(async (instrumentKey) => {
-      try {
-        const price = await getCurrentPrice(instrumentKey, false);
-        return { instrumentKey, price };
-      } catch (error) {
-        console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
-        return { instrumentKey, price: null };
-      }
-    });
+    // Check if market is open
+    let isMarketOpen = false;
+    try {
+      isMarketOpen = await MarketHoursUtil.isMarketOpen();
+    } catch (error) {
+      console.warn(`⚠️ [PRICES] Could not check market hours: ${error.message}`);
+    }
 
-    const apiResults = await Promise.all(apiPromises);
-    let apiSuccessCount = 0;
+    if (isMarketOpen) {
+      // MARKET HOURS: Fetch from API (getCurrentPrice) - live data
+      const apiStart = Date.now();
+      const apiPromises = instrumentKeys.map(async (instrumentKey) => {
+        try {
+          const price = await getCurrentPrice(instrumentKey, false);
+          return { instrumentKey, price };
+        } catch (error) {
+          console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
+          return { instrumentKey, price: null };
+        }
+      });
 
-    apiResults.forEach(({ instrumentKey, price }) => {
-      if (price !== null) {
-        priceMap[instrumentKey] = price;
-        apiSuccessCount++;
+      const apiResults = await Promise.all(apiPromises);
+      let apiSuccessCount = 0;
+      const dbUpdatePromises = [];
 
-        // Update memory cache with fetched price
-        this.priceCache.set(instrumentKey, {
-          ltp: price,
-          candles: null,
-          timestamp: Date.now(),
-          lastUpdated: new Date().toISOString()
+      apiResults.forEach(({ instrumentKey, price }) => {
+        if (price !== null) {
+          priceMap[instrumentKey] = price;
+          apiSuccessCount++;
+
+          // Update memory cache
+          this.priceCache.set(instrumentKey, {
+            ltp: price,
+            candles: null,
+            timestamp: Date.now(),
+            lastUpdated: new Date().toISOString()
+          });
+
+          // Queue DB update (saves to LatestPrice for non-market hours)
+          dbUpdatePromises.push(this.storePriceInDB(instrumentKey, price, null, Date.now()));
+        }
+      });
+
+      const apiTime = Date.now() - apiStart;
+      console.log(`📡 [API] Fetched ${apiSuccessCount}/${instrumentKeys.length} prices in ${apiTime}ms (market open)`);
+
+      // Store prices to DB in background (non-blocking)
+      if (dbUpdatePromises.length > 0) {
+        Promise.all(dbUpdatePromises).catch((err) => {
+          console.error(`❌ [DB] Failed to persist prices: ${err.message}`);
         });
       }
-    });
 
-    const apiTime = Date.now() - apiStart;
-    console.log(`📡 [API] Fetched ${apiSuccessCount}/${instrumentKeys.length} prices in ${apiTime}ms`);
-
-    // Step 2: For missing prices (API failed), fall back to database
-    const missingAfterApi = instrumentKeys.filter((key) => priceMap[key] === undefined);
-    if (missingAfterApi.length > 0) {
-      console.log(`📦 [DB FALLBACK] Fetching ${missingAfterApi.length} missing prices from database...`);
-
+      // For any API failures, fall back to database
+      const missingAfterApi = instrumentKeys.filter((key) => priceMap[key] === undefined);
+      if (missingAfterApi.length > 0) {
+        try {
+          const latestPrices = await LatestPrice.getPricesForInstruments(missingAfterApi);
+          latestPrices.forEach((priceDoc) => {
+            priceMap[priceDoc.instrument_key] = priceDoc.last_traded_price;
+          });
+        } catch (error) {
+          console.error(`❌ [DB FALLBACK] Database fetch failed: ${error.message}`);
+        }
+      }
+    } else {
+      // NON-MARKET HOURS: Use LatestPrice collection, fallback to PreFetchedData candles
       const dbStart = Date.now();
       try {
-        const latestPrices = await LatestPrice.getPricesForInstruments(missingAfterApi);
-        let dbSuccessCount = 0;
-
+        const latestPrices = await LatestPrice.getPricesForInstruments(instrumentKeys);
         latestPrices.forEach((priceDoc) => {
           priceMap[priceDoc.instrument_key] = priceDoc.last_traded_price;
-          dbSuccessCount++;
         });
 
+        // For missing prices, try PreFetchedData (last candle close)
+        const missingKeys = instrumentKeys.filter((key) => priceMap[key] === undefined);
+        if (missingKeys.length > 0) {
+          const PreFetchedData = (await import('../models/preFetchedData.js')).default;
+          const prefetched = await PreFetchedData.find({
+            instrument_key: { $in: missingKeys },
+            timeframe: '1d'
+          }).lean();
+
+          prefetched.forEach((doc) => {
+            if (doc.candle_data?.length > 0) {
+              const lastCandle = doc.candle_data[doc.candle_data.length - 1];
+              // Candle format: [timestamp, open, high, low, close, volume]
+              const closePrice = Array.isArray(lastCandle) ? lastCandle[4] : lastCandle.close;
+              if (closePrice) {
+                priceMap[doc.instrument_key] = closePrice;
+              }
+            }
+          });
+        }
+
         const dbTime = Date.now() - dbStart;
-        console.log(`📦 [DB FALLBACK] Found ${dbSuccessCount}/${missingAfterApi.length} prices in ${dbTime}ms`);
+        console.log(`📦 [DB] Fetched ${Object.keys(priceMap).length}/${instrumentKeys.length} prices in ${dbTime}ms (market closed)`);
       } catch (error) {
-        console.error(`❌ [DB FALLBACK] Database fetch failed: ${error.message}`);
+        console.error(`❌ [DB] Database fetch failed: ${error.message}`);
       }
     }
 
     const totalFound = Object.keys(priceMap).length;
-    console.log(`💰 [PRICES] Total: ${totalFound}/${instrumentKeys.length} prices resolved`);
+    if (totalFound < instrumentKeys.length) {
+      console.log(`💰 [PRICES] Resolved ${totalFound}/${instrumentKeys.length} prices`);
+    }
 
     return priceMap;
   }

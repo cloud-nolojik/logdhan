@@ -2,6 +2,11 @@ import Agenda from 'agenda';
 import dailyDataPrefetchService from './dailyDataPrefetch.service.js';
 import DailyJobStatus from '../models/dailyJobStatus.js';
 import MarketTiming from '../models/marketTiming.js';
+import priceCacheService from './priceCache.service.js';
+import { getCurrentPrice } from '../utils/stockDb.js';
+import WeeklyWatchlist from '../models/weeklyWatchlist.js';
+import { User } from '../models/user.js';
+import MarketHoursUtil from '../utils/marketHours.js';
 
 /**
  * Agenda-based Data Pre-fetch Service
@@ -112,6 +117,107 @@ class AgendaDataPrefetchService {
       }
     });
 
+    // Price prefetch job - runs at 3:35 PM every trading day
+    // Fetches closing prices for all watchlist stocks and saves to LatestPrice collection
+    // This ensures fresh prices are available for weekend bulk analysis
+    this.agenda.define('daily-price-prefetch', async (job) => {
+      console.log('📊 [PRICE PREFETCH] Starting daily price prefetch...');
+
+      try {
+        // Check if today is a trading day
+        const isTradingDay = await MarketHoursUtil.isTradingDay(new Date());
+        if (!isTradingDay) {
+          console.log('📊 [PRICE PREFETCH] Not a trading day, skipping');
+          return { success: true, reason: 'not_trading_day' };
+        }
+
+        // Collect all unique instrument keys from:
+        // 1. WeeklyWatchlist (ChartInk screened stocks)
+        // 2. User watchlists
+        const instrumentKeys = new Set();
+
+        // From WeeklyWatchlist
+        const weeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
+        if (weeklyWatchlist?.stocks?.length > 0) {
+          weeklyWatchlist.stocks.forEach(stock => {
+            if (stock.instrument_key) {
+              instrumentKeys.add(stock.instrument_key);
+            }
+          });
+          console.log(`📊 [PRICE PREFETCH] Found ${weeklyWatchlist.stocks.length} stocks from WeeklyWatchlist`);
+        }
+
+        // From User watchlists
+        const users = await User.find({ 'watchlist.0': { $exists: true } })
+          .select('watchlist.instrument_key')
+          .lean();
+
+        users.forEach(user => {
+          user.watchlist?.forEach(item => {
+            if (item.instrument_key) {
+              instrumentKeys.add(item.instrument_key);
+            }
+          });
+        });
+
+        const allKeys = Array.from(instrumentKeys);
+        console.log(`📊 [PRICE PREFETCH] Total unique stocks to fetch: ${allKeys.length}`);
+
+        if (allKeys.length === 0) {
+          console.log('📊 [PRICE PREFETCH] No stocks to prefetch');
+          return { success: true, stocksCount: 0 };
+        }
+
+        // Fetch prices in batches of 50 to avoid overwhelming the API
+        const BATCH_SIZE = 50;
+        let successCount = 0;
+        let failCount = 0;
+
+        for (let i = 0; i < allKeys.length; i += BATCH_SIZE) {
+          const batch = allKeys.slice(i, i + BATCH_SIZE);
+          const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+          const totalBatches = Math.ceil(allKeys.length / BATCH_SIZE);
+
+          console.log(`📊 [PRICE PREFETCH] Processing batch ${batchNum}/${totalBatches} (${batch.length} stocks)`);
+
+          const pricePromises = batch.map(async (instrumentKey) => {
+            try {
+              const price = await getCurrentPrice(instrumentKey, false);
+              if (price !== null) {
+                // Store in LatestPrice via priceCacheService
+                await priceCacheService.storePriceInDB(instrumentKey, price, null, Date.now());
+                return { instrumentKey, success: true };
+              }
+              return { instrumentKey, success: false };
+            } catch (error) {
+              return { instrumentKey, success: false, error: error.message };
+            }
+          });
+
+          const results = await Promise.all(pricePromises);
+          results.forEach(r => {
+            if (r.success) successCount++;
+            else failCount++;
+          });
+
+          // Small delay between batches to be nice to the API
+          if (i + BATCH_SIZE < allKeys.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+
+        console.log(`✅ [PRICE PREFETCH] Completed: ${successCount} success, ${failCount} failed out of ${allKeys.length}`);
+        this.stats.successfulJobs++;
+
+        return { success: true, stocksCount: allKeys.length, successCount, failCount };
+
+      } catch (error) {
+        console.error('❌ [PRICE PREFETCH] Failed:', error);
+        this.stats.failedJobs++;
+        throw error;
+      }
+    });
+
     // NEW: AI Analysis trigger job (runs at 4:30 PM after data is ready)
     this.agenda.define('trigger-analysis', async (job) => {
 
@@ -196,20 +302,23 @@ class AgendaDataPrefetchService {
 
   /**
    * Schedule all recurring jobs
-   * NOTE: Bulk analysis is now handled by agendaScheduledBulkAnalysis.service.js at 4:30 PM
-   * This service only handles manual triggers and admin operations
+   * - daily-price-prefetch: 3:35 PM IST - Fetches closing prices for all watchlist stocks
+   * NOTE: Bulk analysis is handled by agendaScheduledBulkAnalysis.service.js at 4:30 PM
    */
   async scheduleRecurringJobs() {
     try {
       // Cancel any existing recurring jobs to avoid duplicates
-      // These jobs are no longer scheduled - bulk analysis handles everything at 4:30 PM
       await this.agenda.cancel({
-        name: { $in: ['current-day-prefetch', 'trigger-analysis', 'chart-cleanup'] }
+        name: { $in: ['current-day-prefetch', 'trigger-analysis', 'chart-cleanup', 'daily-price-prefetch'] }
       });
 
-      // REMOVED: current-day-prefetch (4:05 PM) - redundant, bulk analysis fetches data
-      // REMOVED: trigger-analysis (4:30 PM) - redundant, agendaScheduledBulkAnalysis handles this
-      // REMOVED: chart-cleanup - MongoDB TTL index handles this
+      // Schedule daily-price-prefetch at 3:35 PM IST (10:05 UTC)
+      // This runs after market close (3:30 PM) to capture final closing prices
+      // Prices are saved to LatestPrice collection for use during non-market hours
+      await this.agenda.every('35 10 * * 1-5', 'daily-price-prefetch', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+      console.log('📅 [AGENDA DATA] Scheduled daily-price-prefetch at 3:35 PM IST (Mon-Fri)');
 
     } catch (error) {
       console.error('❌ [AGENDA DATA] Failed to schedule recurring jobs:', error);
