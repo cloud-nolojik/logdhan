@@ -182,7 +182,13 @@ class AgendaScheduledBulkAnalysisService {
     const today = new Date();
     const runLabel = `[SCHEDULED BULK ${today.toISOString()}]`;
     const istNow = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
-    console.log(`${runLabel} 🚀 Starting scheduled bulk analysis (source=${source}) at ${istNow}`);
+    console.log(`${runLabel} 🚀 Starting scheduled bulk analysis at ${istNow}`);
+    console.log(`${runLabel} 🔧 Options: source=${source}, skipTradingDayCheck=${skipTradingDayCheck}, analyzeAllChartink=${analyzeAllChartink}`);
+    if (analyzeAllChartink) {
+      console.log(`${runLabel} ✅ analyzeAllChartink=true → Will analyze ALL ChartInk stocks from WeeklyWatchlist`);
+    } else {
+      console.log(`${runLabel} ℹ️  analyzeAllChartink=false → Will only analyze stocks in user watchlists (daily job behavior)`);
+    }
 
     // if (!skipTradingDayCheck) {
     //   const isTradingDay = await MarketHoursUtil.isTradingDay(today);
@@ -255,7 +261,8 @@ class AgendaScheduledBulkAnalysisService {
       let weeklyWatchlistStocksAdded = 0;
       let weeklyWatchlistStocksSkipped = 0;
       if (source === 'chartink' || source === 'all') {
-        console.log(`[SCHEDULED BULK] 📊 Collecting stocks from WeeklyWatchlist (ChartInk)... analyzeAllChartink=${analyzeAllChartink}`);
+        console.log(`[SCHEDULED BULK] 📊 Collecting stocks from WeeklyWatchlist (ChartInk)...`);
+        console.log(`[SCHEDULED BULK] 🔧 analyzeAllChartink=${analyzeAllChartink} (true=analyze all, false=only user watchlist stocks)`);
         // Get current week's global watchlist
         activeWeeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
 
@@ -299,6 +306,10 @@ class AgendaScheduledBulkAnalysisService {
             }
           }
           console.log(`[SCHEDULED BULK] 📊 ChartInk stocks: ${weeklyWatchlistStocksAdded} will analyze, ${weeklyWatchlistStocksSkipped} skipped`);
+          if (weeklyWatchlistStocksSkipped > 0 && !analyzeAllChartink) {
+            console.log(`[SCHEDULED BULK] ℹ️  Skipped ${weeklyWatchlistStocksSkipped} ChartInk stocks because analyzeAllChartink=false (daily job behavior)`);
+            console.log(`[SCHEDULED BULK] ℹ️  To analyze ALL ChartInk stocks, trigger with analyzeAllChartink=true (weekend screening does this)`);
+          }
         } else {
           console.log('[SCHEDULED BULK] 📊 No active WeeklyWatchlist found or no stocks in it');
         }
@@ -307,7 +318,9 @@ class AgendaScheduledBulkAnalysisService {
       const uniqueStocks = Array.from(stockMap.values());
 
       if (uniqueStocks.length === 0) {
-        console.log('[SCHEDULED BULK] No watchlist stocks found across users, skipping');
+        console.log('[SCHEDULED BULK] ⚠️  No watchlist stocks found across users, skipping analysis');
+        console.log(`[SCHEDULED BULK] ⚠️  Reason: source=${source}, analyzeAllChartink=${analyzeAllChartink}`);
+        console.log(`[SCHEDULED BULK] ⚠️  If triggered from weekend screening, ensure analyzeAllChartink=true was passed`);
         return;
       }
 
