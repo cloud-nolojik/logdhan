@@ -599,8 +599,11 @@ class PriceCacheService {
   }
 
   /**
-   * Get latest prices for multiple instruments using triple-fallback pattern
-   * Priority: Database → Memory Cache → API
+   * Get latest prices for multiple instruments
+   * Priority: API (getCurrentPrice) → Database fallback
+   *
+   * API is preferred because getCurrentPrice() fetches live intraday data from Upstox,
+   * while LatestPrice collection may have stale data from previous sessions.
    *
    * @param {Array<string>} instrumentKeys - Array of instrument keys to fetch prices for
    * @returns {Promise<Object>} Map of instrument_key → current_price
@@ -619,56 +622,63 @@ class PriceCacheService {
 
     const priceMap = {};
 
-    // Step 1: Fetch from database (persistent, accurate)
-    const dbStart = Date.now();
-    try {
-      const latestPrices = await LatestPrice.getPricesForInstruments(instrumentKeys);
-      latestPrices.forEach((priceDoc) => {
-        priceMap[priceDoc.instrument_key] = priceDoc.last_traded_price;
-      });
+    // Step 1: Fetch from API (getCurrentPrice) - most accurate, live data
+    const apiStart = Date.now();
+    const apiPromises = instrumentKeys.map(async (instrumentKey) => {
+      try {
+        const price = await getCurrentPrice(instrumentKey, false);
+        return { instrumentKey, price };
+      } catch (error) {
+        console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
+        return { instrumentKey, price: null };
+      }
+    });
 
-    } catch (error) {
-      console.error(`❌ [DB] Database fetch failed: ${error.message}`);
-    }
+    const apiResults = await Promise.all(apiPromises);
+    let apiSuccessCount = 0;
 
-    // Step 3: For still missing prices, fetch from API
-    const missingAfterMemory = instrumentKeys.filter((key) => priceMap[key] === undefined);
-    if (missingAfterMemory.length > 0) {
+    apiResults.forEach(({ instrumentKey, price }) => {
+      if (price !== null) {
+        priceMap[instrumentKey] = price;
+        apiSuccessCount++;
 
-      const apiStart = Date.now();
-      const apiPromises = missingAfterMemory.map(async (instrumentKey) => {
-        try {
-          const price = await getCurrentPrice(instrumentKey, false);
-          return { instrumentKey, price };
-        } catch (error) {
-          console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
-          return { instrumentKey, price: null };
-        }
-      });
+        // Update memory cache with fetched price
+        this.priceCache.set(instrumentKey, {
+          ltp: price,
+          candles: null,
+          timestamp: Date.now(),
+          lastUpdated: new Date().toISOString()
+        });
+      }
+    });
 
-      const apiResults = await Promise.all(apiPromises);
-      let apiSuccessCount = 0;
+    const apiTime = Date.now() - apiStart;
+    console.log(`📡 [API] Fetched ${apiSuccessCount}/${instrumentKeys.length} prices in ${apiTime}ms`);
 
-      apiResults.forEach(({ instrumentKey, price }) => {
-        if (price !== null) {
-          priceMap[instrumentKey] = price;
-          apiSuccessCount++;
+    // Step 2: For missing prices (API failed), fall back to database
+    const missingAfterApi = instrumentKeys.filter((key) => priceMap[key] === undefined);
+    if (missingAfterApi.length > 0) {
+      console.log(`📦 [DB FALLBACK] Fetching ${missingAfterApi.length} missing prices from database...`);
 
-          // Update memory cache with fetched price
-          this.priceCache.set(instrumentKey, {
-            ltp: price,
-            candles: null,
-            timestamp: Date.now(),
-            lastUpdated: new Date().toISOString()
-          });
-        }
-      });
+      const dbStart = Date.now();
+      try {
+        const latestPrices = await LatestPrice.getPricesForInstruments(missingAfterApi);
+        let dbSuccessCount = 0;
 
-      const apiTime = Date.now() - apiStart;
+        latestPrices.forEach((priceDoc) => {
+          priceMap[priceDoc.instrument_key] = priceDoc.last_traded_price;
+          dbSuccessCount++;
+        });
 
+        const dbTime = Date.now() - dbStart;
+        console.log(`📦 [DB FALLBACK] Found ${dbSuccessCount}/${missingAfterApi.length} prices in ${dbTime}ms`);
+      } catch (error) {
+        console.error(`❌ [DB FALLBACK] Database fetch failed: ${error.message}`);
+      }
     }
 
     const totalFound = Object.keys(priceMap).length;
+    console.log(`💰 [PRICES] Total: ${totalFound}/${instrumentKeys.length} prices resolved`);
 
     return priceMap;
   }
