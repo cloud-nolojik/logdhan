@@ -4,7 +4,7 @@ import UserPosition from "../models/userPosition.js";
 import LatestPrice from "../models/latestPrice.js";
 import CoachingCache from "../models/coachingCache.js";
 import AIUsageLog from "../models/aiUsageLog.js";
-import { calculateTrailingStop, checkExitConditions, calculateRiskReduction } from "../utils/trailingStopLoss.js";
+import { calculateTrailingStop, checkExitConditions, calculateRiskReduction, round2 } from "../engine/index.js";
 import { auth } from "../middleware/auth.js";
 import candleFetcherService from "../services/candleFetcher.service.js";
 
@@ -1089,13 +1089,5 @@ Respond in JSON format:
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
-/**
- * Round to 2 decimal places
- */
-function round2(x) {
-  if (typeof x !== 'number' || !Number.isFinite(x)) return x;
-  return Math.round(x * 100) / 100;
-}
 
 export default router;

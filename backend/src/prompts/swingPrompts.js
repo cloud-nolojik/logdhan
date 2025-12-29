@@ -1,5 +1,8 @@
 import StockAnalysis from "../models/stockAnalysis.js";
-import { pickBestStage2Candidate, shrinkCandidateForPrompt } from "../utils/pickBestCandidate.js";
+import { pickBestCandidate as pickBestStage2Candidate, candidates } from "../engine/index.js";
+
+// Alias for backward compatibility
+const shrinkCandidateForPrompt = candidates.shrinkForPrompt;
 
 /**
  * @typedef {"BULLISH" | "BEARISH" | "NEUTRAL"} Stage1Trend

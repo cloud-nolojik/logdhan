@@ -12,7 +12,7 @@ import {
   checkExitConditions,
   recommendTrailingStrategy,
   calculateRiskReduction
-} from "../../utils/trailingStopLoss.js";
+} from "../../engine/index.js";
 
 /**
  * Check if user has an open position for a given instrument

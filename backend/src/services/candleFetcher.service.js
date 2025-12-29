@@ -8,8 +8,9 @@ import PreFetchedData from '../models/preFetchedData.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 import { formatCandles } from '../utils/candleFormatter.js';
 import { TIMEFRAME_TO_UPSTOX } from '../constants/timeframeMap.js';
-// Import indicator calculation function
-const { calculateTechnicalIndicators } = await import('../utils/indicatorCalculator.js');
+// Import indicator calculation function from unified engine
+import { indicators } from '../engine/index.js';
+const calculateTechnicalIndicators = indicators.calculate;
 
 /**
  * Dedicated service for candle data fetching and storage

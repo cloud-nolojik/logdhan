@@ -1,24 +1,45 @@
 /**
- * Trailing Stop Loss Utility
+ * Risk Management Module
  *
- * Deterministic (code-first, not AI) logic for calculating trailing stop levels.
- * RULE: Stop loss can ONLY move UP, never down.
+ * Single source of truth for:
+ * - Trailing Stop Loss calculations
+ * - Risk:Reward calculations
+ * - Position sizing
+ * - Risk reduction analysis
  */
 
+import { round2, isNum } from './helpers.js';
+
 /**
- * Round to 2 decimal places
+ * Calculate Risk:Reward for BUY trade
  */
-function round2(x) {
-  if (typeof x !== 'number' || !Number.isFinite(x)) return x;
-  return Math.round(x * 100) / 100;
+export function rrBuy(entry, target, stopLoss) {
+  if (!isNum(entry) || !isNum(target) || !isNum(stopLoss)) return 0;
+  const risk = entry - stopLoss;
+  const reward = target - entry;
+  if (risk <= 0) return 0;
+  return round2(reward / risk);
 }
 
 /**
- * Calculate if and where to trail stop loss
+ * Calculate Risk:Reward for SELL trade
+ */
+export function rrSell(entry, target, stopLoss) {
+  if (!isNum(entry) || !isNum(target) || !isNum(stopLoss)) return 0;
+  const risk = stopLoss - entry;
+  const reward = entry - target;
+  if (risk <= 0) return 0;
+  return round2(reward / risk);
+}
+
+/**
+ * Calculate trailing stop level
+ *
+ * RULE: Stop loss can ONLY move UP, never down.
  *
  * @param {Object} params
  * @param {Object} params.position - { actual_entry, current_sl, current_target }
- * @param {number} params.current_price
+ * @param {number} params.current_price - Current market price
  * @param {number} [params.atr] - ATR 14 daily
  * @param {number} [params.swing_low] - Recent swing low
  * @param {number} [params.ema20] - EMA 20 daily
@@ -34,7 +55,7 @@ export function calculateTrailingStop({
   const { actual_entry, current_sl, current_target } = position;
 
   // Validate inputs
-  if (typeof current_price !== 'number' || !Number.isFinite(current_price)) {
+  if (!isNum(current_price)) {
     return {
       should_trail: false,
       reason: 'Invalid current price'
@@ -45,7 +66,7 @@ export function calculateTrailingStop({
   if (current_price <= actual_entry) {
     return {
       should_trail: false,
-      reason: "Position not in profit yet",
+      reason: 'Position not in profit yet',
       current_profit_pct: round2(((current_price - actual_entry) / actual_entry) * 100)
     };
   }
@@ -54,11 +75,11 @@ export function calculateTrailingStop({
   const candidates = [];
 
   // Method 1: ATR-based trailing (1.5 ATR below current price)
-  if (atr && atr > 0) {
+  if (isNum(atr) && atr > 0) {
     const atr_stop = round2(current_price - (1.5 * atr));
     if (atr_stop > current_sl && atr_stop < current_price) {
       candidates.push({
-        method: "ATR_TRAIL",
+        method: 'ATR_TRAIL',
         new_sl: atr_stop,
         reason: `1.5x ATR (₹${round2(atr)}) below current price ₹${current_price}`,
         protection_pct: round2(((current_price - atr_stop) / current_price) * 100)
@@ -67,12 +88,12 @@ export function calculateTrailingStop({
   }
 
   // Method 2: Swing low trailing
-  if (swing_low && swing_low > current_sl && swing_low < current_price) {
+  if (isNum(swing_low) && swing_low > current_sl && swing_low < current_price) {
     const buffer = atr ? atr * 0.1 : 1;
     const swing_stop = round2(swing_low - buffer);
     if (swing_stop > current_sl) {
       candidates.push({
-        method: "SWING_LOW",
+        method: 'SWING_LOW',
         new_sl: swing_stop,
         reason: `Recent swing low ₹${swing_low} minus buffer`,
         protection_pct: round2(((current_price - swing_stop) / current_price) * 100)
@@ -81,12 +102,12 @@ export function calculateTrailingStop({
   }
 
   // Method 3: EMA20 trailing
-  if (ema20 && ema20 > current_sl && ema20 < current_price) {
+  if (isNum(ema20) && ema20 > current_sl && ema20 < current_price) {
     const buffer = atr ? atr * 0.2 : 2;
     const ema_stop = round2(ema20 - buffer);
     if (ema_stop > current_sl) {
       candidates.push({
-        method: "EMA_TRAIL",
+        method: 'EMA_TRAIL',
         new_sl: ema_stop,
         reason: `Below 20-day average ₹${round2(ema20)} minus buffer`,
         protection_pct: round2(((current_price - ema_stop) / current_price) * 100)
@@ -97,7 +118,7 @@ export function calculateTrailingStop({
   // Method 4: Breakeven stop (move to entry price)
   if (profit_pct >= 2 && actual_entry > current_sl) {
     candidates.push({
-      method: "BREAKEVEN",
+      method: 'BREAKEVEN',
       new_sl: actual_entry,
       reason: `Move to breakeven after ${round2(profit_pct)}% gain`,
       protection_pct: round2(((current_price - actual_entry) / current_price) * 100)
@@ -109,7 +130,7 @@ export function calculateTrailingStop({
     const lock_1pct = round2(actual_entry * 1.01);
     if (lock_1pct > current_sl && lock_1pct < current_price) {
       candidates.push({
-        method: "LOCK_PROFIT",
+        method: 'LOCK_PROFIT',
         new_sl: lock_1pct,
         reason: `Lock 1% profit after ${round2(profit_pct)}% gain`,
         protection_pct: round2(((current_price - lock_1pct) / current_price) * 100)
@@ -125,7 +146,7 @@ export function calculateTrailingStop({
 
     if (lock_50pct > current_sl && lock_50pct < current_price) {
       candidates.push({
-        method: "LOCK_PROFIT",
+        method: 'LOCK_PROFIT',
         new_sl: lock_50pct,
         reason: `Lock 50% of ${round2(profit_pct)}% gain`,
         protection_pct: round2(((current_price - lock_50pct) / current_price) * 100)
@@ -137,7 +158,7 @@ export function calculateTrailingStop({
   if (candidates.length === 0) {
     return {
       should_trail: false,
-      reason: "No trailing level found above current SL",
+      reason: 'No trailing level found above current SL',
       current_sl,
       current_profit_pct: round2(profit_pct)
     };
@@ -148,10 +169,10 @@ export function calculateTrailingStop({
   const best = candidates[0];
 
   // Ensure best doesn't exceed target
-  if (best.new_sl >= current_target) {
+  if (isNum(current_target) && best.new_sl >= current_target) {
     return {
       should_trail: false,
-      reason: "Best trailing stop would exceed target",
+      reason: 'Best trailing stop would exceed target',
       current_sl,
       current_target
     };
@@ -169,90 +190,14 @@ export function calculateTrailingStop({
 }
 
 /**
- * Check if position should trigger exit alert
- */
-export function checkExitConditions({
-  position,
-  current_price,
-  atr
-}) {
-  const { actual_entry, current_sl, current_target } = position;
-  const alerts = [];
-
-  if (typeof current_price !== 'number' || !Number.isFinite(current_price)) {
-    return alerts;
-  }
-
-  // Near target (within 1%)
-  const distance_to_target_pct = ((current_target - current_price) / current_price) * 100;
-  if (distance_to_target_pct <= 1 && distance_to_target_pct > 0) {
-    alerts.push({
-      type: "NEAR_TARGET",
-      severity: "high",
-      message: `Price ₹${current_price} is ${round2(distance_to_target_pct)}% from target ₹${current_target}`,
-      suggestion: "Consider booking partial or full profit"
-    });
-  }
-
-  // Target hit
-  if (current_price >= current_target) {
-    alerts.push({
-      type: "TARGET_HIT",
-      severity: "critical",
-      message: `Price ₹${current_price} has hit target ₹${current_target}`,
-      suggestion: "Book profit or trail stop aggressively"
-    });
-  }
-
-  // Near stop loss (within 1%)
-  const distance_to_sl_pct = ((current_price - current_sl) / current_price) * 100;
-  if (distance_to_sl_pct <= 1 && distance_to_sl_pct > 0) {
-    alerts.push({
-      type: "NEAR_STOP",
-      severity: "high",
-      message: `Price ₹${current_price} is ${round2(distance_to_sl_pct)}% from stop ₹${current_sl}`,
-      suggestion: "Prepare for possible exit"
-    });
-  }
-
-  // Extended beyond target
-  if (current_price > current_target) {
-    alerts.push({
-      type: "BEYOND_TARGET",
-      severity: "medium",
-      message: `Price ₹${current_price} has exceeded target ₹${current_target}`,
-      suggestion: "Trail stop aggressively or book profit"
-    });
-  }
-
-  // Stop loss hit
-  if (current_price <= current_sl) {
-    alerts.push({
-      type: "STOP_HIT",
-      severity: "critical",
-      message: `Price ₹${current_price} has hit stop loss ₹${current_sl}`,
-      suggestion: "Exit position"
-    });
-  }
-
-  // High volatility warning (if ATR provided)
-  if (atr && atr > 0) {
-    const atr_pct = (atr / current_price) * 100;
-    if (atr_pct > 3) {
-      alerts.push({
-        type: "HIGH_VOLATILITY",
-        severity: "medium",
-        message: `Daily volatility (ATR) is ${round2(atr_pct)}% - elevated risk`,
-        suggestion: "Consider wider stops or reduced position size"
-      });
-    }
-  }
-
-  return alerts;
-}
-
-/**
  * Recommend trailing strategy based on market conditions
+ *
+ * @param {Object} params
+ * @param {string} params.volatility - "LOW" | "MEDIUM" | "HIGH"
+ * @param {string} params.trend - "BULLISH" | "BEARISH" | "NEUTRAL"
+ * @param {number} params.days_in_trade - Days position has been held
+ * @param {number} params.profit_pct - Current profit percentage
+ * @returns {Object} Strategy recommendation
  */
 export function recommendTrailingStrategy({
   volatility,
@@ -301,7 +246,14 @@ export function recommendTrailingStrategy({
 }
 
 /**
- * Calculate position risk after potential trailing
+ * Calculate risk reduction from trailing stop
+ *
+ * @param {Object} params
+ * @param {number} params.current_price - Current price
+ * @param {number} params.old_sl - Old stop loss
+ * @param {number} params.new_sl - New stop loss
+ * @param {number} params.qty - Position quantity
+ * @returns {Object} Risk reduction analysis
  */
 export function calculateRiskReduction({
   current_price,
@@ -309,6 +261,10 @@ export function calculateRiskReduction({
   new_sl,
   qty
 }) {
+  if (!isNum(current_price) || !isNum(old_sl) || !isNum(new_sl) || !isNum(qty)) {
+    return { error: 'Invalid inputs' };
+  }
+
   const old_risk_per_share = current_price - old_sl;
   const new_risk_per_share = current_price - new_sl;
 
@@ -336,9 +292,118 @@ export function calculateRiskReduction({
   };
 }
 
+/**
+ * Calculate position size based on risk budget
+ *
+ * @param {Object} params
+ * @param {number} params.risk_budget - Maximum amount willing to lose (in INR)
+ * @param {number} params.entry - Entry price
+ * @param {number} params.stopLoss - Stop loss price
+ * @param {number} [params.max_position_value] - Maximum position value allowed
+ * @returns {Object} Position sizing recommendation
+ */
+export function calculatePositionSize({
+  risk_budget,
+  entry,
+  stopLoss,
+  max_position_value
+}) {
+  if (!isNum(risk_budget) || !isNum(entry) || !isNum(stopLoss)) {
+    return { error: 'Invalid inputs' };
+  }
+
+  const risk_per_share = Math.abs(entry - stopLoss);
+
+  if (risk_per_share <= 0) {
+    return { error: 'Invalid stop loss - no risk per share' };
+  }
+
+  // Calculate quantity based on risk budget
+  let qty = Math.floor(risk_budget / risk_per_share);
+
+  // Apply max position value constraint if provided
+  if (isNum(max_position_value) && max_position_value > 0) {
+    const max_qty_by_value = Math.floor(max_position_value / entry);
+    qty = Math.min(qty, max_qty_by_value);
+  }
+
+  const position_value = qty * entry;
+  const actual_risk = qty * risk_per_share;
+
+  return {
+    recommended_qty: qty,
+    position_value: round2(position_value),
+    risk_per_share: round2(risk_per_share),
+    total_risk: round2(actual_risk),
+    risk_pct: round2((risk_per_share / entry) * 100)
+  };
+}
+
+/**
+ * Assess trade risk quality
+ *
+ * @param {Object} params
+ * @param {number} params.entry - Entry price
+ * @param {number} params.stopLoss - Stop loss price
+ * @param {number} params.target - Target price
+ * @returns {Object} Risk assessment
+ */
+export function assessTradeRisk({
+  entry,
+  stopLoss,
+  target
+}) {
+  if (!isNum(entry) || !isNum(stopLoss) || !isNum(target)) {
+    return { error: 'Invalid inputs' };
+  }
+
+  const riskPct = round2(((entry - stopLoss) / entry) * 100);
+  const rewardPct = round2(((target - entry) / entry) * 100);
+  const rr = rrBuy(entry, target, stopLoss);
+
+  let riskLevel;
+  let recommendation;
+
+  if (riskPct > 5) {
+    riskLevel = 'HIGH';
+    recommendation = 'Risk too high - consider tighter stop or smaller position';
+  } else if (riskPct > 3) {
+    riskLevel = 'MEDIUM';
+    recommendation = 'Moderate risk - ensure position size is appropriate';
+  } else {
+    riskLevel = 'LOW';
+    recommendation = 'Good risk control';
+  }
+
+  let rrQuality;
+  if (rr >= 2.5) {
+    rrQuality = 'EXCELLENT';
+  } else if (rr >= 2.0) {
+    rrQuality = 'GOOD';
+  } else if (rr >= 1.5) {
+    rrQuality = 'ACCEPTABLE';
+  } else if (rr >= 1.0) {
+    rrQuality = 'MARGINAL';
+  } else {
+    rrQuality = 'POOR';
+  }
+
+  return {
+    risk_pct: riskPct,
+    reward_pct: rewardPct,
+    risk_reward: rr,
+    risk_level: riskLevel,
+    rr_quality: rrQuality,
+    recommendation
+  };
+}
+
 export default {
+  rrBuy,
+  rrSell,
   calculateTrailingStop,
-  checkExitConditions,
   recommendTrailingStrategy,
-  calculateRiskReduction
+  calculateRiskReduction,
+  calculatePositionSize,
+  assessTradeRisk
 };

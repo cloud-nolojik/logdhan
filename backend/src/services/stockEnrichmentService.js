@@ -10,16 +10,10 @@
 import Stock from '../models/stock.js';
 import LatestPrice from '../models/latestPrice.js';
 import PreFetchedData from '../models/preFetchedData.js';
-import { calculateTechnicalIndicators } from '../utils/indicatorCalculator.js';
-import { calculateSetupScore, suggestEntryZone } from '../utils/setupScoreCalculator.js';
+import { calculateSetupScore, getEntryZone, round2, indicators as indicatorsEngine } from '../engine/index.js';
 
-/**
- * Round to 2 decimal places
- */
-function round2(x) {
-  if (typeof x !== 'number' || !Number.isFinite(x)) return x;
-  return Math.round(x * 100) / 100;
-}
+// Alias for backward compatibility
+const calculateTechnicalIndicators = indicatorsEngine.calculate;
 
 /**
  * Map ChartInk symbol to Upstox instrument_key
@@ -217,7 +211,7 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
 
   // Calculate setup score
   const scoreResult = calculateSetupScore(stockData, niftyReturn1M, debug);
-  const entryZone = suggestEntryZone(stockData);
+  const entryZone = getEntryZone(stockData);
 
   return {
     // Core identifiers

@@ -2,7 +2,7 @@ import express from "express";
 import WeeklyWatchlist from "../models/weeklyWatchlist.js";
 import LatestPrice from "../models/latestPrice.js";
 import { auth } from "../middleware/auth.js";
-import { calculateSetupScore, suggestEntryZone, checkEntryZoneProximity } from "../utils/setupScoreCalculator.js";
+import { calculateSetupScore, getEntryZone, checkEntryZoneProximity } from "../engine/index.js";
 
 const router = express.Router();
 
@@ -73,7 +73,7 @@ router.post("/add-stock", auth, async (req, res) => {
       const scoreResult = calculateSetupScore(screening_data);
       setup_score = scoreResult.score;
       score_breakdown = scoreResult.breakdown;
-      entry_zone = suggestEntryZone(screening_data);
+      entry_zone = getEntryZone(screening_data);
     }
 
     const result = await WeeklyWatchlist.addStockToWeek(req.user._id, {

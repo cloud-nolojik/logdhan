@@ -10,7 +10,7 @@ import { getExactStock } from '../utils/stockDb.js';
 import priceCacheService from '../services/priceCache.service.js';
 import { getMonitoringState } from '../services/monitoringState.service.js';
 import WeeklyWatchlist from '../models/weeklyWatchlist.js';
-import { checkEntryZoneProximity } from '../utils/setupScoreCalculator.js';
+import { checkEntryZoneProximity } from '../engine/index.js';
 import pLimit from 'p-limit';
 // Upstox allows 50 requests/second, so 20 concurrent is safe with 10s timeouts
 const limit = pLimit(20); // Optimized for better performance while staying within rate limits

@@ -3,17 +3,9 @@ import UserPosition from "../models/userPosition.js";
 import WeeklyWatchlist from "../models/weeklyWatchlist.js";
 import LatestPrice from "../models/latestPrice.js";
 import { auth } from "../middleware/auth.js";
-import { checkExitConditions } from "../utils/trailingStopLoss.js";
+import { checkExitConditions, round2 } from "../engine/index.js";
 
 const router = express.Router();
-
-/**
- * Round to 2 decimal places
- */
-function round2(x) {
-  if (typeof x !== 'number' || !Number.isFinite(x)) return x;
-  return Math.round(x * 100) / 100;
-}
 
 /**
  * Get time-appropriate greeting
