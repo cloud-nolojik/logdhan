@@ -163,11 +163,13 @@ class AgendaScheduledBulkAnalysisService {
    * @param {Object} options
    * @param {string} [options.source='chartink'] - Which watchlist to analyze: 'chartink', 'screener', or 'all'
    * @param {boolean} [options.skipTradingDayCheck=false] - Skip trading day check (for manual triggers)
+   * @param {boolean} [options.analyzeAllChartink=false] - If true, analyze ALL ChartInk stocks even if not in user watchlists
    */
   async runScheduledAnalysis(options = {}) {
     const {
       source = 'chartink',  // Default to ChartInk only
-      skipTradingDayCheck = false
+      skipTradingDayCheck = false,
+      analyzeAllChartink = false  // When triggered from weekend screening, set this to true
     } = options;
 
     // Check if already running
@@ -246,13 +248,14 @@ class AgendaScheduledBulkAnalysisService {
       }
 
       // 2b. Collect from WeeklyWatchlist (ChartInk screened stocks)
-      // IMPORTANT: Only re-analyze ChartInk stocks that users have added to their personal watchlist
-      // Stocks no one cares about (not in any user's watchlist) are skipped to save API credits
+      // Behavior depends on analyzeAllChartink flag:
+      // - analyzeAllChartink=true (weekend screening trigger): Analyze ALL ChartInk stocks
+      // - analyzeAllChartink=false (daily 4PM job): Only re-analyze stocks in user watchlists
       let activeWeeklyWatchlist = null;
       let weeklyWatchlistStocksAdded = 0;
       let weeklyWatchlistStocksSkipped = 0;
       if (source === 'chartink' || source === 'all') {
-        console.log('[SCHEDULED BULK] 📊 Collecting stocks from WeeklyWatchlist (ChartInk)...');
+        console.log(`[SCHEDULED BULK] 📊 Collecting stocks from WeeklyWatchlist (ChartInk)... analyzeAllChartink=${analyzeAllChartink}`);
         // Get current week's global watchlist
         activeWeeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
 
@@ -265,8 +268,6 @@ class AgendaScheduledBulkAnalysisService {
 
             if (stock.instrument_key) {
               // Check if this ChartInk stock is already in stockMap (from User.watchlist)
-              // If yes → a user cares about it → re-analyze for P&L, stop-loss updates
-              // If no → no user added it → skip (weekend screening already analyzed it)
               if (stockMap.has(stock.instrument_key)) {
                 // Stock is in a user's watchlist - enrich with ChartInk metadata
                 const existingStock = stockMap.get(stock.instrument_key);
@@ -276,14 +277,28 @@ class AgendaScheduledBulkAnalysisService {
                 existingStock.weeklyWatchlistStockId = stock._id;
                 weeklyWatchlistStocksAdded++;
                 totalWatchlistItems++;
+              } else if (analyzeAllChartink) {
+                // analyzeAllChartink=true: Add stock even if not in user watchlist
+                // This is used when triggered from weekend screening
+                stockMap.set(stock.instrument_key, {
+                  instrument_key: stock.instrument_key,
+                  trading_symbol: stock.trading_symbol || '',
+                  name: stock.name || '',
+                  users: [],  // No specific users - global analysis
+                  source: 'chartink',
+                  scan_type: stock.scan_type,
+                  setup_score: stock.setup_score,
+                  weeklyWatchlistStockId: stock._id
+                });
+                weeklyWatchlistStocksAdded++;
+                totalWatchlistItems++;
               } else {
-                // Stock not in any user's watchlist - skip daily re-analysis
-                // Weekend screening already provided initial analysis
+                // analyzeAllChartink=false: Skip - daily job only re-analyzes user watchlist stocks
                 weeklyWatchlistStocksSkipped++;
               }
             }
           }
-          console.log(`[SCHEDULED BULK] 📊 ChartInk stocks: ${weeklyWatchlistStocksAdded} in user watchlists (will analyze), ${weeklyWatchlistStocksSkipped} skipped (not in any watchlist)`);
+          console.log(`[SCHEDULED BULK] 📊 ChartInk stocks: ${weeklyWatchlistStocksAdded} will analyze, ${weeklyWatchlistStocksSkipped} skipped`);
         } else {
           console.log('[SCHEDULED BULK] 📊 No active WeeklyWatchlist found or no stocks in it');
         }

@@ -85,9 +85,13 @@ class WeekendScreeningJob {
         console.log(`[SCREENING JOB] Completed: ${result.totalStocksAdded} stocks added across ${result.usersProcessed} users`);
 
         // Trigger bulk analysis after screening completes (for freshly screened stocks)
+        // analyzeAllChartink=true: Analyze ALL screened stocks, not just those in user watchlists
         console.log('[SCREENING JOB] Triggering bulk analysis for screened stocks...');
         try {
-          await agendaScheduledBulkAnalysisService.triggerManually('Post-weekend-screening analysis');
+          await agendaScheduledBulkAnalysisService.triggerManually('Post-weekend-screening analysis', {
+            source: 'chartink',
+            analyzeAllChartink: true  // Analyze all ChartInk stocks from weekly watchlist
+          });
           console.log('[SCREENING JOB] Bulk analysis triggered successfully');
         } catch (bulkError) {
           console.error('[SCREENING JOB] Failed to trigger bulk analysis:', bulkError.message);
