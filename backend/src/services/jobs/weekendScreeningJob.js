@@ -10,6 +10,8 @@ import chartinkService from '../chartinkService.js';
 import stockEnrichmentService from '../stockEnrichmentService.js';
 import WeeklyWatchlist from '../../models/weeklyWatchlist.js';
 import agendaScheduledBulkAnalysisService from '../agendaScheduledBulkAnalysis.service.js';
+import { getCurrentPrice } from '../../utils/stockDb.js';
+import priceCacheService from '../priceCache.service.js';
 
 class WeekendScreeningJob {
   constructor() {
@@ -238,7 +240,63 @@ class WeekendScreeningJob {
         return result;
       }
 
-      // Step 2: Enrich with technical data and scores
+      // Step 2: PREFETCH FRESH PRICES before enrichment
+      // This ensures enrichment uses fresh closing prices, not stale weekend data
+      console.log(`[SCREENING JOB] 📊 Prefetching fresh prices for ${allResults.length} stocks...`);
+
+      // First map all symbols to instrument_keys
+      const instrumentKeyMap = new Map();
+      for (const stock of allResults) {
+        const mapped = await stockEnrichmentService.mapToInstrumentKey(stock.nsecode);
+        if (mapped?.instrument_key) {
+          instrumentKeyMap.set(stock.nsecode, mapped.instrument_key);
+        }
+      }
+
+      const instrumentKeys = Array.from(instrumentKeyMap.values());
+      console.log(`[SCREENING JOB] 📊 Mapped ${instrumentKeys.length} instrument keys`);
+
+      // Fetch prices from API and save to LatestPrice collection
+      const BATCH_SIZE = 50;
+      let priceSuccessCount = 0;
+      let priceFailCount = 0;
+
+      for (let i = 0; i < instrumentKeys.length; i += BATCH_SIZE) {
+        const batch = instrumentKeys.slice(i, i + BATCH_SIZE);
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const totalBatches = Math.ceil(instrumentKeys.length / BATCH_SIZE);
+
+        console.log(`[SCREENING JOB] 📊 Fetching prices batch ${batchNum}/${totalBatches} (${batch.length} stocks)`);
+
+        const pricePromises = batch.map(async (instrumentKey) => {
+          try {
+            const price = await getCurrentPrice(instrumentKey, false);
+            if (price !== null) {
+              // Save to LatestPrice for enrichment to use
+              await priceCacheService.storePriceInDB(instrumentKey, price, null, Date.now());
+              return { instrumentKey, success: true };
+            }
+            return { instrumentKey, success: false };
+          } catch (error) {
+            return { instrumentKey, success: false, error: error.message };
+          }
+        });
+
+        const results = await Promise.all(pricePromises);
+        results.forEach(r => {
+          if (r.success) priceSuccessCount++;
+          else priceFailCount++;
+        });
+
+        // Small delay between batches
+        if (i + BATCH_SIZE < instrumentKeys.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      console.log(`[SCREENING JOB] ✅ Price prefetch complete: ${priceSuccessCount} success, ${priceFailCount} failed`);
+
+      // Step 3: Enrich with technical data and scores (now uses fresh prices)
       console.log(`[SCREENING JOB] Enriching ${allResults.length} stocks...`);
 
       // First pass: Get all enriched stocks with basic filter
