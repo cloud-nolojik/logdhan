@@ -31,6 +31,7 @@ import priceCacheService from './services/priceCache.service.js'; // In-memory p
 import agendaMonitoringService from './services/agendaMonitoringService.js'; // check-triggers-batch (every 15 min)
 import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // watchlist-bulk-analysis (7:30 AM Mon-Fri)
 import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM, Sun 10AM)
+import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -256,6 +257,17 @@ async function initializePriceCacheService() {
   }
 }
 
+// Initialize Agenda data prefetch service (daily-price-prefetch at 3:35 PM Mon-Fri)
+async function initializeAgendaDataPrefetchService() {
+  try {
+
+    await agendaDataPrefetchService.initialize();
+
+  } catch (error) {
+    console.error('❌ Failed to initialize Agenda data prefetch service:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -271,10 +283,11 @@ app.listen(PORT, async () => {
   await initializeMessagingService();
   await initializePriceCacheService(); // Start price caching for watchlist + indices
 
-  // Scheduled jobs (keeping only 3):
+  // Scheduled jobs:
   await initializeAgendaMonitoringService(); // check-triggers-batch (every 15 min)
   await initializeAgendaScheduledBulkAnalysisService(); // watchlist-bulk-analysis (4:00 PM Mon-Fri)
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST only)
+  await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
 
 });
 
@@ -290,7 +303,8 @@ process.on('SIGINT', async () => {
     await Promise.all([
       agendaMonitoringService.agenda?.stop?.(),
       agendaScheduledBulkAnalysisService.stop(),
-      weekendScreeningJob.shutdown()
+      weekendScreeningJob.shutdown(),
+      agendaDataPrefetchService.stop()
     ]);
 
     // Close MongoDB connection
@@ -312,7 +326,8 @@ process.on('SIGTERM', async () => {
     await Promise.all([
       agendaMonitoringService.agenda?.stop?.(),
       agendaScheduledBulkAnalysisService.stop(),
-      weekendScreeningJob.shutdown()
+      weekendScreeningJob.shutdown(),
+      agendaDataPrefetchService.stop()
     ]);
 
     // Close MongoDB connection
