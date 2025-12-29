@@ -287,10 +287,11 @@ class AgendaScheduledBulkAnalysisService {
               } else if (analyzeAllChartink) {
                 // analyzeAllChartink=true: Add stock even if not in user watchlist
                 // This is used when triggered from weekend screening
+                // Note: WeeklyWatchlist uses 'symbol' and 'stock_name', not 'trading_symbol' and 'name'
                 stockMap.set(stock.instrument_key, {
                   instrument_key: stock.instrument_key,
-                  trading_symbol: stock.trading_symbol || '',
-                  name: stock.name || '',
+                  trading_symbol: stock.symbol || stock.trading_symbol || '',
+                  name: stock.stock_name || stock.name || '',
                   users: [],  // No specific users - global analysis
                   source: 'chartink',
                   scan_type: stock.scan_type,
