@@ -8,18 +8,51 @@ import TokenBlacklist from '../models/tokenBlacklist.js';
 
 const router = express.Router();
 
+// Test credentials for Google Play Store review
+const PLAY_STORE_TEST_NUMBER = '919876543210'; // +91 9876543210 without the +
+const PLAY_STORE_TEST_OTP = '123456';
+
 // POST /auth/send-otp - Send OTP to mobile number
 router.post('/send-otp', async (req, res) => {
   try {
     let { mobileNumber } = req.body;
 
-    // 1️⃣  Remove leading “+” (if present)
+    // 1️⃣  Remove leading "+" (if present)
     if (mobileNumber.startsWith('+')) {
       mobileNumber = mobileNumber.slice(1);
     }
 
     if (!mobileNumber || !/^\d{12}$/.test(mobileNumber)) {
       return res.status(400).json({ error: 'Invalid mobile number. Must be 12 digits.' });
+    }
+
+    // Play Store test account bypass - use fixed OTP, skip sending
+    if (mobileNumber === PLAY_STORE_TEST_NUMBER) {
+      // Use fixed OTP for test account
+      const otp = PLAY_STORE_TEST_OTP;
+
+      // Save test user with fixed OTP
+      await User.findOneAndUpdate(
+        { mobileNumber },
+        {
+          $set: {
+            mobileNumber,
+            otp,
+            otpExpiry: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+          }
+        },
+        {
+          upsert: true,
+          new: true,
+          runValidators: true,
+          setDefaultsOnInsert: true
+        }
+      );
+
+      return res.json({
+        success: true,
+        message: 'OTP sent successfully'
+      });
     }
 
     // Generate a random 6-digit OTP
