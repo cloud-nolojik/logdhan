@@ -392,7 +392,9 @@ class AIAnalyzeService {
     skipIntraday = false,
     // ChartInk screening context (optional)
     scan_type = null,  // breakout, pullback, momentum, consolidation_breakout
-    setup_score = null
+    setup_score = null,
+    // Market regime context (optional) - from regime.checkMarketRegime()
+    regimeCheck = null
   }) {
     // ⏱️ START TIMING
     const analysisStartTime = Date.now();
@@ -968,7 +970,9 @@ class AIAnalyzeService {
         userTradeState,
         // ChartInk screening context
         scan_type,
-        setup_score
+        setup_score,
+        // Market regime context
+        regimeCheck
       });
 
       const aiGenerationTime = Date.now() - aiGenerationStart;
@@ -2455,10 +2459,10 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
    * Stage 3: Final Assembly (v1.4)
    * Combines MARKET DATA + S1 + S2 + sentimentContext
    */
-  async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode = 'cricket', analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null }) {
+  async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode = 'cricket', analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null, regimeCheck = null }) {
     try {
       const generatedAtIst = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
-      const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode, generatedAtIst, analysisMode, userTradeState, scan_type, setup_score });
+      const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode, generatedAtIst, analysisMode, userTradeState, scan_type, setup_score, regimeCheck });
       const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
 
       const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
@@ -2506,7 +2510,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
    * @param {Object} params
    * @param {Object} [params.sentimentTokenUsage] - Token usage from sentiment analysis LLM call
    */
-  async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo, instrument_key, sentimentTokenUsage, analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null }) {
+  async generateStockAnalysis3Call({ stock_name, stock_symbol, current_price, analysis_type, marketPayload, sentiment, sectorInfo, instrument_key, sentimentTokenUsage, analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null, regimeCheck = null }) {
     const t0 = Date.now();
 
     // Log analysis mode
@@ -2688,7 +2692,9 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
   userTradeState,
   // ChartInk screening context
   scan_type,
-  setup_score
+  setup_score,
+  // Market regime context
+  regimeCheck
 });
       tokenTracking.stage3 = s3result.tokenUsage;
       stage3Time = Date.now() - stage3Start;

@@ -20,6 +20,7 @@ import priceCacheService from './priceCache.service.js';
 import pLimit from 'p-limit';
 import { syncScreenerWatchlist } from '../scripts/syncScreenerWatchlist.js';
 import WeeklyWatchlist from '../models/weeklyWatchlist.js';
+import { fetchAndCheckRegime } from '../engine/index.js';
 
 class AgendaScheduledBulkAnalysisService {
   constructor() {
@@ -434,6 +435,16 @@ class AgendaScheduledBulkAnalysisService {
 
       const bulkStartTime = Date.now();
 
+      // Fetch market regime once for all stocks (Nifty 50 vs 50 EMA)
+      let regimeCheck = null;
+      try {
+        regimeCheck = await fetchAndCheckRegime();
+        console.log(`[SCHEDULED BULK] 📊 Market regime: ${regimeCheck.regime} (Nifty ${regimeCheck.distancePct?.toFixed(2)}% from 50 EMA)`);
+      } catch (regimeError) {
+        console.warn(`[SCHEDULED BULK] ⚠️ Failed to fetch market regime:`, regimeError.message);
+        // Continue without regime - analyses will proceed without the warning
+      }
+
       // Create analysis tasks for all stocks
       const analysisTasks = [];
 
@@ -471,7 +482,9 @@ class AgendaScheduledBulkAnalysisService {
                   skipIntraday: false, // Use previous day's data for pre-market analysis
                   // ChartInk screening context
                   scan_type: stock.scan_type,  // breakout, pullback, momentum, consolidation_breakout
-                  setup_score: stock.setup_score
+                  setup_score: stock.setup_score,
+                  // Market regime context (for BUY setups in bearish market warnings)
+                  regimeCheck
                 });
               });
 

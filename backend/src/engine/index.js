@@ -17,9 +17,10 @@ import * as candidates from './candidates.js';
 import * as scoring from './scoring.js';
 import * as risk from './risk.js';
 import * as alerts from './alerts.js';
+import * as regime from './regime.js';
 
 // Re-export all modules for direct access
-export { helpers, indicators, levels, zones, candidates, scoring, risk, alerts };
+export { helpers, indicators, levels, zones, candidates, scoring, risk, alerts, regime };
 
 // Re-export commonly used functions at top level for convenience
 export const { round2, isNum, clamp, get, normalizeCandles } = helpers;
@@ -28,6 +29,7 @@ export const { calculateEntryZone, checkEntryZoneStatus, generateEntryVerdict, c
 export const { calculateTrailingStop, recommendTrailingStrategy, calculateRiskReduction, calculatePositionSize, rrBuy, rrSell } = risk;
 export const { checkExitConditions, checkEntryZoneProximity, checkPositionStatus, generateMorningGlance } = alerts;
 export const { calcClassicPivots } = levels;
+export const { REGIME, checkMarketRegime, getRegimeWarning, fetchAndCheckRegime } = regime;
 
 /**
  * Analyze a stock from candle data
@@ -320,5 +322,6 @@ export default {
   candidates,
   scoring,
   risk,
-  alerts
+  alerts,
+  regime
 };

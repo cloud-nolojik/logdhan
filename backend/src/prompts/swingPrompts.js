@@ -1,5 +1,5 @@
 import StockAnalysis from "../models/stockAnalysis.js";
-import { pickBestCandidate as pickBestStage2Candidate, candidates } from "../engine/index.js";
+import { pickBestCandidate as pickBestStage2Candidate, candidates, regime } from "../engine/index.js";
 
 // Alias for backward compatibility
 const shrinkCandidateForPrompt = candidates.shrinkForPrompt;
@@ -573,7 +573,9 @@ export async function buildStage3Prompt({
   analysisMode: passedAnalysisMode = null,
   // ChartInk screening context (optional)
   scan_type = null,
-  setup_score = null
+  setup_score = null,
+  // Market regime context (optional) - from regime.checkMarketRegime()
+  regimeCheck = null
 }) {
   let existingStage3 = null;
   let existingMetadata = null;
@@ -692,6 +694,17 @@ CHARTINK SCREENING CONTEXT:
 - Scan Type: ${scan_type} (This stock was identified by ChartInk ${scan_type} scan)
 - Setup Score: ${setup_score || 'N/A'}/100
 - Note: The scan type indicates the expected setup pattern. Validate if current price action supports this setup.
+` : ''}${regimeCheck ? `
+MARKET REGIME (Nifty 50 vs 50 EMA):
+- Regime: ${regimeCheck.regime}
+- Nifty Price: ₹${regimeCheck.niftyLast?.toFixed(2) || 'N/A'}
+- Nifty 50 EMA: ₹${regimeCheck.ema50?.toFixed(2) || 'N/A'}
+- Distance from EMA: ${regimeCheck.distancePct?.toFixed(2) || 'N/A'}%
+${regimeCheck.regime === regime.REGIME.BEARISH ? `- ⚠️ WARNING: Market is in BEARISH regime. BUY setups have lower success rates. Consider:
+  1. Reducing position size by 50%
+  2. Waiting for Nifty to reclaim 50 EMA
+  3. Only taking highest-conviction setups (Grade A with score 85+)
+- MUST add warning with code "BEARISH_REGIME" to warnings array for BUY setups` : ''}
 ` : ''}
 USER TRADE STATE:
 ${JSON.stringify(userTradeState || { hasOpenOrder: false, hasOpenPosition: false }, null, 2)}

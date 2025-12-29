@@ -58,7 +58,7 @@ const strategyV14Schema = new mongoose.Schema(
     warnings: {
       type: [
         {
-          code: { type: String, enum: ['GAP_RISK', 'HIGH_VOLATILITY', 'LOW_VOLUME', 'NEWS_EVENT', 'SECTOR_WEAKNESS'] },
+          code: { type: String, enum: ['GAP_RISK', 'HIGH_VOLATILITY', 'LOW_VOLUME', 'NEWS_EVENT', 'SECTOR_WEAKNESS', 'BEARISH_REGIME', 'BULLISH_REGIME', 'CHOPPY_REGIME'] },
           severity: { type: String, enum: ['low', 'medium', 'high'] },
           text: String,
           applies_when: { type: [mongoose.Schema.Types.Mixed], default: [] },
