@@ -236,10 +236,24 @@ router.post('/place-order', authenticateToken, async (req, res) => {
     // Import StockAnalysis model
     const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
 
+    console.log(`[PLACE-ORDER] Looking up analysis - analysisId: ${analysisId}, strategyId: ${strategyId}`);
+
     // Find the analysis - prefer using analysisId if provided, fall back to searching by strategyId
     let existingAnalysis;
     if (analysisId) {
       // Direct lookup by analysis ID - more reliable
+      // First check if the analysis exists at all (ignoring expiry)
+      const analysisExists = await StockAnalysis.findById(analysisId);
+      if (analysisExists) {
+        console.log(`[PLACE-ORDER] Found analysis by ID: ${analysisId}`);
+        console.log(`[PLACE-ORDER] Analysis expires_at: ${analysisExists.expires_at}`);
+        console.log(`[PLACE-ORDER] Current time: ${new Date()}`);
+        console.log(`[PLACE-ORDER] Is expired: ${analysisExists.expires_at < new Date()}`);
+      } else {
+        console.log(`[PLACE-ORDER] No analysis found with ID: ${analysisId}`);
+      }
+
+      // Now check with expiry filter
       existingAnalysis = await StockAnalysis.findOne({
         _id: analysisId,
         expires_at: { $gt: new Date() }
@@ -253,12 +267,15 @@ router.post('/place-order', authenticateToken, async (req, res) => {
     }
 
     if (!existingAnalysis) {
+      console.log(`[PLACE-ORDER] ❌ Analysis not found or expired`);
       return res.status(404).json({
         success: false,
         error: 'strategy_not_found',
         message: 'Strategy not found. Please run analysis first.'
       });
     }
+
+    console.log(`[PLACE-ORDER] ✅ Valid analysis found: ${existingAnalysis._id}`);
 
     // Extract the specific strategy from the analysis
     const strategy = existingAnalysis.analysis_data.strategies.find((s) => s.id === strategyId);
