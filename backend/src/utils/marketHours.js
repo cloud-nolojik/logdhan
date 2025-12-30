@@ -1034,6 +1034,79 @@ class MarketHoursUtil {
       };
     }
   }
+
+  /**
+   * Get the last Friday's date (for weekly analysis cutoff)
+   * If today is Saturday/Sunday, returns the Friday before
+   * If today is Mon-Fri, returns the previous Friday
+   * @param {Date} fromDate - Reference date (defaults to now)
+   * @returns {Date} - Last Friday at market close (3:30 PM IST)
+   */
+  static getLastFriday(fromDate = new Date()) {
+    const istDate = this.toIST(fromDate);
+    const dayOfWeek = istDate.getDay(); // 0=Sunday, 1=Monday, ..., 5=Friday, 6=Saturday
+
+    let daysToSubtract;
+    if (dayOfWeek === 0) {
+      // Sunday → go back 2 days to Friday
+      daysToSubtract = 2;
+    } else if (dayOfWeek === 6) {
+      // Saturday → go back 1 day to Friday
+      daysToSubtract = 1;
+    } else if (dayOfWeek === 5) {
+      // Friday → use previous Friday (7 days back) for consistency
+      daysToSubtract = 7;
+    } else {
+      // Monday=1 → 3 days, Tuesday=2 → 4 days, Wednesday=3 → 5 days, Thursday=4 → 6 days
+      daysToSubtract = dayOfWeek + 2;
+    }
+
+    const lastFriday = new Date(istDate);
+    lastFriday.setDate(lastFriday.getDate() - daysToSubtract);
+    // Set to market close time (3:30 PM IST)
+    lastFriday.setHours(15, 30, 0, 0);
+
+    return lastFriday;
+  }
+
+  /**
+   * Get the most recent Friday (including today if it's Friday)
+   * Used for weekend analysis to get Friday's closing data
+   * @param {Date} fromDate - Reference date (defaults to now)
+   * @returns {Date} - Most recent Friday at market close (3:30 PM IST)
+   */
+  static getMostRecentFriday(fromDate = new Date()) {
+    const istDate = this.toIST(fromDate);
+    const dayOfWeek = istDate.getDay(); // 0=Sunday, 1=Monday, ..., 5=Friday, 6=Saturday
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    let daysToSubtract;
+    if (dayOfWeek === 0) {
+      // Sunday → go back 2 days to Friday
+      daysToSubtract = 2;
+    } else if (dayOfWeek === 6) {
+      // Saturday → go back 1 day to Friday
+      daysToSubtract = 1;
+    } else if (dayOfWeek === 5) {
+      // Friday → use today (0 days back)
+      daysToSubtract = 0;
+    } else {
+      // Monday=1 → 3 days, Tuesday=2 → 4 days, Wednesday=3 → 5 days, Thursday=4 → 6 days
+      daysToSubtract = dayOfWeek + 2;
+    }
+
+    const friday = new Date(istDate);
+    friday.setDate(friday.getDate() - daysToSubtract);
+    // Set to market close time (3:30 PM IST)
+    friday.setHours(15, 30, 0, 0);
+
+    // Log for verification
+    console.log(`📅 [FRIDAY CUTOFF] Today: ${dayNames[dayOfWeek]} (${istDate.toISOString().split('T')[0]})`);
+    console.log(`📅 [FRIDAY CUTOFF] Days to subtract: ${daysToSubtract}`);
+    console.log(`📅 [FRIDAY CUTOFF] Cutoff date: ${friday.toISOString()} (IST: ${friday.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })})`);
+
+    return friday;
+  }
 }
 
 export default MarketHoursUtil;;

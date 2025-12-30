@@ -394,7 +394,9 @@ class AIAnalyzeService {
     scan_type = null,  // breakout, pullback, momentum, consolidation_breakout
     setup_score = null,
     // Market regime context (optional) - from regime.checkMarketRegime()
-    regimeCheck = null
+    regimeCheck = null,
+    // Weekly analysis option - use only Friday's closing data
+    useLastFridayData = false
   }) {
     // ⏱️ START TIMING
     const analysisStartTime = Date.now();
@@ -776,7 +778,8 @@ class AIAnalyzeService {
         stock: stock_name,
         stockSymbol: stock_symbol,
         stockName: stock_name,
-        skipIntraday
+        skipIntraday,
+        useLastFridayData  // For weekly analysis - use only Friday's closing data
       };
 
       // Get sector information for enhanced analysis
@@ -997,15 +1000,22 @@ class AIAnalyzeService {
   async fetchOptimizedMarketData(tradeData) {
     const startTime = Date.now();
     const traceId = `${tradeData.stockSymbol || tradeData.instrument_key}`;
-    console.log(`[ANALYZE] 🌐 Fetching market data for ${traceId}, term=${tradeData.term}, skipIntraday=${tradeData.skipIntraday || false}`);
+    console.log(`[ANALYZE] 🌐 Fetching market data for ${traceId}, term=${tradeData.term}, skipIntraday=${tradeData.skipIntraday || false}, useLastFridayData=${tradeData.useLastFridayData || false}`);
 
     try {
+      // Calculate cutoff date if useLastFridayData is enabled (for weekly analysis)
+      let cutoffDate = null;
+      if (tradeData.useLastFridayData) {
+        cutoffDate = MarketHoursUtil.getMostRecentFriday();
+        console.log(`[ANALYZE] 📅 Using Friday cutoff for weekly analysis: ${cutoffDate.toISOString()}`);
+      }
 
       // Ensure MarketHoursUtil is loaded
       const candleResult = await candleFetcherService.getCandleDataForAnalysis(
         tradeData.instrument_key,
         tradeData.term,
-        tradeData.skipIntraday || false
+        tradeData.skipIntraday || false,
+        { cutoffDate }  // Pass cutoff date option
       );
 
       if (candleResult.success) {

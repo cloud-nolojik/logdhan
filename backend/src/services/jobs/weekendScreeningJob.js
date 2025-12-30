@@ -88,12 +88,14 @@ class WeekendScreeningJob {
 
         // Trigger bulk analysis after screening completes (for freshly screened stocks)
         // analyzeAllChartink=true: Analyze ALL screened stocks, not just those in user watchlists
+        // useLastFridayData=true: Use only Friday's closing data for consistent weekly analysis
         console.log('[SCREENING JOB] 🚀 Triggering bulk analysis for screened stocks...');
-        console.log('[SCREENING JOB] 🔧 Passing analyzeAllChartink=true to analyze ALL ChartInk stocks');
+        console.log('[SCREENING JOB] 🔧 Passing analyzeAllChartink=true, useLastFridayData=true for weekly analysis');
         try {
           const bulkResult = await agendaScheduledBulkAnalysisService.triggerManually('Post-weekend-screening analysis', {
             source: 'chartink',
-            analyzeAllChartink: true  // Analyze all ChartInk stocks from weekly watchlist
+            analyzeAllChartink: true,  // Analyze all ChartInk stocks from weekly watchlist
+            useLastFridayData: true    // Use only Friday's closing data for consistent weekly analysis
           });
           console.log('[SCREENING JOB] ✅ Bulk analysis triggered successfully');
           console.log(`[SCREENING JOB] 📋 Bulk job ID: ${bulkResult.jobId}, scheduled at: ${bulkResult.scheduledAt}`);

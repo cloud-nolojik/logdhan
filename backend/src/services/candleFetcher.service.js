@@ -27,8 +27,12 @@ class CandleFetcherService {
    * Automatically excludes intraday candles during market hours to avoid incomplete data
    * @param {string} instrumentKey - Stock instrument key
    * @param {string} term - Analysis term (short/long)
+   * @param {boolean} skipIntraday - Skip intraday candles
+   * @param {Object} options - Additional options
+   * @param {Date} options.cutoffDate - Only include candles up to this date (for weekly analysis)
    */
-  async getCandleDataForAnalysis(instrumentKey, term, skipIntraday = false) {
+  async getCandleDataForAnalysis(instrumentKey, term, skipIntraday = false, options = {}) {
+    const { cutoffDate } = options;
     // Check if market is currently open - if yes, exclude incomplete intraday candles
     try {
       // Step 1: Try to get pre-fetched data from database
@@ -66,10 +70,18 @@ class CandleFetcherService {
         const sufficientData = this.checkDataSufficiency(preFetchedResult.data);
         if (sufficientData.sufficient) {
 
+          // Apply cutoff date if provided (for weekly analysis using Friday-only data)
+          const formattedData = this.formatDatabaseData(preFetchedResult.data, cutoffDate);
+
+          if (cutoffDate) {
+            console.log(`📅 [CANDLE FETCHER] Applied cutoff date: ${cutoffDate.toISOString()}`);
+          }
+
           return {
             success: true,
             source: 'database',
-            data: this.formatDatabaseData(preFetchedResult.data)
+            data: formattedData,
+            cutoffApplied: !!cutoffDate
           };
         } else {
 
@@ -87,10 +99,34 @@ class CandleFetcherService {
 
         const apiResult = await this.fetchFromAPI(instrumentKey, term, skipIntraday);
 
+        // Apply cutoff date filter if provided (for weekly analysis using Friday-only data)
+        let filteredData = apiResult;
+        if (cutoffDate) {
+          filteredData = {};
+          const cutoffTime = cutoffDate.getTime();
+          for (const [timeframe, candles] of Object.entries(apiResult)) {
+            const originalCount = candles.length;
+            const lastCandleBefore = candles.length > 0 ? candles[candles.length - 1]?.timestamp : null;
+
+            filteredData[timeframe] = candles.filter(candle => {
+              const candleTime = new Date(candle.timestamp).getTime();
+              return candleTime <= cutoffTime;
+            });
+
+            const lastCandleAfter = filteredData[timeframe].length > 0 ? filteredData[timeframe][filteredData[timeframe].length - 1]?.timestamp : null;
+
+            console.log(`📅 [CUTOFF FILTER API] ${timeframe}: ${originalCount} → ${filteredData[timeframe].length} candles`);
+            console.log(`📅 [CUTOFF FILTER API] ${timeframe}: Last candle BEFORE filter: ${lastCandleBefore}`);
+            console.log(`📅 [CUTOFF FILTER API] ${timeframe}: Last candle AFTER filter: ${lastCandleAfter}`);
+          }
+          console.log(`📅 [CANDLE FETCHER] Applied cutoff date to API data: ${cutoffDate.toISOString()}`);
+        }
+
         return {
           success: true,
           source: 'api',
-          data: apiResult
+          data: filteredData,
+          cutoffApplied: !!cutoffDate
         };
       }
 
@@ -176,12 +212,38 @@ class CandleFetcherService {
 
   /**
    * Format database data into standard structure
+   * @param {Array} preFetchedData - Pre-fetched data from database
+   * @param {Date} cutoffDate - Optional cutoff date to filter candles (for weekly analysis)
    */
-  formatDatabaseData(preFetchedData) {
+  formatDatabaseData(preFetchedData, cutoffDate = null) {
     const candlesByTimeframe = {};
 
     preFetchedData.forEach((data) => {
-      candlesByTimeframe[data.timeframe] = data.candle_data || [];
+      let candles = data.candle_data || [];
+      const originalCount = candles.length;
+
+      // Apply cutoff filter if provided (for weekly analysis using Friday-only data)
+      if (cutoffDate) {
+        const cutoffTime = cutoffDate.getTime();
+
+        // Get last candle timestamp before filtering for logging
+        const lastCandleBefore = candles.length > 0 ? candles[candles.length - 1]?.timestamp : null;
+
+        candles = candles.filter(candle => {
+          const candleTime = new Date(candle.timestamp).getTime();
+          return candleTime <= cutoffTime;
+        });
+
+        // Get last candle timestamp after filtering for logging
+        const lastCandleAfter = candles.length > 0 ? candles[candles.length - 1]?.timestamp : null;
+
+        console.log(`📅 [CUTOFF FILTER] ${data.timeframe}: ${originalCount} → ${candles.length} candles`);
+        console.log(`📅 [CUTOFF FILTER] ${data.timeframe}: Last candle BEFORE filter: ${lastCandleBefore}`);
+        console.log(`📅 [CUTOFF FILTER] ${data.timeframe}: Last candle AFTER filter: ${lastCandleAfter}`);
+        console.log(`📅 [CUTOFF FILTER] ${data.timeframe}: Cutoff applied: ${cutoffDate.toISOString()}`);
+      }
+
+      candlesByTimeframe[data.timeframe] = candles;
     });
 
     return candlesByTimeframe;

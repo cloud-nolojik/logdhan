@@ -165,12 +165,14 @@ class AgendaScheduledBulkAnalysisService {
    * @param {string} [options.source='chartink'] - Which watchlist to analyze: 'chartink', 'screener', or 'all'
    * @param {boolean} [options.skipTradingDayCheck=false] - Skip trading day check (for manual triggers)
    * @param {boolean} [options.analyzeAllChartink=false] - If true, analyze ALL ChartInk stocks even if not in user watchlists
+   * @param {boolean} [options.useLastFridayData=false] - If true, use only Friday's closing data (for weekend screening)
    */
   async runScheduledAnalysis(options = {}) {
     const {
       source = 'chartink',  // Default to ChartInk only
       skipTradingDayCheck = false,
-      analyzeAllChartink = false  // When triggered from weekend screening, set this to true
+      analyzeAllChartink = false,  // When triggered from weekend screening, set this to true
+      useLastFridayData = false    // When triggered from weekend screening, use only Friday's data
     } = options;
 
     // Check if already running
@@ -484,7 +486,9 @@ class AgendaScheduledBulkAnalysisService {
                   scan_type: stock.scan_type,  // breakout, pullback, momentum, consolidation_breakout
                   setup_score: stock.setup_score,
                   // Market regime context (for BUY setups in bearish market warnings)
-                  regimeCheck
+                  regimeCheck,
+                  // Weekly analysis - use only Friday's closing data (for weekend screening)
+                  useLastFridayData
                 });
               });
 
