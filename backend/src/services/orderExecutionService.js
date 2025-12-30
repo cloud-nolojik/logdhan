@@ -1,4 +1,4 @@
-import * as upstoxService from './upstox.service.js';
+import upstoxService from './upstox.service.js';
 import triggerOrderService from './triggerOrderService.js';
 import UpstoxUser from '../models/upstoxUser.js';
 import UserPosition from '../models/userPosition.js';
