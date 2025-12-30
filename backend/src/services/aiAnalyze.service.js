@@ -588,7 +588,9 @@ class AIAnalyzeService {
             scan_type,
             setup_score,
             // Market regime context
-            regimeCheck
+            regimeCheck,
+            // Weekly analysis - use only Friday's closing data
+            useLastFridayData
           },
           pendingAnalysis // Pass analysis record for progress updates
         );
@@ -765,7 +767,7 @@ class AIAnalyzeService {
   /**
    * Generate AI analysis using real market data
    */
-  async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key, skipIntraday, analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null, regimeCheck = null }) {
+  async generateAIAnalysis({ stock_name, stock_symbol, current_price, analysis_type, instrument_key, skipIntraday, analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null, regimeCheck = null, useLastFridayData = false }) {
     const methodStart = Date.now();
     const traceId = `${stock_symbol || instrument_key}`;
     console.log(`[ANALYZE] ↪️ Enter generateAIAnalysis for ${traceId} skipIntraday=${skipIntraday} mode=${analysisMode}`);
