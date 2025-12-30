@@ -317,12 +317,28 @@ class WeekendScreeningJob {
       const MIN_SCORE = 60;
       const MAX_STOCKS = 15;
 
-      const enrichedStocks = allEnrichedStocks
+      const qualifiedStocks = allEnrichedStocks
         .filter(s => s.setup_score >= MIN_SCORE)
-        .sort((a, b) => b.setup_score - a.setup_score)
-        .slice(0, MAX_STOCKS);
+        .sort((a, b) => b.setup_score - a.setup_score);
 
-      console.log(`[SCREENING JOB] Qualified stocks (${MIN_SCORE}+): ${enrichedStocks.length} stocks`);
+      // Deduplicate by instrument_key - keep the entry with highest score
+      // Same stock may appear from multiple scans (breakout + momentum) with different grades
+      const deduplicatedStocks = [];
+      const seenInstrumentKeys = new Set();
+
+      for (const stock of qualifiedStocks) {
+        if (!seenInstrumentKeys.has(stock.instrument_key)) {
+          seenInstrumentKeys.add(stock.instrument_key);
+          deduplicatedStocks.push(stock);
+        } else {
+          // Log discarded duplicate (lower score version)
+          console.log(`[SCREENING JOB] 🔄 Duplicate removed: ${stock.symbol} (${stock.scan_type}, score=${stock.setup_score}) - keeping higher scored entry`);
+        }
+      }
+
+      const enrichedStocks = deduplicatedStocks.slice(0, MAX_STOCKS);
+
+      console.log(`[SCREENING JOB] Qualified stocks (${MIN_SCORE}+): ${qualifiedStocks.length} total, ${deduplicatedStocks.length} unique, ${enrichedStocks.length} selected`);
 
       if (enrichedStocks.length === 0) {
         console.log('[SCREENING JOB] No qualified stocks found this week');
