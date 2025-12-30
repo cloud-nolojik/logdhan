@@ -253,16 +253,24 @@ router.post('/place-order', authenticateToken, async (req, res) => {
         console.log(`[PLACE-ORDER] No analysis found with ID: ${analysisId}`);
       }
 
-      // Now check with expiry filter
+      // Now check with expiry filter (also allow if expires_at is not set)
       existingAnalysis = await StockAnalysis.findOne({
         _id: analysisId,
-        expires_at: { $gt: new Date() }
+        $or: [
+          { expires_at: { $gt: new Date() } },
+          { expires_at: { $exists: false } },
+          { expires_at: null }
+        ]
       });
     } else {
       // Fallback: search by strategyId (less reliable as strategy IDs like "S1" aren't unique)
       existingAnalysis = await StockAnalysis.findOne({
         'analysis_data.strategies.id': strategyId,
-        expires_at: { $gt: new Date() }
+        $or: [
+          { expires_at: { $gt: new Date() } },
+          { expires_at: { $exists: false } },
+          { expires_at: null }
+        ]
       });
     }
 
