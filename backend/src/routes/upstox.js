@@ -218,6 +218,7 @@ router.post('/place-order', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const {
+      analysisId,
       strategyId,
       customQuantity = null,
       bypassTriggers = true // Always bypass triggers - place order immediately when user clicks
@@ -235,11 +236,21 @@ router.post('/place-order', authenticateToken, async (req, res) => {
     // Import StockAnalysis model
     const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
 
-    // Find the analysis that contains this strategy
-    const existingAnalysis = await StockAnalysis.findOne({
-      'analysis_data.strategies.id': strategyId,
-      expires_at: { $gt: new Date() }
-    });
+    // Find the analysis - prefer using analysisId if provided, fall back to searching by strategyId
+    let existingAnalysis;
+    if (analysisId) {
+      // Direct lookup by analysis ID - more reliable
+      existingAnalysis = await StockAnalysis.findOne({
+        _id: analysisId,
+        expires_at: { $gt: new Date() }
+      });
+    } else {
+      // Fallback: search by strategyId (less reliable as strategy IDs like "S1" aren't unique)
+      existingAnalysis = await StockAnalysis.findOne({
+        'analysis_data.strategies.id': strategyId,
+        expires_at: { $gt: new Date() }
+      });
+    }
 
     if (!existingAnalysis) {
       return res.status(404).json({
