@@ -475,6 +475,8 @@ class UpstoxService {
         }
       });
 
+      console.log('[UPSTOX] 📤 Sending multi-order request:', JSON.stringify(orderArray, null, 2));
+
       const response = await axios.post(
         `${this.baseURL}/order/multi/place`,
         orderArray,
@@ -487,16 +489,21 @@ class UpstoxService {
         }
       );
 
+      console.log('[UPSTOX] ✅ Multi-order response:', JSON.stringify(response.data, null, 2));
+
       return {
         success: true,
         data: response.data
       };
     } catch (error) {
-      console.error('❌ Upstox multi-order placement error:', error.response?.data || error.message);
+      console.error('❌ Upstox multi-order placement error:');
+      console.error('   Status:', error.response?.status);
+      console.error('   Data:', JSON.stringify(error.response?.data, null, 2));
+      console.error('   Message:', error.message);
       return {
         success: false,
         error: 'multi_order_placement_failed',
-        message: error.response?.data?.message || 'Failed to place multi orders',
+        message: error.response?.data?.message || error.response?.data?.errors?.[0]?.message || 'Failed to place multi orders',
         details: error.response?.data
       };
     }
