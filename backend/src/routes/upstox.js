@@ -220,7 +220,7 @@ router.post('/place-order', authenticateToken, async (req, res) => {
     const {
       strategyId,
       customQuantity = null,
-      bypassTriggers = false // For monitoring jobs
+      bypassTriggers = true // Always bypass triggers - place order immediately when user clicks
     } = req.body;
 
     // Validate required fields
