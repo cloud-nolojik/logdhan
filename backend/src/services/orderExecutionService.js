@@ -339,9 +339,13 @@ class OrderExecutionService {
         accessToken
       );
 
+      console.log(`[ORDER EXECUTION] 📊 Initial order quantity from strategy: ${orderData.quantity}`);
+      console.log(`[ORDER EXECUTION] 📊 Custom quantity received: ${customQuantity}`);
+
       // Override quantity if provided
       if (customQuantity) {
         orderData.quantity = Math.max(1, parseInt(customQuantity));
+        console.log(`[ORDER EXECUTION] ✅ Quantity overridden to: ${orderData.quantity}`);
       }
 
       // 3. Place order using Multi Order API with webhook support for stop-loss/target

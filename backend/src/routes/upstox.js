@@ -224,6 +224,8 @@ router.post('/place-order', authenticateToken, async (req, res) => {
       bypassTriggers = true // Always bypass triggers - place order immediately when user clicks
     } = req.body;
 
+    console.log(`[PLACE-ORDER] 📥 Request received - analysisId: ${analysisId}, strategyId: ${strategyId}, customQuantity: ${customQuantity}, bypassTriggers: ${bypassTriggers}`);
+
     // Validate required fields
     if (!strategyId) {
       return res.status(400).json({
