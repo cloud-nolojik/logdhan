@@ -186,11 +186,14 @@ class AgendaScheduledBulkAnalysisService {
     const runLabel = `[SCHEDULED BULK ${today.toISOString()}]`;
     const istNow = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
     console.log(`${runLabel} 🚀 Starting scheduled bulk analysis at ${istNow}`);
-    console.log(`${runLabel} 🔧 Options: source=${source}, skipTradingDayCheck=${skipTradingDayCheck}, analyzeAllChartink=${analyzeAllChartink}`);
+    console.log(`${runLabel} 🔧 Options: source=${source}, skipTradingDayCheck=${skipTradingDayCheck}, analyzeAllChartink=${analyzeAllChartink}, useLastFridayData=${useLastFridayData}`);
     if (analyzeAllChartink) {
       console.log(`${runLabel} ✅ analyzeAllChartink=true → Will analyze ALL ChartInk stocks from WeeklyWatchlist`);
     } else {
       console.log(`${runLabel} ℹ️  analyzeAllChartink=false → Will only analyze stocks in user watchlists (daily job behavior)`);
+    }
+    if (useLastFridayData) {
+      console.log(`${runLabel} 📅 useLastFridayData=true → Using only Friday's closing data for weekly analysis`);
     }
 
     // if (!skipTradingDayCheck) {
