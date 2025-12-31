@@ -883,4 +883,84 @@ router.post('/add-to-watchlist', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * @route POST /api/ai/evaluate-missed-entry
+ * @desc Evaluate if user should still enter a trade when entry price has been passed
+ * @access Private
+ */
+router.post('/evaluate-missed-entry', authenticateToken, async (req, res) => {
+  try {
+    const {
+      instrument_key,
+      original_entry,
+      current_price,
+      target,
+      stop_loss,
+      strategy_type,
+      analysis_type = 'swing'
+    } = req.body;
+
+    // Validate required fields
+    if (!instrument_key || !original_entry || !current_price || !target || !stop_loss || !strategy_type) {
+      return res.status(400).json({
+        success: false,
+        error: 'missing_fields',
+        message: 'Required fields: instrument_key, original_entry, current_price, target, stop_loss, strategy_type'
+      });
+    }
+
+    // Validate strategy type
+    if (!['BUY', 'SELL'].includes(strategy_type.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_strategy_type',
+        message: 'strategy_type must be BUY or SELL'
+      });
+    }
+
+    // Get stock info
+    const stockInfo = await Stock.getByInstrumentKey(instrument_key);
+    if (!stockInfo) {
+      return res.status(404).json({
+        success: false,
+        error: 'stock_not_found',
+        message: `No stock found with instrument_key: ${instrument_key}`
+      });
+    }
+
+    console.log(`[EVALUATE MISSED ENTRY API] 🔍 Request for ${stockInfo.trading_symbol}`);
+    console.log(`[EVALUATE MISSED ENTRY API] Entry: ₹${original_entry}, Current: ₹${current_price}`);
+
+    // Import aiReviewService
+    const { aiReviewService } = await import('../services/ai/aiReview.service.js');
+
+    // Evaluate the missed entry
+    const result = await aiReviewService.evaluateMissedEntry({
+      stockSymbol: stockInfo.trading_symbol,
+      stockName: stockInfo.name,
+      originalEntry: parseFloat(original_entry),
+      currentPrice: parseFloat(current_price),
+      target: parseFloat(target),
+      stopLoss: parseFloat(stop_loss),
+      strategyType: strategy_type.toUpperCase(),
+      analysisType: analysis_type
+    });
+
+    console.log(`[EVALUATE MISSED ENTRY API] ✅ Verdict: ${result.verdict}`);
+
+    res.json({
+      success: true,
+      data: result
+    });
+
+  } catch (error) {
+    console.error('❌ Evaluate Missed Entry API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'internal_error',
+      message: 'Failed to evaluate missed entry'
+    });
+  }
+});
+
 export default router;

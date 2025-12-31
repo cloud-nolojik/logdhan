@@ -221,10 +221,11 @@ router.post('/place-order', authenticateToken, async (req, res) => {
       analysisId,
       strategyId,
       customQuantity = null,
+      customPrice = null,
       bypassTriggers = true // Always bypass triggers - place order immediately when user clicks
     } = req.body;
 
-    console.log(`[PLACE-ORDER] 📥 Request received - analysisId: ${analysisId}, strategyId: ${strategyId}, customQuantity: ${customQuantity}, bypassTriggers: ${bypassTriggers}`);
+    console.log(`[PLACE-ORDER] 📥 Request received - analysisId: ${analysisId}, strategyId: ${strategyId}, customQuantity: ${customQuantity}, customPrice: ${customPrice}, bypassTriggers: ${bypassTriggers}`);
 
     // Validate required fields
     if (!strategyId) {
@@ -296,6 +297,7 @@ router.post('/place-order', authenticateToken, async (req, res) => {
       strategyId,
       userId,
       customQuantity,
+      customPrice,
       bypassTriggers
     });
 

@@ -185,6 +185,7 @@ class OrderExecutionService {
     strategyId,
     userId,
     customQuantity = null,
+    customPrice = null,
     bypassTriggers = false,
     skipOrderCheck = false
   }) {
@@ -277,6 +278,7 @@ class OrderExecutionService {
         instrumentToken,
         analysisType,
         customQuantity,
+        customPrice,
         analysisId: analysis._id,
         stockSymbol: analysis.stock_symbol
       });
@@ -315,6 +317,7 @@ class OrderExecutionService {
     instrumentToken,
     analysisType,
     customQuantity,
+    customPrice,
     analysisId,
     stockSymbol
   }) {
@@ -341,11 +344,23 @@ class OrderExecutionService {
 
       console.log(`[ORDER EXECUTION] 📊 Initial order quantity from strategy: ${orderData.quantity}`);
       console.log(`[ORDER EXECUTION] 📊 Custom quantity received: ${customQuantity}`);
+      console.log(`[ORDER EXECUTION] 📊 Custom price received: ${customPrice}`);
 
       // Override quantity if provided
       if (customQuantity) {
         orderData.quantity = Math.max(1, parseInt(customQuantity));
         console.log(`[ORDER EXECUTION] ✅ Quantity overridden to: ${orderData.quantity}`);
+      }
+
+      // Override price if provided by user
+      if (customPrice && customPrice > 0) {
+        orderData.price = parseFloat(customPrice);
+        // If user specifies a price, use LIMIT order instead of MARKET
+        if (orderData.orderType === 'MARKET') {
+          orderData.orderType = 'LIMIT';
+          console.log(`[ORDER EXECUTION] ✅ Changed order type from MARKET to LIMIT`);
+        }
+        console.log(`[ORDER EXECUTION] ✅ Price overridden to: ${orderData.price}`);
       }
 
       // 3. Place order using Multi Order API with webhook support for stop-loss/target

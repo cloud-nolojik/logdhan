@@ -4781,6 +4781,201 @@ Return ONLY the JSON object described above.
   }
 
   /**
+   * Evaluate if a user should still enter a trade when the entry price has been passed.
+   * This is a lightweight, focused AI call that gives a clear verdict.
+   *
+   * @param {Object} params - Parameters for evaluation
+   * @param {string} params.stockSymbol - The stock symbol
+   * @param {string} params.stockName - The stock name
+   * @param {number} params.originalEntry - The original recommended entry price
+   * @param {number} params.currentPrice - The current market price
+   * @param {number} params.target - The target price
+   * @param {number} params.stopLoss - The stop loss price
+   * @param {string} params.strategyType - 'BUY' or 'SELL'
+   * @param {string} params.analysisType - 'swing' or 'intraday'
+   * @returns {Object} - Verdict with reasoning
+   */
+  async evaluateMissedEntry({
+    stockSymbol,
+    stockName,
+    originalEntry,
+    currentPrice,
+    target,
+    stopLoss,
+    strategyType,
+    analysisType = 'swing'
+  }) {
+    console.log(`[EVALUATE MISSED ENTRY] 🔍 Evaluating ${stockSymbol} (${strategyType})`);
+    console.log(`[EVALUATE MISSED ENTRY] Original entry: ₹${originalEntry}, Current: ₹${currentPrice}`);
+    console.log(`[EVALUATE MISSED ENTRY] Target: ₹${target}, Stop Loss: ₹${stopLoss}`);
+
+    try {
+      // Calculate key metrics
+      const priceDiff = currentPrice - originalEntry;
+      const priceDiffPercent = ((priceDiff / originalEntry) * 100).toFixed(2);
+
+      // Calculate new R:R if entering at current price
+      const newRisk = strategyType === 'BUY'
+        ? currentPrice - stopLoss
+        : stopLoss - currentPrice;
+      const newReward = strategyType === 'BUY'
+        ? target - currentPrice
+        : currentPrice - target;
+      const newRR = newRisk > 0 ? (newReward / newRisk).toFixed(2) : 0;
+
+      // Original R:R for comparison
+      const originalRisk = strategyType === 'BUY'
+        ? originalEntry - stopLoss
+        : stopLoss - originalEntry;
+      const originalReward = strategyType === 'BUY'
+        ? target - originalEntry
+        : originalEntry - target;
+      const originalRR = originalRisk > 0 ? (originalReward / originalRisk).toFixed(2) : 0;
+
+      const SYSTEM = `You are a trading risk analyst. A user wants to enter a ${strategyType} trade but the price has moved past the original entry point.
+
+Your job is to give a CLEAR, DEFINITIVE verdict on whether they should:
+1. STILL_ENTER - The trade is still viable at current price
+2. SKIP - Entry is too risky at current price, wait for pullback
+3. WAIT_FOR_PULLBACK - Don't chase, set alert for specific price
+
+Be decisive. Traders need clear guidance, not wishy-washy advice.
+
+Respond in JSON format:
+{
+  "verdict": "STILL_ENTER" | "SKIP" | "WAIT_FOR_PULLBACK",
+  "verdict_emoji": "✅" | "❌" | "⏳",
+  "headline": "Short 5-7 word headline like 'Still safe to enter' or 'Too late, skip this one'",
+  "reason": "2-3 sentence explanation in simple language",
+  "new_risk_reward": "X:1",
+  "risk_assessment": "LOW" | "MEDIUM" | "HIGH",
+  "if_entering_now": {
+    "suggested_stop_loss": number or null,
+    "suggested_target": number or null,
+    "max_loss_percent": "X%"
+  },
+  "wait_for_price": number or null (if verdict is WAIT_FOR_PULLBACK)
+}`;
+
+      const USER = `Stock: ${stockName} (${stockSymbol})
+Trade Type: ${strategyType} (${analysisType})
+
+ORIGINAL ANALYSIS:
+- Entry Price: ₹${originalEntry}
+- Target: ₹${target}
+- Stop Loss: ₹${stopLoss}
+- Original R:R: ${originalRR}:1
+
+CURRENT SITUATION:
+- Current Price: ₹${currentPrice}
+- Price moved: ${priceDiffPercent}% ${priceDiff > 0 ? 'UP' : 'DOWN'} from entry
+- If entering now, new R:R would be: ${newRR}:1
+
+Question: Should the user ${strategyType} at current price ₹${currentPrice}, or skip/wait?`;
+
+      const formattedMessages = this.formatMessagesForModel('gpt-4o-mini', SYSTEM, USER);
+
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        this.buildRequestPayload('gpt-4o-mini', formattedMessages, true),
+        {
+          headers: {
+            'Authorization': `Bearer ${this.openaiApiKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      const content = response.data.choices[0].message.content;
+      const usage = response.data.usage;
+
+      // Track cost
+      const costRecord = aiCostTracker.calculateCost(
+        'gpt-4o-mini',
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        false,
+        'evaluate_missed_entry'
+      );
+      console.log(`[EVALUATE MISSED ENTRY] 💰 Cost: ${aiCostTracker.formatCost(costRecord.totalCost)} | Tokens: ${costRecord.totalTokens}`);
+
+      try {
+        const result = JSON.parse(content);
+        console.log(`[EVALUATE MISSED ENTRY] ✅ Verdict: ${result.verdict} - ${result.headline}`);
+        return {
+          success: true,
+          ...result,
+          original_entry: originalEntry,
+          current_price: currentPrice,
+          price_diff_percent: priceDiffPercent,
+          original_rr: originalRR,
+          new_rr: newRR
+        };
+      } catch (parseError) {
+        // Try to extract from markdown
+        const cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+        const result = JSON.parse(cleaned);
+        return {
+          success: true,
+          ...result,
+          original_entry: originalEntry,
+          current_price: currentPrice,
+          price_diff_percent: priceDiffPercent,
+          original_rr: originalRR,
+          new_rr: newRR
+        };
+      }
+
+    } catch (error) {
+      console.error('[EVALUATE MISSED ENTRY] ❌ Error:', error.message);
+
+      // Fallback: Simple rule-based evaluation
+      const priceDiffPercent = Math.abs((currentPrice - originalEntry) / originalEntry * 100);
+      const newRisk = strategyType === 'BUY'
+        ? currentPrice - stopLoss
+        : stopLoss - currentPrice;
+      const newReward = strategyType === 'BUY'
+        ? target - currentPrice
+        : currentPrice - target;
+      const newRR = newRisk > 0 ? newReward / newRisk : 0;
+
+      let verdict, headline, reason;
+
+      if (priceDiffPercent > 5) {
+        verdict = 'SKIP';
+        headline = 'Too late, entry missed';
+        reason = `Price has moved ${priceDiffPercent.toFixed(1)}% from entry. Risk/reward is no longer favorable.`;
+      } else if (newRR < 1.5) {
+        verdict = 'SKIP';
+        headline = 'Risk too high at current price';
+        reason = `New risk:reward is only ${newRR.toFixed(1)}:1. Minimum 1.5:1 required for good trades.`;
+      } else if (priceDiffPercent <= 2) {
+        verdict = 'STILL_ENTER';
+        headline = 'Still safe to enter';
+        reason = `Price only moved ${priceDiffPercent.toFixed(1)}%. R:R of ${newRR.toFixed(1)}:1 is still acceptable.`;
+      } else {
+        verdict = 'WAIT_FOR_PULLBACK';
+        headline = 'Wait for better entry';
+        reason = `Consider waiting for price to pull back closer to ₹${originalEntry.toFixed(2)}.`;
+      }
+
+      return {
+        success: true,
+        verdict,
+        verdict_emoji: verdict === 'STILL_ENTER' ? '✅' : verdict === 'SKIP' ? '❌' : '⏳',
+        headline,
+        reason,
+        new_risk_reward: `${newRR.toFixed(1)}:1`,
+        risk_assessment: newRR >= 2 ? 'LOW' : newRR >= 1.5 ? 'MEDIUM' : 'HIGH',
+        original_entry: originalEntry,
+        current_price: currentPrice,
+        price_diff_percent: priceDiffPercent.toFixed(2),
+        fallback: true // Indicates rule-based fallback was used
+      };
+    }
+  }
+
+  /**
    * Build request payload for AI API calls with conditional response_format
    * @param {string} model - The model name
    * @param {Array} messages - The messages array
