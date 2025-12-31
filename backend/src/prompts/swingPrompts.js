@@ -1,5 +1,6 @@
 import StockAnalysis from "../models/stockAnalysis.js";
 import { pickBestCandidate as pickBestStage2Candidate, candidates, regime } from "../engine/index.js";
+import { round2, isNum } from "../engine/helpers.js";
 
 // Alias for backward compatibility
 const shrinkCandidateForPrompt = candidates.shrinkForPrompt;
@@ -210,14 +211,7 @@ function get(obj, path, fallback = undefined) {
   }
 }
 
-function isNum(x) {
-  return typeof x === "number" && Number.isFinite(x);
-}
-
-function round2(x) {
-  if (!isNum(x)) return x;
-  return Math.round(x * 100) / 100;
-}
+// round2 and isNum imported from ../engine/helpers.js
 
 function calcClassicPivots(prevHigh, prevLow, prevClose) {
   // Classic / floor pivots: P=(H+L+C)/3; R1=2P-L; S1=2P-H; etc.  [oai_citation:1‡Investopedia](https://www.investopedia.com/articles/forex/05/fxpivots.asp?utm_source=chatgpt.com)
