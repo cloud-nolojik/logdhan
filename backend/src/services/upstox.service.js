@@ -11,6 +11,89 @@ class UpstoxService {
   }
 
   /**
+   * Get tick size for a given price based on NSE rules
+   * NSE tick size rules:
+   * - Price < ₹1: tick size = ₹0.01
+   * - Price ₹1 to ₹5: tick size = ₹0.01
+   * - Price ₹5 to ₹10: tick size = ₹0.01
+   * - Price ₹10 to ₹100: tick size = ₹0.05
+   * - Price > ₹100: tick size = ₹0.05
+   *
+   * Note: Most stocks > ₹100 use ₹0.05 tick size
+   */
+  getTickSize(price) {
+    if (price < 1) return 0.01;
+    if (price < 5) return 0.01;
+    if (price < 10) return 0.01;
+    // For prices >= ₹10, NSE uses ₹0.05 tick size
+    return 0.05;
+  }
+
+  /**
+   * Round price to valid NSE tick size
+   * @param {number} price - The price to round
+   * @param {string} direction - 'nearest', 'up', or 'down'
+   * @returns {number} - Price rounded to valid tick size
+   */
+  roundToTickSize(price, direction = 'nearest') {
+    const tickSize = this.getTickSize(price);
+
+    let rounded;
+    switch (direction) {
+      case 'up':
+        rounded = Math.ceil(price / tickSize) * tickSize;
+        break;
+      case 'down':
+        rounded = Math.floor(price / tickSize) * tickSize;
+        break;
+      case 'nearest':
+      default:
+        rounded = Math.round(price / tickSize) * tickSize;
+        break;
+    }
+
+    // Fix floating point precision issues
+    const decimalPlaces = tickSize === 0.05 ? 2 : 2;
+    rounded = parseFloat(rounded.toFixed(decimalPlaces));
+
+    console.log(`[TICK SIZE] Price ₹${price} -> Tick: ₹${tickSize} -> Rounded (${direction}): ₹${rounded}`);
+    return rounded;
+  }
+
+  /**
+   * Validate and correct all prices for an order
+   * Entry price rounded to nearest, StopLoss down (more protective), Target up (more optimistic)
+   */
+  correctOrderPrices(entryPrice, stopLossPrice = null, targetPrice = null, transactionType = 'BUY') {
+    const corrected = {
+      entry: this.roundToTickSize(entryPrice, 'nearest'),
+      stopLoss: null,
+      target: null
+    };
+
+    if (stopLossPrice) {
+      // For BUY: round SL down (lower = more protective)
+      // For SELL: round SL up (higher = more protective)
+      const slDirection = transactionType === 'BUY' ? 'down' : 'up';
+      corrected.stopLoss = this.roundToTickSize(stopLossPrice, slDirection);
+    }
+
+    if (targetPrice) {
+      // For BUY: round target up (higher = more optimistic)
+      // For SELL: round target down (lower = more optimistic)
+      const targetDirection = transactionType === 'BUY' ? 'up' : 'down';
+      corrected.target = this.roundToTickSize(targetPrice, targetDirection);
+    }
+
+    console.log(`[TICK SIZE] Order prices corrected:
+      Entry: ₹${entryPrice} -> ₹${corrected.entry}
+      StopLoss: ₹${stopLossPrice} -> ₹${corrected.stopLoss}
+      Target: ₹${targetPrice} -> ₹${corrected.target}`);
+
+    return corrected;
+  }
+
+  /**
    * Generate authorization URL for Upstox login
    */
   generateAuthUrl(state = null) {
@@ -400,17 +483,31 @@ class UpstoxService {
         throw new Error('Missing required order parameters');
       }
 
+      // Apply tick size correction for LIMIT and SL orders
+      let correctedPrice = orderType === 'MARKET' ? 0 : parseFloat(price || 0);
+      let correctedTriggerPrice = parseFloat(triggerPrice || 0);
+
+      if (orderType !== 'MARKET' && price) {
+        correctedPrice = this.roundToTickSize(parseFloat(price), 'nearest');
+        console.log(`[ORDER] Price tick corrected: ₹${price} -> ₹${correctedPrice}`);
+      }
+
+      if (triggerPrice && triggerPrice > 0) {
+        correctedTriggerPrice = this.roundToTickSize(parseFloat(triggerPrice), 'nearest');
+        console.log(`[ORDER] Trigger price tick corrected: ₹${triggerPrice} -> ₹${correctedTriggerPrice}`);
+      }
+
       const orderPayload = {
         instrument_token: instrumentToken,
         quantity: parseInt(quantity),
         product,
         validity,
-        price: orderType === 'MARKET' ? 0 : parseFloat(price || 0),
+        price: correctedPrice,
         tag: orderData.tag || `ORDER_${Date.now()}`,
         order_type: orderType,
         transaction_type: transactionType.toUpperCase(),
         disclosed_quantity: parseInt(disclosedQuantity),
-        trigger_price: parseFloat(triggerPrice || 0),
+        trigger_price: correctedTriggerPrice,
         is_amo: Boolean(isAmo)
       };
 
@@ -1264,6 +1361,33 @@ class UpstoxService {
         throw new Error(`Invalid transactionType: ${transactionType}. Must be BUY or SELL`);
       }
 
+      // ========== TICK SIZE CORRECTION ==========
+      // NSE requires prices to be in valid tick size multiples
+      // Round prices to valid tick sizes before placing order
+      console.log('[GTT ORDER] ========== TICK SIZE CORRECTION ==========');
+      const correctedPrices = this.correctOrderPrices(
+        entryTriggerPrice,
+        stopLossPrice,
+        targetPrice,
+        txnType
+      );
+
+      const correctedEntry = correctedPrices.entry;
+      const correctedTarget = correctedPrices.target;
+      const correctedStopLoss = correctedPrices.stopLoss;
+
+      // Re-validate after correction (prices might have shifted)
+      if (txnType === 'BUY') {
+        if (correctedTarget <= correctedEntry) {
+          console.log(`[GTT ORDER] ⚠️ After tick correction, adjusting target from ₹${correctedTarget} to ₹${correctedEntry + 0.05}`);
+          correctedPrices.target = correctedEntry + 0.05;
+        }
+        if (correctedStopLoss >= correctedEntry) {
+          console.log(`[GTT ORDER] ⚠️ After tick correction, adjusting stopLoss from ₹${correctedStopLoss} to ₹${correctedEntry - 0.05}`);
+          correctedPrices.stopLoss = correctedEntry - 0.05;
+        }
+      }
+
       // Build rules array for multi-leg order
       const rules = [];
 
@@ -1271,21 +1395,21 @@ class UpstoxService {
       rules.push({
         strategy: 'ENTRY',
         trigger_type: entryTriggerType,
-        trigger_price: parseFloat(entryTriggerPrice)
+        trigger_price: correctedPrices.entry
       });
 
       // Target rule (mandatory for multi-leg)
       rules.push({
         strategy: 'TARGET',
         trigger_type: 'IMMEDIATE',
-        trigger_price: parseFloat(targetPrice)
+        trigger_price: correctedPrices.target
       });
 
       // Stop Loss rule with optional trailing (mandatory for multi-leg)
       const slRule = {
         strategy: 'STOPLOSS',
         trigger_type: 'IMMEDIATE',
-        trigger_price: parseFloat(stopLossPrice)
+        trigger_price: correctedPrices.stopLoss
       };
 
       // Add trailing gap for TSL orders
@@ -1308,13 +1432,13 @@ class UpstoxService {
 
       console.log('[GTT ORDER] ========== PAYLOAD CONSTRUCTION ==========');
       console.log('[GTT ORDER] Final payload to send:', JSON.stringify(gttPayload, null, 2));
-      console.log(`[GTT ORDER] Summary:
+      console.log(`[GTT ORDER] Summary (with tick size correction):
         Instrument: ${instrumentToken}
         Type: ${txnType}
         Quantity: ${quantity} -> parsed: ${parseInt(quantity)}
-        Entry: ₹${entryTriggerPrice} (${entryTriggerType}) -> parsed: ${parseFloat(entryTriggerPrice)}
-        Target: ₹${targetPrice} -> parsed: ${parseFloat(targetPrice)}
-        StopLoss: ₹${stopLossPrice} -> parsed: ${parseFloat(stopLossPrice)}${trailingGap ? ` (Trailing: ₹${trailingGap})` : ''}
+        Entry: ₹${entryTriggerPrice} -> CORRECTED: ₹${correctedPrices.entry} (${entryTriggerType})
+        Target: ₹${targetPrice} -> CORRECTED: ₹${correctedPrices.target}
+        StopLoss: ₹${stopLossPrice} -> CORRECTED: ₹${correctedPrices.stopLoss}${trailingGap ? ` (Trailing: ₹${trailingGap})` : ''}
         Product: ${product}`);
 
       // Use V3 API for GTT orders
