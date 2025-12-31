@@ -4836,8 +4836,16 @@ Return ONLY the JSON object described above.
 
 Your job is to give a CLEAR, DEFINITIVE verdict on whether they should:
 1. STILL_ENTER - The trade is still viable at current price
-2. SKIP - Entry is too risky at current price, wait for pullback
+2. SKIP - Entry is too risky at current price
 3. WAIT_FOR_PULLBACK - Don't chase, set alert for specific price
+
+IMPORTANT GUIDELINES for your verdict:
+- If price moved LESS THAN 2% AND new R:R >= 1.5:1 → Strongly prefer STILL_ENTER
+- If price moved LESS THAN 1% AND new R:R >= 2:1 → MUST be STILL_ENTER (this is negligible movement)
+- If new R:R >= 3:1 even after price movement → Strongly prefer STILL_ENTER (excellent R:R)
+- If price moved 2-5% AND new R:R >= 2:1 → Consider STILL_ENTER or WAIT_FOR_PULLBACK
+- Only recommend SKIP if: price moved > 5% OR new R:R < 1.5:1
+- Do NOT be overly conservative. A trade with 3:1+ R:R and <2% price movement is almost always worth entering.
 
 Be decisive. Traders need clear guidance, not wishy-washy advice.
 
@@ -4941,19 +4949,38 @@ Question: Should the user ${strategyType} at current price ₹${currentPrice}, o
 
       let verdict, headline, reason;
 
-      if (priceDiffPercent > 5) {
+      // Rule 1: If R:R is excellent (>= 3:1) and price moved < 5%, always recommend entry
+      if (newRR >= 3 && priceDiffPercent < 5) {
+        verdict = 'STILL_ENTER';
+        headline = 'Excellent R:R, still safe';
+        reason = `With ${newRR.toFixed(1)}:1 risk-reward and only ${priceDiffPercent.toFixed(1)}% price movement, this is still an excellent setup.`;
+      }
+      // Rule 2: Price moved too far (> 5%)
+      else if (priceDiffPercent > 5) {
         verdict = 'SKIP';
         headline = 'Too late, entry missed';
         reason = `Price has moved ${priceDiffPercent.toFixed(1)}% from entry. Risk/reward is no longer favorable.`;
-      } else if (newRR < 1.5) {
+      }
+      // Rule 3: R:R too low (< 1.5)
+      else if (newRR < 1.5) {
         verdict = 'SKIP';
         headline = 'Risk too high at current price';
         reason = `New risk:reward is only ${newRR.toFixed(1)}:1. Minimum 1.5:1 required for good trades.`;
-      } else if (priceDiffPercent <= 2) {
+      }
+      // Rule 4: Small price movement (< 2%) with acceptable R:R
+      else if (priceDiffPercent <= 2) {
         verdict = 'STILL_ENTER';
         headline = 'Still safe to enter';
         reason = `Price only moved ${priceDiffPercent.toFixed(1)}%. R:R of ${newRR.toFixed(1)}:1 is still acceptable.`;
-      } else {
+      }
+      // Rule 5: Moderate price movement (2-5%) with good R:R (>= 2)
+      else if (newRR >= 2) {
+        verdict = 'STILL_ENTER';
+        headline = 'Good R:R, safe to enter';
+        reason = `Despite ${priceDiffPercent.toFixed(1)}% price movement, R:R of ${newRR.toFixed(1)}:1 is still favorable.`;
+      }
+      // Rule 6: Otherwise wait for pullback
+      else {
         verdict = 'WAIT_FOR_PULLBACK';
         headline = 'Wait for better entry';
         reason = `Consider waiting for price to pull back closer to ₹${originalEntry.toFixed(2)}.`;
