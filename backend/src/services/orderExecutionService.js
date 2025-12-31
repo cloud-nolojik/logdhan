@@ -42,19 +42,24 @@ class OrderExecutionService {
           throw new Error('Analysis not found');
         }
 
-        if (analysis.user_id.toString() !== userId) {
-          throw new Error('Access denied to analysis');
-        }
+        // Note: Analysis is shared across all users, so we don't check analysis.user_id
+        // Instead, we check if THIS user already has an open position for this stock
 
-        // Atomic check: if orders already exist, fail immediately
-        if (analysis.hasActiveOrders()) {
-          const activeOrderIds = analysis.getPlacedOrderIds();
+        // Atomic check: if user already has an open position for this stock, fail
+        const existingPosition = await UserPosition.findOpenPosition(userId, analysis.instrument_key);
+        if (existingPosition) {
           result = {
             success: false,
-            error: 'orders_already_placed',
-            message: `Orders already placed for this analysis. Active orders: ${activeOrderIds.join(', ')}`,
+            error: 'position_already_exists',
+            message: `You already have an open position for ${analysis.stock_symbol}. Close it first before placing a new order.`,
             data: {
-              existing_orders: analysis.placed_orders,
+              existing_position: {
+                position_id: existingPosition._id,
+                symbol: existingPosition.symbol,
+                entry_price: existingPosition.actual_entry,
+                qty: existingPosition.qty,
+                status: existingPosition.status
+              },
               analysis_id: analysis._id
             }
           };
@@ -204,23 +209,26 @@ class OrderExecutionService {
       const instrumentToken = analysis.instrument_key;
       const analysisType = analysis.analysis_type;
 
-      // 2. Check if orders already placed (skip if atomic operation already checked)
+      // 2. Check if user already has open position for this stock (skip if atomic operation already checked)
       if (!skipOrderCheck) {
-        const hasActive = analysis.hasActiveOrders();
-        if (hasActive) {
-          const activeOrderIds = analysis.getPlacedOrderIds();
+        const existingPosition = await UserPosition.findOpenPosition(userId, instrumentToken);
+        if (existingPosition) {
           return {
             success: false,
-            error: 'orders_already_placed',
-            message: `Orders already placed for this analysis. Active orders: ${activeOrderIds.join(', ')}`,
+            error: 'position_already_exists',
+            message: `You already have an open position for ${analysis.stock_symbol}. Close it first.`,
             data: {
-              existing_orders: analysis.placed_orders,
+              existing_position: {
+                position_id: existingPosition._id,
+                symbol: existingPosition.symbol,
+                entry_price: existingPosition.actual_entry,
+                qty: existingPosition.qty,
+                status: existingPosition.status
+              },
               analysis_id: analysis._id
             }
           };
         }
-      } else {
-
       }
 
       // 3. Validate trigger conditions (unless bypassed)

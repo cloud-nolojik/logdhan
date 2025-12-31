@@ -385,7 +385,7 @@ router.post('/place-order', authenticateToken, async (req, res) => {
 
       // Return appropriate status code based on error type
       let statusCode = 400;
-      if (executionResult.error === 'orders_already_placed') statusCode = 409;
+      if (executionResult.error === 'orders_already_placed' || executionResult.error === 'position_already_exists') statusCode = 409;
       if (executionResult.error === 'upstox_not_connected') statusCode = 401;
       if (executionResult.error === 'strategy_not_found') statusCode = 404;
 
