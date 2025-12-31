@@ -363,7 +363,89 @@ class OrderExecutionService {
         console.log(`[ORDER EXECUTION] ✅ Price overridden to: ${orderData.price}`);
       }
 
-      // 3. Place order using Multi Order API with webhook support for stop-loss/target
+      // 3. Place GTT order with Entry, Target, and Stop-Loss
+      // GTT orders are better because they:
+      // - Automatically trigger when entry price is hit
+      // - Automatically place target and stop-loss after entry executes
+      // - Stay valid for up to 1 year
+      const hasStopLossAndTarget = strategy && strategy.stopLoss && strategy.target;
+
+      if (hasStopLossAndTarget) {
+        console.log(`[ORDER EXECUTION] 🎯 Using GTT Multi-Leg order with Entry, Target, and Stop-Loss`);
+        console.log(`[ORDER EXECUTION] Strategy details:`, JSON.stringify(strategy, null, 2));
+        console.log(`[ORDER EXECUTION] Order data:`, JSON.stringify(orderData, null, 2));
+
+        // Determine entry trigger type based on current price vs entry price
+        // For BUY: If entry > current price, use ABOVE (price will go up to entry)
+        // For BUY: If entry < current price, use IMMEDIATE (place now)
+        const entryTriggerType = 'IMMEDIATE'; // Place immediately at the specified price
+
+        const gttParams = {
+          instrumentToken,
+          transactionType: orderData.transactionType,
+          quantity: orderData.quantity,
+          product: orderData.product,
+          entryTriggerPrice: orderData.price,
+          entryTriggerType,
+          targetPrice: strategy.target,
+          stopLossPrice: strategy.stopLoss
+        };
+
+        console.log(`[ORDER EXECUTION] GTT params being sent:`, JSON.stringify(gttParams, null, 2));
+        console.log(`[ORDER EXECUTION] Calling upstoxService.placeGTTOrder...`);
+
+        const gttResult = await upstoxService.placeGTTOrder(accessToken, gttParams);
+
+        console.log(`[ORDER EXECUTION] GTT result received:`, JSON.stringify(gttResult, null, 2));
+
+        await upstoxUser.updateOrderStats(gttResult.success);
+
+        if (gttResult.success) {
+          // Create position entry
+          try {
+            const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+            const analysis = await StockAnalysis.findById(analysisId);
+
+            if (analysis) {
+              const existingPosition = await UserPosition.findOpenPosition(userId, instrumentToken);
+
+              if (!existingPosition) {
+                await UserPosition.createFromAnalysis(
+                  userId,
+                  analysis,
+                  orderData.price,
+                  orderData.quantity,
+                  {
+                    gtt_order_ids: gttResult.gttOrderIds,
+                    stop_loss: strategy.stopLoss,
+                    target: strategy.target
+                  }
+                );
+                console.log(`[ORDER EXECUTION] 📊 Position created for GTT order`);
+              }
+            }
+          } catch (positionError) {
+            console.error(`[ORDER EXECUTION] ⚠️ Failed to create position:`, positionError);
+          }
+
+          return {
+            success: true,
+            data: {
+              gtt_order_ids: gttResult.gttOrderIds,
+              order_type: 'GTT_MULTI_LEG',
+              entry_price: orderData.price,
+              target: strategy.target,
+              stop_loss: strategy.stopLoss,
+              quantity: orderData.quantity
+            },
+            message: `GTT order placed successfully with Entry at ₹${orderData.price}, Target at ₹${strategy.target}, and Stop-Loss at ₹${strategy.stopLoss}`
+          };
+        } else {
+          return gttResult;
+        }
+      }
+
+      // Fallback to regular multi-order if no stop-loss/target
       return await this.placeMultiOrder(
         accessToken,
         orderData,

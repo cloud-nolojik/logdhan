@@ -1195,6 +1195,11 @@ class UpstoxService {
    */
   async placeGTTOrder(accessToken, gttOrderData) {
     try {
+      console.log('[GTT ORDER] ========== GTT ORDER REQUEST START ==========');
+      console.log('[GTT ORDER] Raw input gttOrderData:', JSON.stringify(gttOrderData, null, 2));
+      console.log('[GTT ORDER] Access token present:', !!accessToken);
+      console.log('[GTT ORDER] Access token length:', accessToken?.length || 0);
+
       const {
         instrumentToken,
         transactionType,
@@ -1207,9 +1212,26 @@ class UpstoxService {
         trailingGap
       } = gttOrderData;
 
+      console.log('[GTT ORDER] Extracted parameters:');
+      console.log(`  - instrumentToken: ${instrumentToken} (type: ${typeof instrumentToken})`);
+      console.log(`  - transactionType: ${transactionType} (type: ${typeof transactionType})`);
+      console.log(`  - quantity: ${quantity} (type: ${typeof quantity})`);
+      console.log(`  - product: ${product} (type: ${typeof product})`);
+      console.log(`  - entryTriggerPrice: ${entryTriggerPrice} (type: ${typeof entryTriggerPrice})`);
+      console.log(`  - entryTriggerType: ${entryTriggerType} (type: ${typeof entryTriggerType})`);
+      console.log(`  - targetPrice: ${targetPrice} (type: ${typeof targetPrice})`);
+      console.log(`  - stopLossPrice: ${stopLossPrice} (type: ${typeof stopLossPrice})`);
+      console.log(`  - trailingGap: ${trailingGap} (type: ${typeof trailingGap})`);
+
       // Validate required fields
       if (!instrumentToken || !transactionType || !quantity || !entryTriggerPrice) {
-        throw new Error('Missing required GTT order parameters: instrumentToken, transactionType, quantity, entryTriggerPrice');
+        const missing = [];
+        if (!instrumentToken) missing.push('instrumentToken');
+        if (!transactionType) missing.push('transactionType');
+        if (!quantity) missing.push('quantity');
+        if (!entryTriggerPrice) missing.push('entryTriggerPrice');
+        console.error(`[GTT ORDER] ❌ Missing required fields: ${missing.join(', ')}`);
+        throw new Error(`Missing required GTT order parameters: ${missing.join(', ')}`);
       }
 
       // ENFORCE MULTI-LEG ONLY: Both target and stop loss are required
@@ -1277,26 +1299,36 @@ class UpstoxService {
       // Build GTT order payload - always MULTIPLE for multi-leg
       const gttPayload = {
         type: 'MULTIPLE',
-        quantity: parseInt(quantity.qty),
+        quantity: parseInt(quantity),
         product: product,
         instrument_token: instrumentToken,
         transaction_type: txnType,
         rules: rules
       };
 
-      console.log('[GTT ORDER] Placing multi-leg GTT order:', JSON.stringify(gttPayload, null, 2));
+      console.log('[GTT ORDER] ========== PAYLOAD CONSTRUCTION ==========');
+      console.log('[GTT ORDER] Final payload to send:', JSON.stringify(gttPayload, null, 2));
       console.log(`[GTT ORDER] Summary:
         Instrument: ${instrumentToken}
         Type: ${txnType}
-        Quantity: ${quantity}
-        Entry: ₹${entryTriggerPrice} (${entryTriggerType})
-        Target: ₹${targetPrice}
-        StopLoss: ₹${stopLossPrice}${trailingGap ? ` (Trailing: ₹${trailingGap})` : ''}
+        Quantity: ${quantity} -> parsed: ${parseInt(quantity)}
+        Entry: ₹${entryTriggerPrice} (${entryTriggerType}) -> parsed: ${parseFloat(entryTriggerPrice)}
+        Target: ₹${targetPrice} -> parsed: ${parseFloat(targetPrice)}
+        StopLoss: ₹${stopLossPrice} -> parsed: ${parseFloat(stopLossPrice)}${trailingGap ? ` (Trailing: ₹${trailingGap})` : ''}
         Product: ${product}`);
 
       // Use V3 API for GTT orders
+      const apiUrl = 'https://api.upstox.com/v3/order/gtt/place';
+      console.log('[GTT ORDER] ========== API CALL ==========');
+      console.log(`[GTT ORDER] Making POST request to: ${apiUrl}`);
+      console.log('[GTT ORDER] Request headers:', {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${accessToken?.substring(0, 20)}...`
+      });
+
       const response = await axios.post(
-        'https://api.upstox.com/v3/order/gtt/place',
+        apiUrl,
         gttPayload,
         {
           headers: {
@@ -1307,12 +1339,16 @@ class UpstoxService {
         }
       );
 
-      console.log('[GTT ORDER] ✅ GTT order response:', JSON.stringify(response.data, null, 2));
+      console.log('[GTT ORDER] ========== API RESPONSE ==========');
+      console.log('[GTT ORDER] Response status code:', response.status);
+      console.log('[GTT ORDER] Response headers:', JSON.stringify(response.headers, null, 2));
+      console.log('[GTT ORDER] Response data:', JSON.stringify(response.data, null, 2));
 
       const { status, data, metadata } = response.data;
+      console.log(`[GTT ORDER] Parsed response - status: ${status}, data:`, data, ', metadata:', metadata);
 
       if (status === 'success') {
-        return {
+        const result = {
           success: true,
           data: {
             gtt_order_ids: data.gtt_order_ids,
@@ -1321,24 +1357,44 @@ class UpstoxService {
             has_trailing_sl: trailingGap && trailingGap > 0,
             latency: metadata?.latency
           },
+          gttOrderIds: data.gtt_order_ids, // Also add at top level for compatibility
           message: `GTT multi-leg order placed successfully${trailingGap ? ' with trailing stop loss' : ''}`
         };
+        console.log('[GTT ORDER] ✅ SUCCESS! Returning:', JSON.stringify(result, null, 2));
+        console.log('[GTT ORDER] ========== GTT ORDER REQUEST END ==========');
+        return result;
       } else {
+        console.error(`[GTT ORDER] ❌ Unexpected status: ${status}`);
         throw new Error(`GTT order failed with status: ${status}`);
       }
 
     } catch (error) {
-      const errorData = error.response?.data;
-      console.error('[GTT ORDER] ❌ GTT order placement error:', JSON.stringify(errorData || error.message, null, 2));
-      if (errorData?.errors) {
-        console.error('[GTT ORDER] ❌ Error details:', JSON.stringify(errorData.errors, null, 2));
+      console.log('[GTT ORDER] ========== ERROR HANDLING ==========');
+      console.error('[GTT ORDER] ❌ Error caught:', error.message);
+      console.error('[GTT ORDER] ❌ Error name:', error.name);
+      console.error('[GTT ORDER] ❌ Error stack:', error.stack);
+
+      if (error.response) {
+        console.error('[GTT ORDER] ❌ HTTP Status:', error.response.status);
+        console.error('[GTT ORDER] ❌ HTTP Status Text:', error.response.statusText);
+        console.error('[GTT ORDER] ❌ Response headers:', JSON.stringify(error.response.headers, null, 2));
+        console.error('[GTT ORDER] ❌ Response data:', JSON.stringify(error.response.data, null, 2));
       }
-      return {
+
+      const errorData = error.response?.data;
+      if (errorData?.errors) {
+        console.error('[GTT ORDER] ❌ Upstox errors array:', JSON.stringify(errorData.errors, null, 2));
+      }
+
+      const result = {
         success: false,
         error: 'gtt_order_failed',
         message: errorData?.errors?.[0]?.message || errorData?.message || error.message || 'Failed to place GTT order',
         details: errorData
       };
+      console.error('[GTT ORDER] ❌ Returning error result:', JSON.stringify(result, null, 2));
+      console.log('[GTT ORDER] ========== GTT ORDER REQUEST END ==========');
+      return result;
     }
   }
 
