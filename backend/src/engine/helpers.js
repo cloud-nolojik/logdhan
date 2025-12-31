@@ -5,13 +5,15 @@
  */
 
 /**
- * Round to 2 decimal places
+ * Round to 1 decimal place (₹0.10 increments)
+ * This makes prices cleaner for display (e.g., ₹1497.80 instead of ₹1497.83)
+ * Note: Actual order placement uses NSE tick size (₹0.05) in upstox.service.js
  * @param {number} x - Value to round
  * @returns {number} Rounded value or original if not a valid number
  */
 export function round2(x) {
   if (typeof x !== 'number' || !Number.isFinite(x)) return x;
-  return Math.round(x * 100) / 100;
+  return Math.round(x * 10) / 10;
 }
 
 /**

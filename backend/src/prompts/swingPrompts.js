@@ -924,7 +924,8 @@ simple_verdict (REQUIRED):
   * "SKIP - setup not strong enough today"
   * "HOLD - structure intact, approaching ₹<target>"
   * "REVIEW - structure weakening near ₹<stopLoss>"
-- Use actual ₹ values from entry/target/stopLoss
+- IMPORTANT: Use EXACT ₹ values from entry/target/stopLoss WITH DECIMALS (e.g., ₹1497.83, NOT ₹1498)
+- Never round prices - use the exact values provided in the zones data
 
 why_this_makes_sense (REQUIRED, array of 3 strings):
 - Item 1: What the stock is doing right now (plain English, explain indicators)
