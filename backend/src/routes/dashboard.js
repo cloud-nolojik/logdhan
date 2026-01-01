@@ -77,7 +77,8 @@ router.get("/morning-glance", auth, async (req, res) => {
         status_emoji,
         status_text,
         needs_attention,
-        days_held: pos.days_in_trade
+        days_held: pos.days_in_trade,
+        execution_status: pos.execution_status || "PENDING"
       };
     }));
 
@@ -120,8 +121,9 @@ router.get("/morning-glance", auth, async (req, res) => {
       }
     }
 
-    // 4. Calculate overall status
-    const totalPnl = positionSummaries.reduce((sum, p) => sum + p.pnl_inr, 0);
+    // 4. Calculate overall status (only executed positions count towards P&L)
+    const executedPositions = positionSummaries.filter(p => p.execution_status === "EXECUTED");
+    const totalPnl = executedPositions.reduce((sum, p) => sum + p.pnl_inr, 0);
     const needsAttention = positionSummaries.filter(p => p.needs_attention).length;
 
     // 5. Generate market vibe (simple heuristic)

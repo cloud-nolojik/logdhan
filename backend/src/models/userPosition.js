@@ -62,6 +62,13 @@ const userPositionSchema = new mongoose.Schema({
     default: "OPEN"
   },
 
+  // Execution status - tracks if order was actually placed with broker
+  execution_status: {
+    type: String,
+    enum: ["PENDING", "EXECUTED"],
+    default: "PENDING"
+  },
+
   // Closure details (filled when closed)
   closed_at: Date,
   close_reason: {
@@ -151,6 +158,15 @@ userPositionSchema.statics.createFromAnalysis = async function(
   }
 
   return position;
+};
+
+// Method: Mark position as executed (broker order placed)
+userPositionSchema.methods.markExecuted = async function() {
+  if (this.execution_status === "EXECUTED") {
+    return this; // Already executed, no-op
+  }
+  this.execution_status = "EXECUTED";
+  return this.save();
 };
 
 // Method: Trail stop loss (validates SL only moves UP)

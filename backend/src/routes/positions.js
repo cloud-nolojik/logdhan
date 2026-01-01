@@ -57,6 +57,7 @@ router.get("/", auth, async (req, res) => {
         entered_at: p.entered_at,
         days_in_trade: p.days_in_trade,
         status: p.status,
+        execution_status: p.execution_status || "PENDING",
         original_analysis: p.original_analysis,
         sl_trail_count: p.sl_trail_history.length,
         pnl: pnl
@@ -1087,6 +1088,49 @@ Respond in JSON format:
   } catch (error) {
     console.error("Exit coach error:", error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/v1/positions/:id/mark-executed
+ * Mark a position as executed (broker order was placed)
+ */
+router.post("/:id/mark-executed", auth, async (req, res) => {
+  try {
+    const position = await UserPosition.findOne({
+      _id: req.params.id,
+      user_id: req.user._id
+    });
+
+    if (!position) {
+      return res.status(404).json({
+        success: false,
+        message: "Position not found"
+      });
+    }
+
+    if (position.execution_status === "EXECUTED") {
+      return res.json({
+        success: true,
+        message: "Position already marked as executed",
+        execution_status: position.execution_status
+      });
+    }
+
+    await position.markExecuted();
+
+    res.json({
+      success: true,
+      message: "Position marked as executed",
+      execution_status: position.execution_status
+    });
+  } catch (error) {
+    console.error("Error marking position as executed:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark position as executed",
+      error: error.message
+    });
   }
 });
 
