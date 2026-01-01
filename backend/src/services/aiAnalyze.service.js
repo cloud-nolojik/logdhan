@@ -14,6 +14,7 @@ import { User } from '../models/user.js';
 import modelSelectorService from './ai/modelSelector.service.js';
 import AnalysisSession from '../models/analysisSession.js';
 import { buildStage1, buildStage2, buildStage3Prompt } from '../prompts/swingPrompts.js';
+import { pickBestCandidate } from '../engine/index.js';
 import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
 import FineTuneData from '../models/fineTuneData.js';
@@ -2760,6 +2761,26 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
 
     const finalOut = s3result.data;
     const analysisMeta = finalOut.analysis_meta || finalOut.meta || {};
+
+    // Inject triggers from Stage 2 best candidate into final output
+    // The LLM doesn't copy triggers from selectedCandidate, so we do it in code
+    if (finalOut.strategies?.[0] && s2r?.s2?.candidates?.length > 0) {
+      const { best } = pickBestCandidate(s2r.s2);
+      if (best?.skeleton?.triggers?.length > 0) {
+        finalOut.strategies[0].triggers = best.skeleton.triggers;
+        console.log(`✅ [TRIGGERS] Injected ${best.skeleton.triggers.length} trigger(s) from ${best.id} (${best.name}) into ${stock_symbol}`);
+      }
+      // Also inject invalidations_pre_entry if available
+      if (best?.skeleton?.invalidations_pre_entry?.length > 0) {
+        // Merge with existing invalidations if any, or set if empty
+        const existingInvalidations = finalOut.strategies[0].invalidations || [];
+        const preEntryInvalidations = best.skeleton.invalidations_pre_entry.map(inv => ({
+          ...inv,
+          scope: 'pre_entry'
+        }));
+        finalOut.strategies[0].invalidations = [...preEntryInvalidations, ...existingInvalidations];
+      }
+    }
 
     // Calculate total token usage (sentiment + stage3 LLM calls)
     Object.keys(tokenTracking.total).forEach((key) => {

@@ -383,10 +383,23 @@ class OrderExecutionService {
         console.log(`[ORDER EXECUTION] Strategy details:`, JSON.stringify(strategy, null, 2));
         console.log(`[ORDER EXECUTION] Order data:`, JSON.stringify(orderData, null, 2));
 
-        // Determine entry trigger type based on current price vs entry price
-        // For BUY: If entry > current price, use ABOVE (price will go up to entry)
-        // For BUY: If entry < current price, use IMMEDIATE (place now)
-        const entryTriggerType = 'IMMEDIATE'; // Place immediately at the specified price
+        // Determine entry trigger type from strategy triggers
+        // Triggers contain the condition logic (e.g., price >= entry means ABOVE)
+        let entryTriggerType = 'ABOVE'; // Default to ABOVE for safety (wait for price)
+
+        const entryTrigger = strategy.triggers?.find(t => t.id === 'T1' || t.scope === 'entry');
+        if (entryTrigger?.condition?.op) {
+          const op = entryTrigger.condition.op;
+          // Map trigger operator to GTT trigger type
+          if (op === '>=' || op === '>' || op === 'crosses_above') {
+            entryTriggerType = 'ABOVE';
+          } else if (op === '<=' || op === '<' || op === 'crosses_below') {
+            entryTriggerType = 'BELOW';
+          }
+          console.log(`[ORDER EXECUTION] ✅ Using trigger type ${entryTriggerType} from strategy trigger (op: ${op})`);
+        } else {
+          console.log(`[ORDER EXECUTION] ⚠️ No trigger found in strategy, defaulting to ABOVE`);
+        }
 
         const gttParams = {
           instrumentToken,
