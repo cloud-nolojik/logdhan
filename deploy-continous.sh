@@ -3,11 +3,22 @@
 # === CONFIG ===
 REMOTE_USER="root"
 REMOTE_HOST="64.227.179.191"
+REMOTE_PASSWORD="nolojiK@2023Nov"
 REMOTE_DIR="/var/www/logdhan"
 FRONTEND_DIR="./frontend"
 BACKEND_DIR="./backend"
 COMMIT_MSG="Auto-deploy on $(date '+%Y-%m-%d %H:%M:%S')"
 BRANCH="master"  # Change if using a different branch
+
+# Check if sshpass is installed
+if ! command -v sshpass &> /dev/null; then
+    echo "⚠️ sshpass not found. Install it with: brew install hudochenkov/sshpass/sshpass"
+    exit 1
+fi
+
+# SSH/SCP commands with password
+SSH_CMD="sshpass -p '$REMOTE_PASSWORD' ssh -o StrictHostKeyChecking=no"
+RSYNC_CMD="sshpass -p '$REMOTE_PASSWORD' rsync -avz -e 'ssh -o StrictHostKeyChecking=no'"
 
 # === STEP 0: Git Commit and Push ===
 echo "📦 Committing and pushing to GitHub..."
@@ -34,15 +45,15 @@ cd -
 
 # === STEP 2: Upload Backend (excluding node_modules) ===
 echo "🚚 Uploading backend..."
-rsync -avz --exclude 'node_modules' $BACKEND_DIR/ $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/backend
+sshpass -p "$REMOTE_PASSWORD" rsync -avz --exclude 'node_modules' -e "ssh -o StrictHostKeyChecking=no" $BACKEND_DIR/ $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/backend
 
 # === STEP 3: Upload Frontend Build (from Vite 'dist/') ===
 echo "🚚 Uploading frontend build..."
-rsync -avz $FRONTEND_DIR/dist/ $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/frontend
+sshpass -p "$REMOTE_PASSWORD" rsync -avz -e "ssh -o StrictHostKeyChecking=no" $FRONTEND_DIR/dist/ $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/frontend
 
 # === STEP 4: Restart Backend (with PM2) ===
 echo "🚀 Restarting backend server..."
-ssh $REMOTE_USER@$REMOTE_HOST << 'ENDSSH'
+sshpass -p "$REMOTE_PASSWORD" ssh -o StrictHostKeyChecking=no $REMOTE_USER@$REMOTE_HOST << 'ENDSSH'
 cd /var/www/logdhan/backend
 npm install
 pm2 restart logdhan-backend || pm2 start src/index.js --name logdhan-backend
