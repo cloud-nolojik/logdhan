@@ -90,12 +90,29 @@ router.get("/morning-glance", auth, async (req, res) => {
       };
     }));
 
-    // 3. Get user's personal watchlist (already loaded in req.user from auth middleware)
+    // 3. Get user's personal watchlist and generate alerts
     const userWatchlist = req.user?.watchlist || [];
     const watchlistAlerts = [];
 
-    // For now, just show watchlist stocks count - no entry zone alerts for user watchlist
-    // User watchlist doesn't have entry_zone data like global WeeklyWatchlist
+    // Generate watchlist alerts from user's watchlist stocks
+    for (const stock of userWatchlist) {
+      try {
+        const priceDoc = await LatestPrice.findOne({ instrument_key: stock.instrument_key });
+        const currentPrice = priceDoc?.last_traded_price || priceDoc?.close;
+
+        if (currentPrice) {
+          // Show each watchlist stock with current price info
+          watchlistAlerts.push({
+            symbol: stock.trading_symbol,
+            message: `₹${round2(currentPrice)}`,
+            type: "WATCHING",
+            urgency: "low"
+          });
+        }
+      } catch (err) {
+        console.warn(`Failed to get price for watchlist stock ${stock.trading_symbol}:`, err.message);
+      }
+    }
 
     // 4. Calculate overall status (only executed positions count towards P&L)
     const executedPositions = positionSummaries.filter(p => p.execution_status === "EXECUTED");
