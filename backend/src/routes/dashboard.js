@@ -1,9 +1,10 @@
 import express from "express";
 import UserPosition from "../models/userPosition.js";
-import WeeklyWatchlist from "../models/weeklyWatchlist.js";
+import { User } from "../models/user.js";
 import LatestPrice from "../models/latestPrice.js";
 import { auth } from "../middleware/auth.js";
 import { checkExitConditions, round2 } from "../engine/index.js";
+import { getCurrentPrice } from "../utils/stockDb.js";
 
 const router = express.Router();
 
@@ -33,23 +34,29 @@ router.get("/morning-glance", auth, async (req, res) => {
       const priceDoc = await LatestPrice.findOne({ instrument_key: pos.instrument_key });
       const current_price = priceDoc?.last_traded_price || priceDoc?.close || pos.actual_entry;
       const pnl = pos.calculateUnrealizedPnl(current_price);
+      const isExecuted = pos.execution_status === "EXECUTED";
 
-      // Quick status check
-      const alerts = checkExitConditions({
+      // Quick status check - only relevant for executed positions
+      const alerts = isExecuted ? checkExitConditions({
         position: {
           actual_entry: pos.actual_entry,
           current_sl: pos.current_sl,
           current_target: pos.current_target
         },
         current_price
-      });
+      }) : [];
 
       // Determine status emoji and message
       let status_emoji = "✅";
       let status_text = "Structure intact";
       let needs_attention = false;
 
-      if (alerts.some(a => a.type === "STOP_HIT")) {
+      // Only check alerts for executed positions
+      if (!isExecuted) {
+        status_emoji = "⏳";
+        status_text = "Order pending";
+        needs_attention = false; // Pending orders don't need attention
+      } else if (alerts.some(a => a.type === "STOP_HIT")) {
         status_emoji = "🔴";
         status_text = "Stop hit - Exit";
         needs_attention = true;
@@ -71,8 +78,8 @@ router.get("/morning-glance", auth, async (req, res) => {
 
       return {
         symbol: pos.symbol,
-        pnl_pct: pnl.unrealized_pnl_pct,
-        pnl_inr: pnl.unrealized_pnl,
+        pnl_pct: isExecuted ? pnl.unrealized_pnl_pct : 0,
+        pnl_inr: isExecuted ? pnl.unrealized_pnl : 0,
         current_price,
         status_emoji,
         status_text,
@@ -82,44 +89,13 @@ router.get("/morning-glance", auth, async (req, res) => {
       };
     }));
 
-    // 3. Get watchlist alerts
-    const watchlist = await WeeklyWatchlist.getCurrentWeek(user_id);
+    // 3. Get user's personal watchlist alerts
+    const user = await User.findById(user_id);
+    const userWatchlist = user?.watchlist || [];
     const watchlistAlerts = [];
 
-    if (watchlist) {
-      for (const stock of watchlist.stocks) {
-        if (stock.status !== "WATCHING" && stock.status !== "APPROACHING") continue;
-
-        const priceDoc = await LatestPrice.findOne({ instrument_key: stock.instrument_key });
-        const current_price = priceDoc?.last_traded_price || priceDoc?.close;
-
-        if (!current_price || !stock.entry_zone) continue;
-
-        // Check if approaching entry zone
-        const { low, high } = stock.entry_zone;
-        const distanceToZone = current_price > high
-          ? ((current_price - high) / current_price) * 100
-          : current_price < low
-            ? ((low - current_price) / current_price) * 100
-            : 0;
-
-        if (current_price >= low && current_price <= high) {
-          watchlistAlerts.push({
-            symbol: stock.symbol,
-            message: `IN entry zone ₹${low}-${high}`,
-            type: "TRIGGERED",
-            urgency: "high"
-          });
-        } else if (distanceToZone <= 2) {
-          watchlistAlerts.push({
-            symbol: stock.symbol,
-            message: `${distanceToZone.toFixed(1)}% from entry zone`,
-            type: "APPROACHING",
-            urgency: "medium"
-          });
-        }
-      }
-    }
+    // For now, just show watchlist stocks count - no entry zone alerts for user watchlist
+    // User watchlist doesn't have entry_zone data like global WeeklyWatchlist
 
     // 4. Calculate overall status (only executed positions count towards P&L)
     const executedPositions = positionSummaries.filter(p => p.execution_status === "EXECUTED");
@@ -147,11 +123,11 @@ router.get("/morning-glance", auth, async (req, res) => {
           day: 'numeric'
         }),
 
-        // Positions summary
+        // Positions summary (only executed positions)
         positions: {
-          count: positionSummaries.length,
+          count: executedPositions.length,
           total_pnl_inr: round2(totalPnl),
-          items: positionSummaries
+          items: executedPositions
         },
 
         // Watchlist alerts
@@ -163,9 +139,9 @@ router.get("/morning-glance", auth, async (req, res) => {
 
         // Quick stats
         stats: {
-          open_positions: positionSummaries.length,
-          positions_in_profit: positionSummaries.filter(p => p.pnl_pct > 0).length,
-          watchlist_stocks: watchlist?.stocks?.length || 0,
+          open_positions: executedPositions.length,
+          positions_in_profit: executedPositions.filter(p => p.pnl_pct > 0).length,
+          watchlist_stocks: userWatchlist.length,
           alerts_count: watchlistAlerts.length
         }
       }

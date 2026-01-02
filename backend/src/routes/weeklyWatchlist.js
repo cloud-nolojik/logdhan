@@ -3,6 +3,7 @@ import WeeklyWatchlist from "../models/weeklyWatchlist.js";
 import LatestPrice from "../models/latestPrice.js";
 import { auth } from "../middleware/auth.js";
 import { calculateSetupScore, getEntryZone, checkEntryZoneProximity } from "../engine/index.js";
+import { getCurrentPrice } from "../utils/stockDb.js";
 
 const router = express.Router();
 
@@ -22,10 +23,22 @@ router.get("/", auth, async (req, res) => {
       });
     }
 
-    // Enrich with current prices
+    // Enrich with current prices (real-time from Upstox API)
     const enrichedStocks = await Promise.all(watchlist.stocks.map(async (stock) => {
-      const priceDoc = await LatestPrice.findOne({ instrument_key: stock.instrument_key });
-      const currentPrice = priceDoc?.last_traded_price || priceDoc?.close;
+      let currentPrice = null;
+
+      try {
+        // Try real-time price first
+        currentPrice = await getCurrentPrice(stock.instrument_key);
+      } catch (priceError) {
+        console.warn(`Failed to get real-time price for ${stock.symbol}:`, priceError.message);
+      }
+
+      // Fallback to cached price if real-time fails
+      if (!currentPrice) {
+        const priceDoc = await LatestPrice.findOne({ instrument_key: stock.instrument_key });
+        currentPrice = priceDoc?.last_traded_price || priceDoc?.close;
+      }
 
       let zoneStatus = null;
       if (currentPrice && stock.entry_zone) {
