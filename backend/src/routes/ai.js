@@ -359,7 +359,74 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       });
     }
 
-    // Validate required fields exist for completed analysis
+    // Handle intraday analysis separately (different schema)
+    if (analysis_type === 'intraday') {
+      const analysis = anyAnalysis;
+
+      console.log(`\n========== [INTRADAY BY-INSTRUMENT] DEBUG ==========`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Found analysis for: ${instrumentKey}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] analysis._id: ${analysis._id}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] analysis.stock_symbol: ${analysis.stock_symbol}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] analysis.status: ${analysis.status}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data keys: ${Object.keys(analysis.analysis_data || {}).join(', ')}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data.symbol: ${analysis.analysis_data?.symbol}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data.analysis_type: ${analysis.analysis_data?.analysis_type}`);
+
+      // Ensure required fields exist for intraday analysis
+      const analysisData = analysis.analysis_data || {};
+
+      // Add symbol and analysis_type to top level if missing (for old cached data)
+      if (!analysisData.symbol) {
+        console.log(`[INTRADAY BY-INSTRUMENT] FIXING: Adding missing symbol from stock_symbol`);
+        analysisData.symbol = analysis.stock_symbol;
+      }
+      if (!analysisData.analysis_type) {
+        console.log(`[INTRADAY BY-INSTRUMENT] FIXING: Adding missing analysis_type`);
+        analysisData.analysis_type = 'intraday';
+      }
+      if (!analysisData.generated_at_ist) {
+        console.log(`[INTRADAY BY-INSTRUMENT] FIXING: Adding missing generated_at_ist`);
+        analysisData.generated_at_ist = analysis.created_at?.toISOString() || new Date().toISOString();
+      }
+
+      // For intraday, map intraday sentiment to overall_sentiment if missing
+      if (!analysisData.overall_sentiment && analysisData.intraday?.aggregate_sentiment) {
+        console.log(`[INTRADAY BY-INSTRUMENT] FIXING: Adding missing overall_sentiment from intraday`);
+        analysisData.overall_sentiment = analysisData.intraday.aggregate_sentiment;
+      }
+
+      console.log(`[INTRADAY BY-INSTRUMENT] Final analysisData.symbol: ${analysisData.symbol}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Final analysisData.analysis_type: ${analysisData.analysis_type}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Final analysisData keys: ${Object.keys(analysisData).join(', ')}`);
+
+      const responsePayload = {
+        success: true,
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: 'intraday',
+          current_price: analysis.current_price,
+          analysis_data: analysisData,
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          created_at: analysis.created_at
+        },
+        cached: true,
+        analysis_id: analysis._id.toString(),
+        error: null,
+        message: null
+      };
+
+      console.log(`[INTRADAY BY-INSTRUMENT] Response analysis_data.symbol: ${responsePayload.data.analysis_data.symbol}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Response analysis_data.analysis_type: ${responsePayload.data.analysis_data.analysis_type}`);
+      console.log(`========== [INTRADAY BY-INSTRUMENT] END ==========\n`);
+
+      return res.json(responsePayload);
+    }
+
+    // Validate required fields exist for completed SWING analysis
     if (!anyAnalysis.analysis_data?.market_summary?.last ||
       !anyAnalysis.analysis_data?.market_summary?.trend ||
       !anyAnalysis.analysis_data?.market_summary?.volatility ||

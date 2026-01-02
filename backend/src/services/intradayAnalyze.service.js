@@ -490,11 +490,13 @@ class IntradayAnalyzeService {
         estimated_time_remaining: 0
       },
       // Store intraday-specific data in analysis_data
-      // Also include overall_sentiment (required field) mapped from intraday data
+      // Include required fields at top level for Kotlin model compatibility
       analysis_data: {
         schema_version: '1.0-intraday',
+        symbol: symbol,  // Required by Kotlin AnalysisData model
         analysis_type: 'intraday',
         overall_sentiment: overallSentiment,  // Required field - map from intraday sentiment
+        generated_at_ist: new Date().toISOString(),  // Required by Kotlin model
         intraday: analysisResult  // Store full intraday result
       }
     });
