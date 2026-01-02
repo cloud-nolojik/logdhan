@@ -15,6 +15,7 @@ import Stock from '../models/stock.js';
 import DailyNewsStock from '../models/dailyNewsStock.js';
 import SentimentCache from '../models/sentimentCache.js';
 import MarketSentiment from '../models/marketSentiment.js';
+import ApiUsage from '../models/apiUsage.js';
 import OpenAI from 'openai';
 
 const SCRAPE_VERSION = 'v2-web-search';
@@ -93,9 +94,10 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
  * Analyze headlines sentiment using AI (batch per stock)
  * @param {string} symbol - Stock symbol
  * @param {{ text: string, hash: string }[]} headlines - Headlines to analyze
+ * @param {string} scrapeRunId - UUID for this scrape run
  * @returns {Promise<{ sentiment: string, impact: string, reason: string }[]>}
  */
-async function analyzeHeadlinesSentiment(symbol, headlines) {
+async function analyzeHeadlinesSentiment(symbol, headlines, scrapeRunId = null) {
   if (!headlines || headlines.length === 0) return [];
 
   // Check cache first
@@ -124,6 +126,9 @@ async function analyzeHeadlinesSentiment(symbol, headlines) {
   }
 
   // Analyze uncached headlines via AI
+  const startTime = Date.now();
+  const requestId = uuidv4();
+
   try {
     console.log(`[NewsSearch] Analyzing ${uncached.length} uncached headlines for ${symbol}`);
 
@@ -155,6 +160,31 @@ Impact guide:
       response_format: { type: 'json_object' },
       max_tokens: 1000
     });
+
+    const responseTime = Date.now() - startTime;
+    const usage = response.usage || {};
+
+    // Log API usage
+    await ApiUsage.logUsage({
+      provider: 'OPENAI',
+      model: 'gpt-4o-mini',
+      feature: 'HEADLINE_SENTIMENT',
+      tokens: {
+        input: usage.prompt_tokens || 0,
+        output: usage.completion_tokens || 0
+      },
+      request_id: requestId,
+      scrape_run_id: scrapeRunId,
+      response_time_ms: responseTime,
+      success: true,
+      context: {
+        symbol: symbol,
+        headlines_count: uncached.length,
+        description: `Sentiment analysis for ${symbol} headlines`
+      }
+    });
+
+    console.log(`[NewsSearch] Sentiment analysis for ${symbol} completed (${responseTime}ms, tokens: ${usage.prompt_tokens || 0}+${usage.completion_tokens || 0})`);
 
     const parsed = JSON.parse(response.choices[0].message.content);
     const items = parsed.items || [];
@@ -191,6 +221,26 @@ Impact guide:
 
     return results;
   } catch (error) {
+    const responseTime = Date.now() - startTime;
+
+    // Log failed API usage
+    await ApiUsage.logUsage({
+      provider: 'OPENAI',
+      model: 'gpt-4o-mini',
+      feature: 'HEADLINE_SENTIMENT',
+      tokens: { input: 0, output: 0 },
+      request_id: requestId,
+      scrape_run_id: scrapeRunId,
+      response_time_ms: responseTime,
+      success: false,
+      error_message: error.message,
+      context: {
+        symbol: symbol,
+        headlines_count: uncached.length,
+        description: `Failed sentiment analysis for ${symbol}`
+      }
+    });
+
     console.error(`[NewsSearch] AI sentiment analysis error for ${symbol}:`, error.message);
 
     // Return uncached without sentiment (will be analyzed later)
@@ -208,9 +258,13 @@ Impact guide:
 
 /**
  * Fetch Indian stock market news using OpenAI web search
+ * @param {string} scrapeRunId - UUID for this scrape run
  * @returns {Promise<{ stocks: Object, metadata: object }>}
  */
-async function fetchStockNewsWithWebSearch() {
+async function fetchStockNewsWithWebSearch(scrapeRunId = null) {
+  const startTime = Date.now();
+  const requestId = uuidv4();
+
   try {
     console.log('[NewsSearch] Fetching Indian stock market news via web search...');
 
@@ -260,10 +314,31 @@ Rules:
       input: searchPrompt
     });
 
+    const responseTime = Date.now() - startTime;
+    const usage = response.usage || {};
+
+    // Log API usage
+    await ApiUsage.logUsage({
+      provider: 'OPENAI',
+      model: 'gpt-4o',
+      feature: 'DAILY_NEWS_STOCKS',
+      tokens: {
+        input: usage.input_tokens || 0,
+        output: usage.output_tokens || 0
+      },
+      request_id: requestId,
+      scrape_run_id: scrapeRunId,
+      response_time_ms: responseTime,
+      success: true,
+      context: {
+        description: 'Daily stock news web search'
+      }
+    });
+
     // Extract the text response
     const outputText = response.output_text || '';
 
-    console.log('[NewsSearch] Web search completed, parsing results...');
+    console.log(`[NewsSearch] Web search completed (${responseTime}ms, tokens: ${usage.input_tokens || 0}+${usage.output_tokens || 0}), parsing results...`);
 
     // Try to extract JSON from the response
     let stocksData = {};
@@ -313,6 +388,24 @@ Rules:
     };
 
   } catch (error) {
+    const responseTime = Date.now() - startTime;
+
+    // Log failed API usage
+    await ApiUsage.logUsage({
+      provider: 'OPENAI',
+      model: 'gpt-4o',
+      feature: 'DAILY_NEWS_STOCKS',
+      tokens: { input: 0, output: 0 },
+      request_id: requestId,
+      scrape_run_id: scrapeRunId,
+      response_time_ms: responseTime,
+      success: false,
+      error_message: error.message,
+      context: {
+        description: 'Failed daily stock news web search'
+      }
+    });
+
     console.error('[NewsSearch] Web search error:', error.message);
     throw error;
   }
@@ -372,6 +465,9 @@ function extractStocksFromText(text) {
  * @returns {Promise<Object>} Market sentiment data
  */
 async function fetchMarketSentiment(scrapeRunId) {
+  const startTime = Date.now();
+  const requestId = uuidv4();
+
   try {
     console.log('[NewsSearch] Fetching Nifty 50 market sentiment...');
 
@@ -432,9 +528,29 @@ Be specific about the sentiment - BULLISH means expecting 0.5%+ gains, BEARISH m
       input: searchPrompt
     });
 
+    const responseTime = Date.now() - startTime;
     const outputText = response.output_text || '';
 
-    console.log('[NewsSearch] Market sentiment search completed, parsing...');
+    // Log API usage
+    const usage = response.usage || {};
+    await ApiUsage.logUsage({
+      provider: 'OPENAI',
+      model: 'gpt-4o',
+      feature: 'MARKET_SENTIMENT',
+      tokens: {
+        input: usage.input_tokens || 0,
+        output: usage.output_tokens || 0
+      },
+      request_id: requestId,
+      scrape_run_id: scrapeRunId,
+      response_time_ms: responseTime,
+      success: true,
+      context: {
+        description: 'Nifty 50 market sentiment web search'
+      }
+    });
+
+    console.log(`[NewsSearch] Market sentiment search completed (${responseTime}ms, tokens: ${usage.input_tokens || 0}+${usage.output_tokens || 0})`);
 
     // Try to extract JSON
     let sentimentData = null;
@@ -513,7 +629,7 @@ export async function scrapeAndStoreDailyNewsStocks() {
     const marketSentiment = await fetchMarketSentiment(scrapeRunId);
 
     // Fetch news via web search
-    const { stocks: scrapedStocks, metadata } = await fetchStockNewsWithWebSearch();
+    const { stocks: scrapedStocks, metadata } = await fetchStockNewsWithWebSearch(scrapeRunId);
 
     if (Object.keys(scrapedStocks).length === 0) {
       console.warn('[NewsSearch] No stocks found in search, checking for fallback...');
@@ -553,7 +669,7 @@ export async function scrapeAndStoreDailyNewsStocks() {
       }));
 
       // Analyze sentiment
-      const analyzedHeadlines = await analyzeHeadlinesSentiment(trading_symbol, headlinesWithHash);
+      const analyzedHeadlines = await analyzeHeadlinesSentiment(trading_symbol, headlinesWithHash, scrapeRunId);
 
       // Calculate aggregates
       const { sentiment, impact } = DailyNewsStock.calculateAggregateSentiment(analyzedHeadlines);
