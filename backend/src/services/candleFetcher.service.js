@@ -33,6 +33,18 @@ class CandleFetcherService {
    */
   async getCandleDataForAnalysis(instrumentKey, term, skipIntraday = false, options = {}) {
     const { cutoffDate } = options;
+
+    // ========== DEBUG: DATA FETCH TRACKING ==========
+    const fetchStartTime = new Date();
+    const istTime = new Date(fetchStartTime.getTime() + (5.5 * 60 * 60 * 1000)); // Convert to IST
+    console.log(`\n🔍 ========== CANDLE DATA FETCH DEBUG ==========`);
+    console.log(`📅 Fetch requested at: ${istTime.toISOString().replace('T', ' ').slice(0, 19)} IST`);
+    console.log(`📊 Instrument: ${instrumentKey}`);
+    console.log(`📈 Term: ${term}`);
+    console.log(`⏭️ Skip Intraday: ${skipIntraday}`);
+    console.log(`📅 Cutoff Date: ${cutoffDate ? cutoffDate.toISOString() : 'NONE (using latest data)'}`);
+    console.log(`================================================\n`);
+
     // Check if market is currently open - if yes, exclude incomplete intraday candles
     try {
       // Step 1: Try to get pre-fetched data from database
@@ -49,9 +61,37 @@ class CandleFetcherService {
       }
 
       if (preFetchedResult.success && preFetchedResult.data?.length > 0) {
+        // ========== DEBUG: DATABASE DATA FOUND ==========
+        console.log(`\n💾 ========== DATABASE DATA FOUND ==========`);
+        preFetchedResult.data.forEach((record) => {
+          const lastBarTime = record.data_quality?.last_bar_time;
+          const lastBarIST = lastBarTime ? new Date(new Date(lastBarTime).getTime() + (5.5 * 60 * 60 * 1000)).toISOString().replace('T', ' ').slice(0, 19) : 'N/A';
+          const lastCandle = record.candle_data?.[record.candle_data.length - 1];
+          const lastCandleTime = lastCandle?.timestamp || lastCandle?.[0];
+          const lastCandleIST = lastCandleTime ? new Date(new Date(lastCandleTime).getTime() + (5.5 * 60 * 60 * 1000)).toISOString().replace('T', ' ').slice(0, 19) : 'N/A';
+          console.log(`📊 ${record.timeframe}: ${record.candle_data?.length || 0} candles`);
+          console.log(`   └─ Last bar time (DB metadata): ${lastBarIST} IST`);
+          console.log(`   └─ Last candle timestamp: ${lastCandleIST} IST`);
+          console.log(`   └─ Last candle OHLCV: O=${lastCandle?.open} H=${lastCandle?.high} L=${lastCandle?.low} C=${lastCandle?.close} V=${lastCandle?.volume}`);
+        });
+        console.log(`=============================================\n`);
 
         const freshnessCheck = await this.checkDataFreshness(preFetchedResult.data);
+
+        // ========== DEBUG: FRESHNESS CHECK RESULT ==========
+        console.log(`\n🕐 ========== DATA FRESHNESS CHECK ==========`);
+        console.log(`📊 Is data fresh? ${freshnessCheck.fresh ? '✅ YES' : '❌ NO - NEEDS UPDATE'}`);
+        if (!freshnessCheck.fresh && freshnessCheck.staleTimeframes?.length > 0) {
+          console.log(`⚠️ Stale timeframes that need update:`);
+          freshnessCheck.staleTimeframes.forEach((stale) => {
+            const lastBarIST = stale.last_bar_time ? new Date(new Date(stale.last_bar_time).getTime() + (5.5 * 60 * 60 * 1000)).toISOString().replace('T', ' ').slice(0, 19) : 'N/A';
+            console.log(`   └─ ${stale.timeframe}: Last bar at ${lastBarIST} IST (${stale.time_diff_hours || 0}h behind)`);
+          });
+        }
+        console.log(`=============================================\n`);
+
         if (!freshnessCheck.fresh) {
+          console.log(`\n🔄 ========== FETCHING INCREMENTAL UPDATE FROM API ==========`);
           const incrementalResult = await incrementalUpdaterService.fetchIncrementalDataAndMerge(
             instrumentKey,
             preFetchedResult.data,
@@ -60,11 +100,24 @@ class CandleFetcherService {
             skipIntraday
           );
           if (incrementalResult.success) {
+            console.log(`✅ Incremental update successful!`);
             // Refresh DB data
             const refreshed = await dailyDataPrefetchService.constructor.getDataForAnalysis(instrumentKey, term);
             preFetchedResult.data = refreshed.data;
-          } else {
 
+            // ========== DEBUG: UPDATED DATA ==========
+            console.log(`\n📊 ========== DATA AFTER INCREMENTAL UPDATE ==========`);
+            refreshed.data.forEach((record) => {
+              const lastCandle = record.candle_data?.[record.candle_data.length - 1];
+              const lastCandleTime = lastCandle?.timestamp || lastCandle?.[0];
+              const lastCandleIST = lastCandleTime ? new Date(new Date(lastCandleTime).getTime() + (5.5 * 60 * 60 * 1000)).toISOString().replace('T', ' ').slice(0, 19) : 'N/A';
+              console.log(`📊 ${record.timeframe}: Now has ${record.candle_data?.length || 0} candles`);
+              console.log(`   └─ Latest candle: ${lastCandleIST} IST`);
+              console.log(`   └─ Latest OHLCV: O=${lastCandle?.open} H=${lastCandle?.high} L=${lastCandle?.low} C=${lastCandle?.close}`);
+            });
+            console.log(`======================================================\n`);
+          } else {
+            console.log(`❌ Incremental update failed - using stale DB data`);
           }
         }
         const sufficientData = this.checkDataSufficiency(preFetchedResult.data);
@@ -76,6 +129,22 @@ class CandleFetcherService {
           if (cutoffDate) {
             console.log(`📅 [CANDLE FETCHER] Applied cutoff date: ${cutoffDate.toISOString()}`);
           }
+
+          // ========== DEBUG: FINAL DATA SUMMARY ==========
+          const fetchEndTime = new Date();
+          const fetchDuration = fetchEndTime - fetchStartTime;
+          console.log(`\n✅ ========== FINAL DATA FOR ANALYSIS ==========`);
+          console.log(`📦 Data Source: DATABASE${!freshnessCheck.fresh ? ' + INCREMENTAL API UPDATE' : ''}`);
+          console.log(`⏱️ Total fetch time: ${fetchDuration}ms`);
+          Object.entries(formattedData).forEach(([timeframe, candles]) => {
+            if (candles && candles.length > 0) {
+              const lastCandle = candles[candles.length - 1];
+              const lastCandleTime = lastCandle?.timestamp || lastCandle?.[0];
+              const lastCandleIST = lastCandleTime ? new Date(new Date(lastCandleTime).getTime() + (5.5 * 60 * 60 * 1000)).toISOString().replace('T', ' ').slice(0, 19) : 'N/A';
+              console.log(`📊 ${timeframe}: ${candles.length} candles → LATEST: ${lastCandleIST} IST (Close: ₹${lastCandle?.close})`);
+            }
+          });
+          console.log(`================================================\n`);
 
           return {
             success: true,
@@ -96,6 +165,10 @@ class CandleFetcherService {
 
       } else
       {
+        // ========== DEBUG: NO DATABASE DATA - FETCHING FROM API ==========
+        console.log(`\n⚠️ ========== NO DATABASE DATA FOUND ==========`);
+        console.log(`🌐 Fetching fresh data from Upstox API...`);
+        console.log(`================================================\n`);
 
         const apiResult = await this.fetchFromAPI(instrumentKey, term, skipIntraday);
 
@@ -121,6 +194,22 @@ class CandleFetcherService {
           }
           console.log(`📅 [CANDLE FETCHER] Applied cutoff date to API data: ${cutoffDate.toISOString()}`);
         }
+
+        // ========== DEBUG: API DATA SUMMARY ==========
+        const fetchEndTime = new Date();
+        const fetchDuration = fetchEndTime - fetchStartTime;
+        console.log(`\n✅ ========== FINAL DATA FOR ANALYSIS (FROM API) ==========`);
+        console.log(`📦 Data Source: UPSTOX API (fresh fetch)`);
+        console.log(`⏱️ Total fetch time: ${fetchDuration}ms`);
+        Object.entries(filteredData).forEach(([timeframe, candles]) => {
+          if (candles && candles.length > 0) {
+            const lastCandle = candles[candles.length - 1];
+            const lastCandleTime = lastCandle?.timestamp || lastCandle?.[0];
+            const lastCandleIST = lastCandleTime ? new Date(new Date(lastCandleTime).getTime() + (5.5 * 60 * 60 * 1000)).toISOString().replace('T', ' ').slice(0, 19) : 'N/A';
+            console.log(`📊 ${timeframe}: ${candles.length} candles → LATEST: ${lastCandleIST} IST (Close: ₹${lastCandle?.close})`);
+          }
+        });
+        console.log(`===========================================================\n`);
 
         return {
           success: true,

@@ -486,6 +486,18 @@ class AIReviewService {
       } catch (mhError) {
         console.error('❌ Error checking market hours:', mhError.message);
       }
+
+      // ========== DEBUG: AI ANALYSIS START ==========
+      const analysisStartTime = new Date();
+      const analysisStartIST = new Date(analysisStartTime.getTime() + (5.5 * 60 * 60 * 1000));
+      console.log(`\n🤖 ========== AI ANALYSIS STARTED ==========`);
+      console.log(`📅 Analysis started at: ${analysisStartIST.toISOString().replace('T', ' ').slice(0, 19)} IST`);
+      console.log(`📊 Stock: ${tradeData.stock} (${tradeData.instrument_key})`);
+      console.log(`📈 Term: ${tradeData.term}`);
+      console.log(`🏪 Market Open: ${isMarketOpen ? 'YES ✅' : 'NO ❌'}`);
+      console.log(`⏭️ Skip Intraday Data: ${!isMarketOpen ? 'YES (market closed)' : 'NO (fetching live data)'}`);
+      console.log(`=============================================\n`);
+
       const [candleResult, newsData] = await Promise.all([
       candleFetcherService.getCandleDataForAnalysis(tradeData.instrument_key, tradeData.term, !isMarketOpen),
       this.fetchNewsData(tradeData.stock).catch((e) => ({ error: e?.message || String(e) }))]
@@ -493,6 +505,23 @@ class AIReviewService {
 
       // Extract clean candle data from candleFetcherService result
       const candleSets = candleResult.success ? candleResult.data : {};
+
+      // ========== DEBUG: DATA RECEIVED FOR ANALYSIS ==========
+      console.log(`\n📥 ========== DATA RECEIVED FOR AI ANALYSIS ==========`);
+      console.log(`📦 Data Source: ${candleResult.source || 'unknown'}`);
+      console.log(`✅ Fetch Success: ${candleResult.success}`);
+      console.log(`📅 Cutoff Applied: ${candleResult.cutoffApplied ? 'YES (using historical data only)' : 'NO (using latest data)'}`);
+      Object.entries(candleSets).forEach(([timeframe, candles]) => {
+        if (candles && candles.length > 0) {
+          const lastCandle = candles[candles.length - 1];
+          const lastCandleTime = lastCandle?.timestamp || lastCandle?.[0];
+          const lastCandleIST = lastCandleTime ? new Date(new Date(lastCandleTime).getTime() + (5.5 * 60 * 60 * 1000)).toISOString().replace('T', ' ').slice(0, 19) : 'N/A';
+          console.log(`📊 ${timeframe}: ${candles.length} candles`);
+          console.log(`   └─ LATEST CANDLE: ${lastCandleIST} IST`);
+          console.log(`   └─ OHLCV: O=₹${lastCandle?.open} H=₹${lastCandle?.high} L=₹${lastCandle?.low} C=₹${lastCandle?.close} V=${lastCandle?.volume}`);
+        }
+      });
+      console.log(`======================================================\n`);
 
       const agentOut = await this.routeToTradingAgent(tradeData, candleSets, newsData);
       const sentiment = await this.analyzeSentiment(newsData, tradeData.term, tradeData.logId);
