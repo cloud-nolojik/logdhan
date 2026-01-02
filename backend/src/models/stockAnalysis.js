@@ -112,6 +112,70 @@ const strategyV14Schema = new mongoose.Schema(
   { _id: false, strict: 'throw' }
 );
 
+// Intraday-specific schema for news-based trading levels
+const intradayDataSchema = new mongoose.Schema(
+  {
+    schema_version: String,
+    analysis_type: {
+      type: String,
+      enum: ['intraday'],
+      default: 'intraday'
+    },
+    symbol: String,
+    instrument_key: String,
+    company_name: String,
+    news_headlines: [{
+      headline: String,
+      category: String,
+      sentiment: String,
+      impact: String,
+      sentiment_reason: String
+    }],
+    aggregate_sentiment: {
+      type: String,
+      enum: ['BULLISH', 'BEARISH', 'NEUTRAL']
+    },
+    aggregate_impact: {
+      type: String,
+      enum: ['HIGH', 'MEDIUM', 'LOW']
+    },
+    confidence_score: Number,
+    prev_day: {
+      open: Number,
+      high: Number,
+      low: Number,
+      close: Number
+    },
+    atr_14: Number,
+    adjusted_atr: Number,
+    atr_multiplier: Number,
+    direction: {
+      type: String,
+      enum: ['BUY', 'SELL', 'NEUTRAL', 'AVOID']
+    },
+    entry: Number,
+    entry_zone: {
+      low: Number,
+      high: Number
+    },
+    stop_loss: Number,
+    target_1: Number,
+    target_2: Number,
+    risk_reward: String,
+    avoid_reason: String,
+    gap_info: mongoose.Schema.Types.Mixed,
+    pivots: {
+      P: Number,
+      R1: Number,
+      R2: Number,
+      S1: Number,
+      S2: Number
+    },
+    reasoning: String
+  },
+  { _id: false, strict: false }
+);
+
 const analysisDataV14Schema = new mongoose.Schema(
   {
     schema_version: {
@@ -123,6 +187,8 @@ const analysisDataV14Schema = new mongoose.Schema(
       type: String,
       enum: ['swing', 'intraday']
     },
+    // Intraday-specific data (only present for intraday analysis)
+    intraday: { type: intradayDataSchema, default: null },
     generated_at_ist: String,
     insufficientData: {
       type: Boolean,

@@ -470,6 +470,9 @@ class IntradayAnalyzeService {
   async saveAnalysis({ instrumentKey, symbol, companyName, currentPrice, analysisResult, validUntil }) {
     console.log(`[INTRADAY] DB: Creating StockAnalysis document...`);
 
+    // Map intraday sentiment to overall_sentiment format
+    const overallSentiment = analysisResult.aggregate_sentiment || 'NEUTRAL';
+
     // Create new StockAnalysis document
     const analysis = new StockAnalysis({
       instrument_key: instrumentKey,
@@ -487,8 +490,11 @@ class IntradayAnalyzeService {
         estimated_time_remaining: 0
       },
       // Store intraday-specific data in analysis_data
+      // Also include overall_sentiment (required field) mapped from intraday data
       analysis_data: {
-        schema_version: analysisResult.schema_version,
+        schema_version: '1.0-intraday',
+        analysis_type: 'intraday',
+        overall_sentiment: overallSentiment,  // Required field - map from intraday sentiment
         intraday: analysisResult  // Store full intraday result
       }
     });
