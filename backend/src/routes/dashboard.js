@@ -23,6 +23,9 @@ function getGreeting() {
 router.get("/morning-glance", auth, async (req, res) => {
   try {
     const user_id = req.user._id;
+    console.log("📊 [MORNING GLANCE] User ID:", user_id);
+    console.log("📊 [MORNING GLANCE] User watchlist length:", req.user?.watchlist?.length || 0);
+    console.log("📊 [MORNING GLANCE] User watchlist:", JSON.stringify(req.user?.watchlist?.map(w => w.trading_symbol) || []));
 
     // 1. Get open positions
     const positions = await UserPosition.findAllOpenPositions(user_id);
