@@ -208,19 +208,37 @@ class IntradayAnalyzeService {
       console.log(`[INTRADAY]   - First raw candle: ${JSON.stringify(rawCandles[0])}`);
       console.log(`[INTRADAY]   - Last raw candle: ${JSON.stringify(rawCandles[rawCandles.length - 1])}`);
 
-      // Transform raw candles from Upstox format [timestamp, open, high, low, close, volume, oi]
-      // to object format for ATR calculation
+      // Transform raw candles - handle both array format and object format
+      // Array format: [timestamp, open, high, low, close, volume, oi]
+      // Object format: { timestamp, open, high, low, close, volume }
       console.log(`\n[INTRADAY] Step 4.3: Transforming candles...`);
+      const isArrayFormat = Array.isArray(rawCandles[0]);
+      console.log(`[INTRADAY]   - Candle format detected: ${isArrayFormat ? 'ARRAY' : 'OBJECT'}`);
+
       const candleData = rawCandles
         .map((candle, idx) => {
-          const obj = {
-            timestamp: candle[0],
-            open: candle[1],
-            high: candle[2],
-            low: candle[3],
-            close: candle[4],
-            volume: candle[5]
-          };
+          let obj;
+          if (isArrayFormat) {
+            // Array format from some APIs
+            obj = {
+              timestamp: candle[0],
+              open: candle[1],
+              high: candle[2],
+              low: candle[3],
+              close: candle[4],
+              volume: candle[5]
+            };
+          } else {
+            // Object format (already has named properties)
+            obj = {
+              timestamp: candle.timestamp,
+              open: candle.open,
+              high: candle.high,
+              low: candle.low,
+              close: candle.close,
+              volume: candle.volume
+            };
+          }
           // Log first 3 transformations for debugging
           if (idx < 3) {
             console.log(`[INTRADAY]   - Candle ${idx}: ${JSON.stringify(obj)}`);
