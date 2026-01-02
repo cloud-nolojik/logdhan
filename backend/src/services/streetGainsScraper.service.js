@@ -18,7 +18,7 @@ import MarketSentiment from '../models/marketSentiment.js';
 import ApiUsage from '../models/apiUsage.js';
 import OpenAI from 'openai';
 
-const SCRAPE_VERSION = 'v2-web-search';
+const SCRAPE_VERSION = 'v3-web-search';
 
 // News sources to search (Indian stock market)
 const NEWS_DOMAINS = [
@@ -36,16 +36,18 @@ const openai = new OpenAI({
 });
 
 /**
- * Map raw symbol to Upstox instrument_key
- * @param {string} rawSymbol - Symbol from news
+ * Map symbol to Upstox instrument_key
+ * OpenAI now returns exact NSE trading symbols, so we do a direct lookup
+ * with fallback strategies for edge cases
+ * @param {string} rawSymbol - Symbol from OpenAI (should be exact NSE symbol)
  * @returns {Promise<{ instrument_key: string|null, trading_symbol: string, company_name: string|null }>}
  */
 async function mapSymbolToInstrumentKey(rawSymbol) {
   const cleanSymbol = rawSymbol.trim().toUpperCase();
 
   try {
-    // Lookup in Stock collection (NSE equity first)
-    const stock = await Stock.findOne({
+    // 1. Direct match on NSE trading_symbol (primary strategy)
+    let stock = await Stock.findOne({
       trading_symbol: cleanSymbol,
       segment: 'NSE_EQ',
       is_active: true
@@ -59,22 +61,63 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
       };
     }
 
-    // Fallback: Try BSE
-    const bseStock = await Stock.findOne({
+    // 2. Try without underscores (fallback for any edge cases)
+    const normalizedSymbol = cleanSymbol.replace(/_/g, '');
+    if (normalizedSymbol !== cleanSymbol) {
+      stock = await Stock.findOne({
+        trading_symbol: normalizedSymbol,
+        segment: 'NSE_EQ',
+        is_active: true
+      }).lean();
+
+      if (stock) {
+        console.log(`[NewsSearch] Mapped ${rawSymbol} -> ${stock.trading_symbol} (normalized)`);
+        return {
+          instrument_key: stock.instrument_key,
+          trading_symbol: stock.trading_symbol,
+          company_name: stock.name
+        };
+      }
+    }
+
+    // 3. Regex search on company name (fallback for any unmapped symbols)
+    const nameParts = cleanSymbol.split(/[_\s-]/).filter(p => p.length > 2);
+    if (nameParts.length > 0) {
+      const regexPattern = '^' + nameParts.join('.*');
+      stock = await Stock.findOne({
+        name: { $regex: regexPattern, $options: 'i' },
+        segment: 'NSE_EQ',
+        is_active: true
+      }).lean();
+
+      if (stock) {
+        console.log(`[NewsSearch] Mapped ${rawSymbol} -> ${stock.trading_symbol} (name regex)`);
+        return {
+          instrument_key: stock.instrument_key,
+          trading_symbol: stock.trading_symbol,
+          company_name: stock.name
+        };
+      }
+    }
+
+    // 4. Fallback: Try BSE
+    stock = await Stock.findOne({
       trading_symbol: cleanSymbol,
       segment: 'BSE_EQ',
       is_active: true
     }).lean();
 
-    if (bseStock) {
+    if (stock) {
+      console.log(`[NewsSearch] Mapped ${rawSymbol} -> ${stock.trading_symbol} (BSE)`);
       return {
-        instrument_key: bseStock.instrument_key,
-        trading_symbol: bseStock.trading_symbol,
-        company_name: bseStock.name
+        instrument_key: stock.instrument_key,
+        trading_symbol: stock.trading_symbol,
+        company_name: stock.name
       };
     }
 
     // Not found
+    console.warn(`[NewsSearch] Could not map symbol: ${rawSymbol}`);
     return {
       instrument_key: null,
       trading_symbol: cleanSymbol,
@@ -276,12 +319,12 @@ async function fetchStockNewsWithWebSearch(scrapeRunId = null) {
 
     const searchPrompt = `Search for today's (${dateStr}) Indian stock market pre-market news and stocks to watch.
 
-Find news about specific NSE/BSE listed stocks that have important announcements, results, SEBI orders, management changes, order wins, or significant corporate actions.
+Find news about specific NSE listed stocks that have important announcements, results, SEBI orders, management changes, order wins, or significant corporate actions.
 
 Return a JSON object with this exact structure:
 {
   "stocks": {
-    "SYMBOL": [
+    "NSE_TRADING_SYMBOL": [
       {
         "text": "Full headline text mentioning the stock",
         "category": "PRE_MARKET_NEWS" or "STOCKS_TO_WATCH"
@@ -292,9 +335,42 @@ Return a JSON object with this exact structure:
   "news_date": "${dateStr}"
 }
 
+CRITICAL - Use the EXACT NSE trading symbol as the key. Examples:
+- Hero MotoCorp → "HEROMOTOCO" (not HERO_MOTOCORP)
+- TVS Motor → "TVSMOTOR" (not TVS_MOTOR)
+- Bajaj Auto → "BAJAJ-AUTO" (includes hyphen)
+- Mahindra & Mahindra → "M&M" (includes ampersand)
+- State Bank of India → "SBIN"
+- Hindustan Unilever → "HINDUNILVR"
+- Larsen & Toubro → "LT"
+- Tata Consultancy → "TCS"
+- Infosys → "INFY"
+- HDFC Bank → "HDFCBANK"
+- ICICI Bank → "ICICIBANK"
+- Kotak Bank → "KOTAKBANK"
+- IndusInd Bank → "INDUSINDBK"
+- Bharti Airtel → "BHARTIARTL"
+- Asian Paints → "ASIANPAINT"
+- Nestle India → "NESTLEIND"
+- Titan Company → "TITAN"
+- Eicher Motors → "EICHERMOT"
+- Tech Mahindra → "TECHM"
+- Dr Reddy's → "DRREDDY"
+- Sun Pharma → "SUNPHARMA"
+- UltraTech Cement → "ULTRACEMCO"
+- Tata Consumer → "TATACONSUM"
+- Bajaj Finance → "BAJFINANCE"
+- Bajaj Finserv → "BAJAJFINSV"
+- Shriram Finance → "SHRIRAMFIN"
+- Apollo Hospitals → "APOLLOHOSP"
+- Divi's Labs → "DIVISLAB"
+- Power Grid → "POWERGRID"
+- Adani Enterprises → "ADANIENT"
+- Adani Ports → "ADANIPORTS"
+
 Rules:
-1. Only include NSE/BSE listed Indian stocks
-2. Use official trading symbols (e.g., RELIANCE, TCS, INFY, HDFCBANK)
+1. Only include NSE listed Indian stocks
+2. Use the EXACT NSE trading symbol as shown on NSE India website
 3. Each headline should be the actual news headline, not a summary
 4. Focus on actionable news that could affect stock prices today
 5. Include 10-20 stocks with the most significant news
