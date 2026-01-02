@@ -513,6 +513,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       analysis_data: analysis.analysis_data,
       status: analysis.status,
       created_at: analysis.created_at,
+      valid_until: analysis.valid_until, // 🆕 Add validity period for swing analysis
       expires_at: analysis.expires_at,
       // NEW: Monitoring flags
       can_start_monitoring: globalCanStartMonitoring,
@@ -651,6 +652,7 @@ router.get('/analysis/:analysisId/progress', authenticateToken, async (req, res)
         stock_symbol: analysis.stock_symbol,
         analysis_type: analysis.analysis_type,
         created_at: analysis.created_at,
+        valid_until: analysis.valid_until, // 🆕 Add validity period
         expires_at: analysis.expires_at,
         // Include partial results if available
         partial_data: analysis.status === 'in_progress' ? {
