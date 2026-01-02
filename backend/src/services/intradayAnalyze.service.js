@@ -16,7 +16,7 @@ import {
   buildIntradayExplanationPrompt,
   buildIntradayAnalysisResult
 } from '../prompts/intradayPrompts.js';
-import { getStockByInstrumentKey } from '../utils/stockDb.js';
+import { getExactStock } from '../utils/stockDb.js';
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -56,7 +56,7 @@ class IntradayAnalyzeService {
       // 2. Get stock info if not provided
       let stockInfo = { trading_symbol: symbol, name: null };
       if (!symbol) {
-        const stockData = await getStockByInstrumentKey(instrumentKey);
+        const stockData = await getExactStock(instrumentKey);
         if (stockData) {
           stockInfo = {
             trading_symbol: stockData.trading_symbol,
