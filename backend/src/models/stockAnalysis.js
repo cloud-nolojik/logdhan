@@ -423,6 +423,32 @@ stockAnalysisSchema.statics.findInProgressAnalysis = function (instrumentKey, an
   sort({ created_at: -1 });
 };
 
+/**
+ * Find valid intraday analysis (checks valid_until for intraday type)
+ * For intraday: only returns if valid_until is in the future
+ * For swing: returns any completed analysis
+ */
+stockAnalysisSchema.statics.findValidAnalysis = function (instrumentKey, analysisType) {
+  const now = new Date();
+
+  const query = {
+    instrument_key: instrumentKey,
+    analysis_type: analysisType,
+    status: 'completed',
+    $or: [
+      { scheduled_release_time: null },
+      { scheduled_release_time: { $lte: now } }
+    ]
+  };
+
+  // For intraday, also check valid_until
+  if (analysisType === 'intraday') {
+    query.valid_until = { $gt: now };
+  }
+
+  return this.findOne(query).sort({ created_at: -1 });
+};
+
 // Instance methods for progress tracking
 stockAnalysisSchema.methods.updateProgress = function (step, percentage, estimatedTimeRemaining = null) {
   this.progress.current_step = step;

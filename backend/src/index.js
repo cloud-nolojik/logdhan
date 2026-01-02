@@ -32,6 +32,7 @@ import agendaMonitoringService from './services/agendaMonitoringService.js'; // 
 import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // watchlist-bulk-analysis (7:30 AM Mon-Fri)
 import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM, Sun 10AM)
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
+import dailyNewsStocksJob from './services/jobs/dailyNewsStocksJob.js'; // daily-news-scrape (8:30 AM Mon-Fri)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -61,6 +62,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import weeklyWatchlistRoutes from './routes/weeklyWatchlist.js';
 import screenerRoutes from './routes/screener.js';
 import journalRoutes from './routes/journal.js';
+import dailyNewsStocksRoutes from './routes/dailyNewsStocks.js';
 
 const app = express();
 
@@ -190,6 +192,7 @@ app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/weekly-watchlist', weeklyWatchlistRoutes);
 app.use('/api/v1/screener', screenerRoutes);
 app.use('/api/v1/journal', journalRoutes);
+app.use('/api/v1/daily-news-stocks', dailyNewsStocksRoutes);
 
 // App redirect routes for WhatsApp deep links
 app.use('/app', appRedirectRoutes);
@@ -292,6 +295,17 @@ async function initializeAgendaDataPrefetchService() {
   }
 }
 
+// Initialize daily news stocks job (8:30 AM Mon-Fri IST)
+async function initializeDailyNewsStocksJob() {
+  try {
+
+    await dailyNewsStocksJob.initialize();
+
+  } catch (error) {
+    console.error('❌ Failed to initialize daily news stocks job:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -312,6 +326,7 @@ app.listen(PORT, async () => {
   await initializeAgendaScheduledBulkAnalysisService(); // watchlist-bulk-analysis (4:00 PM Mon-Fri)
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST only)
   await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
+  await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
 
 });
 
@@ -328,7 +343,8 @@ process.on('SIGINT', async () => {
       agendaMonitoringService.agenda?.stop?.(),
       agendaScheduledBulkAnalysisService.stop(),
       weekendScreeningJob.shutdown(),
-      agendaDataPrefetchService.stop()
+      agendaDataPrefetchService.stop(),
+      dailyNewsStocksJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -351,7 +367,8 @@ process.on('SIGTERM', async () => {
       agendaMonitoringService.agenda?.stop?.(),
       agendaScheduledBulkAnalysisService.stop(),
       weekendScreeningJob.shutdown(),
-      agendaDataPrefetchService.stop()
+      agendaDataPrefetchService.stop(),
+      dailyNewsStocksJob.shutdown()
     ]);
 
     // Close MongoDB connection
