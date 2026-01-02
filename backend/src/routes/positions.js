@@ -275,6 +275,8 @@ router.get("/history", auth, async (req, res) => {
         actual_entry: p.actual_entry,
         exit_price: p.exit_price,
         qty: p.qty,
+        current_sl: p.current_sl,           // Historical SL at time of close
+        current_target: p.current_target,   // Historical Target at time of close
         close_reason: p.close_reason,
         entered_at: p.entered_at,
         closed_at: p.closed_at,
