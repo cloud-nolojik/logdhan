@@ -99,6 +99,7 @@ router.get("/morning-glance", auth, async (req, res) => {
 
     // 4. Calculate overall status (only executed positions count towards P&L)
     const executedPositions = positionSummaries.filter(p => p.execution_status === "EXECUTED");
+    const pendingPositions = positionSummaries.filter(p => p.execution_status === "PENDING");
     const totalPnl = executedPositions.reduce((sum, p) => sum + p.pnl_inr, 0);
     const needsAttention = positionSummaries.filter(p => p.needs_attention).length;
 
@@ -130,6 +131,12 @@ router.get("/morning-glance", auth, async (req, res) => {
           items: executedPositions
         },
 
+        // Pending positions (not yet executed with broker)
+        pending_positions: {
+          count: pendingPositions.length,
+          items: pendingPositions
+        },
+
         // Watchlist alerts
         watchlist_alerts: watchlistAlerts,
 
@@ -140,6 +147,7 @@ router.get("/morning-glance", auth, async (req, res) => {
         // Quick stats
         stats: {
           open_positions: executedPositions.length,
+          pending_positions: pendingPositions.length,
           positions_in_profit: executedPositions.filter(p => p.pnl_pct > 0).length,
           watchlist_stocks: userWatchlist.length,
           alerts_count: watchlistAlerts.length
