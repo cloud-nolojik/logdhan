@@ -1,5 +1,6 @@
 import express from 'express';
 import aiReviewService from '../services/aiAnalyze.service.js';
+import intradayAnalyzeService from '../services/intradayAnalyze.service.js';
 import candleFetcherService from '../services/candleFetcher.service.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
@@ -117,8 +118,48 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
       console.warn(`⚠️ [PRICE CACHE] Error fetching from cache: ${error.message}`);
     }
 
-    // Return immediate response - analysis will happen in background
+    // Route to appropriate service based on analysis type
+    if (analysis_type === 'intraday') {
+      // Use intradayAnalyzeService for news-based intraday analysis
+      console.log(`[AI ROUTE] Routing to intradayAnalyzeService for ${stock_symbol}`);
 
+      const result = await intradayAnalyzeService.getOrGenerateAnalysis({
+        instrumentKey: instrument_key,
+        symbol: stock_symbol,
+        forceRefresh: forceFresh
+      });
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          error: result.error,
+          message: result.message || 'Intraday analysis not available for this stock'
+        });
+      }
+
+      // Return intraday analysis result
+      const analysis = result.analysis;
+      return res.status(200).json({
+        success: true,
+        status: 'completed',
+        message: result.from_cache ? 'Intraday plan retrieved from cache' : 'Intraday plan generated successfully',
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: 'intraday',
+          current_price: analysis.current_price,
+          analysis_data: analysis.analysis_data,
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          created_at: analysis.created_at
+        },
+        from_cache: result.from_cache
+      });
+    }
+
+    // For swing analysis - return immediate response, analysis will happen in background
     // Start analysis in background (don't await)
     aiReviewService.analyzeStock({
       instrument_key,

@@ -65,18 +65,27 @@ class IntradayAnalyzeService {
         }
       }
 
-      // 3. Get today's news for this stock
-      const today = DailyNewsStock.getISTDateAsUTC();
+      // 3. Get latest news for this stock (today or most recent)
       const newsStock = await DailyNewsStock.findOne({
-        instrument_key: instrumentKey,
-        scrape_date: today
-      });
+        instrument_key: instrumentKey
+      }).sort({ scrape_date: -1 }); // Get most recent
 
       if (!newsStock) {
         return {
           success: false,
-          error: 'No news data available for this stock today',
-          message: 'This stock is not in today\'s news. Intraday plan is only available for stocks with news.'
+          error: 'No news data available for this stock',
+          message: 'This stock is not in the news. Intraday plan is only available for stocks with news.'
+        };
+      }
+
+      // Check if news is stale (more than 2 days old)
+      const today = DailyNewsStock.getISTDateAsUTC();
+      const daysDiff = Math.floor((today.getTime() - newsStock.scrape_date.getTime()) / (1000 * 60 * 60 * 24));
+      if (daysDiff > 2) {
+        return {
+          success: false,
+          error: 'News data is too old',
+          message: `News for this stock is ${daysDiff} days old. Please wait for fresh news data.`
         };
       }
 
@@ -289,17 +298,22 @@ class IntradayAnalyzeService {
     const existing = await StockAnalysis.findValidAnalysis(instrumentKey, 'intraday');
 
     if (!existing) {
-      // Check if in news today
-      const today = DailyNewsStock.getISTDateAsUTC();
+      // Check if in recent news (up to 2 days)
       const newsStock = await DailyNewsStock.findOne({
-        instrument_key: instrumentKey,
-        scrape_date: today
-      });
+        instrument_key: instrumentKey
+      }).sort({ scrape_date: -1 });
+
+      const today = DailyNewsStock.getISTDateAsUTC();
+      let isRecent = false;
+      if (newsStock) {
+        const daysDiff = Math.floor((today.getTime() - newsStock.scrape_date.getTime()) / (1000 * 60 * 60 * 24));
+        isRecent = daysDiff <= 2;
+      }
 
       return {
         has_analysis: false,
-        in_news_today: !!newsStock,
-        can_analyze: !!newsStock
+        in_news_today: !!newsStock && isRecent,
+        can_analyze: !!newsStock && isRecent
       };
     }
 
