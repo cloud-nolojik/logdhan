@@ -122,14 +122,41 @@ class IntradayAnalyzeService {
 
     try {
       // 1. Fetch daily candles for ATR calculation (need 15+ days)
-      const candleData = await candleFetcherService.fetchCandles(instrumentKey, '1d');
+      // Calculate date range: from 30 days ago to yesterday
+      const toDate = new Date();
+      toDate.setDate(toDate.getDate() - 1); // Yesterday
+      const fromDate = new Date();
+      fromDate.setDate(fromDate.getDate() - 30); // 30 days ago
 
-      if (!candleData || candleData.length < 15) {
+      console.log(`[INTRADAY] Fetching candles from ${fromDate.toISOString()} to ${toDate.toISOString()}`);
+
+      const rawCandles = await candleFetcherService.fetchCandlesFromAPI(
+        instrumentKey,
+        'day', // Upstox API uses 'day' not '1d'
+        fromDate,
+        toDate,
+        true // skipIntraday - we only need daily data
+      );
+
+      if (!rawCandles || rawCandles.length < 15) {
         return {
           success: false,
-          error: `Insufficient candle data: ${candleData?.length || 0} days (need 15+)`
+          error: `Insufficient candle data: ${rawCandles?.length || 0} days (need 15+)`
         };
       }
+
+      // Transform raw candles from Upstox format [timestamp, open, high, low, close, volume, oi]
+      // to object format for ATR calculation
+      const candleData = rawCandles.map(candle => ({
+        timestamp: candle[0],
+        open: candle[1],
+        high: candle[2],
+        low: candle[3],
+        close: candle[4],
+        volume: candle[5]
+      }));
+
+      console.log(`[INTRADAY] Got ${candleData.length} daily candles for ${symbol}`);
 
       // 2. Get previous day candle (most recent)
       const prevDayCandle = candleData[candleData.length - 1];
