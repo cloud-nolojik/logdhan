@@ -1,6 +1,8 @@
 import { getCurrentPrice, getExactStock } from '../utils/stockDb.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 import LatestPrice from '../models/latestPrice.js';
+import upstoxService from './upstox.service.js';
+import { User } from '../models/user.js';
 
 /**
  * PriceCacheService - In-memory price caching for real-time updates
@@ -599,9 +601,73 @@ class PriceCacheService {
   }
 
   /**
+   * Fetch bulk LTP prices using Upstox market-quote/ltp API
+   * Much faster than fetching one by one - single API call for up to 500 instruments
+   *
+   * @param {Array<string>} instrumentKeys - Array of instrument keys
+   * @returns {Promise<Object>} Map of instrument_key → price
+   * @private
+   */
+  async fetchBulkLTP(instrumentKeys) {
+    if (!instrumentKeys || instrumentKeys.length === 0) {
+      return {};
+    }
+
+    const priceMap = {};
+
+    try {
+      // Get any user's access token for market data (market data is same for all users)
+      const user = await User.findOne({ 'broker.upstox.access_token': { $exists: true, $ne: null } })
+        .select('broker.upstox.access_token')
+        .lean();
+
+      if (!user?.broker?.upstox?.access_token) {
+        console.warn('⚠️ [BULK LTP] No Upstox access token available, falling back to individual fetch');
+        return null; // Signal to use fallback
+      }
+
+      const accessToken = user.broker.upstox.access_token;
+
+      // Upstox allows up to 500 instruments per request
+      const BATCH_SIZE = 500;
+      const batches = [];
+      for (let i = 0; i < instrumentKeys.length; i += BATCH_SIZE) {
+        batches.push(instrumentKeys.slice(i, i + BATCH_SIZE));
+      }
+
+      // Fetch all batches in parallel
+      const batchPromises = batches.map(async (batch) => {
+        const result = await upstoxService.getLiveMarketData(batch, accessToken);
+        return result;
+      });
+
+      const batchResults = await Promise.all(batchPromises);
+
+      // Aggregate results from all batches
+      batchResults.forEach((result) => {
+        if (result.success && result.data) {
+          Object.entries(result.data).forEach(([key, data]) => {
+            if (data?.last_price !== undefined) {
+              priceMap[key] = data.last_price;
+            }
+          });
+        }
+      });
+
+      return priceMap;
+
+    } catch (error) {
+      console.error(`❌ [BULK LTP] Failed: ${error.message}`);
+      return null; // Signal to use fallback
+    }
+  }
+
+  /**
    * Get latest prices for multiple instruments
    *
-   * Market Hours: API (getCurrentPrice) → saves to LatestPrice → returns fresh data
+   * Market Hours:
+   *   1. Try BULK LTP API (single call for all stocks - FAST!)
+   *   2. Fallback to individual getCurrentPrice calls if bulk fails
    * Non-Market Hours: LatestPrice collection only (fast, no API calls)
    *
    * @param {Array<string>} instrumentKeys - Array of instrument keys to fetch prices for
@@ -630,26 +696,18 @@ class PriceCacheService {
     }
 
     if (isMarketOpen) {
-      // MARKET HOURS: Fetch from API (getCurrentPrice) - live data
+      // MARKET HOURS: Try BULK LTP first (much faster!)
       const apiStart = Date.now();
-      const apiPromises = instrumentKeys.map(async (instrumentKey) => {
-        try {
-          const price = await getCurrentPrice(instrumentKey, false);
-          return { instrumentKey, price };
-        } catch (error) {
-          console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
-          return { instrumentKey, price: null };
-        }
-      });
 
-      const apiResults = await Promise.all(apiPromises);
-      let apiSuccessCount = 0;
-      const dbUpdatePromises = [];
+      // Try bulk LTP API first
+      const bulkResult = await this.fetchBulkLTP(instrumentKeys);
 
-      apiResults.forEach(({ instrumentKey, price }) => {
-        if (price !== null) {
+      if (bulkResult !== null && Object.keys(bulkResult).length > 0) {
+        // Bulk API worked - use results
+        const dbUpdatePromises = [];
+
+        Object.entries(bulkResult).forEach(([instrumentKey, price]) => {
           priceMap[instrumentKey] = price;
-          apiSuccessCount++;
 
           // Update memory cache
           this.priceCache.set(instrumentKey, {
@@ -661,20 +719,63 @@ class PriceCacheService {
 
           // Queue DB update (saves to LatestPrice for non-market hours)
           dbUpdatePromises.push(this.storePriceInDB(instrumentKey, price, null, Date.now()));
-        }
-      });
-
-      const apiTime = Date.now() - apiStart;
-      console.log(`📡 [API] Fetched ${apiSuccessCount}/${instrumentKeys.length} prices in ${apiTime}ms (market open)`);
-
-      // Store prices to DB in background (non-blocking)
-      if (dbUpdatePromises.length > 0) {
-        Promise.all(dbUpdatePromises).catch((err) => {
-          console.error(`❌ [DB] Failed to persist prices: ${err.message}`);
         });
+
+        const apiTime = Date.now() - apiStart;
+        console.log(`⚡ [BULK LTP] Fetched ${Object.keys(bulkResult).length}/${instrumentKeys.length} prices in ${apiTime}ms (market open)`);
+
+        // Store prices to DB in background (non-blocking)
+        if (dbUpdatePromises.length > 0) {
+          Promise.all(dbUpdatePromises).catch((err) => {
+            console.error(`❌ [DB] Failed to persist prices: ${err.message}`);
+          });
+        }
+      } else {
+        // Bulk API failed - fallback to individual calls
+        console.warn('⚠️ [BULK LTP] Failed, falling back to individual API calls');
+
+        const apiPromises = instrumentKeys.map(async (instrumentKey) => {
+          try {
+            const price = await getCurrentPrice(instrumentKey, false);
+            return { instrumentKey, price };
+          } catch (error) {
+            console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
+            return { instrumentKey, price: null };
+          }
+        });
+
+        const apiResults = await Promise.all(apiPromises);
+        const dbUpdatePromises = [];
+
+        apiResults.forEach(({ instrumentKey, price }) => {
+          if (price !== null) {
+            priceMap[instrumentKey] = price;
+
+            // Update memory cache
+            this.priceCache.set(instrumentKey, {
+              ltp: price,
+              candles: null,
+              timestamp: Date.now(),
+              lastUpdated: new Date().toISOString()
+            });
+
+            // Queue DB update
+            dbUpdatePromises.push(this.storePriceInDB(instrumentKey, price, null, Date.now()));
+          }
+        });
+
+        const apiTime = Date.now() - apiStart;
+        console.log(`📡 [API] Fetched ${Object.keys(priceMap).length}/${instrumentKeys.length} prices in ${apiTime}ms (market open - fallback)`);
+
+        // Store prices to DB in background
+        if (dbUpdatePromises.length > 0) {
+          Promise.all(dbUpdatePromises).catch((err) => {
+            console.error(`❌ [DB] Failed to persist prices: ${err.message}`);
+          });
+        }
       }
 
-      // For any API failures, fall back to database
+      // For any missing prices, fall back to database
       const missingAfterApi = instrumentKeys.filter((key) => priceMap[key] === undefined);
       if (missingAfterApi.length > 0) {
         try {
