@@ -1,23 +1,33 @@
 /**
- * StreetGains Scraper Service
+ * Stock News Scraper Service
  *
- * Scrapes stock news from StreetGains pre-market analysis page.
- * Uses Puppeteer for JavaScript-rendered content (Next.js site).
+ * Fetches Indian stock market news using OpenAI's web search API.
+ * Sources: MoneyControl, Economic Times, Business Standard, LiveMint
  *
  * Sections scraped:
  * - Pre-Market News
  * - Stocks to Watch
+ * - Market Sentiment (Nifty 50 outlook)
  */
 
-import puppeteer from 'puppeteer';
 import { v4 as uuidv4 } from 'uuid';
 import Stock from '../models/stock.js';
 import DailyNewsStock from '../models/dailyNewsStock.js';
 import SentimentCache from '../models/sentimentCache.js';
+import MarketSentiment from '../models/marketSentiment.js';
 import OpenAI from 'openai';
 
-const STREETGAINS_URL = 'https://streetgains.in/streetview-stock-market-news-analysis/stock-market-open';
-const SCRAPE_VERSION = 'v1-dom-parser';
+const SCRAPE_VERSION = 'v2-web-search';
+
+// News sources to search (Indian stock market)
+const NEWS_DOMAINS = [
+  'moneycontrol.com',
+  'economictimes.indiatimes.com',
+  'business-standard.com',
+  'livemint.com',
+  'ndtvprofit.com',
+  'zeebiz.com'
+];
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -26,7 +36,7 @@ const openai = new OpenAI({
 
 /**
  * Map raw symbol to Upstox instrument_key
- * @param {string} rawSymbol - Symbol from StreetGains
+ * @param {string} rawSymbol - Symbol from news
  * @returns {Promise<{ instrument_key: string|null, trading_symbol: string, company_name: string|null }>}
  */
 async function mapSymbolToInstrumentKey(rawSymbol) {
@@ -70,7 +80,7 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
       company_name: null
     };
   } catch (error) {
-    console.error(`[StreetGains] Error mapping symbol ${rawSymbol}:`, error.message);
+    console.error(`[NewsSearch] Error mapping symbol ${rawSymbol}:`, error.message);
     return {
       instrument_key: null,
       trading_symbol: cleanSymbol,
@@ -109,13 +119,13 @@ async function analyzeHeadlinesSentiment(symbol, headlines) {
 
   // If all cached, return early
   if (uncached.length === 0) {
-    console.log(`[StreetGains] All ${headlines.length} headlines cached for ${symbol}`);
+    console.log(`[NewsSearch] All ${headlines.length} headlines cached for ${symbol}`);
     return results;
   }
 
   // Analyze uncached headlines via AI
   try {
-    console.log(`[StreetGains] Analyzing ${uncached.length} uncached headlines for ${symbol}`);
+    console.log(`[NewsSearch] Analyzing ${uncached.length} uncached headlines for ${symbol}`);
 
     const prompt = `
 Analyze these news headlines for ${symbol}:
@@ -181,7 +191,7 @@ Impact guide:
 
     return results;
   } catch (error) {
-    console.error(`[StreetGains] AI sentiment analysis error for ${symbol}:`, error.message);
+    console.error(`[NewsSearch] AI sentiment analysis error for ${symbol}:`, error.message);
 
     // Return uncached without sentiment (will be analyzed later)
     return [
@@ -197,180 +207,321 @@ Impact guide:
 }
 
 /**
- * Scrape StreetGains page using Puppeteer
- * @returns {Promise<{ stocks: Map, metadata: object }>}
+ * Fetch Indian stock market news using OpenAI web search
+ * @returns {Promise<{ stocks: Object, metadata: object }>}
  */
-async function scrapeStreetGainsPage() {
-  let browser = null;
-
+async function fetchStockNewsWithWebSearch() {
   try {
-    console.log('[StreetGains] Launching browser...');
+    console.log('[NewsSearch] Fetching Indian stock market news via web search...');
 
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu'
-      ]
-    });
+    // Get today's date in IST
+    const today = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(today.getTime() + istOffset);
+    const dateStr = istDate.toISOString().split('T')[0];
 
-    const page = await browser.newPage();
+    const searchPrompt = `Search for today's (${dateStr}) Indian stock market pre-market news and stocks to watch.
 
-    // Set user agent
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
+Find news about specific NSE/BSE listed stocks that have important announcements, results, SEBI orders, management changes, order wins, or significant corporate actions.
 
-    // Navigate to page
-    console.log('[StreetGains] Navigating to:', STREETGAINS_URL);
-    await page.goto(STREETGAINS_URL, {
-      waitUntil: 'networkidle2',
-      timeout: 30000
-    });
-
-    // Wait for content to load
-    await page.waitForSelector('body', { timeout: 10000 });
-
-    // Extract data from page
-    const scrapedData = await page.evaluate(() => {
-      const stocksMap = {};
-
-      // Helper to extract stock symbol from headline
-      const extractSymbol = (headline) => {
-        // Common patterns: "SYMBOL:", "SYMBOL -", "(SYMBOL)", etc.
-        const patterns = [
-          /^([A-Z][A-Z0-9]{2,15})\s*[:|-]/,  // RELIANCE: or RELIANCE -
-          /\(([A-Z][A-Z0-9]{2,15})\)/,        // (RELIANCE)
-          /^([A-Z][A-Z0-9]{2,15})\s/          // RELIANCE at start
-        ];
-
-        for (const pattern of patterns) {
-          const match = headline.match(pattern);
-          if (match) return match[1];
-        }
-
-        return null;
-      };
-
-      // Find all section headers and their content
-      const sections = document.querySelectorAll('h2, h3, .section-title');
-      const headlines = [];
-
-      sections.forEach(section => {
-        const sectionText = section.textContent.toLowerCase();
-        let category = null;
-
-        if (sectionText.includes('pre-market') || sectionText.includes('premarket')) {
-          category = 'PRE_MARKET_NEWS';
-        } else if (sectionText.includes('stocks to watch') || sectionText.includes('watch')) {
-          category = 'STOCKS_TO_WATCH';
-        }
-
-        if (category) {
-          // Find list items after this section
-          let sibling = section.nextElementSibling;
-          while (sibling && !sibling.matches('h2, h3, .section-title')) {
-            const items = sibling.querySelectorAll('li, p, .news-item');
-            items.forEach(item => {
-              const text = item.textContent.trim();
-              if (text.length > 20 && text.length < 500) {
-                const symbol = extractSymbol(text);
-                if (symbol) {
-                  headlines.push({ symbol, text, category });
-                }
-              }
-            });
-            sibling = sibling.nextElementSibling;
-          }
-        }
-      });
-
-      // Alternative: Look for common list structures
-      if (headlines.length === 0) {
-        // Try finding news list containers
-        const newsContainers = document.querySelectorAll(
-          '.news-list, .stock-news, .market-news, [class*="news"], ul, ol'
-        );
-
-        newsContainers.forEach(container => {
-          const items = container.querySelectorAll('li');
-          items.forEach(item => {
-            const text = item.textContent.trim();
-            if (text.length > 20 && text.length < 500) {
-              const symbol = extractSymbol(text);
-              if (symbol) {
-                // Try to determine category from context
-                const parentText = container.previousElementSibling?.textContent?.toLowerCase() || '';
-                let category = 'PRE_MARKET_NEWS';
-                if (parentText.includes('watch')) {
-                  category = 'STOCKS_TO_WATCH';
-                }
-                headlines.push({ symbol, text, category });
-              }
-            }
-          });
-        });
+Return a JSON object with this exact structure:
+{
+  "stocks": {
+    "SYMBOL": [
+      {
+        "text": "Full headline text mentioning the stock",
+        "category": "PRE_MARKET_NEWS" or "STOCKS_TO_WATCH"
       }
+    ]
+  },
+  "sources_used": ["list of news sources"],
+  "news_date": "${dateStr}"
+}
 
-      // Group by symbol
-      headlines.forEach(h => {
-        if (!stocksMap[h.symbol]) {
-          stocksMap[h.symbol] = [];
+Rules:
+1. Only include NSE/BSE listed Indian stocks
+2. Use official trading symbols (e.g., RELIANCE, TCS, INFY, HDFCBANK)
+3. Each headline should be the actual news headline, not a summary
+4. Focus on actionable news that could affect stock prices today
+5. Include 10-20 stocks with the most significant news
+6. Categorize as PRE_MARKET_NEWS for breaking news or STOCKS_TO_WATCH for stocks with potential movement`;
+
+    const response = await openai.responses.create({
+      model: 'gpt-4o',
+      tools: [{
+        type: 'web_search',
+        user_location: {
+          type: 'approximate',
+          country: 'IN',
+          city: 'Mumbai',
+          region: 'Maharashtra'
         }
-        stocksMap[h.symbol].push({ text: h.text, category: h.category });
-      });
-
-      return {
-        stocks: stocksMap,
-        pageTitle: document.title,
-        foundHeadlines: headlines.length
-      };
+      }],
+      input: searchPrompt
     });
 
-    console.log(`[StreetGains] Found ${scrapedData.foundHeadlines} headlines for ${Object.keys(scrapedData.stocks).length} stocks`);
+    // Extract the text response
+    const outputText = response.output_text || '';
+
+    console.log('[NewsSearch] Web search completed, parsing results...');
+
+    // Try to extract JSON from the response
+    let stocksData = {};
+    let metadata = {
+      sources_used: [],
+      news_date: dateStr
+    };
+
+    // Look for JSON in the response
+    const jsonMatch = outputText.match(/\{[\s\S]*"stocks"[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        stocksData = parsed.stocks || {};
+        metadata.sources_used = parsed.sources_used || [];
+        metadata.news_date = parsed.news_date || dateStr;
+      } catch (parseError) {
+        console.error('[NewsSearch] JSON parse error, trying fallback extraction...');
+        // Fallback: Extract stock mentions from text
+        stocksData = extractStocksFromText(outputText);
+      }
+    } else {
+      // Fallback: Extract stock mentions from text
+      stocksData = extractStocksFromText(outputText);
+    }
+
+    // Get sources from annotations if available
+    if (response.output && Array.isArray(response.output)) {
+      const messageOutput = response.output.find(o => o.type === 'message');
+      if (messageOutput?.content?.[0]?.annotations) {
+        const urls = messageOutput.content[0].annotations
+          .filter(a => a.type === 'url_citation')
+          .map(a => a.url);
+        metadata.sources_used = [...new Set(urls)].slice(0, 10);
+      }
+    }
+
+    const stockCount = Object.keys(stocksData).length;
+    console.log(`[NewsSearch] Found news for ${stockCount} stocks`);
 
     return {
-      stocks: scrapedData.stocks,
+      stocks: stocksData,
       metadata: {
-        pageTitle: scrapedData.pageTitle,
-        foundHeadlines: scrapedData.foundHeadlines
+        ...metadata,
+        foundHeadlines: Object.values(stocksData).flat().length
       }
     };
 
   } catch (error) {
-    console.error('[StreetGains] Scrape error:', error.message);
+    console.error('[NewsSearch] Web search error:', error.message);
     throw error;
-  } finally {
-    if (browser) {
-      await browser.close();
-    }
   }
 }
 
 /**
- * Main scraper function - scrapes and stores daily news stocks
+ * Fallback: Extract stock symbols and news from plain text
+ * @param {string} text - Response text
+ * @returns {Object} Stocks map
+ */
+function extractStocksFromText(text) {
+  const stocks = {};
+
+  // Common Indian stock symbols pattern
+  const symbolPattern = /\b([A-Z]{2,15}(?:BANK|LIFE|PHARMA|TECH|INFRA)?)\b/g;
+
+  // Known major stocks to look for
+  const knownSymbols = [
+    'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'KOTAKBANK',
+    'SBIN', 'AXISBANK', 'BAJFINANCE', 'BHARTIARTL', 'ITC', 'HINDUNILVR',
+    'ASIANPAINT', 'MARUTI', 'TATAMOTORS', 'TATASTEEL', 'WIPRO', 'HCLTECH',
+    'SUNPHARMA', 'DRREDDY', 'CIPLA', 'ADANIENT', 'ADANIPORTS', 'ADANIGREEN',
+    'POWERGRID', 'NTPC', 'ONGC', 'COALINDIA', 'BPCL', 'IOC', 'GAIL',
+    'TITAN', 'BAJAJ-AUTO', 'HEROMOTOCO', 'EICHERMOT', 'M&M', 'LT',
+    'ULTRACEMCO', 'GRASIM', 'INDUSINDBK', 'TECHM', 'NESTLEIND', 'BRITANNIA'
+  ];
+
+  // Split into sentences
+  const sentences = text.split(/[.!?\n]+/);
+
+  for (const sentence of sentences) {
+    const upperSentence = sentence.toUpperCase();
+
+    for (const symbol of knownSymbols) {
+      if (upperSentence.includes(symbol) && sentence.trim().length > 20) {
+        if (!stocks[symbol]) {
+          stocks[symbol] = [];
+        }
+        // Avoid duplicates
+        const exists = stocks[symbol].some(s => s.text === sentence.trim());
+        if (!exists && stocks[symbol].length < 3) {
+          stocks[symbol].push({
+            text: sentence.trim(),
+            category: 'PRE_MARKET_NEWS'
+          });
+        }
+      }
+    }
+  }
+
+  return stocks;
+}
+
+/**
+ * Fetch Nifty 50 market sentiment using OpenAI web search
+ * @param {string} scrapeRunId - UUID for this scrape run
+ * @returns {Promise<Object>} Market sentiment data
+ */
+async function fetchMarketSentiment(scrapeRunId) {
+  try {
+    console.log('[NewsSearch] Fetching Nifty 50 market sentiment...');
+
+    // Get today's date in IST
+    const today = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(today.getTime() + istOffset);
+    const dateStr = istDate.toISOString().split('T')[0];
+
+    const searchPrompt = `Search for today's (${dateStr}) Nifty 50 pre-market outlook and market sentiment for Indian stock markets.
+
+Look for:
+1. SGX Nifty / GIFT Nifty futures indication
+2. US market overnight performance (Dow Jones, S&P 500, Nasdaq)
+3. Asian markets trend (Nikkei, Hang Seng, etc.)
+4. FII/DII activity from previous session
+5. Key support and resistance levels for Nifty 50
+6. Any major global events affecting markets
+
+Return a JSON object with this exact structure:
+{
+  "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH",
+  "confidence": 0.0 to 1.0,
+  "summary": "One paragraph summary of market outlook",
+  "key_factors": [
+    { "factor": "Description of factor", "impact": "POSITIVE" | "NEGATIVE" | "NEUTRAL" }
+  ],
+  "levels": {
+    "support_1": number,
+    "support_2": number,
+    "resistance_1": number,
+    "resistance_2": number
+  },
+  "global_cues": {
+    "us_markets": "POSITIVE" | "NEGATIVE" | "MIXED" | "FLAT",
+    "asian_markets": "POSITIVE" | "NEGATIVE" | "MIXED" | "FLAT",
+    "sgx_nifty": "POSITIVE" | "NEGATIVE" | "FLAT"
+  },
+  "institutional_activity": {
+    "fii_trend": "BUYING" | "SELLING" | "NEUTRAL",
+    "dii_trend": "BUYING" | "SELLING" | "NEUTRAL"
+  }
+}
+
+Be specific about the sentiment - BULLISH means expecting 0.5%+ gains, BEARISH means expecting 0.5%+ losses, NEUTRAL means flat/rangebound.`;
+
+    const response = await openai.responses.create({
+      model: 'gpt-4o',
+      tools: [{
+        type: 'web_search',
+        user_location: {
+          type: 'approximate',
+          country: 'IN',
+          city: 'Mumbai',
+          region: 'Maharashtra'
+        }
+      }],
+      input: searchPrompt
+    });
+
+    const outputText = response.output_text || '';
+
+    console.log('[NewsSearch] Market sentiment search completed, parsing...');
+
+    // Try to extract JSON
+    let sentimentData = null;
+    const jsonMatch = outputText.match(/\{[\s\S]*"sentiment"[\s\S]*\}/);
+
+    if (jsonMatch) {
+      try {
+        sentimentData = JSON.parse(jsonMatch[0]);
+      } catch (parseError) {
+        console.error('[NewsSearch] Market sentiment JSON parse error');
+      }
+    }
+
+    // Fallback: Extract sentiment from text
+    if (!sentimentData) {
+      const lowerText = outputText.toLowerCase();
+      let sentiment = 'NEUTRAL';
+
+      if (lowerText.includes('bullish') || lowerText.includes('positive opening') || lowerText.includes('gap up')) {
+        sentiment = 'BULLISH';
+      } else if (lowerText.includes('bearish') || lowerText.includes('negative opening') || lowerText.includes('gap down')) {
+        sentiment = 'BEARISH';
+      }
+
+      sentimentData = {
+        sentiment,
+        confidence: 0.5,
+        summary: outputText.substring(0, 500),
+        key_factors: [],
+        global_cues: {},
+        institutional_activity: {}
+      };
+    }
+
+    // Save to database
+    const marketSentimentData = {
+      index_name: 'NIFTY_50',
+      sentiment: sentimentData.sentiment || 'NEUTRAL',
+      confidence: sentimentData.confidence || 0.5,
+      summary: sentimentData.summary,
+      key_factors: sentimentData.key_factors || [],
+      levels: sentimentData.levels || {},
+      global_cues: sentimentData.global_cues || {},
+      institutional_activity: sentimentData.institutional_activity || {},
+      source: {
+        name: 'Web Search',
+        scraped_at: new Date()
+      },
+      scrape_run_id: scrapeRunId
+    };
+
+    const saved = await MarketSentiment.upsertTodaySentiment(marketSentimentData);
+    console.log(`[NewsSearch] Market sentiment saved: ${saved.sentiment} (confidence: ${saved.confidence})`);
+
+    return saved;
+
+  } catch (error) {
+    console.error('[NewsSearch] Market sentiment fetch error:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Main scraper function - fetches and stores daily news stocks
  * @returns {Promise<{ success: boolean, stocks_count: number, scrape_run_id: string }>}
  */
 export async function scrapeAndStoreDailyNewsStocks() {
   const scrapeRunId = uuidv4();
   const scrapeDate = DailyNewsStock.getISTDateAsUTC();
 
-  console.log(`[StreetGains] Starting scrape run: ${scrapeRunId}`);
-  console.log(`[StreetGains] Scrape date (IST): ${scrapeDate.toISOString()}`);
+  console.log(`[NewsSearch] Starting news fetch run: ${scrapeRunId}`);
+  console.log(`[NewsSearch] Scrape date (IST): ${scrapeDate.toISOString()}`);
 
   try {
-    // Scrape the page
-    const { stocks: scrapedStocks, metadata } = await scrapeStreetGainsPage();
+    // Fetch market sentiment first (Nifty 50 outlook)
+    const marketSentiment = await fetchMarketSentiment(scrapeRunId);
+
+    // Fetch news via web search
+    const { stocks: scrapedStocks, metadata } = await fetchStockNewsWithWebSearch();
 
     if (Object.keys(scrapedStocks).length === 0) {
-      console.warn('[StreetGains] No stocks found in scrape, checking for fallback...');
+      console.warn('[NewsSearch] No stocks found in search, checking for fallback...');
 
       // Check if we have existing data for today
       const existingData = await DailyNewsStock.getTodayStocks();
       if (existingData.length > 0) {
-        console.log('[StreetGains] Using existing data for today');
+        console.log('[NewsSearch] Using existing data for today');
         return {
           success: true,
           stocks_count: existingData.length,
@@ -383,7 +534,7 @@ export async function scrapeAndStoreDailyNewsStocks() {
         success: false,
         stocks_count: 0,
         scrape_run_id: scrapeRunId,
-        error: 'No stocks found in scrape'
+        error: 'No stocks found in news search'
       };
     }
 
@@ -424,8 +575,8 @@ export async function scrapeAndStoreDailyNewsStocks() {
         symbol: trading_symbol,
         company_name,
         source: {
-          name: 'StreetGains',
-          url: STREETGAINS_URL,
+          name: 'Web Search (Multiple Sources)',
+          url: metadata.sources_used?.[0] || 'https://moneycontrol.com',
           scraped_at: new Date()
         },
         scrape_run_id: scrapeRunId,
@@ -439,20 +590,25 @@ export async function scrapeAndStoreDailyNewsStocks() {
       const saved = await DailyNewsStock.upsertTodayStock(stockData);
       processedStocks.push(saved);
 
-      console.log(`[StreetGains] Processed ${trading_symbol}: ${newsItems.length} headlines, sentiment=${sentiment}, confidence=${confidenceScore.toFixed(2)}`);
+      console.log(`[NewsSearch] Processed ${trading_symbol}: ${newsItems.length} headlines, sentiment=${sentiment}, confidence=${confidenceScore.toFixed(2)}`);
     }
 
-    console.log(`[StreetGains] Scrape complete: ${processedStocks.length} stocks processed`);
+    console.log(`[NewsSearch] News fetch complete: ${processedStocks.length} stocks processed`);
 
     return {
       success: true,
       stocks_count: processedStocks.length,
       scrape_run_id: scrapeRunId,
+      market_sentiment: marketSentiment ? {
+        sentiment: marketSentiment.sentiment,
+        confidence: marketSentiment.confidence,
+        summary: marketSentiment.summary
+      } : null,
       metadata
     };
 
   } catch (error) {
-    console.error('[StreetGains] Scrape and store error:', error.message);
+    console.error('[NewsSearch] Fetch and store error:', error.message);
 
     return {
       success: false,
@@ -489,9 +645,41 @@ export async function getTodayNewsStocks() {
   };
 }
 
+/**
+ * Get today's market sentiment (Nifty 50)
+ * @returns {Promise<Object>} Market sentiment data
+ */
+export async function getTodayMarketSentiment() {
+  const { sentiment, is_today } = await MarketSentiment.getTodayOrLatest('NIFTY_50');
+
+  if (!sentiment) {
+    return {
+      sentiment: null,
+      is_today: false,
+      message: 'No market sentiment available'
+    };
+  }
+
+  return {
+    sentiment: {
+      index_name: sentiment.index_name,
+      sentiment: sentiment.sentiment,
+      confidence: sentiment.confidence,
+      summary: sentiment.summary,
+      key_factors: sentiment.key_factors,
+      levels: sentiment.levels,
+      global_cues: sentiment.global_cues,
+      institutional_activity: sentiment.institutional_activity,
+      analysis_date: sentiment.analysis_date
+    },
+    is_today
+  };
+}
+
 export default {
   scrapeAndStoreDailyNewsStocks,
   getTodayNewsStocks,
+  getTodayMarketSentiment,
   mapSymbolToInstrumentKey,
   analyzeHeadlinesSentiment
 };

@@ -16,6 +16,9 @@ router.get("/", optionalAuth, async (req, res) => {
   try {
     const { stocks, scrape_date, is_today, source, message } = await streetGainsScraper.getTodayNewsStocks();
 
+    // Also get market sentiment
+    const marketSentimentData = await streetGainsScraper.getTodayMarketSentiment();
+
     if (stocks.length === 0) {
       return res.json({
         success: true,
@@ -23,6 +26,7 @@ router.get("/", optionalAuth, async (req, res) => {
         count: 0,
         scrape_date: null,
         is_today: false,
+        market_sentiment: marketSentimentData.sentiment || null,
         message: message || "No news stocks available. Check back after 8:30 AM IST."
       });
     }
@@ -50,18 +54,49 @@ router.get("/", optionalAuth, async (req, res) => {
       scrape_date: scrape_date,
       is_today,
       source: {
-        name: source?.name || 'StreetGains',
+        name: source?.name || 'Web Search',
         url: source?.url,
         scraped_at: source?.scraped_at
       },
       scrape_run_id: firstStock.scrape_run_id,
       scrape_version: firstStock.scrape_version,
+      market_sentiment: marketSentimentData.sentiment || null,
       stocks: formattedStocks,
       count: formattedStocks.length
     });
 
   } catch (error) {
     console.error("[Daily News] Error fetching stocks:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/v1/daily-news-stocks/market-sentiment
+ * Get today's Nifty 50 market sentiment
+ * Access: All users
+ */
+router.get("/market-sentiment", optionalAuth, async (req, res) => {
+  try {
+    const { sentiment, is_today, message } = await streetGainsScraper.getTodayMarketSentiment();
+
+    if (!sentiment) {
+      return res.json({
+        success: true,
+        sentiment: null,
+        is_today: false,
+        message: message || "No market sentiment available. Check back after 8:30 AM IST."
+      });
+    }
+
+    res.json({
+      success: true,
+      sentiment,
+      is_today
+    });
+
+  } catch (error) {
+    console.error("[Daily News] Error fetching market sentiment:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
