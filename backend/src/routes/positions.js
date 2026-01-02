@@ -275,13 +275,17 @@ router.get("/history", auth, async (req, res) => {
         actual_entry: p.actual_entry,
         exit_price: p.exit_price,
         qty: p.qty,
-        realized_pnl: p.realized_pnl,
-        realized_pnl_pct: p.realized_pnl_pct,
         close_reason: p.close_reason,
         entered_at: p.entered_at,
         closed_at: p.closed_at,
         days_in_trade: p.days_in_trade,
-        status: p.status
+        status: p.status,
+        pnl: {
+          realized_pnl: p.realized_pnl || 0,
+          realized_pnl_pct: p.realized_pnl_pct || 0,
+          unrealized_pnl: 0,
+          unrealized_pnl_pct: 0
+        }
       }))
     });
   } catch (error) {
