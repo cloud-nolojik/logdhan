@@ -368,12 +368,15 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       console.log(`[INTRADAY BY-INSTRUMENT] analysis._id: ${analysis._id}`);
       console.log(`[INTRADAY BY-INSTRUMENT] analysis.stock_symbol: ${analysis.stock_symbol}`);
       console.log(`[INTRADAY BY-INSTRUMENT] analysis.status: ${analysis.status}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data keys: ${Object.keys(analysis.analysis_data || {}).join(', ')}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data.symbol: ${analysis.analysis_data?.symbol}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data.analysis_type: ${analysis.analysis_data?.analysis_type}`);
 
-      // Ensure required fields exist for intraday analysis
-      const analysisData = analysis.analysis_data || {};
+      // Convert Mongoose document to plain object to properly access nested fields
+      const rawAnalysisData = analysis.analysis_data?.toObject ? analysis.analysis_data.toObject() : (analysis.analysis_data || {});
+      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data keys: ${Object.keys(rawAnalysisData).join(', ')}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data.symbol: ${rawAnalysisData.symbol}`);
+      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data.analysis_type: ${rawAnalysisData.analysis_type}`);
+
+      // Create a mutable copy for modifications
+      const analysisData = { ...rawAnalysisData };
 
       // Add symbol and analysis_type to top level if missing (for old cached data)
       if (!analysisData.symbol) {
