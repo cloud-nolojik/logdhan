@@ -1,10 +1,8 @@
 import express from "express";
 import UserPosition from "../models/userPosition.js";
-import { User } from "../models/user.js";
 import LatestPrice from "../models/latestPrice.js";
 import { auth } from "../middleware/auth.js";
 import { checkExitConditions, round2 } from "../engine/index.js";
-import { getCurrentPrice } from "../utils/stockDb.js";
 
 const router = express.Router();
 
@@ -89,9 +87,8 @@ router.get("/morning-glance", auth, async (req, res) => {
       };
     }));
 
-    // 3. Get user's personal watchlist alerts
-    const user = await User.findById(user_id);
-    const userWatchlist = user?.watchlist || [];
+    // 3. Get user's personal watchlist (already loaded in req.user from auth middleware)
+    const userWatchlist = req.user?.watchlist || [];
     const watchlistAlerts = [];
 
     // For now, just show watchlist stocks count - no entry zone alerts for user watchlist
