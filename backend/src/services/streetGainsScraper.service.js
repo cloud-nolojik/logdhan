@@ -36,17 +36,73 @@ const openai = new OpenAI({
 });
 
 /**
- * Map symbol to Upstox instrument_key
- * OpenAI now returns exact NSE trading symbols, so we do a direct lookup
- * with fallback strategies for edge cases
- * @param {string} rawSymbol - Symbol from OpenAI (should be exact NSE symbol)
+ * Map symbol/instrument_key to stock details
+ * OpenAI now returns instrument_keys (NSE_EQ|ISIN) or company names as fallback
+ * @param {string} rawKey - Key from OpenAI (instrument_key like NSE_EQ|INE... or company name)
  * @returns {Promise<{ instrument_key: string|null, trading_symbol: string, company_name: string|null }>}
  */
-async function mapSymbolToInstrumentKey(rawSymbol) {
-  const cleanSymbol = rawSymbol.trim().toUpperCase();
+async function mapSymbolToInstrumentKey(rawKey) {
+  const cleanKey = rawKey.trim();
 
   try {
-    // 1. Direct match on NSE trading_symbol (primary strategy)
+    // 1. Check if it's already an instrument_key format (NSE_EQ|INE...)
+    if (cleanKey.match(/^NSE_EQ\|INE[A-Z0-9]+$/i)) {
+      const stock = await Stock.findOne({
+        instrument_key: cleanKey,
+        is_active: true
+      }).lean();
+
+      if (stock) {
+        console.log(`[NewsSearch] Direct instrument_key match: ${cleanKey} -> ${stock.trading_symbol}`);
+        return {
+          instrument_key: stock.instrument_key,
+          trading_symbol: stock.trading_symbol,
+          company_name: stock.name
+        };
+      }
+
+      // Try case-insensitive search on ISIN part
+      const isinPart = cleanKey.split('|')[1];
+      if (isinPart) {
+        const stockByIsin = await Stock.findOne({
+          instrument_key: { $regex: `NSE_EQ\\|${isinPart}`, $options: 'i' },
+          is_active: true
+        }).lean();
+
+        if (stockByIsin) {
+          console.log(`[NewsSearch] ISIN match: ${isinPart} -> ${stockByIsin.trading_symbol}`);
+          return {
+            instrument_key: stockByIsin.instrument_key,
+            trading_symbol: stockByIsin.trading_symbol,
+            company_name: stockByIsin.name
+          };
+        }
+      }
+
+      console.warn(`[NewsSearch] Invalid instrument_key, not found: ${cleanKey}`);
+    }
+
+    // 2. Check if it's a BSE instrument_key format (BSE_EQ|INE...)
+    if (cleanKey.match(/^BSE_EQ\|INE[A-Z0-9]+$/i)) {
+      const stock = await Stock.findOne({
+        instrument_key: cleanKey,
+        is_active: true
+      }).lean();
+
+      if (stock) {
+        console.log(`[NewsSearch] BSE instrument_key match: ${cleanKey} -> ${stock.trading_symbol}`);
+        return {
+          instrument_key: stock.instrument_key,
+          trading_symbol: stock.trading_symbol,
+          company_name: stock.name
+        };
+      }
+    }
+
+    // From here, treat as trading symbol or company name (fallback)
+    const cleanSymbol = cleanKey.toUpperCase();
+
+    // 3. Direct match on NSE trading_symbol
     let stock = await Stock.findOne({
       trading_symbol: cleanSymbol,
       segment: 'NSE_EQ',
@@ -61,7 +117,7 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
       };
     }
 
-    // 2. Try without underscores (fallback for any edge cases)
+    // 4. Try without underscores (fallback for any edge cases)
     const normalizedSymbol = cleanSymbol.replace(/_/g, '');
     if (normalizedSymbol !== cleanSymbol) {
       stock = await Stock.findOne({
@@ -71,7 +127,7 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
       }).lean();
 
       if (stock) {
-        console.log(`[NewsSearch] Mapped ${rawSymbol} -> ${stock.trading_symbol} (normalized)`);
+        console.log(`[NewsSearch] Mapped ${rawKey} -> ${stock.trading_symbol} (normalized)`);
         return {
           instrument_key: stock.instrument_key,
           trading_symbol: stock.trading_symbol,
@@ -80,8 +136,29 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
       }
     }
 
-    // 3. Regex search on company name (fallback for any unmapped symbols)
-    const nameParts = cleanSymbol.split(/[_\s-]/).filter(p => p.length > 2);
+    // 5. Try trading_symbol regex match (handles cases like MAHINDRA&M -> M&M)
+    const symbolParts = cleanSymbol.split(/[_\s&-]/).filter(p => p.length > 0);
+    if (symbolParts.length > 0) {
+      const firstPart = symbolParts[0];
+      stock = await Stock.findOne({
+        trading_symbol: { $regex: firstPart.substring(0, 3), $options: 'i' },
+        name: { $regex: firstPart, $options: 'i' },
+        segment: 'NSE_EQ',
+        is_active: true
+      }).lean();
+
+      if (stock) {
+        console.log(`[NewsSearch] Mapped ${rawKey} -> ${stock.trading_symbol} (partial match)`);
+        return {
+          instrument_key: stock.instrument_key,
+          trading_symbol: stock.trading_symbol,
+          company_name: stock.name
+        };
+      }
+    }
+
+    // 6. Regex search on company name
+    const nameParts = cleanSymbol.split(/[_\s&-]/).filter(p => p.length > 2);
     if (nameParts.length > 0) {
       const regexPattern = '^' + nameParts.join('.*');
       stock = await Stock.findOne({
@@ -91,7 +168,7 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
       }).lean();
 
       if (stock) {
-        console.log(`[NewsSearch] Mapped ${rawSymbol} -> ${stock.trading_symbol} (name regex)`);
+        console.log(`[NewsSearch] Mapped ${rawKey} -> ${stock.trading_symbol} (name regex)`);
         return {
           instrument_key: stock.instrument_key,
           trading_symbol: stock.trading_symbol,
@@ -100,7 +177,28 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
       }
     }
 
-    // 4. Fallback: Try BSE
+    // 7. First word match fallback
+    if (nameParts.length > 0) {
+      const firstWord = nameParts[0];
+      if (firstWord.length >= 4) {
+        stock = await Stock.findOne({
+          name: { $regex: `^${firstWord}`, $options: 'i' },
+          segment: 'NSE_EQ',
+          is_active: true
+        }).sort({ trading_symbol: 1 }).lean();
+
+        if (stock) {
+          console.log(`[NewsSearch] Mapped ${rawKey} -> ${stock.trading_symbol} (first word match)`);
+          return {
+            instrument_key: stock.instrument_key,
+            trading_symbol: stock.trading_symbol,
+            company_name: stock.name
+          };
+        }
+      }
+    }
+
+    // 8. Fallback: Try BSE
     stock = await Stock.findOne({
       trading_symbol: cleanSymbol,
       segment: 'BSE_EQ',
@@ -108,7 +206,7 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
     }).lean();
 
     if (stock) {
-      console.log(`[NewsSearch] Mapped ${rawSymbol} -> ${stock.trading_symbol} (BSE)`);
+      console.log(`[NewsSearch] Mapped ${rawKey} -> ${stock.trading_symbol} (BSE)`);
       return {
         instrument_key: stock.instrument_key,
         trading_symbol: stock.trading_symbol,
@@ -117,17 +215,17 @@ async function mapSymbolToInstrumentKey(rawSymbol) {
     }
 
     // Not found
-    console.warn(`[NewsSearch] Could not map symbol: ${rawSymbol}`);
+    console.warn(`[NewsSearch] Could not map key: ${rawKey}`);
     return {
       instrument_key: null,
       trading_symbol: cleanSymbol,
       company_name: null
     };
   } catch (error) {
-    console.error(`[NewsSearch] Error mapping symbol ${rawSymbol}:`, error.message);
+    console.error(`[NewsSearch] Error mapping key ${rawKey}:`, error.message);
     return {
       instrument_key: null,
-      trading_symbol: cleanSymbol,
+      trading_symbol: cleanKey.toUpperCase(),
       company_name: null
     };
   }
@@ -324,7 +422,7 @@ Find news about specific NSE listed stocks that have important announcements, re
 Return a JSON object with this exact structure:
 {
   "stocks": {
-    "NSE_TRADING_SYMBOL": [
+    "NSE_EQ|ISIN_CODE": [
       {
         "text": "Full headline text mentioning the stock",
         "category": "PRE_MARKET_NEWS" or "STOCKS_TO_WATCH"
@@ -335,46 +433,46 @@ Return a JSON object with this exact structure:
   "news_date": "${dateStr}"
 }
 
-CRITICAL - Use the EXACT NSE trading symbol as the key. Examples:
-- Hero MotoCorp → "HEROMOTOCO" (not HERO_MOTOCORP)
-- TVS Motor → "TVSMOTOR" (not TVS_MOTOR)
-- Bajaj Auto → "BAJAJ-AUTO" (includes hyphen)
-- Mahindra & Mahindra → "M&M" (includes ampersand)
-- State Bank of India → "SBIN"
-- Hindustan Unilever → "HINDUNILVR"
-- Larsen & Toubro → "LT"
-- Tata Consultancy → "TCS"
-- Infosys → "INFY"
-- HDFC Bank → "HDFCBANK"
-- ICICI Bank → "ICICIBANK"
-- Kotak Bank → "KOTAKBANK"
-- IndusInd Bank → "INDUSINDBK"
-- Bharti Airtel → "BHARTIARTL"
-- Asian Paints → "ASIANPAINT"
-- Nestle India → "NESTLEIND"
-- Titan Company → "TITAN"
-- Eicher Motors → "EICHERMOT"
-- Tech Mahindra → "TECHM"
-- Dr Reddy's → "DRREDDY"
-- Sun Pharma → "SUNPHARMA"
-- UltraTech Cement → "ULTRACEMCO"
-- Tata Consumer → "TATACONSUM"
-- Bajaj Finance → "BAJFINANCE"
-- Bajaj Finserv → "BAJAJFINSV"
-- Shriram Finance → "SHRIRAMFIN"
-- Apollo Hospitals → "APOLLOHOSP"
-- Divi's Labs → "DIVISLAB"
-- Power Grid → "POWERGRID"
-- Adani Enterprises → "ADANIENT"
-- Adani Ports → "ADANIPORTS"
+CRITICAL - Use the Upstox INSTRUMENT_KEY format as the key (NSE_EQ|ISIN). Examples:
+- Reliance Industries → "NSE_EQ|INE002A01018"
+- TCS → "NSE_EQ|INE467B01029"
+- HDFC Bank → "NSE_EQ|INE040A01034"
+- Infosys → "NSE_EQ|INE009A01021"
+- ICICI Bank → "NSE_EQ|INE090A01021"
+- State Bank of India → "NSE_EQ|INE062A01020"
+- Kotak Mahindra Bank → "NSE_EQ|INE237A01028"
+- Hindustan Unilever → "NSE_EQ|INE030A01027"
+- ITC Ltd → "NSE_EQ|INE154A01025"
+- Larsen & Toubro → "NSE_EQ|INE018A01030"
+- Bharti Airtel → "NSE_EQ|INE397D01024"
+- Asian Paints → "NSE_EQ|INE021A01026"
+- Maruti Suzuki → "NSE_EQ|INE585B01010"
+- Sun Pharma → "NSE_EQ|INE044A01036"
+- Titan Company → "NSE_EQ|INE280A01028"
+- Bajaj Finance → "NSE_EQ|INE296A01024"
+- Wipro → "NSE_EQ|INE075A01022"
+- HCL Technologies → "NSE_EQ|INE860A01027"
+- Tata Motors → "NSE_EQ|INE155A01022"
+- Tata Steel → "NSE_EQ|INE081A01020"
+- Mahindra & Mahindra → "NSE_EQ|INE101A01026"
+- Power Grid → "NSE_EQ|INE752E01010"
+- NTPC → "NSE_EQ|INE733E01010"
+- UltraTech Cement → "NSE_EQ|INE481G01011"
+- Tech Mahindra → "NSE_EQ|INE669C01036"
+- Adani Enterprises → "NSE_EQ|INE423A01024"
+- Adani Ports → "NSE_EQ|INE742F01042"
+- IndusInd Bank → "NSE_EQ|INE095A01012"
+- Axis Bank → "NSE_EQ|INE238A01034"
+- Dr Reddy's Labs → "NSE_EQ|INE089A01023"
 
 Rules:
 1. Only include NSE listed Indian stocks
-2. Use the EXACT NSE trading symbol as shown on NSE India website
+2. Use the EXACT instrument_key format: NSE_EQ|ISIN_CODE (12 character ISIN starting with INE)
 3. Each headline should be the actual news headline, not a summary
 4. Focus on actionable news that could affect stock prices today
 5. Include 10-20 stocks with the most significant news
-6. Categorize as PRE_MARKET_NEWS for breaking news or STOCKS_TO_WATCH for stocks with potential movement`;
+6. Categorize as PRE_MARKET_NEWS for breaking news or STOCKS_TO_WATCH for stocks with potential movement
+7. If you don't know the exact ISIN, use the company name as fallback key`;
 
     const response = await openai.responses.create({
       model: 'gpt-4o',
@@ -490,24 +588,53 @@ Rules:
 /**
  * Fallback: Extract stock symbols and news from plain text
  * @param {string} text - Response text
- * @returns {Object} Stocks map
+ * @returns {Object} Stocks map (keyed by instrument_key or symbol)
  */
 function extractStocksFromText(text) {
   const stocks = {};
 
-  // Common Indian stock symbols pattern
-  const symbolPattern = /\b([A-Z]{2,15}(?:BANK|LIFE|PHARMA|TECH|INFRA)?)\b/g;
+  // First, try to extract instrument_keys from text
+  const instrumentKeyPattern = /NSE_EQ\|INE[A-Z0-9]+/gi;
+  const instrumentKeyMatches = text.match(instrumentKeyPattern) || [];
 
-  // Known major stocks to look for
-  const knownSymbols = [
-    'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'KOTAKBANK',
-    'SBIN', 'AXISBANK', 'BAJFINANCE', 'BHARTIARTL', 'ITC', 'HINDUNILVR',
-    'ASIANPAINT', 'MARUTI', 'TATAMOTORS', 'TATASTEEL', 'WIPRO', 'HCLTECH',
-    'SUNPHARMA', 'DRREDDY', 'CIPLA', 'ADANIENT', 'ADANIPORTS', 'ADANIGREEN',
-    'POWERGRID', 'NTPC', 'ONGC', 'COALINDIA', 'BPCL', 'IOC', 'GAIL',
-    'TITAN', 'BAJAJ-AUTO', 'HEROMOTOCO', 'EICHERMOT', 'M&M', 'LT',
-    'ULTRACEMCO', 'GRASIM', 'INDUSINDBK', 'TECHM', 'NESTLEIND', 'BRITANNIA'
-  ];
+  // Known major stocks with their instrument_keys (symbol -> instrument_key mapping)
+  const knownStocksMap = {
+    'RELIANCE': 'NSE_EQ|INE002A01018',
+    'TCS': 'NSE_EQ|INE467B01029',
+    'INFY': 'NSE_EQ|INE009A01021',
+    'HDFCBANK': 'NSE_EQ|INE040A01034',
+    'ICICIBANK': 'NSE_EQ|INE090A01021',
+    'KOTAKBANK': 'NSE_EQ|INE237A01028',
+    'SBIN': 'NSE_EQ|INE062A01020',
+    'AXISBANK': 'NSE_EQ|INE238A01034',
+    'BAJFINANCE': 'NSE_EQ|INE296A01024',
+    'BHARTIARTL': 'NSE_EQ|INE397D01024',
+    'ITC': 'NSE_EQ|INE154A01025',
+    'HINDUNILVR': 'NSE_EQ|INE030A01027',
+    'ASIANPAINT': 'NSE_EQ|INE021A01026',
+    'MARUTI': 'NSE_EQ|INE585B01010',
+    'TATAMOTORS': 'NSE_EQ|INE155A01022',
+    'TATASTEEL': 'NSE_EQ|INE081A01020',
+    'WIPRO': 'NSE_EQ|INE075A01022',
+    'HCLTECH': 'NSE_EQ|INE860A01027',
+    'SUNPHARMA': 'NSE_EQ|INE044A01036',
+    'DRREDDY': 'NSE_EQ|INE089A01023',
+    'CIPLA': 'NSE_EQ|INE059A01026',
+    'ADANIENT': 'NSE_EQ|INE423A01024',
+    'ADANIPORTS': 'NSE_EQ|INE742F01042',
+    'POWERGRID': 'NSE_EQ|INE752E01010',
+    'NTPC': 'NSE_EQ|INE733E01010',
+    'ONGC': 'NSE_EQ|INE213A01029',
+    'COALINDIA': 'NSE_EQ|INE522F01014',
+    'TITAN': 'NSE_EQ|INE280A01028',
+    'LT': 'NSE_EQ|INE018A01030',
+    'ULTRACEMCO': 'NSE_EQ|INE481G01011',
+    'INDUSINDBK': 'NSE_EQ|INE095A01012',
+    'TECHM': 'NSE_EQ|INE669C01036',
+    'NESTLEIND': 'NSE_EQ|INE239A01016',
+    'BRITANNIA': 'NSE_EQ|INE216A01030',
+    'M&M': 'NSE_EQ|INE101A01026'
+  };
 
   // Split into sentences
   const sentences = text.split(/[.!?\n]+/);
@@ -515,15 +642,31 @@ function extractStocksFromText(text) {
   for (const sentence of sentences) {
     const upperSentence = sentence.toUpperCase();
 
-    for (const symbol of knownSymbols) {
-      if (upperSentence.includes(symbol) && sentence.trim().length > 20) {
-        if (!stocks[symbol]) {
-          stocks[symbol] = [];
+    // Check for instrument_keys in sentence
+    for (const instrumentKey of instrumentKeyMatches) {
+      if (sentence.includes(instrumentKey) && sentence.trim().length > 20) {
+        if (!stocks[instrumentKey]) {
+          stocks[instrumentKey] = [];
         }
-        // Avoid duplicates
-        const exists = stocks[symbol].some(s => s.text === sentence.trim());
-        if (!exists && stocks[symbol].length < 3) {
-          stocks[symbol].push({
+        const exists = stocks[instrumentKey].some(s => s.text === sentence.trim());
+        if (!exists && stocks[instrumentKey].length < 3) {
+          stocks[instrumentKey].push({
+            text: sentence.trim(),
+            category: 'PRE_MARKET_NEWS'
+          });
+        }
+      }
+    }
+
+    // Check for known symbols and convert to instrument_key
+    for (const [symbol, instrumentKey] of Object.entries(knownStocksMap)) {
+      if (upperSentence.includes(symbol) && sentence.trim().length > 20) {
+        if (!stocks[instrumentKey]) {
+          stocks[instrumentKey] = [];
+        }
+        const exists = stocks[instrumentKey].some(s => s.text === sentence.trim());
+        if (!exists && stocks[instrumentKey].length < 3) {
+          stocks[instrumentKey].push({
             text: sentence.trim(),
             category: 'PRE_MARKET_NEWS'
           });
