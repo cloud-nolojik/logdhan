@@ -182,6 +182,7 @@ class AIAnalyzeService {
    * @param {string} params.analysis_type - Analysis type (swing/intraday)
    * @param {number} params.current_price - Current stock price
    * @param {Date} params.scheduled_release_time - Optional scheduled release time for bulk analysis
+   * @param {boolean} params.useWeeklyExpiry - If true, use weekly expiration (Friday 3:29:59 PM IST) instead of daily
    * @returns {Promise<Object>} Created/updated analysis record
    */
   async createPendingAnalysisRecord({
@@ -190,7 +191,8 @@ class AIAnalyzeService {
     stock_symbol,
     analysis_type,
     current_price,
-    scheduled_release_time = null
+    scheduled_release_time = null,
+    useWeeklyExpiry = false
 
   }) {
     try {
@@ -205,9 +207,17 @@ class AIAnalyzeService {
         analysis_type
       });
 
-      // Calculate valid_until time (next market close)
+      // Calculate valid_until time
+      // - Weekly watchlist stocks: Friday 3:29:59 PM IST (end of trading week)
+      // - Regular stocks: Next market close (3:59:59 PM IST)
       const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
-      const valid_until = await MarketHoursUtil.getValidUntilTime();
+      const valid_until = useWeeklyExpiry
+        ? await MarketHoursUtil.getWeeklyValidUntilTime()
+        : await MarketHoursUtil.getValidUntilTime();
+
+      if (useWeeklyExpiry) {
+        console.log(`📅 [PENDING ANALYSIS] Using WEEKLY expiry for ${stock_symbol}: valid_until=${valid_until.toISOString()}`);
+      }
       const now = new Date();
       // If existing analysis has valid_until field, preserve existing data
       // Just update status to pending for validation

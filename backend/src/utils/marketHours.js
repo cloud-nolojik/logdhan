@@ -1070,6 +1070,104 @@ class MarketHoursUtil {
   }
 
   /**
+   * Get validity time for weekly watchlist analysis (end of trading week)
+   * Weekly analysis expires at Friday 3:29:59 PM IST of the current trading week
+   *
+   * This is different from getValidUntilTime() which expires at next market close (daily).
+   * Weekly watchlist analysis should remain valid for the entire trading week.
+   *
+   * Examples:
+   * - Created Monday 10:00 AM → Valid until Friday 3:29:59 PM (same week)
+   * - Created Friday 2:00 PM → Valid until Friday 3:29:59 PM (same day)
+   * - Created Friday 4:00 PM → Valid until NEXT Friday 3:29:59 PM (next week)
+   * - Created Saturday → Valid until NEXT Friday 3:29:59 PM (next week)
+   *
+   * @param {Date} fromDate - Creation date (defaults to now)
+   * @returns {Promise<Date>} - Validity time (Friday 3:29:59 PM IST as UTC)
+   */
+  static async getWeeklyValidUntilTime(fromDate = new Date()) {
+    try {
+      const now = fromDate || new Date();
+      const istNow = this.toIST(now);
+
+      // Get current day and time in IST
+      const dayOfWeek = istNow.getDay(); // 0=Sunday, 1=Monday, ..., 5=Friday, 6=Saturday
+      const currentHour = istNow.getHours();
+      const currentMinute = istNow.getMinutes();
+      const currentTimeInMinutes = currentHour * 60 + currentMinute;
+
+      // Weekly cutoff time: 3:29:59 PM IST (15:29 = 929 minutes)
+      const weeklyCutoffTime = 15 * 60 + 29; // 929 minutes
+
+      let targetFriday = new Date(istNow);
+
+      if (dayOfWeek === 5) {
+        // It's Friday
+        if (currentTimeInMinutes < weeklyCutoffTime) {
+          // Before 3:29:59 PM → expires today at 3:29:59 PM
+          // targetFriday is already today
+        } else {
+          // After 3:29:59 PM → expires NEXT Friday
+          targetFriday.setDate(targetFriday.getDate() + 7);
+        }
+      } else if (dayOfWeek === 6) {
+        // Saturday → next Friday (6 days ahead)
+        targetFriday.setDate(targetFriday.getDate() + 6);
+      } else if (dayOfWeek === 0) {
+        // Sunday → next Friday (5 days ahead)
+        targetFriday.setDate(targetFriday.getDate() + 5);
+      } else {
+        // Monday (1) → Friday = +4 days
+        // Tuesday (2) → Friday = +3 days
+        // Wednesday (3) → Friday = +2 days
+        // Thursday (4) → Friday = +1 day
+        const daysUntilFriday = 5 - dayOfWeek;
+        targetFriday.setDate(targetFriday.getDate() + daysUntilFriday);
+      }
+
+      // Check if targetFriday is a trading day (not a holiday)
+      // If Friday is a holiday, use the last trading day of that week (Thursday, etc.)
+      const isFridayTradingDay = await this.isTradingDay(targetFriday);
+
+      if (!isFridayTradingDay) {
+        // Friday is a holiday - find the last trading day of the week
+        // Go backwards from Friday until we find a trading day
+        for (let i = 1; i <= 4; i++) {
+          const checkDate = new Date(targetFriday);
+          checkDate.setDate(checkDate.getDate() - i);
+          const isTrading = await this.isTradingDay(checkDate);
+          if (isTrading) {
+            targetFriday = checkDate;
+            break;
+          }
+        }
+      }
+
+      // Convert to UTC for storage (3:29:59 PM IST = 09:59:59 AM UTC)
+      // IST is UTC+5:30, so 15:29:59 IST - 5:30 = 09:59:59 UTC
+      const validUntilUTC = this.getUtcForIstTime({
+        baseDate: targetFriday,
+        hour: 15,
+        minute: 29,
+        second: 59,
+        millisecond: 0
+      });
+
+      console.log(`📅 [WEEKLY VALID UNTIL] fromDate IST: ${istNow.toISOString()}`);
+      console.log(`📅 [WEEKLY VALID UNTIL] Target Friday IST: ${targetFriday.toISOString()}`);
+      console.log(`📅 [WEEKLY VALID UNTIL] Valid until UTC: ${validUntilUTC.toISOString()}`);
+
+      return validUntilUTC;
+    } catch (error) {
+      console.error('❌ [WEEKLY VALID UNTIL] Error calculating weekly validity time:', error);
+      // Fallback: 7 days from now
+      const fallback = new Date();
+      fallback.setDate(fallback.getDate() + 7);
+      return fallback;
+    }
+  }
+
+  /**
    * Get the most recent Friday (including today if it's Friday)
    * Used for weekend analysis to get Friday's closing data
    * @param {Date} fromDate - Reference date (defaults to now)

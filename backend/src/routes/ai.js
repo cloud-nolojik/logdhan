@@ -502,6 +502,16 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       }
     }
 
+    // Check if analysis is expired (for weekly watchlist stocks)
+    const now = new Date();
+    const isExpired = analysis.valid_until && now > new Date(analysis.valid_until);
+
+    // Generate expiry message for users
+    let expiryMessage = null;
+    if (isExpired) {
+      expiryMessage = 'New weekly analysis will be available from Saturday 6 PM';
+    }
+
     // Format response to match AnalysisApiResponse structure
     const formattedResponse = {
       _id: analysis._id,
@@ -515,6 +525,8 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       created_at: analysis.created_at,
       valid_until: analysis.valid_until, // 🆕 Add validity period for swing analysis
       expires_at: analysis.expires_at,
+      is_expired: isExpired, // 🆕 Flag to indicate if analysis is expired
+      expiry_message: expiryMessage, // 🆕 User-friendly message when expired
       // NEW: Monitoring flags
       can_start_monitoring: globalCanStartMonitoring,
       monitoring_status: !globalCanStartMonitoring ? 'conditions_met' : null,
