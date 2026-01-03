@@ -300,6 +300,9 @@ export function pickBestCandidate(stage2Result) {
       scan_type_bonus
     );
 
+    // 🔍 DEBUG: Log scoring for each candidate
+    console.log(`🔍 [SCORING] ${c.id}(${c.name}): RR=${rr}, trend=${trend_align}, dist=${distance_pct}, bonus=${scan_type_bonus} → score=${rawScore}`);
+
     return {
       ...c,
       totalScore: rawScore,  // Keep raw for ranking (higher = better)
@@ -309,6 +312,8 @@ export function pickBestCandidate(stage2Result) {
 
   // Sort by total score descending
   const ranked = scored.sort((a, b) => b.totalScore - a.totalScore);
+
+  console.log(`🔍 [SCORING] Winner: ${ranked[0].id}(${ranked[0].name}) with score=${ranked[0].totalScore}`);
 
   return {
     best: ranked[0],
