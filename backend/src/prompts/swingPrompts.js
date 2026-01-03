@@ -1,6 +1,7 @@
 import StockAnalysis from "../models/stockAnalysis.js";
 import { pickBestCandidate as pickBestStage2Candidate, candidates, regime } from "../engine/index.js";
 import { round2, isNum } from "../engine/helpers.js";
+import scanLevels from "../engine/scanLevels.js";
 
 // Alias for backward compatibility
 const shrinkCandidateForPrompt = candidates.shrinkForPrompt;
@@ -372,6 +373,75 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
 
   const candidates = [];
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SCAN-SPECIFIC CANDIDATE (C0) - Primary candidate when scan_type is provided
+  // Uses formulas that match WHY ChartInk found this stock
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType)) {
+    // Build data object for scanLevels
+    const scanData = {
+      ema20: ema20,
+      ema50: ema50,
+      sma200: sma200,
+      high20D: recent20High,
+      low20D: recent20Low,
+      fridayHigh: prevH,
+      fridayLow: prevL,
+      fridayClose: prevC,
+      fridayVolume: get(marketPayload, "volumeContext.volume"),
+      avgVolume20: get(marketPayload, "volumeContext.avgVolume20"),
+      atr: atrD,
+      rsi: rsi1h
+    };
+
+    const scanResult = scanLevels.calculateTradingLevels(scanType, scanData);
+
+    if (scanResult.valid) {
+      const c0RR = rrBuy(scanResult.entry, scanResult.target, scanResult.stop);
+
+      candidates.push({
+        id: "C0",
+        name: `scan_${scanType}`,
+        matches_scan_type: true,
+        is_scan_specific: true,  // Flag to identify this as the primary scan-based candidate
+        scan_mode: scanResult.mode,
+        score: {
+          rr: c0RR,
+          trend_align: trend === "BULLISH" ? 1.2 : 0.5,
+          distance_pct: round2((Math.abs(last - scanResult.entry) / last) * 100),
+          scan_type_bonus: 0.5  // High bonus for matching scan type
+        },
+        skeleton: {
+          type: "BUY",
+          archetype: scanResult.archetype || scanType.replace('_', '-'),
+          alignment: trend === "BULLISH" ? "with_trend" : "neutral",
+          entryType: scanResult.entryType,
+          entry: scanResult.entry,
+          entryRange: scanResult.entryRange,
+          target: scanResult.target,
+          stopLoss: scanResult.stop,
+          riskReward: scanResult.riskReward,
+          triggers: [
+            buildTrigger({
+              id: "T1",
+              timeframe: "1h",
+              left_ref: scanResult.entryType === 'limit' ? "price" : "high",
+              op: scanResult.entryType === 'limit' ? "<=" : "crosses_above",
+              right_ref: "entry",
+              right_value: scanResult.entry
+            })
+          ],
+          invalidations_pre_entry: [buildInvalidation(scanResult.entry)]
+        },
+        scan_reason: scanResult.reason,
+        scan_adjustments: scanResult.adjustments
+      });
+    } else {
+      // Log why scan-specific calculation failed (for debugging)
+      base.notes.push(`Scan-specific (${scanType}) calculation failed: ${scanResult.reason}`);
+    }
+  }
+
   // --- C1: Breakout (with trend) ---
   // Use recent swing high / R1 as reference “activation” level.
   const c1Entry = round2(Math.max(pivots.r1 || 0, recent20High || 0));
@@ -666,7 +736,13 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   out.notes.push("Candidates are computed from pivots + swing highs/lows + ATR; pivots are classic H/L/C based.");//  [oai_citation:3‡Investopedia](https://www.investopedia.com/articles/forex/05/fxpivots.asp?utm_source=chatgpt.com)
   out.notes.push("ATR is used as a volatility proxy for sizing distances.");//  [oai_citation:4‡Fidelity](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/atr?utm_source=chatgpt.com)
   if (scanType) {
-    out.notes.push(`ChartInk scan_type hint applied: ${scanType} → preferred candidates boosted by ${SCAN_TYPE_HINT_BONUS}.`);
+    // Check if C0 (scan-specific candidate) exists and is valid
+    const hasScanSpecific = labeledCandidates.some(c => c.is_scan_specific);
+    if (hasScanSpecific) {
+      const c0 = labeledCandidates.find(c => c.is_scan_specific);
+      out.notes.push(`Scan-specific candidate (C0) generated for ${scanType}: Entry=${c0.skeleton.entry}, Mode=${c0.scan_mode}`);
+    }
+    out.notes.push(`ChartInk scan_type: ${scanType}`);
   }
 
   // If you're keeping the "prompt builder" pattern:
