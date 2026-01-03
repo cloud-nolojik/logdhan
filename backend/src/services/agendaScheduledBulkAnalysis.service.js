@@ -392,8 +392,7 @@ class AgendaScheduledBulkAnalysisService {
             }
           } else {
             // No existing strategy or not completed - create pending record
-            // Use weekly expiry for ChartInk (weekly watchlist) stocks
-            const isWeeklyStock = stock.source === 'chartink' || stock.source === 'both';
+            // Use weekly expiry for ALL swing analysis (valid until Friday 3:29:59 PM)
             await aiAnalyzeService.createPendingAnalysisRecord({
               instrument_key: stock.instrument_key,
               stock_name: stockDetails.name,
@@ -401,7 +400,7 @@ class AgendaScheduledBulkAnalysisService {
               analysis_type: 'swing',
               current_price: current_price,
               scheduled_release_time: releaseTime,
-              useWeeklyExpiry: isWeeklyStock
+              useWeeklyExpiry: true  // All swing analyses use weekly expiry
             });
             recordsCreated++;
 
