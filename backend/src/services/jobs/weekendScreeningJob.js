@@ -378,11 +378,13 @@ class WeekendScreeningJob {
       watchlist.screening_run_at = new Date();
       watchlist.scan_types_used = scanTypes;
       watchlist.total_screener_results = allResults.length;
-      watchlist.grade_a_count = enrichedStocks.length;
+      // Count actual Grade A stocks in the watchlist
+      watchlist.grade_a_count = watchlist.stocks.filter(s => s.grade === 'A').length;
       await watchlist.save();
 
       result.totalStocksAdded = addResult.added;
-      console.log(`[SCREENING JOB] Added ${addResult.added} new stocks, skipped ${addResult.skipped} duplicates`);
+      result.totalStocksUpdated = addResult.updated;
+      console.log(`[SCREENING JOB] Added ${addResult.added} new stocks, updated ${addResult.updated} existing stocks`);
 
       this.stats.stocksProcessed += enrichedStocks.length;
 

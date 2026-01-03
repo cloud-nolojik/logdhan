@@ -177,15 +177,37 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
 // Static: Get or create current week (global)
 // On weekends, creates NEXT week's watchlist for screening prep
 weeklyWatchlistSchema.statics.getOrCreateCurrentWeek = async function() {
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+  // On weekends, always check/create next week's watchlist
+  if (isWeekend) {
+    const { weekStart, weekEnd, weekLabel } = getWeekBoundaries(now, true);
+
+    // Check if next week's watchlist already exists
+    let nextWeekWatchlist = await this.findOne({ week_start: weekStart });
+
+    if (!nextWeekWatchlist) {
+      // Create next week's watchlist
+      nextWeekWatchlist = await this.create({
+        week_start: weekStart,
+        week_end: weekEnd,
+        week_label: weekLabel,
+        stocks: [],
+        status: "ACTIVE"
+      });
+      console.log(`[WeeklyWatchlist] Created new watchlist for next week: ${weekLabel}`);
+    }
+
+    return nextWeekWatchlist;
+  }
+
+  // On weekdays, use getCurrentWeek or create current week
   let watchlist = await this.getCurrentWeek();
 
   if (!watchlist) {
-    const now = new Date();
-    const dayOfWeek = now.getDay();
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-    // On weekends, create next week's watchlist
-    const { weekStart, weekEnd, weekLabel } = getWeekBoundaries(now, isWeekend);
+    const { weekStart, weekEnd, weekLabel } = getWeekBoundaries(now, false);
 
     watchlist = await this.create({
       week_start: weekStart,
@@ -195,7 +217,7 @@ weeklyWatchlistSchema.statics.getOrCreateCurrentWeek = async function() {
       status: "ACTIVE"
     });
 
-    console.log(`[WeeklyWatchlist] Created new watchlist: ${weekLabel} (isWeekend: ${isWeekend})`);
+    console.log(`[WeeklyWatchlist] Created new watchlist: ${weekLabel}`);
   }
 
   return watchlist;
@@ -217,21 +239,45 @@ weeklyWatchlistSchema.statics.addStock = async function(stockData) {
   return { added: true, watchlist };
 };
 
-// Static: Add multiple stocks at once
+// Static: Add multiple stocks at once (upsert - update existing or insert new)
 weeklyWatchlistSchema.statics.addStocks = async function(stocksData) {
   const watchlist = await this.getOrCreateCurrentWeek();
 
-  const existingKeys = new Set(watchlist.stocks.map(s => s.instrument_key));
-  const newStocks = stocksData.filter(s => !existingKeys.has(s.instrument_key));
+  const existingMap = new Map(watchlist.stocks.map(s => [s.instrument_key, s]));
+  let added = 0;
+  let updated = 0;
 
-  if (newStocks.length > 0) {
-    watchlist.stocks.push(...newStocks);
-    await watchlist.save();
+  for (const stockData of stocksData) {
+    const existing = existingMap.get(stockData.instrument_key);
+
+    if (existing) {
+      // Update existing stock with fresh screening data
+      existing.symbol = stockData.symbol;
+      existing.stock_name = stockData.stock_name;
+      existing.setup_score = stockData.setup_score;
+      existing.grade = stockData.grade;
+      existing.screening_data = stockData.screening_data;
+      existing.scan_type = stockData.scan_type;
+      existing.selection_reason = stockData.selection_reason;
+      existing.entry_zone = stockData.entry_zone;
+      // Clear old analysis link - new analysis will be triggered
+      existing.analysis_id = null;
+      existing.ai_notes = null;
+      // Keep the original added_at and status (user tracking state)
+      updated++;
+    } else {
+      // Add new stock
+      watchlist.stocks.push(stockData);
+      added++;
+    }
   }
 
+  await watchlist.save();
+
   return {
-    added: newStocks.length,
-    skipped: stocksData.length - newStocks.length,
+    added,
+    updated,
+    skipped: 0,
     watchlist
   };
 };
