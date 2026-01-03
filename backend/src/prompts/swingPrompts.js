@@ -323,6 +323,11 @@ function candidateMatchesScanType(candidateId, scanType) {
 }
 
 export function buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1, scan_type = null, setup_score = null }) {
+  // 🔍 DEBUG: Log scan_type at buildStage2 entry
+  console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - ENTRY`);
+  console.log(`   scan_type param: ${scan_type === null ? 'null' : scan_type === undefined ? 'undefined' : `"${scan_type}"`}`);
+  console.log(`   scan_type type: ${typeof scan_type}`);
+
   const system = `You are a disciplined swing strategist. JSON ONLY. No markdown.`;
 
   // If you still want an LLM here, keep prompts.
@@ -330,6 +335,8 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
 
   // NORMALIZE scan_type ONCE - use this everywhere instead of raw scan_type
   const scanType = (scan_type || "").toString().trim().toLowerCase();
+  console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - Normalized scanType: "${scanType}"`);
+  console.log(`   Will generate C0: ${scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType)}`);
 
   const last = get(marketPayload, "priceContext.last", current_price);
   const ema20 = get(marketPayload, "trendMomentum.ema20_1D");
@@ -377,7 +384,14 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   // SCAN-SPECIFIC CANDIDATE (C0) - Primary candidate when scan_type is provided
   // Uses formulas that match WHY ChartInk found this stock
   // ═══════════════════════════════════════════════════════════════════════════
+  console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - C0 GENERATION CHECK`);
+  console.log(`   scanType: "${scanType}"`);
+  console.log(`   scanType truthy: ${!!scanType}`);
+  console.log(`   scanType in valid list: ${['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType)}`);
+
   if (scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType)) {
+    console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - GENERATING C0 for scanType="${scanType}"`);
+
     // Build data object for scanLevels
     const scanData = {
       ema20: ema20,
@@ -394,10 +408,17 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
       rsi: rsi1h
     };
 
+    console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - scanData:`, JSON.stringify({
+      ema20, high20D: recent20High, fridayHigh: prevH, fridayClose: prevC, atr: atrD
+    }));
+
+    console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - Calling scanLevels.calculateTradingLevels("${scanType}", scanData)`);
     const scanResult = scanLevels.calculateTradingLevels(scanType, scanData);
+    console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - scanResult:`, JSON.stringify(scanResult));
 
     if (scanResult.valid) {
       const c0RR = rrBuy(scanResult.entry, scanResult.target, scanResult.stop);
+      console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - C0 VALID! Entry=${scanResult.entry}, RR=${c0RR}`);
 
       candidates.push({
         id: "C0",
@@ -438,8 +459,11 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
       });
     } else {
       // Log why scan-specific calculation failed (for debugging)
+      console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - C0 INVALID: ${scanResult.reason}`);
       base.notes.push(`Scan-specific (${scanType}) calculation failed: ${scanResult.reason}`);
     }
+  } else {
+    console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - SKIPPING C0 (scanType empty or not in valid list)`);
   }
 
   // --- C1: Breakout (with trend) ---

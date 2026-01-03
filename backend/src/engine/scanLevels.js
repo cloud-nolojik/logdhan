@@ -33,50 +33,65 @@ export function roundToTick(price, tick = 0.05) {
  * @returns {object} Trading levels with validation
  */
 export function calculateTradingLevels(scanType, data) {
+  console.log(`🔍 [SCAN_LEVELS] calculateTradingLevels called with scanType="${scanType}"`);
+
   // ─────────────────────────────────────────────────────────────────────────
   // VALIDATE REQUIRED DATA
   // ─────────────────────────────────────────────────────────────────────────
   const validation = validateData(data);
   if (!validation.valid) {
+    console.log(`🔍 [SCAN_LEVELS] Validation FAILED: ${validation.reason}`);
     return validation;
   }
+  console.log(`🔍 [SCAN_LEVELS] Validation passed`);
 
   const { atr } = data;
 
   let result;
 
+  console.log(`🔍 [SCAN_LEVELS] Switching on scanType: "${scanType?.toLowerCase()}"`);
   switch (scanType?.toLowerCase()) {
     case 'breakout':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculateBreakoutLevels`);
       result = calculateBreakoutLevels(data);
       break;
 
     case 'pullback':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculatePullbackLevels`);
       result = calculatePullbackLevels(data);
       break;
 
     case 'momentum':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculateMomentumLevels`);
       result = calculateMomentumLevels(data);
       break;
 
     case 'consolidation_breakout':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculateConsolidationLevels`);
       result = calculateConsolidationLevels(data);
       break;
 
     default:
+      console.log(`🔍 [SCAN_LEVELS] Unknown scan type: "${scanType}"`);
       return {
         valid: false,
         reason: `Unknown scan type: ${scanType}`
       };
   }
 
+  console.log(`🔍 [SCAN_LEVELS] Result from calculation:`, JSON.stringify(result));
+
   if (!result.valid) {
+    console.log(`🔍 [SCAN_LEVELS] Calculation returned invalid: ${result.reason}`);
     return result;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // APPLY GUARDRAILS
   // ─────────────────────────────────────────────────────────────────────────
+  console.log(`🔍 [SCAN_LEVELS] Applying guardrails...`);
   const guarded = applyGuardrails(result.entry, result.stop, result.target, atr, scanType);
+  console.log(`🔍 [SCAN_LEVELS] Guardrails result:`, JSON.stringify(guarded));
 
   if (!guarded.valid) {
     return {

@@ -2426,9 +2426,13 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
    * Builds candidate skeletons (BUY/SELL/NO_TRADE) with entry/stop/target ranges (no LLM call - pure code)
    */
   stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1, scan_type = null }) {
+    // 🔍 DEBUG: Log scan_type received in stage2Skeleton
+    console.log(`🔍 [STAGE2_SKELETON] ${stock_symbol} - scan_type param: ${scan_type === null ? 'null' : scan_type === undefined ? 'undefined' : `"${scan_type}"`}`);
+
     try {
       // buildStage2 now returns { system, user } where user is JSON string of computed data
       // Pass scan_type to enable C0 (scan-specific) candidate generation
+      console.log(`🔍 [STAGE2_SKELETON] ${stock_symbol} - Calling buildStage2 with scan_type="${scan_type}"`);
       const { user } = buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1, scan_type });
       const s2 = JSON.parse(user);
 
@@ -2680,11 +2684,27 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     // STAGE 2 (code-based, no LLM call)
     const stage2Start = Date.now();
 
+    // 🔍 DEBUG: Log scan_type before Stage 2
+    console.log(`🔍 [SCAN_TYPE DEBUG] ${stock_symbol} - Before Stage 2:`);
+    console.log(`   scan_type received: ${scan_type === null ? 'null' : scan_type === undefined ? 'undefined' : `"${scan_type}"`}`);
+    console.log(`   scan_type type: ${typeof scan_type}`);
+
     let s2r;
     let stage2Time = 0;
     try {
       s2r = this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1, scan_type });
       stage2Time = Date.now() - stage2Start;
+
+      // 🔍 DEBUG: Log Stage 2 result candidates
+      const candidateIds = s2r?.s2?.candidates?.map(c => `${c.id}(${c.name})`).join(', ') || 'none';
+      const hasC0 = s2r?.s2?.candidates?.some(c => c.id === 'C0');
+      console.log(`🔍 [SCAN_TYPE DEBUG] ${stock_symbol} - Stage 2 result:`);
+      console.log(`   candidates: [${candidateIds}]`);
+      console.log(`   has C0 (scan-specific): ${hasC0}`);
+      if (hasC0) {
+        const c0 = s2r.s2.candidates.find(c => c.id === 'C0');
+        console.log(`   C0 entry: ${c0?.skeleton?.entry}, entryType: ${c0?.skeleton?.entryType}`);
+      }
 
     } catch (error) {
       stage2Time = Date.now() - stage2Start;
