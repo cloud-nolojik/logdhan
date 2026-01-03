@@ -566,14 +566,16 @@ class AIAnalyzeService {
       console.log(`[ANALYZE] 🎯 Analysis mode: ${analysisMode} for ${stock_symbol || instrument_key}`);
 
       // Create pending analysis record using common method
+      // Use weekly expiry (next Friday 3:29:59 PM) for ALL swing analysis
+      const useWeeklyExpiry = analysis_type === 'swing';
       const pendingAnalysis = await this.createPendingAnalysisRecord({
         instrument_key,
         stock_name,
         stock_symbol,
         analysis_type,
         current_price,
-        scheduled_release_time
-
+        scheduled_release_time,
+        useWeeklyExpiry
       });
       console.log(
         `[ANALYZE] 📝 Pending analysis created ${pendingAnalysis._id} for ${stock_symbol || instrument_key} ` +
