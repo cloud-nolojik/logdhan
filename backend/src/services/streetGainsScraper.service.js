@@ -490,6 +490,7 @@ Return a JSON object with this exact structure:
     "COMPANY_NAME": [
       {
         "text": "Full headline text about ONLY this specific stock",
+        "description": "1-2 sentence summary of the actual news - what happened, numbers, details",
         "category": "PRE_MARKET_NEWS" or "STOCKS_TO_WATCH"
       }
     ]
@@ -497,6 +498,13 @@ Return a JSON object with this exact structure:
   "sources_used": ["list of news sources"],
   "news_date": "${dateStr}"
 }
+
+**IMPORTANT: The "description" field must contain SPECIFIC DETAILS from the news:**
+- For results: "Q3 profit rose 15% to Rs 500 crore, revenue grew 12% YoY"
+- For orders: "Won Rs 200 crore order from Tata Motors for EV buses"
+- For SEBI: "SEBI imposed Rs 10 lakh fine for delayed disclosure"
+- For management: "CEO resigned citing personal reasons, CFO appointed interim CEO"
+- DO NOT write vague descriptions like "positive developments" or "significant news"
 
 **CRITICAL RULES - MUST FOLLOW:**
 1. Each headline MUST be SPECIFICALLY and PRIMARILY about ONLY ONE company
@@ -953,6 +961,7 @@ export async function scrapeAndStoreDailyNewsStocks() {
       // Generate headline hashes
       const headlinesWithHash = headlines.map(h => ({
         text: h.text,
+        description: h.description || null,  // Include description from web search
         category: h.category,
         hash: DailyNewsStock.generateHeadlineHash(h.text)
       }));
@@ -968,6 +977,7 @@ export async function scrapeAndStoreDailyNewsStocks() {
       const newsItems = analyzedHeadlines.map(h => ({
         headline: h.text,
         headline_hash: h.hash,
+        description: h.description || null,  // Detailed news description
         category: h.category,
         sentiment: h.sentiment,
         impact: h.impact,

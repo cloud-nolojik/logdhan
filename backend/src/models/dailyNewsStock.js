@@ -7,6 +7,7 @@ import crypto from "crypto";
 const newsItemSchema = new mongoose.Schema({
   headline: { type: String, required: true },
   headline_hash: { type: String, required: true },  // SHA256 for deduplication & caching
+  description: { type: String, default: null },  // Detailed news description (1-2 sentences)
   category: {
     type: String,
     enum: ['PRE_MARKET_NEWS', 'STOCKS_TO_WATCH'],

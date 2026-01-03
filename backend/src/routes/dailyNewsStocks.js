@@ -38,6 +38,7 @@ router.get("/", optionalAuth, async (req, res) => {
       instrument_key: stock.instrument_key,
       headlines: stock.news_items.map(item => ({
         text: item.headline,
+        description: item.description || null,  // Detailed news description
         category: item.category
       })),
       sentiment: stock.aggregate_sentiment,
@@ -139,6 +140,7 @@ router.get("/:symbol", auth, async (req, res) => {
         instrument_key: stock.instrument_key,
         headlines: stock.news_items.map(item => ({
           text: item.headline,
+          description: item.description || null,  // Detailed news description
           category: item.category,
           sentiment: item.sentiment,
           impact: item.impact,
