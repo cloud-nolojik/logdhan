@@ -295,17 +295,18 @@ function computeDataHealth(marketPayload) {
 /**
  * Maps ChartInk scan_type to preferred candidate IDs
  * Used to boost matching candidates when scan_type is provided
+ * C5 (trend-follow) is preferred for momentum/breakout as it provides immediate entry at current price
  */
 const SCAN_TYPE_TO_CANDIDATES = {
-  "breakout": ["C1"],
-  "pullback": ["C2"],
-  "momentum": ["C1", "C2"],           // Momentum can use breakout or pullback
-  "consolidation_breakout": ["C1"],   // Similar to breakout
+  "breakout": ["C5", "C1"],           // Prefer C5 (trend-follow at current price), then C1 (breakout above)
+  "pullback": ["C2"],                 // Pullback - wait for entry below current price
+  "momentum": ["C5", "C1", "C2"],     // Momentum prefers C5 (immediate), then C1 or C2
+  "consolidation_breakout": ["C5", "C1"], // Similar to breakout - prefer immediate entry
   // Uppercase versions
-  "BREAKOUT": ["C1"],
+  "BREAKOUT": ["C5", "C1"],
   "PULLBACK": ["C2"],
-  "MOMENTUM": ["C1", "C2"],
-  "CONSOLIDATION_BREAKOUT": ["C1"]
+  "MOMENTUM": ["C5", "C1", "C2"],
+  "CONSOLIDATION_BREAKOUT": ["C5", "C1"]
 };
 
 // Bonus score for matching scan_type (significant but not overwhelming)
@@ -325,6 +326,9 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
 
   // If you still want an LLM here, keep prompts.
   // But since you asked for code-first: Stage2 can be fully deterministic and skip LLM.
+
+  // NORMALIZE scan_type ONCE - use this everywhere instead of raw scan_type
+  const scanType = (scan_type || "").toString().trim().toLowerCase();
 
   const last = get(marketPayload, "priceContext.last", current_price);
   const ema20 = get(marketPayload, "trendMomentum.ema20_1D");
@@ -378,12 +382,12 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   candidates.push({
     id: "C1",
     name: "breakout",
-    matches_scan_type: candidateMatchesScanType("C1", scan_type),
+    matches_scan_type: candidateMatchesScanType("C1", scanType),
     score: {
       rr: c1RR,
       trend_align: trend === "BULLISH" ? 1 : 0.3,
       distance_pct: round2((Math.abs(last - c1Entry) / last) * 100),
-      scan_type_bonus: candidateMatchesScanType("C1", scan_type) ? SCAN_TYPE_HINT_BONUS : 0
+      scan_type_bonus: candidateMatchesScanType("C1", scanType) ? SCAN_TYPE_HINT_BONUS : 0
     },
     skeleton: {
       type: "BUY",
@@ -411,12 +415,12 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   candidates.push({
     id: "C2",
     name: "pullback",
-    matches_scan_type: candidateMatchesScanType("C2", scan_type),
+    matches_scan_type: candidateMatchesScanType("C2", scanType),
     score: {
       rr: c2RR,
       trend_align: trend === "BULLISH" ? 1 : 0.4,
       distance_pct: round2((Math.abs(last - c2Entry) / last) * 100),
-      scan_type_bonus: candidateMatchesScanType("C2", scan_type) ? SCAN_TYPE_HINT_BONUS : 0
+      scan_type_bonus: candidateMatchesScanType("C2", scanType) ? SCAN_TYPE_HINT_BONUS : 0
     },
     skeleton: {
       type: "BUY",
@@ -445,13 +449,13 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   candidates.push({
     id: "C3",
     name: "mean_reversion",
-    matches_scan_type: candidateMatchesScanType("C3", scan_type),
+    matches_scan_type: candidateMatchesScanType("C3", scanType),
     score: {
       rr: c3RR,
       trend_align: trend === "NEUTRAL" ? 1 : 0.5,
       rsi_fit: isNum(rsi1h) ? (rsi1h < 45 ? 1 : 0.3) : 0.4,
       distance_pct: round2((Math.abs(last - c3Entry) / last) * 100),
-      scan_type_bonus: candidateMatchesScanType("C3", scan_type) ? SCAN_TYPE_HINT_BONUS : 0
+      scan_type_bonus: candidateMatchesScanType("C3", scanType) ? SCAN_TYPE_HINT_BONUS : 0
     },
     skeleton: {
       type: "BUY",
@@ -479,12 +483,12 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   candidates.push({
     id: "C4",
     name: "range_fade",
-    matches_scan_type: candidateMatchesScanType("C4", scan_type),
+    matches_scan_type: candidateMatchesScanType("C4", scanType),
     score: {
       rr: c4RR,
       trend_align: trend === "NEUTRAL" ? 1 : 0.4,
       distance_pct: round2((Math.abs(last - c4Entry) / last) * 100),
-      scan_type_bonus: candidateMatchesScanType("C4", scan_type) ? SCAN_TYPE_HINT_BONUS : 0
+      scan_type_bonus: candidateMatchesScanType("C4", scanType) ? SCAN_TYPE_HINT_BONUS : 0
     },
     skeleton: {
       type: "SELL",
@@ -512,6 +516,110 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
     }
   });
 
+  // --- C5: Trend-follow (BUY_ABOVE trigger for next-week actionable entries) ---
+  // This candidate provides TRULY ACTIONABLE entries for weekend screening
+  // Entry is a TRIGGER above Friday high / recent high - not a stale LTP fill
+  // Uses normalized scanType (lowercase) for consistent matching
+  const isImmediateEntryScan = scanType && ['momentum', 'breakout', 'consolidation_breakout'].includes(scanType);
+
+  // SAFETY: Skip C5 entirely if ATR is missing/zero/invalid
+  const hasValidAtr = isNum(atrD) && atrD > 0;
+
+  if (isImmediateEntryScan && trend === "BULLISH" && hasValidAtr) {
+    // C5 Entry: BUY_ABOVE trigger at max(fridayHigh, recent20High) + buffer
+    // Fallback chain: prevH → recent20High → last (prefer actual highs)
+    const fridayHigh = isNum(prevH) ? prevH : (isNum(recent20High) ? recent20High : last);
+    const c5BaseEntry = Math.max(fridayHigh, recent20High || fridayHigh);
+
+    // Buffer = min(0.15 * ATR, entry * 0.003) to avoid triggering on noise
+    // Clamp to non-negative
+    const c5Buffer = Math.max(0, Math.min(0.15 * atrD, c5BaseEntry * 0.003));
+    const c5Entry = round2(c5BaseEntry + c5Buffer);
+
+    // Stop: Below EMA20 or S1 (whichever provides better risk)
+    const c5Stop = round2(Math.max(ema20 - 0.5 * atrD, pivots.s1 || (last - 1.5 * atrD)));
+
+    // Target: R1 or 2% above recent 20-day high
+    const c5Target = round2(Math.max(pivots.r1 || (last + 2 * atrD), recent20High ? recent20High * 1.02 : (last + 2 * atrD)));
+
+    // GEOMETRY GUARD: Ensure stop < entry < target for BUY
+    const c5GeometryValid = c5Stop < c5Entry && c5Entry < c5Target;
+
+    // DISTANCE CAP: Skip if entry is >6% away from current price (prevents absurd triggers)
+    const c5DistancePct = Math.abs(c5Entry - last) / last;
+    const c5DistanceValid = c5DistancePct <= 0.06; // Max 6% from current price
+
+    const c5RR = rrBuy(c5Entry, c5Target, c5Stop);
+
+    // ATR-based entry range (adaptive to volatility) - slippage band AFTER trigger
+    const c5GapBuffer = Math.max(0, Math.min(atrD * 0.5, c5Entry * 0.03)); // 0.5*ATR or 3%, whichever smaller
+
+    // Only add C5 if geometry valid, distance valid, and RR >= 1.0
+    if (c5GeometryValid && c5DistanceValid && c5RR >= 1.0) {
+      candidates.push({
+        id: "C5",
+        name: "trend_follow",
+        matches_scan_type: candidateMatchesScanType("C5", scanType),
+        score: {
+          rr: c5RR,
+          trend_align: 1.2, // Bullish trend required, so always high alignment
+          distance_pct: round2(c5DistancePct * 100), // Distance from current price as %
+          scan_type_bonus: SCAN_TYPE_HINT_BONUS + 0.3 // Extra bonus for matching weekend scans
+        },
+        skeleton: {
+          type: "BUY",
+          archetype: "trend-follow",
+          alignment: "with_trend",
+          entryType: "buy_above", // TRIGGER-based entry, not market order
+          entry: c5Entry,
+          // Acceptable slippage band AFTER trigger fires (not "marketable range")
+          entryRange: [round2(c5Entry), round2(c5Entry + c5GapBuffer)],
+          target: c5Target,
+          stopLoss: c5Stop,
+          riskReward: c5RR,
+          // Validity rules for "next week only" (single source of truth: validSessions)
+          validity: {
+            validSessions: 5, // Valid for 5 trading sessions (1 week)
+            maxGapUpPct: 2.0, // Skip if Monday opens >2% above entry
+            maxGapDownPct: 3.0, // Skip if Monday opens >3% below Friday close
+            gapAction: "SKIP" // Action when gap exceeds limits
+          },
+          triggers: [
+            buildTrigger({
+              id: "T1",
+              timeframe: "1h",
+              left_ref: "high", // Trigger on high breaking above entry
+              op: "crosses_above",
+              right_ref: "entry",
+              right_value: c5Entry
+            })
+          ],
+          invalidations_pre_entry: [
+            {
+              timeframe: "1h",
+              left: { ref: "close" },
+              op: "<",
+              right: { ref: "value", value: c5Stop },
+              occurrences: { count: 1, consecutive: false },
+              action: "cancel_entry",
+              scope: "pre_entry"
+            },
+            {
+              // Gap-down invalidation
+              timeframe: "1d",
+              left: { ref: "open" },
+              op: "<",
+              right: { ref: "value", value: round2(last * 0.97) }, // >3% gap down
+              occurrences: { count: 1, consecutive: false },
+              action: "cancel_entry",
+              scope: "pre_entry"
+            }
+          ]
+        }
+      });
+    }
+  }
+
   // Filter obvious invalid candidates (bad geometry or RR too low)
   const filtered = candidates
     .map(c => {
@@ -524,28 +632,41 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
     })
     .filter(c => c.ok);
 
-  // Optional: label NO_TRADE if nothing passes min RR threshold
+  // Classify candidates by RR quality
   const MIN_RR = 1.5;
   const passing = filtered.filter(c => c.skeleton.riskReward >= MIN_RR);
+  const isLowRRFallback = passing.length === 0 && filtered.length > 0;
+
+  // Add quality labels to candidates
+  const labeledCandidates = (passing.length ? passing : filtered)
+    .sort((a, b) => {
+      // quick score: RR first, then trend alignment, then closeness, plus scan_type bonus
+      const aScore = (a.score.rr || 0) + (a.score.trend_align || 0) - ((a.score.distance_pct || 0) / 100) + (a.score.scan_type_bonus || 0);
+      const bScore = (b.score.rr || 0) + (b.score.trend_align || 0) - ((b.score.distance_pct || 0) / 100) + (b.score.scan_type_bonus || 0);
+      return bScore - aScore;
+    })
+    .map(c => ({
+      ...c,
+      // Add quality label based on RR threshold
+      quality: c.skeleton.riskReward >= MIN_RR ? "PREFERRED" : "LOW_RR_FALLBACK"
+    }));
 
   const out = {
     ...base,
     insufficientData: false,
-    // Include scan_type hint if provided (for downstream reference)
-    ...(scan_type && { scan_type_hint: scan_type }),
-    candidates: (passing.length ? passing : filtered)
-      .sort((a, b) => {
-        // quick score: RR first, then trend alignment, then closeness, plus scan_type bonus
-        const aScore = (a.score.rr || 0) + (a.score.trend_align || 0) - ((a.score.distance_pct || 0) / 100) + (a.score.scan_type_bonus || 0);
-        const bScore = (b.score.rr || 0) + (b.score.trend_align || 0) - ((b.score.distance_pct || 0) / 100) + (b.score.scan_type_bonus || 0);
-        return bScore - aScore;
-      })
+    // Include normalized scan_type hint if provided (for downstream reference)
+    ...(scanType && { scan_type_hint: scanType }),
+    // Flag if we're showing low-RR fallback candidates
+    quality_note: isLowRRFallback
+      ? "No candidates meet preferred RR >= 1.5 threshold. Showing best available setups - trade only if you accept higher risk."
+      : null,
+    candidates: labeledCandidates
   };
 
   out.notes.push("Candidates are computed from pivots + swing highs/lows + ATR; pivots are classic H/L/C based.");//  [oai_citation:3‡Investopedia](https://www.investopedia.com/articles/forex/05/fxpivots.asp?utm_source=chatgpt.com)
   out.notes.push("ATR is used as a volatility proxy for sizing distances.");//  [oai_citation:4‡Fidelity](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/atr?utm_source=chatgpt.com)
-  if (scan_type) {
-    out.notes.push(`ChartInk scan_type hint applied: ${scan_type} → preferred candidates boosted by ${SCAN_TYPE_HINT_BONUS}.`);
+  if (scanType) {
+    out.notes.push(`ChartInk scan_type hint applied: ${scanType} → preferred candidates boosted by ${SCAN_TYPE_HINT_BONUS}.`);
   }
 
   // If you're keeping the "prompt builder" pattern:
@@ -684,10 +805,18 @@ If analysis_mode = "DISCOVERY":
 Stock: ${stock_name} (${stock_symbol})
 Current Observed Price: ₹${current_price}
 ${scan_type ? `
-CHARTINK SCREENING CONTEXT:
+CHARTINK SCREENING CONTEXT (WEEKEND ANALYSIS FOR NEXT WEEK):
 - Scan Type: ${scan_type} (This stock was identified by ChartInk ${scan_type} scan)
 - Setup Score: ${setup_score || 'N/A'}/100
-- Note: The scan type indicates the expected setup pattern. Validate if current price action supports this setup.
+- ⚠️ CRITICAL: This analysis is for NEXT WEEK's trading (starting Monday), not for immediate action.
+- Entry Level Requirements:
+  * For "breakout" or "momentum" scans: Entry should be at or slightly ABOVE current price (breakout continuation)
+  * For "pullback" scans: If entry is more than 2% below current price, mark as "WAIT_FOR_PULLBACK" in simple_verdict
+  * For "consolidation_breakout" scans: Entry should be near the breakout level (within 1-2% of current price)
+- If the optimal entry zone is significantly below current price (>3%), the setup may have already played out.
+  In this case, either:
+  1. Adjust entry to a realistic level user can act on next week, OR
+  2. Set simple_verdict to "WAIT - Entry zone passed" and explain in why_this_makes_sense
 ` : ''}${regimeCheck ? `
 MARKET REGIME (Nifty 50 vs 50 EMA):
 - Regime: ${regimeCheck.regime}
@@ -769,6 +898,14 @@ If required values cannot be produced reliably -> insufficientData = true (still
 - Do NOT invent a new archetype outside this list.
 - If selectedCandidate.skeleton entry/target/stopLoss is missing or violates required ordering (BUY: stop < entry < target; SELL: target < entry < stop), set type="NO_TRADE", entry=null, entryRange=null, target=null, stopLoss=null, riskReward=0, and mark insufficientData=true.
 - If all required values exist but the structure is not acceptable (e.g., RR < 1.0), set type="NO_TRADE" but keep insufficientData=false.
+
+=== WEEKEND SCREENING ENTRY RULE (when scan_type is present) ===
+- This analysis is prepared over the weekend for NEXT WEEK's trading.
+- Entry MUST be actionable when markets open Monday:
+  * entry should be within -2% to +3% of current_price for BUY setups
+  * If pullback entry is >2% below current price: Set simple_verdict to "WAIT for pullback to ₹{entry}"
+  * If entry is >3% below current: The setup has likely played out - consider NO_TRADE or adjust entry upward
+- simple_verdict MUST reflect whether user can act immediately on Monday or needs to wait
 
 === OPEN-STATE RULE (VERY IMPORTANT) ===
 If userTradeState.hasOpenOrder=true OR userTradeState.hasOpenPosition=true:
