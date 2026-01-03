@@ -430,7 +430,7 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
           rr: c0RR,
           trend_align: trend === "BULLISH" ? 1.2 : 0.5,
           distance_pct: round2((Math.abs(last - scanResult.entry) / last) * 100),
-          scan_type_bonus: 0.5  // High bonus for matching scan type
+          scan_type_bonus: 2.0  // Strong bonus to ensure scan-specific candidate wins over generic ones
         },
         skeleton: {
           type: "BUY",
@@ -466,8 +466,19 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
     console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - SKIPPING C0 (scanType empty or not in valid list)`);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GENERIC CANDIDATES (C1-C5) - Only generate if scan_type is NOT provided
+  // When scan_type exists, we ONLY use C0 regardless of whether it succeeded
+  // ═══════════════════════════════════════════════════════════════════════════
+  const hasScanType = scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType);
+
+  if (hasScanType) {
+    console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - SKIPPING C1-C5 (scan_type="${scanType}" provided, using C0 only)`);
+  } else {
+    console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - Generating generic candidates C1-C5 (no scan_type)`);
+
   // --- C1: Breakout (with trend) ---
-  // Use recent swing high / R1 as reference “activation” level.
+  // Use recent swing high / R1 as reference "activation" level.
   const c1Entry = round2(Math.max(pivots.r1 || 0, recent20High || 0));
   const c1Stop  = round2(Math.max(pivots.pivot || 0, ema20 || 0)); // keep below entry
   const c1Target = round2((pivots.r2 && pivots.r2 > c1Entry) ? pivots.r2 : (c1Entry + 1.2 * atrD));
@@ -713,6 +724,7 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
       });
     }
   }
+  } // End of else block for generic candidates (C1-C5)
 
   // Filter obvious invalid candidates (bad geometry or RR too low)
   const filtered = candidates
