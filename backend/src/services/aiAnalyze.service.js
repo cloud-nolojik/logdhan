@@ -2425,10 +2425,11 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
    * Stage 2: Strategy Skeleton & Triggers
    * Builds candidate skeletons (BUY/SELL/NO_TRADE) with entry/stop/target ranges (no LLM call - pure code)
    */
-  stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1 }) {
+  stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1, scan_type = null }) {
     try {
       // buildStage2 now returns { system, user } where user is JSON string of computed data
-      const { user } = buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1 });
+      // Pass scan_type to enable C0 (scan-specific) candidate generation
+      const { user } = buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1, scan_type });
       const s2 = JSON.parse(user);
 
       // Gate: if insufficientData is returned
@@ -2682,7 +2683,7 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     let s2r;
     let stage2Time = 0;
     try {
-      s2r = this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1 });
+      s2r = this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1, scan_type });
       stage2Time = Date.now() - stage2Start;
 
     } catch (error) {
