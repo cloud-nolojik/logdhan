@@ -535,9 +535,11 @@ stockAnalysisSchema.methods.markCompleted = async function () {
   this.progress.estimated_time_remaining = 0;
   this.progress.last_updated = new Date();
 
-  // Set valid_until to next market close (3:59:59 PM IST)
-  const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
-  this.valid_until = await MarketHoursUtil.getValidUntilTime();
+  // Only set valid_until if not already set (preserve weekly expiry from createPendingAnalysisRecord)
+  if (!this.valid_until) {
+    const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
+    this.valid_until = await MarketHoursUtil.getValidUntilTime();
+  }
 
   return this.save();
 };
