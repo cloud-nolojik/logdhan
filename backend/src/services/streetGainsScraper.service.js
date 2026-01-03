@@ -184,6 +184,119 @@ function escapeRegex(str) {
 }
 
 /**
+ * List of known company name patterns to detect multi-stock headlines
+ * Used to filter out headlines that mention multiple companies
+ */
+const COMPANY_DETECTION_PATTERNS = [
+  // Short trading symbols (3-5 chars) - case insensitive whole word match
+  'TCS', 'ITC', 'HDFC', 'ICICI', 'SBI', 'ONGC', 'NTPC', 'BPCL', 'HPCL', 'IOC',
+  'L&T', 'M&M', 'HUL', 'JSW', 'TATA', 'ADANI', 'CIPLA', 'WIPRO',
+  // Common company name patterns
+  'Reliance', 'Infosys', 'Bharti', 'Airtel', 'Maruti', 'Suzuki',
+  'Hero', 'MotoCorp', 'TVS', 'Motor', 'Bajaj', 'Auto', 'Finance',
+  'Asian Paints', 'Titan', 'Nestle', 'Britannia',
+  'Sun Pharma', 'Dr Reddy', "Reddy's", 'Lupin', 'Divi',
+  'Coal India', 'Power Grid', 'Hindalco', 'Vedanta',
+  'Tech Mahindra', 'HCL', 'Mindtree', 'Mphasis',
+  'Kotak', 'Axis', 'IndusInd', 'Yes Bank', 'IDFC', 'Bandhan',
+  'Zomato', 'Paytm', 'Nykaa', 'Delhivery', 'PolicyBazaar',
+  'Ola Electric', 'Tata Motors', 'Tata Steel', 'Tata Power',
+  'Adani Enterprises', 'Adani Ports', 'Adani Green', 'Adani Power',
+  'ITC Hotels', 'Indian Hotels', 'EIH', 'Lemon Tree',
+  'GAIL', 'SAIL', 'BHEL', 'BEL', 'HAL',
+  'UltraTech', 'Shree Cement', 'ACC', 'Ambuja',
+  'IndianOil', 'BPCL', 'HPCL', 'RIL', 'ONGC'
+];
+
+/**
+ * Check if a headline mentions multiple companies
+ * @param {string} headline - The headline text
+ * @param {string} assignedCompany - The company this headline is assigned to
+ * @returns {{ isValid: boolean, mentionedCompanies: string[] }}
+ */
+function validateHeadlineAssignment(headline, assignedCompany) {
+  const headlineLower = headline.toLowerCase();
+  const assignedLower = assignedCompany.toLowerCase();
+
+  // Find all company mentions in the headline
+  const mentionedCompanies = [];
+
+  for (const pattern of COMPANY_DETECTION_PATTERNS) {
+    const patternLower = pattern.toLowerCase();
+
+    // Skip if this pattern is part of the assigned company name
+    if (assignedLower.includes(patternLower)) {
+      continue;
+    }
+
+    // Check if pattern exists in headline as a word boundary match
+    // This prevents "ITC" matching inside "ITCHOTELS"
+    const regex = new RegExp(`\\b${escapeRegex(patternLower)}\\b`, 'i');
+    if (regex.test(headlineLower)) {
+      // Additional check: don't count if it's a substring of the assigned company
+      const assignedWords = assignedCompany.split(/[\s,&-]+/).map(w => w.toLowerCase());
+      if (!assignedWords.includes(patternLower)) {
+        mentionedCompanies.push(pattern);
+      }
+    }
+  }
+
+  // Also check for common multi-stock indicators
+  const multiStockIndicators = [
+    /\b(?:and|,)\s+(?:while|as|but)\b/i,  // "X jumped, while Y fell"
+    /\bgainers?\b.*\blosers?\b/i,          // Mentions both gainers and losers
+    /\b(?:including|such as|like)\s+\w+,\s*\w+/i,  // Lists multiple stocks
+    /\b(?:IT|auto|pharma|banking|metal)\s+(?:stocks?|sector)\b/i  // Sector news
+  ];
+
+  const hasMultiStockIndicator = multiStockIndicators.some(regex => regex.test(headline));
+
+  // Invalid if mentions other companies OR has multi-stock indicators
+  const isValid = mentionedCompanies.length === 0 && !hasMultiStockIndicator;
+
+  if (!isValid) {
+    console.log(`[NewsSearch] ⚠️ Filtering out headline for "${assignedCompany}": mentions other companies [${mentionedCompanies.join(', ')}] or is multi-stock news`);
+  }
+
+  return {
+    isValid,
+    mentionedCompanies,
+    hasMultiStockIndicator
+  };
+}
+
+/**
+ * Filter headlines to only include those specifically about the assigned company
+ * @param {Object} stocksData - Map of company name to headlines array
+ * @returns {Object} Filtered stocks data
+ */
+function filterMultiStockHeadlines(stocksData) {
+  const filteredStocks = {};
+  let removedCount = 0;
+
+  for (const [companyName, headlines] of Object.entries(stocksData)) {
+    const validHeadlines = headlines.filter(headline => {
+      const { isValid } = validateHeadlineAssignment(headline.text, companyName);
+      if (!isValid) {
+        removedCount++;
+      }
+      return isValid;
+    });
+
+    // Only include stocks that still have valid headlines
+    if (validHeadlines.length > 0) {
+      filteredStocks[companyName] = validHeadlines;
+    }
+  }
+
+  if (removedCount > 0) {
+    console.log(`[NewsSearch] Filtered out ${removedCount} multi-stock headlines`);
+  }
+
+  return filteredStocks;
+}
+
+/**
  * Analyze headlines sentiment using AI (batch per stock)
  * @param {string} symbol - Stock symbol
  * @param {{ text: string, hash: string }[]} headlines - Headlines to analyze
@@ -376,7 +489,7 @@ Return a JSON object with this exact structure:
   "stocks": {
     "COMPANY_NAME": [
       {
-        "text": "Full headline text mentioning the stock",
+        "text": "Full headline text about ONLY this specific stock",
         "category": "PRE_MARKET_NEWS" or "STOCKS_TO_WATCH"
       }
     ]
@@ -385,29 +498,34 @@ Return a JSON object with this exact structure:
   "news_date": "${dateStr}"
 }
 
-**CRITICAL RULES:**
-1. Use the EXACT company name as mentioned in the headline as the key
-2. The headline MUST be about that specific company - DO NOT mix up companies
-3. Use the company name EXACTLY as it appears in news (e.g., "Indian Bank", "Ola Electric", "Reliance Industries", "TCS", "HDFC Bank")
-4. DO NOT use stock symbols or ISIN codes - just use the company name
+**CRITICAL RULES - MUST FOLLOW:**
+1. Each headline MUST be SPECIFICALLY and PRIMARILY about ONLY ONE company
+2. DO NOT include headlines that mention multiple stocks (e.g., "TCS, Infosys, Wipro gain" should NOT be included)
+3. DO NOT include market roundup headlines that list multiple gainers/losers
+4. The company MUST be the PRIMARY SUBJECT of the headline, not just mentioned in passing
+5. Use the company name EXACTLY as it appears in news (e.g., "Indian Bank", "Ola Electric", "Reliance Industries", "TCS", "HDFC Bank")
+6. DO NOT use stock symbols or ISIN codes - just use the company name
+7. CRITICAL: "ITC" and "ITC Hotels" are DIFFERENT companies - DO NOT mix them up!
 
-Examples of correct output:
-{
-  "stocks": {
-    "Indian Bank": [{"text": "Indian Bank reports 15% rise in Q3 profit", "category": "PRE_MARKET_NEWS"}],
-    "Ola Electric": [{"text": "Ola Electric shares surge 12% on delivery numbers", "category": "STOCKS_TO_WATCH"}],
-    "Reliance Industries": [{"text": "Reliance Jio adds 5M subscribers in December", "category": "PRE_MARKET_NEWS"}],
-    "TCS": [{"text": "TCS wins $500M deal from European bank", "category": "PRE_MARKET_NEWS"}]
-  }
-}
+**EXAMPLES OF CORRECT HEADLINES:**
+- "Indian Bank reports 15% rise in Q3 profit" → assign to "Indian Bank" ✅
+- "TCS wins $500M deal from European bank" → assign to "TCS" ✅
+- "Reliance Jio adds 5M subscribers in December" → assign to "Reliance Industries" ✅
+
+**EXAMPLES OF INCORRECT HEADLINES (DO NOT INCLUDE):**
+- "Hero MotoCorp and TVS Motor jumped, while ITC tumbled 3%" → mentions 3 stocks, SKIP ❌
+- "IT stocks including TCS, Infosys rise on weak rupee" → mentions multiple stocks, SKIP ❌
+- "Nifty 50 sees mixed trading with auto and pharma up" → sector news, SKIP ❌
+
+Return ONLY headlines where ONE specific company is the PRIMARY subject.
 
 Rules:
 1. Only include NSE listed Indian stocks
 2. Use the company name as it appears in the news headline
 3. Each headline should be the actual news headline, not a summary
-4. The headline MUST be specifically about the company you assign it to
-5. Focus on actionable news that could affect stock prices today
-6. Include 10-20 stocks with the most significant news
+4. The headline MUST be ONLY about ONE company (the one you assign it to)
+5. Focus on company-specific news (results, deals, SEBI orders, management, etc.)
+6. Include 10-20 stocks with the most significant company-specific news
 7. Categorize as PRE_MARKET_NEWS for breaking news or STOCKS_TO_WATCH for stocks with potential movement`;
 
     const response = await openai.responses.create({
@@ -475,6 +593,16 @@ Rules:
       stocksData = extractStocksFromText(outputText);
     }
 
+    // IMPORTANT: Filter out headlines that mention multiple companies
+    // This is a safety net in case OpenAI still returns multi-stock headlines
+    const beforeFilterCount = Object.keys(stocksData).length;
+    stocksData = filterMultiStockHeadlines(stocksData);
+    const afterFilterCount = Object.keys(stocksData).length;
+
+    if (beforeFilterCount !== afterFilterCount) {
+      console.log(`[NewsSearch] Stocks reduced from ${beforeFilterCount} to ${afterFilterCount} after filtering multi-stock headlines`);
+    }
+
     // Get sources from annotations if available
     if (response.output && Array.isArray(response.output)) {
       const messageOutput = response.output.find(o => o.type === 'message');
@@ -487,7 +615,7 @@ Rules:
     }
 
     const stockCount = Object.keys(stocksData).length;
-    console.log(`[NewsSearch] Found news for ${stockCount} stocks`);
+    console.log(`[NewsSearch] Found news for ${stockCount} stocks (after filtering)`);
 
     return {
       stocks: stocksData,
