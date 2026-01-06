@@ -46,7 +46,8 @@ router.get("/", optionalAuth, async (req, res) => {
       instrument_key: stock.instrument_key,
       headlines: stock.news_items.map(item => ({
         text: item.headline,
-        description: item.description || null,  // Detailed news description
+        // Use description if available, otherwise fall back to sentiment_reason
+        description: item.description || item.sentiment_reason || null,
         category: item.category
       })),
       sentiment: stock.aggregate_sentiment,
