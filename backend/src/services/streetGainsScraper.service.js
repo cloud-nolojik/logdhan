@@ -20,7 +20,7 @@ import MarketSentiment from '../models/marketSentiment.js';
 import ApiUsage from '../models/apiUsage.js';
 import OpenAI from 'openai';
 
-const SCRAPE_VERSION = 'v4-rss-primary';
+const SCRAPE_VERSION = 'v5-openai-primary';
 
 // Initialize RSS parser
 const rssParser = new Parser({
@@ -297,13 +297,17 @@ function extractCompanyFromHeadline(headline) {
     /^(?:Buy|Sell|Hold|Accumulate|Reduce)\s+([A-Z][A-Za-z&\s]+?)(?:;|\s+target|\s+at)/i,
   ];
 
-  // Skip generic headlines
+  // Skip generic headlines and non-Indian market news
   const skipPatterns = [
     /^(?:Sensex|Nifty|Market|Markets|Stock|Stocks|Share|Shares|Trade|Trading)\s+/i,
     /^(?:Wall Street|US market|Global|Asian|European)\s+/i,
     /^(?:FII|DII|Institutional|Retail)\s+/i,
     /among\s+\d+\s+stocks?/i,
     /\d+\s+stocks?\s+(?:to|that|which)/i,
+    // Skip foreign market news (not Indian stocks)
+    /^(?:South Korean|Korean|Chinese|Japanese|US|UK|European|German|French)\s+/i,
+    /(?:Korea|China|Japan|Taiwan|Hong Kong|Singapore|Thailand|Indonesia)\s+(?:shares?|stocks?|market)/i,
+    /(?:Samsung|Hyundai|Toyota|Sony|Alibaba|Tencent|TSMC)\s+/i,
   ];
 
   for (const skipPattern of skipPatterns) {
@@ -489,29 +493,14 @@ async function fetchStockNewsWithRSS(scrapeRunId = null) {
 }
 
 /**
- * Fetch stock news - tries RSS first, falls back to OpenAI web search
+ * Fetch stock news - uses OpenAI web search as primary source for better accuracy
+ * RSS feeds were picking up irrelevant foreign market news (e.g., South Korean markets)
  * @param {string} scrapeRunId - UUID for this scrape run
  * @returns {Promise<{ stocks: Object, metadata: object }>}
  */
 async function fetchStockNews(scrapeRunId = null) {
-  // Try RSS first (now fetches from multiple sources)
-  try {
-    const rssResult = await fetchStockNewsWithRSS(scrapeRunId);
-    const stockCount = Object.keys(rssResult.stocks).length;
-
-    // Use RSS if we got at least 3 stocks (lowered from 5 since we now have multiple sources)
-    if (stockCount >= 3) {
-      console.log(`[NewsSearch] Using RSS sources (${stockCount} stocks found from ${rssResult.metadata.sources_used.length} feeds)`);
-      return rssResult;
-    }
-
-    console.log(`[NewsSearch] RSS returned only ${stockCount} stocks, falling back to web search`);
-  } catch (error) {
-    console.error('[NewsSearch] RSS failed, falling back to web search:', error.message);
-  }
-
-  // Fallback to OpenAI web search
-  console.log('[NewsSearch] Using OpenAI web search as fallback');
+  // Use OpenAI web search as primary source (more accurate, Indian stocks only)
+  console.log('[NewsSearch] Using OpenAI web search for Indian stock news...');
   return await fetchStockNewsWithWebSearch(scrapeRunId);
 }
 
