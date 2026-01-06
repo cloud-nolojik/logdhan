@@ -183,14 +183,24 @@ class AgendaScheduledBulkAnalysisService {
 
     // Check if today is a trading day (skip holidays)
     const today = new Date();
-    const runLabel = `[SCHEDULED BULK ${today.toISOString()}]`;
+    const runLabel = `[BULK-4PM]`;
     const istNow = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
-    console.log(`${runLabel} 🚀 Starting scheduled bulk analysis at ${istNow}`);
-    console.log(`${runLabel} 🔧 Options: source=${source}, skipTradingDayCheck=${skipTradingDayCheck}, analyzeAllChartink=${analyzeAllChartink}, useLastFridayData=${useLastFridayData}`);
+
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`${runLabel} 🚀 STEP 0: STARTING BULK ANALYSIS JOB`);
+    console.log(`${'='.repeat(80)}`);
+    console.log(`${runLabel} ⏰ Start Time (IST): ${istNow}`);
+    console.log(`${runLabel} ⏰ Start Time (UTC): ${today.toISOString()}`);
+    console.log(`${runLabel} 🔧 Options received:`);
+    console.log(`${runLabel}    - source: ${source}`);
+    console.log(`${runLabel}    - skipTradingDayCheck: ${skipTradingDayCheck}`);
+    console.log(`${runLabel}    - analyzeAllChartink: ${analyzeAllChartink}`);
+    console.log(`${runLabel}    - useLastFridayData: ${useLastFridayData}`);
+
     if (analyzeAllChartink) {
       console.log(`${runLabel} ✅ analyzeAllChartink=true → Will analyze ALL ChartInk stocks from WeeklyWatchlist`);
     } else {
-      console.log(`${runLabel} ℹ️  analyzeAllChartink=false → Will only analyze stocks in user watchlists (daily job behavior)`);
+      console.log(`${runLabel} ℹ️  analyzeAllChartink=false → Will only analyze stocks that overlap with user watchlists`);
     }
     if (useLastFridayData) {
       console.log(`${runLabel} 📅 useLastFridayData=true → Using only Friday's closing data for weekly analysis`);
@@ -208,9 +218,13 @@ class AgendaScheduledBulkAnalysisService {
     this.stats.totalRuns++;
 
     try {
-      // STEP 0: Sync watchlists from Screener.in (only if source includes screener)
+      // STEP 1: Sync watchlists from Screener.in (only if source includes screener)
+      console.log(`\n${runLabel} ${'─'.repeat(60)}`);
+      console.log(`${runLabel} 📋 STEP 1: SYNC SCREENER WATCHLISTS`);
+      console.log(`${runLabel} ${'─'.repeat(60)}`);
+
       if (source === 'screener' || source === 'all') {
-        console.log('[SCHEDULED BULK] 🔄 Step 0: Syncing watchlists from Screener.in...');
+        console.log(`${runLabel} 🔄 Syncing watchlists from Screener.in...`);
         const syncResult = await syncScreenerWatchlist({
           StockModel: Stock,
           UserModel: User,
@@ -218,24 +232,41 @@ class AgendaScheduledBulkAnalysisService {
         });
 
         if (!syncResult.success) {
-          console.error('[SCHEDULED BULK] ❌ Screener sync failed:', syncResult.error);
-          console.log('[SCHEDULED BULK] Continuing with existing watchlists...');
+          console.error(`${runLabel} ❌ Screener sync failed:`, syncResult.error);
+          console.log(`${runLabel} ⚠️ Continuing with existing watchlists...`);
         } else {
-          console.log(`[SCHEDULED BULK] ✅ Screener sync complete: ${syncResult.matchedStocksCount} stocks synced to ${syncResult.usersUpdated} users`);
+          console.log(`${runLabel} ✅ Screener sync complete: ${syncResult.matchedStocksCount} stocks synced to ${syncResult.usersUpdated} users`);
         }
+      } else {
+        console.log(`${runLabel} ⏭️ SKIPPED (source=${source}, not 'screener' or 'all')`);
       }
 
-      // 1. Get all users
-      const users = await User.find({}).select('_id email name watchlist').lean();
-      console.log(`[SCHEDULED BULK] 👥 Loaded ${users.length} users`);
+      // STEP 2: Load all users
+      console.log(`\n${runLabel} ${'─'.repeat(60)}`);
+      console.log(`${runLabel} 👥 STEP 2: LOAD ALL USERS`);
+      console.log(`${runLabel} ${'─'.repeat(60)}`);
 
-      // 2. Collect all unique stocks from watchlists
+      const users = await User.find({}).select('_id email name watchlist').lean();
+      console.log(`${runLabel} ✅ Loaded ${users.length} users from database`);
+
+      // Show users with watchlists
+      const usersWithWatchlist = users.filter(u => u.watchlist && u.watchlist.length > 0);
+      console.log(`${runLabel} 📊 Users with watchlist items: ${usersWithWatchlist.length}/${users.length}`);
+      usersWithWatchlist.forEach(u => {
+        console.log(`${runLabel}    - ${u.email || u.name || u._id}: ${u.watchlist.length} stocks`);
+      });
+
+      // STEP 3: Collect stocks from user watchlists (Screener.in)
+      console.log(`\n${runLabel} ${'─'.repeat(60)}`);
+      console.log(`${runLabel} 📊 STEP 3: COLLECT STOCKS FROM USER WATCHLISTS`);
+      console.log(`${runLabel} ${'─'.repeat(60)}`);
+
       const stockMap = new Map();
       let totalWatchlistItems = 0;
 
-      // 2a. Collect from User.watchlist (Screener.in stocks)
+      // 3a. Collect from User.watchlist (Screener.in stocks)
       if (source === 'screener' || source === 'all') {
-        console.log('[SCHEDULED BULK] 📋 Collecting stocks from User.watchlist (Screener)...');
+        console.log(`${runLabel} 🔍 Scanning User.watchlist (Screener source)...`);
         for (const user of users) {
           if (user.watchlist && user.watchlist.length > 0) {
             totalWatchlistItems += user.watchlist.length;
@@ -256,26 +287,53 @@ class AgendaScheduledBulkAnalysisService {
             }
           }
         }
-        console.log(`[SCHEDULED BULK] 📋 Collected ${stockMap.size} stocks from User.watchlist`);
+        console.log(`${runLabel} ✅ Collected ${stockMap.size} unique stocks from User.watchlist`);
+        if (stockMap.size > 0) {
+          console.log(`${runLabel} 📝 User watchlist stocks:`);
+          Array.from(stockMap.values()).forEach(s => {
+            console.log(`${runLabel}    - ${s.trading_symbol || s.instrument_key} (${s.users.length} users)`);
+          });
+        }
+      } else {
+        console.log(`${runLabel} ⏭️ SKIPPED (source=${source}, not 'screener' or 'all')`);
       }
 
-      // 2b. Collect from WeeklyWatchlist (ChartInk screened stocks)
+      // STEP 4: Collect stocks from WeeklyWatchlist (ChartInk screened stocks)
+      console.log(`\n${runLabel} ${'─'.repeat(60)}`);
+      console.log(`${runLabel} 📊 STEP 4: COLLECT STOCKS FROM CHARTINK (WeeklyWatchlist)`);
+      console.log(`${runLabel} ${'─'.repeat(60)}`);
+
       // Behavior depends on analyzeAllChartink flag:
       // - analyzeAllChartink=true (weekend screening trigger): Analyze ALL ChartInk stocks
       // - analyzeAllChartink=false (daily 4PM job): Only re-analyze stocks in user watchlists
       let activeWeeklyWatchlist = null;
       let weeklyWatchlistStocksAdded = 0;
       let weeklyWatchlistStocksSkipped = 0;
+
       if (source === 'chartink' || source === 'all') {
-        console.log(`[SCHEDULED BULK] 📊 Collecting stocks from WeeklyWatchlist (ChartInk)...`);
-        console.log(`[SCHEDULED BULK] 🔧 analyzeAllChartink=${analyzeAllChartink} (true=analyze all, false=only user watchlist stocks)`);
+        console.log(`${runLabel} 🔍 Fetching WeeklyWatchlist.getCurrentWeek()...`);
+        console.log(`${runLabel} 🔧 analyzeAllChartink=${analyzeAllChartink}`);
+        console.log(`${runLabel}    - true  → Analyze ALL ChartInk stocks (weekend screening behavior)`);
+        console.log(`${runLabel}    - false → Only analyze ChartInk stocks that overlap with user watchlists`);
+
         // Get current week's global watchlist
         activeWeeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
 
         if (activeWeeklyWatchlist && activeWeeklyWatchlist.stocks?.length > 0) {
+          console.log(`${runLabel} ✅ Found WeeklyWatchlist with ${activeWeeklyWatchlist.stocks.length} total stocks`);
+          console.log(`${runLabel} 📅 Week: ${activeWeeklyWatchlist.week_start?.toISOString()} to ${activeWeeklyWatchlist.week_end?.toISOString()}`);
+
+          // List all ChartInk stocks
+          console.log(`${runLabel} 📝 ChartInk stocks in WeeklyWatchlist:`);
+          for (const stock of activeWeeklyWatchlist.stocks) {
+            const statusIcon = ['WATCHING', 'APPROACHING', 'TRIGGERED'].includes(stock.status) ? '✅' : '⏭️';
+            console.log(`${runLabel}    ${statusIcon} ${stock.symbol || stock.trading_symbol} (${stock.scan_type}, status=${stock.status})`);
+          }
+
           for (const stock of activeWeeklyWatchlist.stocks) {
             // Only include stocks that are still actionable (WATCHING, APPROACHING, TRIGGERED)
             if (!['WATCHING', 'APPROACHING', 'TRIGGERED'].includes(stock.status)) {
+              console.log(`${runLabel}    ⏭️ Skipping ${stock.symbol} - status=${stock.status} (not actionable)`);
               continue;
             }
 
@@ -290,6 +348,7 @@ class AgendaScheduledBulkAnalysisService {
                 existingStock.weeklyWatchlistStockId = stock._id;
                 weeklyWatchlistStocksAdded++;
                 totalWatchlistItems++;
+                console.log(`${runLabel}    🔗 ${stock.symbol} - OVERLAP with user watchlist (added)`);
               } else if (analyzeAllChartink) {
                 // analyzeAllChartink=true: Add stock even if not in user watchlist
                 // This is used when triggered from weekend screening
@@ -306,42 +365,81 @@ class AgendaScheduledBulkAnalysisService {
                 });
                 weeklyWatchlistStocksAdded++;
                 totalWatchlistItems++;
+                console.log(`${runLabel}    ➕ ${stock.symbol} - ADDED (analyzeAllChartink=true)`);
               } else {
                 // analyzeAllChartink=false: Skip - daily job only re-analyzes user watchlist stocks
                 weeklyWatchlistStocksSkipped++;
+                console.log(`${runLabel}    ⏭️ ${stock.symbol} - SKIPPED (not in user watchlist, analyzeAllChartink=false)`);
               }
             }
           }
-          console.log(`[SCHEDULED BULK] 📊 ChartInk stocks: ${weeklyWatchlistStocksAdded} will analyze, ${weeklyWatchlistStocksSkipped} skipped`);
+
+          console.log(`\n${runLabel} 📊 ChartInk summary:`);
+          console.log(`${runLabel}    - Total in WeeklyWatchlist: ${activeWeeklyWatchlist.stocks.length}`);
+          console.log(`${runLabel}    - Will analyze: ${weeklyWatchlistStocksAdded}`);
+          console.log(`${runLabel}    - Skipped: ${weeklyWatchlistStocksSkipped}`);
+
           if (weeklyWatchlistStocksSkipped > 0 && !analyzeAllChartink) {
-            console.log(`[SCHEDULED BULK] ℹ️  Skipped ${weeklyWatchlistStocksSkipped} ChartInk stocks because analyzeAllChartink=false (daily job behavior)`);
-            console.log(`[SCHEDULED BULK] ℹ️  To analyze ALL ChartInk stocks, trigger with analyzeAllChartink=true (weekend screening does this)`);
+            console.log(`${runLabel} ⚠️ ${weeklyWatchlistStocksSkipped} ChartInk stocks skipped because analyzeAllChartink=false`);
+            console.log(`${runLabel} 💡 To analyze ALL ChartInk stocks, trigger with analyzeAllChartink=true`);
           }
         } else {
-          console.log('[SCHEDULED BULK] 📊 No active WeeklyWatchlist found or no stocks in it');
+          console.log(`${runLabel} ⚠️ No active WeeklyWatchlist found or no stocks in it`);
+          console.log(`${runLabel}    - activeWeeklyWatchlist: ${activeWeeklyWatchlist ? 'exists' : 'null'}`);
+          console.log(`${runLabel}    - stocks.length: ${activeWeeklyWatchlist?.stocks?.length || 0}`);
         }
+      } else {
+        console.log(`${runLabel} ⏭️ SKIPPED (source=${source}, not 'chartink' or 'all')`);
       }
+
+      // STEP 5: Final stock list summary
+      console.log(`\n${runLabel} ${'─'.repeat(60)}`);
+      console.log(`${runLabel} 📋 STEP 5: FINAL STOCK LIST SUMMARY`);
+      console.log(`${runLabel} ${'─'.repeat(60)}`);
 
       const uniqueStocks = Array.from(stockMap.values());
 
+      console.log(`${runLabel} 📊 Total unique stocks to analyze: ${uniqueStocks.length}`);
+
       if (uniqueStocks.length === 0) {
-        console.log('[SCHEDULED BULK] ⚠️  No watchlist stocks found across users, skipping analysis');
-        console.log(`[SCHEDULED BULK] ⚠️  Reason: source=${source}, analyzeAllChartink=${analyzeAllChartink}`);
-        console.log(`[SCHEDULED BULK] ⚠️  If triggered from weekend screening, ensure analyzeAllChartink=true was passed`);
+        console.log(`${runLabel} ❌ NO STOCKS TO ANALYZE - EXITING JOB`);
+        console.log(`${runLabel} ⚠️ Reason: source=${source}, analyzeAllChartink=${analyzeAllChartink}`);
+        console.log(`${runLabel} 💡 If triggered from weekend screening, ensure analyzeAllChartink=true was passed`);
         return;
       }
 
-      // 3. Fetch prices for all unique stocks at once
+      // List all stocks that will be analyzed
+      console.log(`${runLabel} 📝 Stocks to analyze:`);
+      uniqueStocks.forEach((s, i) => {
+        console.log(`${runLabel}    ${i + 1}. ${s.trading_symbol || s.instrument_key} (source=${s.source}, users=${s.users.length})`);
+      });
+
+      // STEP 6: Fetch prices
+      console.log(`\n${runLabel} ${'─'.repeat(60)}`);
+      console.log(`${runLabel} 💰 STEP 6: FETCH LATEST PRICES`);
+      console.log(`${runLabel} ${'─'.repeat(60)}`);
 
       const instrumentKeys = uniqueStocks.map((stock) => stock.instrument_key);
+      console.log(`${runLabel} 🔍 Fetching prices for ${instrumentKeys.length} stocks...`);
       const priceFetchStart = Date.now();
       const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
-      console.log(`[SCHEDULED BULK] 💰 Fetched latest prices for ${instrumentKeys.length} unique stocks in ${Date.now() - priceFetchStart}ms`);
+      console.log(`${runLabel} ✅ Fetched prices in ${Date.now() - priceFetchStart}ms`);
+
+      // Log prices
+      console.log(`${runLabel} 📝 Prices fetched:`);
+      uniqueStocks.forEach(s => {
+        const price = priceMap[s.instrument_key];
+        const priceStatus = (price && !isNaN(price) && price > 0) ? `₹${price.toFixed(2)}` : '❌ MISSING/INVALID';
+        console.log(`${runLabel}    - ${s.trading_symbol || s.instrument_key}: ${priceStatus}`);
+      });
 
       // No delayed release - analysis visible immediately after 7:30 AM run
       const releaseTime = null;
 
-      // 4. Check existing strategies and decide: VALIDATE or CREATE pending record
+      // STEP 7: Check existing strategies
+      console.log(`\n${runLabel} ${'─'.repeat(60)}`);
+      console.log(`${runLabel} 🔍 STEP 7: CHECK EXISTING STRATEGIES`);
+      console.log(`${runLabel} ${'─'.repeat(60)}`);
 
       let recordsCreated = 0;
       let recordsToValidate = 0;
@@ -353,7 +451,7 @@ class AgendaScheduledBulkAnalysisService {
         const current_price = priceMap[stock.instrument_key];
 
         if (!current_price || isNaN(current_price) || current_price <= 0) {
-
+          console.log(`${runLabel}    ⏭️ ${stock.trading_symbol} - SKIP (no valid price)`);
           recordsSkipped++;
           continue;
         }
@@ -363,12 +461,12 @@ class AgendaScheduledBulkAnalysisService {
         try {
           stockDetails = await Stock.findOne({ instrument_key: stock.instrument_key }).lean();
           if (!stockDetails) {
-
+            console.log(`${runLabel}    ⏭️ ${stock.trading_symbol} - SKIP (not found in Stock collection)`);
             recordsSkipped++;
             continue;
           }
         } catch (error) {
-          console.error(`  ❌ Error fetching stock details for ${stock.instrument_key}:`, error.message);
+          console.error(`${runLabel}    ❌ ${stock.trading_symbol} - ERROR fetching details: ${error.message}`);
           recordsSkipped++;
           continue;
         }
@@ -383,11 +481,11 @@ class AgendaScheduledBulkAnalysisService {
             if (now > existing.valid_until) {
               // Strategy expired - will be validated by analyzeStock()
               recordsToValidate++;
-
+              console.log(`${runLabel}    🔄 ${stock.trading_symbol} - EXPIRED (valid_until=${existing.valid_until.toISOString()}) → will re-analyze`);
             } else {
               // Strategy still valid - skip
               recordsSkipped++;
-
+              console.log(`${runLabel}    ✅ ${stock.trading_symbol} - VALID (valid_until=${existing.valid_until.toISOString()}) → cache hit`);
               continue;
             }
           } else {
@@ -403,15 +501,24 @@ class AgendaScheduledBulkAnalysisService {
               useWeeklyExpiry: true  // All swing analyses use weekly expiry
             });
             recordsCreated++;
-
+            console.log(`${runLabel}    ➕ ${stock.trading_symbol} - NEW pending record created`);
           }
         } catch (error) {
-          console.error(`  ❌ Failed to check/create record for ${stock.trading_symbol}:`, error.message);
+          console.error(`${runLabel}    ❌ ${stock.trading_symbol} - ERROR: ${error.message}`);
           recordsSkipped++;
         }
       }
 
-      // 5. Analyze each stock for each user who has it in their watchlist - PARALLEL PROCESSING
+      console.log(`\n${runLabel} 📊 Strategy check summary:`);
+      console.log(`${runLabel}    - New pending records: ${recordsCreated}`);
+      console.log(`${runLabel}    - Expired (will re-analyze): ${recordsToValidate}`);
+      console.log(`${runLabel}    - Skipped (valid cache or error): ${recordsSkipped}`);
+
+      // STEP 8: Run AI Analysis
+      console.log(`\n${runLabel} ${'─'.repeat(60)}`);
+      console.log(`${runLabel} 🤖 STEP 8: RUN AI ANALYSIS (PARALLEL)`);
+      console.log(`${runLabel} ${'─'.repeat(60)}`);
+
       let analysisCount = 0;
       let successCount = 0;
       let failureCount = 0;
@@ -419,41 +526,33 @@ class AgendaScheduledBulkAnalysisService {
       const candleLogged = new Set();
 
       // Configure concurrency limit based on OpenAI rate limits
-      // PERFORMANCE CALCULATION:
-      // - 1000 stocks × 12s avg = 12,000s total work
-      // - 12,000s ÷ 10 concurrent = ~1,200s = ~20 minutes (vs 3.3 hours sequential!)
-      //
-      // RATE LIMIT CONSIDERATIONS (OpenAI API):
-      // - Free Tier: 3 RPM (too slow, need Tier 1+)
-      // - Tier 1: 500 RPM, 30,000 TPM
-      // - Tier 2: 5,000 RPM, 450,000 TPM
-      // - Each analysis = 3 API calls (stage1, stage2, stage3)
-      // - Average tokens per analysis: ~6,000 tokens
-      //
-      // SAFE CONCURRENCY LIMITS BY TIER:
-      // - Tier 1: CONCURRENCY_LIMIT = 5  (15 RPM, ~30K TPM)
-      // - Tier 2: CONCURRENCY_LIMIT = 10 (30 RPM, ~60K TPM)
-      // - Tier 3: CONCURRENCY_LIMIT = 20 (60 RPM, ~120K TPM)
-      //
-      // With exponential backoff, the system will automatically slow down if rate limits are hit
-      // START WITH CONSERVATIVE LIMIT - Increase gradually based on your tier
       const CONCURRENCY_LIMIT = 5; // Safe for Tier 1, increase to 10 for Tier 2+
       const limit = pLimit(CONCURRENCY_LIMIT);
+
+      console.log(`${runLabel} ⚙️ Concurrency limit: ${CONCURRENCY_LIMIT} parallel analyses`);
 
       const bulkStartTime = Date.now();
 
       // Fetch market regime once for all stocks (Nifty 50 vs 50 EMA)
+      console.log(`${runLabel} 📊 Fetching market regime (Nifty 50 vs 50 EMA)...`);
       let regimeCheck = null;
       try {
         regimeCheck = await fetchAndCheckRegime();
-        console.log(`[SCHEDULED BULK] 📊 Market regime: ${regimeCheck.regime} (Nifty ${regimeCheck.distancePct?.toFixed(2)}% from 50 EMA)`);
+        console.log(`${runLabel} ✅ Market regime: ${regimeCheck.regime} (Nifty ${regimeCheck.distancePct?.toFixed(2)}% from 50 EMA)`);
       } catch (regimeError) {
-        console.warn(`[SCHEDULED BULK] ⚠️ Failed to fetch market regime:`, regimeError.message);
+        console.warn(`${runLabel} ⚠️ Failed to fetch market regime: ${regimeError.message}`);
         // Continue without regime - analyses will proceed without the warning
       }
 
       // Create analysis tasks for all stocks
       const analysisTasks = [];
+      const totalStocksToAnalyze = uniqueStocks.filter(s => {
+        const price = priceMap[s.instrument_key];
+        return price && !isNaN(price) && price > 0;
+      }).length;
+
+      console.log(`${runLabel} 🚀 Starting parallel analysis of ${totalStocksToAnalyze} stocks...`);
+      console.log(`${runLabel} ${'─'.repeat(40)}`);
 
       for (const stock of uniqueStocks) {
         // Get price from our pre-fetched priceMap
@@ -472,7 +571,10 @@ class AgendaScheduledBulkAnalysisService {
           // Wrap each analysis in a limited concurrency task with retry logic
           const task = limit(async () => {
             analysisCount++;
+            const taskNum = analysisCount;
             const taskStartTime = Date.now();
+
+            console.log(`${runLabel} 🔄 [${taskNum}/${totalStocksToAnalyze}] ANALYZING: ${stock.trading_symbol} @ ₹${current_price.toFixed(2)}`);
 
             try {
               // Wrap API call with exponential backoff retry
@@ -502,8 +604,11 @@ class AgendaScheduledBulkAnalysisService {
               if (result.success) {
                 if (result.cached) {
                   skippedCount++;
+                  console.log(`${runLabel} ⏭️ [${taskNum}/${totalStocksToAnalyze}] ${stock.trading_symbol} - CACHE HIT (${taskTime}ms)`);
                 } else {
                   successCount++;
+                  const action = result.data?.analysis_data?.recommendation?.action || result.data?.recommendation?.action || 'N/A';
+                  console.log(`${runLabel} ✅ [${taskNum}/${totalStocksToAnalyze}] ${stock.trading_symbol} - SUCCESS → ${action} (${taskTime}ms)`);
 
                   // Link analysis to WeeklyWatchlist stock if this is a ChartInk stock
                   if (stock.source === 'chartink' && stock.weeklyWatchlistStockId && result.data?._id) {
@@ -513,8 +618,9 @@ class AgendaScheduledBulkAnalysisService {
                         result.data._id,
                         result.data?.recommendation?.summary || null
                       );
+                      console.log(`${runLabel}    🔗 Linked to WeeklyWatchlist`);
                     } catch (linkError) {
-                      console.warn(`[SCHEDULED BULK] ⚠️ Failed to link analysis for ${stock.trading_symbol}:`, linkError.message);
+                      console.warn(`${runLabel}    ⚠️ Failed to link to WeeklyWatchlist: ${linkError.message}`);
                     }
                   }
                 }
@@ -529,25 +635,20 @@ class AgendaScheduledBulkAnalysisService {
                       .map((tf) => `${tf.key || tf.timeframe || 'n/a'}:${tf.last_candle_time || 'n/a'}`)
                       .join(', ');
                     console.log(
-                      `[SCHEDULED BULK] 🕒 Candles for ${stock.trading_symbol || stock.instrument_key} ` +
-                      `(cached=${result.cached ? 'yes' : 'no'}): primary=${candleInfo.primary_timeframe || 'n/a'}, ` +
-                      `last=${candleInfo.last_candle_time || 'n/a'}, frames=${frames || 'none'}`
-                    );
-                  } else {
-                    console.log(
-                      `[SCHEDULED BULK] ⚠️  No candle metadata found for ${stock.trading_symbol || stock.instrument_key} ` +
-                      `(cached=${result.cached ? 'yes' : 'no'})`
+                      `${runLabel}    🕒 Candles: primary=${candleInfo.primary_timeframe || 'n/a'}, ` +
+                      `last=${candleInfo.last_candle_time || 'n/a'}`
                     );
                   }
                   candleLogged.add(stock.instrument_key);
                 }
               } else {
                 failureCount++;
+                console.log(`${runLabel} ❌ [${taskNum}/${totalStocksToAnalyze}] ${stock.trading_symbol} - FAILED: ${result.error || 'Unknown error'} (${taskTime}ms)`);
               }
             } catch (error) {
               failureCount++;
               const taskTime = Date.now() - taskStartTime;
-              console.error(`  ❌ [${analysisCount}/${totalWatchlistItems}] Error analyzing ${stock.trading_symbol}:`, error.message, `(${taskTime}ms)`);
+              console.error(`${runLabel} ❌ [${taskNum}/${totalStocksToAnalyze}] ${stock.trading_symbol} - ERROR: ${error.message} (${taskTime}ms)`);
             }
           });
 
@@ -556,14 +657,20 @@ class AgendaScheduledBulkAnalysisService {
       }
 
       // Execute all tasks in parallel with concurrency limit
-
+      console.log(`${runLabel} ⏳ Waiting for ${analysisTasks.length} analysis tasks to complete...`);
       await Promise.all(analysisTasks);
 
       const bulkTotalTime = Date.now() - bulkStartTime;
 
-      // 4. Summary
+      // STEP 9: Final Summary
+      console.log(`\n${runLabel} ${'='.repeat(80)}`);
+      console.log(`${runLabel} 📊 STEP 9: FINAL SUMMARY`);
+      console.log(`${runLabel} ${'='.repeat(80)}`);
+
       const screenerOnlyStocks = uniqueStocks.filter(s => s.source === 'screener').length;
+      const chartinkOnlyStocks = uniqueStocks.filter(s => s.source === 'chartink').length;
       const bothSourceStocks = uniqueStocks.filter(s => s.source === 'both').length;  // In user watchlist + ChartInk
+
       const summary = {
         date: today.toISOString().split('T')[0],
         totalAnalyses: analysisCount,
@@ -572,17 +679,35 @@ class AgendaScheduledBulkAnalysisService {
         failed: failureCount,
         uniqueStocks: uniqueStocks.length,
         screenerOnlyStocks,
+        chartinkOnlyStocks,
         chartinkInWatchlist: bothSourceStocks,  // ChartInk stocks that users added to watchlist
         chartinkSkipped: weeklyWatchlistStocksSkipped,  // ChartInk stocks not in any watchlist (skipped)
         totalUsers: users.length,
         hasActiveWeeklyWatchlist: !!activeWeeklyWatchlist,
-        weeklyWatchlistTotalStocks: activeWeeklyWatchlist?.stocks?.length || 0
+        weeklyWatchlistTotalStocks: activeWeeklyWatchlist?.stocks?.length || 0,
+        durationMs: bulkTotalTime
       };
-      console.log(
-        `${runLabel} 🧾 Summary: uniqueStocks=${summary.uniqueStocks} (screener=${screenerOnlyStocks}, chartink_in_watchlist=${bothSourceStocks}, chartink_skipped=${weeklyWatchlistStocksSkipped}), ` +
-        `totalAnalyses=${summary.totalAnalyses}, success=${summary.successful}, skipped=${summary.skipped}, failed=${summary.failed}, ` +
-        `users=${summary.totalUsers}, weeklyWatchlistTotal=${summary.weeklyWatchlistTotalStocks}, duration_ms=${bulkTotalTime}`
-      );
+
+      console.log(`${runLabel} ⏱️ Total Duration: ${(bulkTotalTime / 1000).toFixed(1)} seconds`);
+      console.log(`${runLabel}`);
+      console.log(`${runLabel} 📈 ANALYSIS RESULTS:`);
+      console.log(`${runLabel}    ✅ Successful: ${successCount}`);
+      console.log(`${runLabel}    ⏭️ Skipped (cache hit): ${skippedCount}`);
+      console.log(`${runLabel}    ❌ Failed: ${failureCount}`);
+      console.log(`${runLabel}    📊 Total analyses: ${analysisCount}`);
+      console.log(`${runLabel}`);
+      console.log(`${runLabel} 📋 STOCK SOURCES:`);
+      console.log(`${runLabel}    - Total unique stocks: ${uniqueStocks.length}`);
+      console.log(`${runLabel}    - Screener only: ${screenerOnlyStocks}`);
+      console.log(`${runLabel}    - ChartInk only: ${chartinkOnlyStocks}`);
+      console.log(`${runLabel}    - Both sources (overlap): ${bothSourceStocks}`);
+      console.log(`${runLabel}    - ChartInk skipped (analyzeAllChartink=false): ${weeklyWatchlistStocksSkipped}`);
+      console.log(`${runLabel}`);
+      console.log(`${runLabel} 👥 USERS: ${users.length}`);
+      console.log(`${runLabel} 📅 WeeklyWatchlist: ${activeWeeklyWatchlist?.stocks?.length || 0} stocks`);
+      console.log(`${runLabel} ${'='.repeat(80)}`);
+      console.log(`${runLabel} ✅ BULK ANALYSIS JOB COMPLETED`);
+      console.log(`${runLabel} ${'='.repeat(80)}\n`);
 
       // Update stats
       this.stats.successfulRuns++;
@@ -590,12 +715,15 @@ class AgendaScheduledBulkAnalysisService {
       this.stats.lastRunSummary = summary;
 
     } catch (error) {
-      console.error('❌ [SCHEDULED BULK] Error in scheduled analysis:', error);
+      console.error(`\n${runLabel} ${'='.repeat(80)}`);
+      console.error(`${runLabel} ❌ BULK ANALYSIS JOB FAILED`);
+      console.error(`${runLabel} ${'='.repeat(80)}`);
+      console.error(`${runLabel} Error:`, error.message);
+      console.error(`${runLabel} Stack:`, error.stack);
       this.stats.failedRuns++;
       throw error;
     } finally {
       this.isRunning = false;
-
     }
   }
 
