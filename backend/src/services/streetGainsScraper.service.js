@@ -1,8 +1,9 @@
 /**
  * Stock News Scraper Service
  *
- * Fetches Indian stock market news using OpenAI's web search API.
- * Sources: MoneyControl, Economic Times, Business Standard, LiveMint
+ * Fetches Indian stock market news from:
+ * 1. Economic Times RSS (primary - free, reliable)
+ * 2. OpenAI web search (fallback - when RSS fails)
  *
  * Sections scraped:
  * - Pre-Market News
@@ -11,6 +12,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import Parser from 'rss-parser';
 import Stock from '../models/stock.js';
 import DailyNewsStock from '../models/dailyNewsStock.js';
 import SentimentCache from '../models/sentimentCache.js';
@@ -18,7 +20,21 @@ import MarketSentiment from '../models/marketSentiment.js';
 import ApiUsage from '../models/apiUsage.js';
 import OpenAI from 'openai';
 
-const SCRAPE_VERSION = 'v3-web-search';
+const SCRAPE_VERSION = 'v4-rss-primary';
+
+// Initialize RSS parser
+const rssParser = new Parser({
+  timeout: 15000,
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (compatible; StockNewsBot/1.0)'
+  }
+});
+
+// Economic Times RSS feeds
+const ET_RSS_FEEDS = {
+  markets: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms',
+  stocks: 'https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms'
+};
 
 // News sources to search (Indian stock market)
 const NEWS_DOMAINS = [
@@ -181,6 +197,254 @@ async function mapSymbolToInstrumentKey(companyName) {
  */
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Clean up malformed stocks data from OpenAI response
+ * Fixes issues like: "text": "actual headline" becoming the headline text
+ * Also ensures description is properly extracted
+ * @param {Object} stocksData - Raw stocks data from OpenAI
+ * @returns {Object} Cleaned stocks data
+ */
+function cleanupStocksData(stocksData) {
+  const cleaned = {};
+
+  for (const [companyName, headlines] of Object.entries(stocksData)) {
+    if (!Array.isArray(headlines)) continue;
+
+    cleaned[companyName] = headlines.map(h => {
+      let text = h.text || '';
+      let description = h.description || null;
+
+      // Fix malformed text that contains JSON key prefix like: "text": "actual headline"
+      // Pattern 1: "text": "actual headline",
+      const textMatch = text.match(/^["']?text["']?\s*:\s*["'](.+?)["'],?\s*$/i);
+      if (textMatch) {
+        text = textMatch[1];
+      }
+
+      // Pattern 2: {"text": "headline", "description": "..."}
+      if (text.startsWith('{') || text.includes('"text"')) {
+        try {
+          const parsed = JSON.parse(text.replace(/,\s*$/, ''));
+          if (parsed.text) text = parsed.text;
+          if (parsed.description && !description) description = parsed.description;
+        } catch (e) {
+          // Try regex extraction
+          const innerMatch = text.match(/"text"\s*:\s*"([^"]+)"/);
+          if (innerMatch) text = innerMatch[1];
+          const descMatch = text.match(/"description"\s*:\s*"([^"]+)"/);
+          if (descMatch && !description) description = descMatch[1];
+        }
+      }
+
+      // Remove leading/trailing quotes and commas
+      text = text.replace(/^["',\s]+|["',\s]+$/g, '').trim();
+
+      // Validate: headline should be at least 10 chars and not look like JSON
+      if (text.length < 10 || text.startsWith('{') || text.startsWith('[')) {
+        console.warn(`[NewsSearch] Skipping invalid headline for ${companyName}: "${text.substring(0, 50)}..."`);
+        return null;
+      }
+
+      return {
+        text,
+        description,
+        category: h.category || 'PRE_MARKET_NEWS'
+      };
+    }).filter(Boolean); // Remove nulls
+  }
+
+  // Remove companies with no valid headlines
+  for (const [companyName, headlines] of Object.entries(cleaned)) {
+    if (headlines.length === 0) {
+      delete cleaned[companyName];
+    }
+  }
+
+  return cleaned;
+}
+
+/**
+ * Extract company name from a headline
+ * Patterns: "X shares...", "X stock...", "X reports...", "X posts..."
+ * @param {string} headline - The headline text
+ * @returns {string|null} - Extracted company name or null
+ */
+function extractCompanyFromHeadline(headline) {
+  if (!headline) return null;
+
+  // Common patterns for stock news headlines
+  const patterns = [
+    // "HDFC Bank shares rally 5%", "Tata Motors stock gains"
+    /^([A-Z][A-Za-z&\s]+?)(?:\s+(?:shares?|stock|scrip))\s+/i,
+    // "HDFC Bank reports Q3 profit", "TCS posts strong results"
+    /^([A-Z][A-Za-z&\s]+?)(?:\s+(?:reports?|posts?|announces?|logs?|sees?|records?))\s+/i,
+    // "HDFC Bank Q3 profit rises", "Tata Motors December sales"
+    /^([A-Z][A-Za-z&\s]+?)(?:\s+(?:Q[1-4]|FY\d{2}|January|February|March|April|May|June|July|August|September|October|November|December))\s+/i,
+    // "Multibagger largecap stock that rose..." - skip these
+    /^(?:Multibagger|This|These|Top|Best|Worst)\s+/i,
+    // "Buy HDFC Bank; target Rs 1850"
+    /^(?:Buy|Sell|Hold|Accumulate|Reduce)\s+([A-Z][A-Za-z&\s]+?)(?:;|\s+target|\s+at)/i,
+  ];
+
+  // Skip generic headlines
+  const skipPatterns = [
+    /^(?:Sensex|Nifty|Market|Markets|Stock|Stocks|Share|Shares|Trade|Trading)\s+/i,
+    /^(?:Wall Street|US market|Global|Asian|European)\s+/i,
+    /^(?:FII|DII|Institutional|Retail)\s+/i,
+    /among\s+\d+\s+stocks?/i,
+    /\d+\s+stocks?\s+(?:to|that|which)/i,
+  ];
+
+  for (const skipPattern of skipPatterns) {
+    if (skipPattern.test(headline)) return null;
+  }
+
+  // Try each pattern
+  for (const pattern of patterns) {
+    const match = headline.match(pattern);
+    if (match && match[1]) {
+      let company = match[1].trim();
+      // Clean up: remove trailing "and", "Ltd", etc.
+      company = company.replace(/\s+(?:and|Ltd|Limited|Inc|Corp|PV|CV)\.?$/i, '').trim();
+      // Must be at least 2 chars and not a common word
+      if (company.length >= 2 && !/^(?:The|A|An|In|On|At|By|For|To)$/i.test(company)) {
+        return company;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Fetch stock news from Economic Times RSS feed
+ * @param {string} scrapeRunId - UUID for this scrape run
+ * @returns {Promise<{ stocks: Object, metadata: object }>}
+ */
+async function fetchStockNewsWithRSS(scrapeRunId = null) {
+  const startTime = Date.now();
+
+  try {
+    console.log('[NewsRSS] Fetching stock news from Economic Times RSS...');
+
+    // Get today's date in IST
+    const today = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(today.getTime() + istOffset);
+    const dateStr = istDate.toISOString().split('T')[0];
+    const todayStart = new Date(istDate);
+    todayStart.setHours(0, 0, 0, 0);
+
+    // Fetch from primary RSS feed
+    const feed = await rssParser.parseURL(ET_RSS_FEEDS.markets);
+    const responseTime = Date.now() - startTime;
+
+    console.log(`[NewsRSS] RSS feed parsed in ${responseTime}ms. Found ${feed.items?.length || 0} items`);
+
+    if (!feed.items || feed.items.length === 0) {
+      throw new Error('RSS feed returned no items');
+    }
+
+    // Filter to today's news only and extract stock-specific headlines
+    const stocksData = {};
+    let processedCount = 0;
+    let skippedCount = 0;
+
+    for (const item of feed.items) {
+      // Check if it's from today (based on pubDate)
+      const pubDate = item.pubDate ? new Date(item.pubDate) : null;
+      if (pubDate) {
+        const pubDateIST = new Date(pubDate.getTime() + istOffset);
+        // Skip if older than today (allow some buffer for timezone)
+        const hoursDiff = (istDate - pubDateIST) / (1000 * 60 * 60);
+        if (hoursDiff > 24) {
+          skippedCount++;
+          continue;
+        }
+      }
+
+      // Extract company name from headline
+      const headline = item.title?.trim();
+      if (!headline) continue;
+
+      const companyName = extractCompanyFromHeadline(headline);
+      if (!companyName) {
+        skippedCount++;
+        continue;
+      }
+
+      // Clean up description - remove HTML tags
+      let description = item.contentSnippet || item.description || '';
+      description = description.replace(/<[^>]*>/g, '').trim();
+      // Truncate if too long
+      if (description.length > 500) {
+        description = description.substring(0, 497) + '...';
+      }
+
+      // Add to stocks data
+      if (!stocksData[companyName]) {
+        stocksData[companyName] = [];
+      }
+
+      // Avoid duplicate headlines for same company
+      const exists = stocksData[companyName].some(h => h.text === headline);
+      if (!exists && stocksData[companyName].length < 3) {
+        stocksData[companyName].push({
+          text: headline,
+          description: description || null,
+          category: 'PRE_MARKET_NEWS'
+        });
+        processedCount++;
+      }
+    }
+
+    const stockCount = Object.keys(stocksData).length;
+    console.log(`[NewsRSS] Extracted ${stockCount} stocks with ${processedCount} headlines (skipped ${skippedCount} non-stock items)`);
+
+    return {
+      stocks: stocksData,
+      metadata: {
+        sources_used: ['Economic Times RSS'],
+        news_date: dateStr,
+        foundHeadlines: processedCount,
+        source_type: 'rss'
+      }
+    };
+
+  } catch (error) {
+    const responseTime = Date.now() - startTime;
+    console.error(`[NewsRSS] RSS fetch failed after ${responseTime}ms:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Fetch stock news - tries RSS first, falls back to OpenAI web search
+ * @param {string} scrapeRunId - UUID for this scrape run
+ * @returns {Promise<{ stocks: Object, metadata: object }>}
+ */
+async function fetchStockNews(scrapeRunId = null) {
+  // Try RSS first
+  try {
+    const rssResult = await fetchStockNewsWithRSS(scrapeRunId);
+    const stockCount = Object.keys(rssResult.stocks).length;
+
+    // Use RSS if we got at least 5 stocks
+    if (stockCount >= 5) {
+      console.log(`[NewsSearch] Using RSS source (${stockCount} stocks found)`);
+      return rssResult;
+    }
+
+    console.log(`[NewsSearch] RSS returned only ${stockCount} stocks, falling back to web search`);
+  } catch (error) {
+    console.error('[NewsSearch] RSS failed, falling back to web search:', error.message);
+  }
+
+  // Fallback to OpenAI web search
+  console.log('[NewsSearch] Using OpenAI web search as fallback');
+  return await fetchStockNewsWithWebSearch(scrapeRunId);
 }
 
 /**
@@ -489,8 +753,8 @@ Return a JSON object with this exact structure:
   "stocks": {
     "COMPANY_NAME": [
       {
-        "text": "Full headline text about ONLY this specific stock",
-        "description": "1-2 sentence summary of the actual news - what happened, numbers, details",
+        "text": "Clean headline text (no quotes or JSON formatting)",
+        "description": "REQUIRED: 1-2 sentence summary with SPECIFIC numbers and details from the news",
         "category": "PRE_MARKET_NEWS" or "STOCKS_TO_WATCH"
       }
     ]
@@ -498,6 +762,12 @@ Return a JSON object with this exact structure:
   "sources_used": ["list of news sources"],
   "news_date": "${dateStr}"
 }
+
+**CRITICAL JSON FORMAT RULES:**
+- The "text" field must contain ONLY the headline text, NOT JSON like "text": "headline"
+- The "description" field is MANDATORY - never set it to null or empty
+- Example CORRECT format: {"text": "HDFC Bank Q3 profit rises 15%", "description": "HDFC Bank reported Q3 net profit of Rs 16,372 crore, up 15% YoY. NII grew 10% to Rs 30,650 crore.", "category": "PRE_MARKET_NEWS"}
+- Example WRONG format: {"text": "\\"text\\": \\"HDFC Bank Q3 profit rises 15%\\"", ...} ❌
 
 **IMPORTANT: The "description" field must contain SPECIFIC DETAILS from the news:**
 - For results: "Q3 profit rose 15% to Rs 500 crore, revenue grew 12% YoY"
@@ -591,6 +861,9 @@ Rules:
         stocksData = parsed.stocks || {};
         metadata.sources_used = parsed.sources_used || [];
         metadata.news_date = parsed.news_date || dateStr;
+
+        // Clean up any malformed headline data (e.g., "text": "actual headline")
+        stocksData = cleanupStocksData(stocksData);
       } catch (parseError) {
         console.error('[NewsSearch] JSON parse error, trying fallback extraction...');
         // Fallback: Extract stock mentions from text
@@ -925,8 +1198,8 @@ export async function scrapeAndStoreDailyNewsStocks() {
     // Fetch market sentiment first (Nifty 50 outlook)
     const marketSentiment = await fetchMarketSentiment(scrapeRunId);
 
-    // Fetch news via web search
-    const { stocks: scrapedStocks, metadata } = await fetchStockNewsWithWebSearch(scrapeRunId);
+    // Fetch news (RSS primary, web search fallback)
+    const { stocks: scrapedStocks, metadata } = await fetchStockNews(scrapeRunId);
 
     if (Object.keys(scrapedStocks).length === 0) {
       console.warn('[NewsSearch] No stocks found in search, checking for fallback...');
