@@ -56,6 +56,7 @@ echo "🚀 Restarting backend server..."
 sshpass -p "$REMOTE_PASSWORD" ssh -o StrictHostKeyChecking=no $REMOTE_USER@$REMOTE_HOST << 'ENDSSH'
 cd /var/www/logdhan/backend
 npm install
+pm2 flush logdhan-backend
 pm2 restart logdhan-backend || pm2 start src/index.js --name logdhan-backend
 ENDSSH
 
