@@ -16,8 +16,16 @@ router.get("/", optionalAuth, async (req, res) => {
   try {
     const { stocks, scrape_date, is_today, source, message } = await streetGainsScraper.getTodayNewsStocks();
 
-    // Also get market sentiment
+    // Also get market sentiment (now includes Bank Nifty, sectors, SGX Nifty)
     const marketSentimentData = await streetGainsScraper.getTodayMarketSentiment();
+
+    // Format enhanced market sentiment for response
+    const formattedMarketSentiment = marketSentimentData.sentiment ? {
+      nifty_50: marketSentimentData.sentiment,
+      bank_nifty: marketSentimentData.bank_nifty || null,
+      sgx_nifty: marketSentimentData.sgx_nifty || null,
+      sectors: marketSentimentData.sectors || null
+    } : null;
 
     if (stocks.length === 0) {
       return res.json({
@@ -26,7 +34,7 @@ router.get("/", optionalAuth, async (req, res) => {
         count: 0,
         scrape_date: null,
         is_today: false,
-        market_sentiment: marketSentimentData.sentiment || null,
+        market_sentiment: formattedMarketSentiment,
         message: message || "No news stocks available. Check back after 8:30 AM IST."
       });
     }
@@ -61,7 +69,7 @@ router.get("/", optionalAuth, async (req, res) => {
       },
       scrape_run_id: firstStock.scrape_run_id,
       scrape_version: firstStock.scrape_version,
-      market_sentiment: marketSentimentData.sentiment || null,
+      market_sentiment: formattedMarketSentiment,
       stocks: formattedStocks,
       count: formattedStocks.length
     });
@@ -74,17 +82,17 @@ router.get("/", optionalAuth, async (req, res) => {
 
 /**
  * GET /api/v1/daily-news-stocks/market-sentiment
- * Get today's Nifty 50 market sentiment
+ * Get today's market sentiment (Nifty 50, Bank Nifty, Sectors, SGX Nifty)
  * Access: All users
  */
 router.get("/market-sentiment", optionalAuth, async (req, res) => {
   try {
-    const { sentiment, is_today, message } = await streetGainsScraper.getTodayMarketSentiment();
+    const { sentiment, bank_nifty, sgx_nifty, sectors, is_today, message } = await streetGainsScraper.getTodayMarketSentiment();
 
     if (!sentiment) {
       return res.json({
         success: true,
-        sentiment: null,
+        market_sentiment: null,
         is_today: false,
         message: message || "No market sentiment available. Check back after 8:30 AM IST."
       });
@@ -92,7 +100,12 @@ router.get("/market-sentiment", optionalAuth, async (req, res) => {
 
     res.json({
       success: true,
-      sentiment,
+      market_sentiment: {
+        nifty_50: sentiment,
+        bank_nifty: bank_nifty || null,
+        sgx_nifty: sgx_nifty || null,
+        sectors: sectors || null
+      },
       is_today
     });
 

@@ -30,7 +30,16 @@ const rssParser = new Parser({
   }
 });
 
-// Economic Times RSS feeds
+// RSS feeds from multiple sources for better coverage and redundancy
+const RSS_FEEDS = [
+  { name: 'Economic Times Markets', url: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms' },
+  { name: 'Economic Times Stocks', url: 'https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms' },
+  { name: 'Moneycontrol', url: 'https://www.moneycontrol.com/rss/latestnews.xml' },
+  { name: 'Business Standard Markets', url: 'https://www.business-standard.com/rss/markets-106.rss' },
+  { name: 'Livemint Markets', url: 'https://www.livemint.com/rss/markets' }
+];
+
+// Legacy reference (for backward compatibility)
 const ET_RSS_FEEDS = {
   markets: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms',
   stocks: 'https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms'
@@ -319,7 +328,46 @@ function extractCompanyFromHeadline(headline) {
 }
 
 /**
- * Fetch stock news from Economic Times RSS feed
+ * Sleep utility for retry delays
+ * @param {number} ms - Milliseconds to sleep
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetch RSS feed with retry logic and exponential backoff
+ * @param {string} feedUrl - RSS feed URL
+ * @param {string} feedName - Feed name for logging
+ * @param {number} maxRetries - Maximum retry attempts
+ * @returns {Promise<object|null>} - Parsed feed or null if failed
+ */
+async function fetchRSSFeedWithRetry(feedUrl, feedName, maxRetries = 2) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const feed = await rssParser.parseURL(feedUrl);
+      if (feed.items && feed.items.length > 0) {
+        console.log(`[NewsRSS] ✓ ${feedName}: ${feed.items.length} items`);
+        return { feed, source: feedName };
+      }
+      console.log(`[NewsRSS] ⚠️ ${feedName}: No items returned`);
+      return null;
+    } catch (error) {
+      if (attempt < maxRetries) {
+        const delay = 1000 * Math.pow(2, attempt); // Exponential backoff: 1s, 2s
+        console.log(`[NewsRSS] ⚠️ ${feedName} failed (attempt ${attempt + 1}), retrying in ${delay}ms...`);
+        await sleep(delay);
+      } else {
+        console.log(`[NewsRSS] ✗ ${feedName}: Failed after ${maxRetries + 1} attempts - ${error.message}`);
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetch stock news from multiple RSS feeds in parallel
  * @param {string} scrapeRunId - UUID for this scrape run
  * @returns {Promise<{ stocks: Object, metadata: object }>}
  */
@@ -327,86 +375,106 @@ async function fetchStockNewsWithRSS(scrapeRunId = null) {
   const startTime = Date.now();
 
   try {
-    console.log('[NewsRSS] Fetching stock news from Economic Times RSS...');
+    console.log('[NewsRSS] Fetching stock news from multiple RSS sources...');
 
     // Get today's date in IST
     const today = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
     const istDate = new Date(today.getTime() + istOffset);
     const dateStr = istDate.toISOString().split('T')[0];
-    const todayStart = new Date(istDate);
-    todayStart.setHours(0, 0, 0, 0);
 
-    // Fetch from primary RSS feed
-    const feed = await rssParser.parseURL(ET_RSS_FEEDS.markets);
+    // Fetch from all RSS feeds in parallel
+    const feedPromises = RSS_FEEDS.map(feed =>
+      fetchRSSFeedWithRetry(feed.url, feed.name)
+    );
+
+    const feedResults = await Promise.allSettled(feedPromises);
+    const successfulFeeds = feedResults
+      .filter(r => r.status === 'fulfilled' && r.value !== null)
+      .map(r => r.value);
+
     const responseTime = Date.now() - startTime;
+    console.log(`[NewsRSS] Fetched ${successfulFeeds.length}/${RSS_FEEDS.length} feeds in ${responseTime}ms`);
 
-    console.log(`[NewsRSS] RSS feed parsed in ${responseTime}ms. Found ${feed.items?.length || 0} items`);
-
-    if (!feed.items || feed.items.length === 0) {
-      throw new Error('RSS feed returned no items');
+    if (successfulFeeds.length === 0) {
+      throw new Error('All RSS feeds failed');
     }
 
-    // Filter to today's news only and extract stock-specific headlines
+    // Merge all feed items and extract stock-specific headlines
     const stocksData = {};
+    const sourcesUsed = [];
     let processedCount = 0;
     let skippedCount = 0;
+    const seenHeadlines = new Set(); // Track headlines across all sources to avoid duplicates
 
-    for (const item of feed.items) {
-      // Check if it's from today (based on pubDate)
-      const pubDate = item.pubDate ? new Date(item.pubDate) : null;
-      if (pubDate) {
-        const pubDateIST = new Date(pubDate.getTime() + istOffset);
-        // Skip if older than today (allow some buffer for timezone)
-        const hoursDiff = (istDate - pubDateIST) / (1000 * 60 * 60);
-        if (hoursDiff > 24) {
+    for (const { feed, source } of successfulFeeds) {
+      if (!sourcesUsed.includes(source)) {
+        sourcesUsed.push(source);
+      }
+
+      for (const item of feed.items) {
+        // Check if it's from today (based on pubDate)
+        const pubDate = item.pubDate ? new Date(item.pubDate) : null;
+        if (pubDate) {
+          const pubDateIST = new Date(pubDate.getTime() + istOffset);
+          // Skip if older than today (allow some buffer for timezone)
+          const hoursDiff = (istDate - pubDateIST) / (1000 * 60 * 60);
+          if (hoursDiff > 24) {
+            skippedCount++;
+            continue;
+          }
+        }
+
+        // Extract company name from headline
+        const headline = item.title?.trim();
+        if (!headline) continue;
+
+        // Skip if we've already seen this headline from another source
+        if (seenHeadlines.has(headline.toLowerCase())) {
+          continue;
+        }
+        seenHeadlines.add(headline.toLowerCase());
+
+        const companyName = extractCompanyFromHeadline(headline);
+        if (!companyName) {
           skippedCount++;
           continue;
         }
-      }
 
-      // Extract company name from headline
-      const headline = item.title?.trim();
-      if (!headline) continue;
+        // Clean up description - remove HTML tags
+        let description = item.contentSnippet || item.description || '';
+        description = description.replace(/<[^>]*>/g, '').trim();
+        // Truncate if too long
+        if (description.length > 500) {
+          description = description.substring(0, 497) + '...';
+        }
 
-      const companyName = extractCompanyFromHeadline(headline);
-      if (!companyName) {
-        skippedCount++;
-        continue;
-      }
+        // Add to stocks data
+        if (!stocksData[companyName]) {
+          stocksData[companyName] = [];
+        }
 
-      // Clean up description - remove HTML tags
-      let description = item.contentSnippet || item.description || '';
-      description = description.replace(/<[^>]*>/g, '').trim();
-      // Truncate if too long
-      if (description.length > 500) {
-        description = description.substring(0, 497) + '...';
-      }
-
-      // Add to stocks data
-      if (!stocksData[companyName]) {
-        stocksData[companyName] = [];
-      }
-
-      // Avoid duplicate headlines for same company
-      const exists = stocksData[companyName].some(h => h.text === headline);
-      if (!exists && stocksData[companyName].length < 3) {
-        stocksData[companyName].push({
-          text: headline,
-          description: description || null,
-          category: 'PRE_MARKET_NEWS'
-        });
-        processedCount++;
+        // Avoid duplicate headlines for same company (limit to 3 per company)
+        const exists = stocksData[companyName].some(h => h.text === headline);
+        if (!exists && stocksData[companyName].length < 3) {
+          stocksData[companyName].push({
+            text: headline,
+            description: description || null,
+            category: 'PRE_MARKET_NEWS',
+            source: source // Track which source this headline came from
+          });
+          processedCount++;
+        }
       }
     }
 
     const stockCount = Object.keys(stocksData).length;
-    console.log(`[NewsRSS] Extracted ${stockCount} stocks with ${processedCount} headlines (skipped ${skippedCount} non-stock items)`);
+    console.log(`[NewsRSS] Extracted ${stockCount} stocks with ${processedCount} headlines from ${sourcesUsed.length} sources (skipped ${skippedCount} non-stock items)`);
 
     return {
       stocks: stocksData,
       metadata: {
-        sources_used: ['Economic Times RSS'],
+        sources_used: sourcesUsed,
         news_date: dateStr,
         foundHeadlines: processedCount,
         source_type: 'rss'
@@ -426,14 +494,14 @@ async function fetchStockNewsWithRSS(scrapeRunId = null) {
  * @returns {Promise<{ stocks: Object, metadata: object }>}
  */
 async function fetchStockNews(scrapeRunId = null) {
-  // Try RSS first
+  // Try RSS first (now fetches from multiple sources)
   try {
     const rssResult = await fetchStockNewsWithRSS(scrapeRunId);
     const stockCount = Object.keys(rssResult.stocks).length;
 
-    // Use RSS if we got at least 5 stocks
-    if (stockCount >= 5) {
-      console.log(`[NewsSearch] Using RSS source (${stockCount} stocks found)`);
+    // Use RSS if we got at least 3 stocks (lowered from 5 since we now have multiple sources)
+    if (stockCount >= 3) {
+      console.log(`[NewsSearch] Using RSS sources (${stockCount} stocks found from ${rssResult.metadata.sources_used.length} feeds)`);
       return rssResult;
     }
 
@@ -1030,16 +1098,16 @@ function extractStocksFromText(text) {
 }
 
 /**
- * Fetch Nifty 50 market sentiment using OpenAI web search
+ * Fetch market sentiment for Nifty 50, Bank Nifty, and sectors using OpenAI web search
  * @param {string} scrapeRunId - UUID for this scrape run
- * @returns {Promise<Object>} Market sentiment data
+ * @returns {Promise<Object>} Market sentiment data including Nifty 50, Bank Nifty, and sectors
  */
 async function fetchMarketSentiment(scrapeRunId) {
   const startTime = Date.now();
   const requestId = uuidv4();
 
   try {
-    console.log('[NewsSearch] Fetching Nifty 50 market sentiment...');
+    console.log('[NewsSearch] Fetching market sentiment (Nifty 50, Bank Nifty, Sectors)...');
 
     // Get today's date in IST
     const today = new Date();
@@ -1047,42 +1115,80 @@ async function fetchMarketSentiment(scrapeRunId) {
     const istDate = new Date(today.getTime() + istOffset);
     const dateStr = istDate.toISOString().split('T')[0];
 
-    const searchPrompt = `Search for today's (${dateStr}) Nifty 50 pre-market outlook and market sentiment for Indian stock markets.
+    const searchPrompt = `Search for today's (${dateStr}) pre-market outlook and market sentiment for Indian stock markets.
+
+I need COMPREHENSIVE data for:
+1. **Nifty 50** - Main index sentiment
+2. **Bank Nifty** - Banking sector index sentiment
+3. **SGX Nifty / GIFT Nifty futures** - Pre-market indication with percentage change
+4. **Sector-wise outlook** - IT, Pharma, Auto, Metal sectors
 
 Look for:
-1. SGX Nifty / GIFT Nifty futures indication
-2. US market overnight performance (Dow Jones, S&P 500, Nasdaq)
-3. Asian markets trend (Nikkei, Hang Seng, etc.)
-4. FII/DII activity from previous session
-5. Key support and resistance levels for Nifty 50
-6. Any major global events affecting markets
+- SGX Nifty / GIFT Nifty futures indication (exact percentage if available)
+- US market overnight performance (Dow Jones, S&P 500, Nasdaq)
+- Asian markets trend (Nikkei, Hang Seng, SGX)
+- FII/DII activity from previous session
+- Key support and resistance levels for both Nifty 50 and Bank Nifty
+- Sector-specific news affecting IT, Pharma, Auto, Metal stocks
 
 Return a JSON object with this exact structure:
 {
-  "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH",
-  "confidence": 0.0 to 1.0,
-  "summary": "One paragraph summary of market outlook",
+  "nifty_50": {
+    "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH",
+    "confidence": 0.0 to 1.0,
+    "summary": "One paragraph summary of Nifty 50 outlook",
+    "levels": {
+      "support_1": number,
+      "support_2": number,
+      "resistance_1": number,
+      "resistance_2": number,
+      "pivot": number
+    }
+  },
+  "bank_nifty": {
+    "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH",
+    "confidence": 0.0 to 1.0,
+    "summary": "One paragraph summary of Bank Nifty outlook",
+    "levels": {
+      "support_1": number,
+      "support_2": number,
+      "resistance_1": number,
+      "resistance_2": number,
+      "pivot": number
+    }
+  },
+  "sgx_nifty": {
+    "indication": "+0.5%" or "-0.3%" (percentage string),
+    "status": "POSITIVE" | "NEGATIVE" | "FLAT",
+    "points": number (if available)
+  },
+  "sectors": {
+    "IT": { "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH", "reason": "brief reason" },
+    "PHARMA": { "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH", "reason": "brief reason" },
+    "AUTO": { "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH", "reason": "brief reason" },
+    "METAL": { "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH", "reason": "brief reason" },
+    "BANKING": { "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH", "reason": "brief reason" },
+    "REALTY": { "sentiment": "BULLISH" | "NEUTRAL" | "BEARISH", "reason": "brief reason" }
+  },
   "key_factors": [
     { "factor": "Description of factor", "impact": "POSITIVE" | "NEGATIVE" | "NEUTRAL" }
   ],
-  "levels": {
-    "support_1": number,
-    "support_2": number,
-    "resistance_1": number,
-    "resistance_2": number
-  },
   "global_cues": {
     "us_markets": "POSITIVE" | "NEGATIVE" | "MIXED" | "FLAT",
     "asian_markets": "POSITIVE" | "NEGATIVE" | "MIXED" | "FLAT",
-    "sgx_nifty": "POSITIVE" | "NEGATIVE" | "FLAT"
+    "dollar_index": "STRONG" | "WEAK" | "STABLE",
+    "crude_oil": "UP" | "DOWN" | "STABLE"
   },
   "institutional_activity": {
     "fii_trend": "BUYING" | "SELLING" | "NEUTRAL",
-    "dii_trend": "BUYING" | "SELLING" | "NEUTRAL"
+    "dii_trend": "BUYING" | "SELLING" | "NEUTRAL",
+    "fii_value_cr": number (if available, in crores),
+    "dii_value_cr": number (if available, in crores)
   }
 }
 
-Be specific about the sentiment - BULLISH means expecting 0.5%+ gains, BEARISH means expecting 0.5%+ losses, NEUTRAL means flat/rangebound.`;
+Be specific about sentiment - BULLISH means expecting 0.5%+ gains, BEARISH means expecting 0.5%+ losses, NEUTRAL means flat/rangebound.
+For SGX Nifty, provide the exact percentage indication if available.`;
 
     const response = await openai.responses.create({
       model: 'gpt-4o',
@@ -1116,7 +1222,7 @@ Be specific about the sentiment - BULLISH means expecting 0.5%+ gains, BEARISH m
       response_time_ms: responseTime,
       success: true,
       context: {
-        description: 'Nifty 50 market sentiment web search'
+        description: 'Market sentiment (Nifty 50, Bank Nifty, Sectors) web search'
       }
     });
 
@@ -1124,7 +1230,7 @@ Be specific about the sentiment - BULLISH means expecting 0.5%+ gains, BEARISH m
 
     // Try to extract JSON
     let sentimentData = null;
-    const jsonMatch = outputText.match(/\{[\s\S]*"sentiment"[\s\S]*\}/);
+    const jsonMatch = outputText.match(/\{[\s\S]*"nifty_50"[\s\S]*\}|\{[\s\S]*"sentiment"[\s\S]*\}/);
 
     if (jsonMatch) {
       try {
@@ -1134,8 +1240,8 @@ Be specific about the sentiment - BULLISH means expecting 0.5%+ gains, BEARISH m
       }
     }
 
-    // Fallback: Extract sentiment from text
-    if (!sentimentData) {
+    // Fallback: Extract sentiment from text (legacy format)
+    if (!sentimentData || !sentimentData.nifty_50) {
       const lowerText = outputText.toLowerCase();
       let sentiment = 'NEUTRAL';
 
@@ -1145,26 +1251,65 @@ Be specific about the sentiment - BULLISH means expecting 0.5%+ gains, BEARISH m
         sentiment = 'BEARISH';
       }
 
-      sentimentData = {
-        sentiment,
-        confidence: 0.5,
-        summary: outputText.substring(0, 500),
-        key_factors: [],
-        global_cues: {},
-        institutional_activity: {}
-      };
+      // Convert legacy format to new format if needed
+      if (sentimentData && sentimentData.sentiment && !sentimentData.nifty_50) {
+        sentimentData = {
+          nifty_50: {
+            sentiment: sentimentData.sentiment,
+            confidence: sentimentData.confidence || 0.5,
+            summary: sentimentData.summary,
+            levels: sentimentData.levels || {}
+          },
+          bank_nifty: {
+            sentiment: sentiment,
+            confidence: 0.5,
+            summary: 'Bank Nifty outlook aligned with Nifty 50',
+            levels: {}
+          },
+          sgx_nifty: sentimentData.global_cues?.sgx_nifty ? {
+            indication: sentimentData.global_cues.sgx_nifty === 'POSITIVE' ? '+0.3%' : sentimentData.global_cues.sgx_nifty === 'NEGATIVE' ? '-0.3%' : '0%',
+            status: sentimentData.global_cues.sgx_nifty
+          } : { indication: '0%', status: 'FLAT' },
+          sectors: {},
+          key_factors: sentimentData.key_factors || [],
+          global_cues: sentimentData.global_cues || {},
+          institutional_activity: sentimentData.institutional_activity || {}
+        };
+      } else if (!sentimentData) {
+        sentimentData = {
+          nifty_50: {
+            sentiment,
+            confidence: 0.5,
+            summary: outputText.substring(0, 500),
+            levels: {}
+          },
+          bank_nifty: {
+            sentiment,
+            confidence: 0.5,
+            summary: 'Bank Nifty outlook aligned with Nifty 50',
+            levels: {}
+          },
+          sgx_nifty: { indication: '0%', status: 'FLAT' },
+          sectors: {},
+          key_factors: [],
+          global_cues: {},
+          institutional_activity: {}
+        };
+      }
     }
 
-    // Save to database
-    const marketSentimentData = {
+    // Save Nifty 50 sentiment to database
+    const nifty50Data = {
       index_name: 'NIFTY_50',
-      sentiment: sentimentData.sentiment || 'NEUTRAL',
-      confidence: sentimentData.confidence || 0.5,
-      summary: sentimentData.summary,
+      sentiment: sentimentData.nifty_50?.sentiment || 'NEUTRAL',
+      confidence: sentimentData.nifty_50?.confidence || 0.5,
+      summary: sentimentData.nifty_50?.summary,
       key_factors: sentimentData.key_factors || [],
-      levels: sentimentData.levels || {},
+      levels: sentimentData.nifty_50?.levels || {},
       global_cues: sentimentData.global_cues || {},
       institutional_activity: sentimentData.institutional_activity || {},
+      sgx_nifty: sentimentData.sgx_nifty || {},
+      sectors: sentimentData.sectors || {},
       source: {
         name: 'Web Search',
         scraped_at: new Date()
@@ -1172,10 +1317,38 @@ Be specific about the sentiment - BULLISH means expecting 0.5%+ gains, BEARISH m
       scrape_run_id: scrapeRunId
     };
 
-    const saved = await MarketSentiment.upsertTodaySentiment(marketSentimentData);
-    console.log(`[NewsSearch] Market sentiment saved: ${saved.sentiment} (confidence: ${saved.confidence})`);
+    const savedNifty50 = await MarketSentiment.upsertTodaySentiment(nifty50Data);
+    console.log(`[NewsSearch] Nifty 50 sentiment saved: ${savedNifty50.sentiment} (confidence: ${savedNifty50.confidence})`);
 
-    return saved;
+    // Save Bank Nifty sentiment to database
+    const bankNiftyData = {
+      index_name: 'BANK_NIFTY',
+      sentiment: sentimentData.bank_nifty?.sentiment || 'NEUTRAL',
+      confidence: sentimentData.bank_nifty?.confidence || 0.5,
+      summary: sentimentData.bank_nifty?.summary,
+      key_factors: [],
+      levels: sentimentData.bank_nifty?.levels || {},
+      global_cues: {},
+      institutional_activity: {},
+      source: {
+        name: 'Web Search',
+        scraped_at: new Date()
+      },
+      scrape_run_id: scrapeRunId
+    };
+
+    const savedBankNifty = await MarketSentiment.upsertTodaySentiment(bankNiftyData);
+    console.log(`[NewsSearch] Bank Nifty sentiment saved: ${savedBankNifty.sentiment} (confidence: ${savedBankNifty.confidence})`);
+
+    // Return combined data for API response
+    return {
+      nifty_50: savedNifty50,
+      bank_nifty: savedBankNifty,
+      sgx_nifty: sentimentData.sgx_nifty || {},
+      sectors: sentimentData.sectors || {},
+      global_cues: sentimentData.global_cues || {},
+      institutional_activity: sentimentData.institutional_activity || {}
+    };
 
   } catch (error) {
     console.error('[NewsSearch] Market sentiment fetch error:', error.message);
@@ -1338,9 +1511,17 @@ export async function getTodayNewsStocks() {
  * @returns {Promise<Object>} Market sentiment data
  */
 export async function getTodayMarketSentiment() {
-  const { sentiment, is_today } = await MarketSentiment.getTodayOrLatest('NIFTY_50');
+  // Fetch both Nifty 50 and Bank Nifty sentiment
+  const [nifty50Result, bankNiftyResult] = await Promise.all([
+    MarketSentiment.getTodayOrLatest('NIFTY_50'),
+    MarketSentiment.getTodayOrLatest('BANK_NIFTY')
+  ]);
 
-  if (!sentiment) {
+  const nifty50 = nifty50Result.sentiment;
+  const bankNifty = bankNiftyResult.sentiment;
+  const is_today = nifty50Result.is_today || bankNiftyResult.is_today;
+
+  if (!nifty50) {
     return {
       sentiment: null,
       is_today: false,
@@ -1348,18 +1529,38 @@ export async function getTodayMarketSentiment() {
     };
   }
 
+  // Format Nifty 50 data
+  const nifty50Data = {
+    index_name: nifty50.index_name,
+    sentiment: nifty50.sentiment,
+    confidence: nifty50.confidence,
+    summary: nifty50.summary,
+    key_factors: nifty50.key_factors,
+    levels: nifty50.levels,
+    global_cues: nifty50.global_cues,
+    institutional_activity: nifty50.institutional_activity,
+    analysis_date: nifty50.analysis_date
+  };
+
+  // Format Bank Nifty data
+  const bankNiftyData = bankNifty ? {
+    index_name: bankNifty.index_name,
+    sentiment: bankNifty.sentiment,
+    confidence: bankNifty.confidence,
+    summary: bankNifty.summary,
+    levels: bankNifty.levels,
+    analysis_date: bankNifty.analysis_date
+  } : null;
+
+  // Extract SGX Nifty and sectors from Nifty 50 document (stored together)
+  const sgxNifty = nifty50.sgx_nifty || null;
+  const sectors = nifty50.sectors || null;
+
   return {
-    sentiment: {
-      index_name: sentiment.index_name,
-      sentiment: sentiment.sentiment,
-      confidence: sentiment.confidence,
-      summary: sentiment.summary,
-      key_factors: sentiment.key_factors,
-      levels: sentiment.levels,
-      global_cues: sentiment.global_cues,
-      institutional_activity: sentiment.institutional_activity,
-      analysis_date: sentiment.analysis_date
-    },
+    sentiment: nifty50Data,
+    bank_nifty: bankNiftyData,
+    sgx_nifty: sgxNifty,
+    sectors: sectors,
     is_today
   };
 }

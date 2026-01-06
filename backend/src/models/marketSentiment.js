@@ -58,9 +58,51 @@ const marketSentimentSchema = new mongoose.Schema({
       type: String,
       enum: ['POSITIVE', 'NEGATIVE', 'MIXED', 'FLAT']
     },
-    sgx_nifty: {
+    dollar_index: {
+      type: String,
+      enum: ['STRONG', 'WEAK', 'STABLE']
+    },
+    crude_oil: {
+      type: String,
+      enum: ['UP', 'DOWN', 'STABLE']
+    }
+  },
+
+  // SGX/GIFT Nifty pre-market indication
+  sgx_nifty: {
+    indication: String, // e.g., "+0.5%", "-0.3%"
+    status: {
       type: String,
       enum: ['POSITIVE', 'NEGATIVE', 'FLAT']
+    },
+    points: Number // optional, actual points difference
+  },
+
+  // Sector-wise sentiment
+  sectors: {
+    IT: {
+      sentiment: { type: String, enum: ['BULLISH', 'NEUTRAL', 'BEARISH'] },
+      reason: String
+    },
+    PHARMA: {
+      sentiment: { type: String, enum: ['BULLISH', 'NEUTRAL', 'BEARISH'] },
+      reason: String
+    },
+    AUTO: {
+      sentiment: { type: String, enum: ['BULLISH', 'NEUTRAL', 'BEARISH'] },
+      reason: String
+    },
+    METAL: {
+      sentiment: { type: String, enum: ['BULLISH', 'NEUTRAL', 'BEARISH'] },
+      reason: String
+    },
+    BANKING: {
+      sentiment: { type: String, enum: ['BULLISH', 'NEUTRAL', 'BEARISH'] },
+      reason: String
+    },
+    REALTY: {
+      sentiment: { type: String, enum: ['BULLISH', 'NEUTRAL', 'BEARISH'] },
+      reason: String
     }
   },
 
@@ -73,7 +115,9 @@ const marketSentimentSchema = new mongoose.Schema({
     dii_trend: {
       type: String,
       enum: ['BUYING', 'SELLING', 'NEUTRAL']
-    }
+    },
+    fii_value_cr: Number, // FII value in crores
+    dii_value_cr: Number  // DII value in crores
   },
 
   // Source info
