@@ -407,7 +407,9 @@ class AIAnalyzeService {
     // Market regime context (optional) - from regime.checkMarketRegime()
     regimeCheck = null,
     // Weekly analysis option - use only Friday's closing data
-    useLastFridayData = false
+    useLastFridayData = false,
+    // Force re-analysis even if cached (for 4 PM refresh with latest market data)
+    forceRevalidate = false
   }) {
     // ⏱️ START TIMING
     const analysisStartTime = Date.now();
@@ -477,8 +479,8 @@ class AIAnalyzeService {
         if (existing.status === 'completed') {
           const now = new Date();
 
-          // Check if strategy is still valid
-          if (existing.valid_until && now <= existing.valid_until) {
+          // Check if strategy is still valid (unless forceRevalidate is true)
+          if (!forceRevalidate && existing.valid_until && now <= existing.valid_until) {
             const totalTime = Date.now() - analysisStartTime;
             console.log(
               `[ANALYZE] ♻️ Cache hit for ${stock_symbol || instrument_key} ` +
@@ -503,7 +505,15 @@ class AIAnalyzeService {
               cached: true
             };
           }
-          // If completed but expired, fall through to create new analysis
+
+          // If forceRevalidate, log that we're skipping cache
+          if (forceRevalidate) {
+            console.log(
+              `[ANALYZE] 🔄 Force revalidate for ${stock_symbol || instrument_key} ` +
+              `(ignoring cache valid_until=${existing.valid_until?.toISOString ? existing.valid_until.toISOString() : existing.valid_until})`
+            );
+          }
+          // If completed but expired (or forceRevalidate), fall through to create new analysis
 
         } else if (existing.status === 'in_progress') {
           console.log(

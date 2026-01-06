@@ -171,7 +171,12 @@ class AgendaScheduledBulkAnalysisService {
 
       // Schedule for 4:00 PM IST every day (Monday-Friday)
       // Cron format: minute hour * * day-of-week
-      await this.agenda.every('0 16 * * 1-5', 'watchlist-bulk-analysis', {}, {
+      // source='screener': Only analyze User.watchlist stocks (no ChartInk/WeeklyWatchlist)
+      // forceRevalidate=true: Re-analyze even if cached, using latest market data
+      await this.agenda.every('0 16 * * 1-5', 'watchlist-bulk-analysis', {
+        source: 'screener',
+        forceRevalidate: true
+      }, {
         timezone: 'Asia/Kolkata'
       });
 
@@ -184,17 +189,19 @@ class AgendaScheduledBulkAnalysisService {
   /**
    * Main function that runs at 4:30 PM
    * @param {Object} options
-   * @param {string} [options.source='chartink'] - Which watchlist to analyze: 'chartink', 'screener', or 'all'
+   * @param {string} [options.source='screener'] - Which watchlist to analyze: 'chartink', 'screener', or 'all'
    * @param {boolean} [options.skipTradingDayCheck=false] - Skip trading day check (for manual triggers)
    * @param {boolean} [options.analyzeAllChartink=false] - If true, analyze ALL ChartInk stocks even if not in user watchlists
    * @param {boolean} [options.useLastFridayData=false] - If true, use only Friday's closing data (for weekend screening)
+   * @param {boolean} [options.forceRevalidate=false] - If true, re-analyze stocks even if they have valid cached analysis
    */
   async runScheduledAnalysis(options = {}) {
     const {
-      source = 'chartink',  // Default to ChartInk only
+      source = 'screener',  // Default to Screener.in user watchlists only
       skipTradingDayCheck = false,
       analyzeAllChartink = false,  // When triggered from weekend screening, set this to true
-      useLastFridayData = false    // When triggered from weekend screening, use only Friday's data
+      useLastFridayData = false,   // When triggered from weekend screening, use only Friday's data
+      forceRevalidate = false      // When true, re-analyze even if cached (for 4 PM refresh)
     } = options;
 
     // Check if already running
@@ -218,6 +225,7 @@ class AgendaScheduledBulkAnalysisService {
     console.log(`${runLabel}    - skipTradingDayCheck: ${skipTradingDayCheck}`);
     console.log(`${runLabel}    - analyzeAllChartink: ${analyzeAllChartink}`);
     console.log(`${runLabel}    - useLastFridayData: ${useLastFridayData}`);
+    console.log(`${runLabel}    - forceRevalidate: ${forceRevalidate}`);
 
     if (analyzeAllChartink) {
       console.log(`${runLabel} ✅ analyzeAllChartink=true → Will analyze ALL ChartInk stocks from WeeklyWatchlist`);
@@ -226,6 +234,9 @@ class AgendaScheduledBulkAnalysisService {
     }
     if (useLastFridayData) {
       console.log(`${runLabel} 📅 useLastFridayData=true → Using only Friday's closing data for weekly analysis`);
+    }
+    if (forceRevalidate) {
+      console.log(`${runLabel} 🔄 forceRevalidate=true → Will RE-ANALYZE all stocks with latest data (ignoring cache)`);
     }
 
     // if (!skipTradingDayCheck) {
@@ -500,7 +511,11 @@ class AgendaScheduledBulkAnalysisService {
           if (existing && existing.status === 'completed' && existing.valid_until) {
             const now = new Date();
 
-            if (now > existing.valid_until) {
+            if (forceRevalidate) {
+              // forceRevalidate=true: Re-analyze regardless of cache validity
+              recordsToValidate++;
+              console.log(`${runLabel}    🔄 ${stock.trading_symbol} - FORCE REVALIDATE (ignoring cache, valid_until=${existing.valid_until.toISOString()})`);
+            } else if (now > existing.valid_until) {
               // Strategy expired - will be validated by analyzeStock()
               recordsToValidate++;
               console.log(`${runLabel}    🔄 ${stock.trading_symbol} - EXPIRED (valid_until=${existing.valid_until.toISOString()}) → will re-analyze`);
@@ -617,7 +632,9 @@ class AgendaScheduledBulkAnalysisService {
                   // Market regime context (for BUY setups in bearish market warnings)
                   regimeCheck,
                   // Weekly analysis - use only Friday's closing data (for weekend screening)
-                  useLastFridayData
+                  useLastFridayData,
+                  // Force re-analysis even if cached (for 4 PM refresh with latest data)
+                  forceRevalidate
                 });
               });
 
