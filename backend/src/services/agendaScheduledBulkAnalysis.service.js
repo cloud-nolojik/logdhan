@@ -53,6 +53,7 @@ class AgendaScheduledBulkAnalysisService {
     }
 
     try {
+      console.log('[SCHEDULED BULK] Initializing Agenda service...');
 
       // Use existing MongoDB connection
       const mongoUrl = process.env.MONGODB_URI;
@@ -69,19 +70,40 @@ class AgendaScheduledBulkAnalysisService {
         defaultConcurrency: 1
       });
 
-      // Define the job
+      // Define the job BEFORE waiting for ready
       this.defineJobs();
 
       // Setup event handlers
       this.setupEventHandlers();
 
-      // Start agenda
+      // Wait for Agenda's MongoDB connection to be ready before starting
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Agenda MongoDB connection timeout after 30s'));
+        }, 30000);
+
+        this.agenda.on('ready', () => {
+          clearTimeout(timeout);
+          console.log('[SCHEDULED BULK] Agenda MongoDB connection ready');
+          resolve();
+        });
+
+        this.agenda.on('error', (err) => {
+          clearTimeout(timeout);
+          console.error('[SCHEDULED BULK] Agenda error:', err);
+          reject(err);
+        });
+      });
+
+      // Start agenda processing AFTER connection is ready
       await this.agenda.start();
+      console.log('[SCHEDULED BULK] Agenda started processing jobs');
 
       // Schedule the recurring job
       await this.scheduleRecurringJobs();
 
       this.isInitialized = true;
+      console.log('[SCHEDULED BULK] ✅ Initialization complete');
 
     } catch (error) {
       console.error('❌ [SCHEDULED BULK] Failed to initialize service:', error);
