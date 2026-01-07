@@ -33,6 +33,7 @@ import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAn
 import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM, Sun 10AM)
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
 import dailyNewsStocksJob from './services/jobs/dailyNewsStocksJob.js'; // daily-news-scrape (8:30 AM Mon-Fri)
+import positionScanJob from './services/jobs/positionScanJob.js'; // position-scan (4 PM Mon-Fri, rule-based)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -308,6 +309,17 @@ async function initializeDailyNewsStocksJob() {
   }
 }
 
+// Initialize position scan job (4 PM Mon-Fri IST - rule-based, zero AI cost)
+async function initializePositionScanJob() {
+  try {
+
+    await positionScanJob.initialize();
+
+  } catch (error) {
+    console.error('❌ Failed to initialize position scan job:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -329,6 +341,7 @@ app.listen(PORT, async () => {
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST only)
   await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
   await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
+  await initializePositionScanJob(); // position-scan (4 PM Mon-Fri, rule-based, zero AI cost)
 
 });
 
@@ -346,7 +359,8 @@ process.on('SIGINT', async () => {
       agendaScheduledBulkAnalysisService.stop(),
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
-      dailyNewsStocksJob.shutdown()
+      dailyNewsStocksJob.shutdown(),
+      positionScanJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -370,7 +384,8 @@ process.on('SIGTERM', async () => {
       agendaScheduledBulkAnalysisService.stop(),
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
-      dailyNewsStocksJob.shutdown()
+      dailyNewsStocksJob.shutdown(),
+      positionScanJob.shutdown()
     ]);
 
     // Close MongoDB connection

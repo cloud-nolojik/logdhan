@@ -2,12 +2,17 @@
  * Agenda-based Scheduled Bulk Analysis Service
  * Runs at 4:00 PM every trading day to analyze watchlist stocks
  *
+ * PURPOSE: Discovery Mode - analyze stocks for NEW trade opportunities
+ *
  * Sources:
  * - User.watchlist: Per-user stocks from Screener.in sync
  * - WeeklyWatchlist: Global stocks from ChartInk weekend screening (shared by all users)
  *
  * So users see fresh analysis for next day's trading (market closes at 3:30 PM)
  * Uses MongoDB for job persistence via Agenda
+ *
+ * NOTE: Position management (existing trades) is handled by positionScanJob.js
+ * which runs a separate rule-based scan at 4 PM (zero AI cost).
  */
 
 import Agenda from 'agenda';

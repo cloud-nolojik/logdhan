@@ -1,6 +1,7 @@
 import express from "express";
 import axios from "axios";
 import UserPosition from "../models/userPosition.js";
+import PositionAlert from "../models/positionAlert.js";
 import LatestPrice from "../models/latestPrice.js";
 import CoachingCache from "../models/coachingCache.js";
 import AIUsageLog from "../models/aiUsageLog.js";
@@ -295,6 +296,156 @@ router.get("/history", auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch position history",
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/v1/positions/alerts
+ * Get latest position alerts for user (from 4 PM scan)
+ * Includes overnight gap detection on each request
+ */
+router.get("/alerts", auth, async (req, res) => {
+  try {
+    const hoursAgo = parseInt(req.query.hours) || 24;
+
+    // Get alerts from last N hours
+    const alerts = await PositionAlert.getRecentForUser(req.user._id, hoursAgo);
+
+    if (alerts.length === 0) {
+      return res.json({
+        success: true,
+        alerts: [],
+        message: "No alerts found. Alerts are generated at 4 PM IST on trading days."
+      });
+    }
+
+    // Enrich alerts with current price (for overnight gap detection)
+    const enrichedAlerts = await Promise.all(alerts.map(async (alert) => {
+      let currentPrice = alert.price_at_scan;
+      let wasOverridden = alert.was_overridden || false;
+      let overrideReason = alert.override_reason || null;
+
+      try {
+        // Get fresh price
+        const marketData = await candleFetcherService.getMarketDataForTriggers(alert.instrument_key);
+        if (marketData?.ltp || marketData?.current_price) {
+          currentPrice = marketData.ltp || marketData.current_price;
+
+          // Check for overnight gap (SL breached after scan)
+          if (currentPrice < alert.sl_at_scan && alert.alert_status !== 'ACTION_NEEDED') {
+            wasOverridden = true;
+            overrideReason = 'SL breached (overnight/premarket gap)';
+
+            // Update alert in DB
+            await PositionAlert.findByIdAndUpdate(alert._id, {
+              was_overridden: true,
+              override_reason: overrideReason
+            });
+          }
+        }
+      } catch (priceError) {
+        // Use scan-time price as fallback
+        console.warn(`Could not fetch price for ${alert.symbol}:`, priceError.message);
+      }
+
+      return {
+        _id: alert._id,
+        position_id: alert.position_id,
+        symbol: alert.symbol,
+        instrument_key: alert.instrument_key,
+        alert_status: wasOverridden ? 'ACTION_NEEDED' : alert.alert_status,
+        alert_reason: wasOverridden ? overrideReason : alert.alert_reason,
+        price_at_scan: alert.price_at_scan,
+        current_price: round2(currentPrice),
+        sl_at_scan: alert.sl_at_scan,
+        target_at_scan: alert.target_at_scan,
+        pnl_pct_at_scan: alert.pnl_pct_at_scan,
+        days_in_trade: alert.days_in_trade,
+        trail_recommendation: alert.trail_recommendation,
+        exit_alerts: alert.exit_alerts,
+        scanned_at: alert.scanned_at,
+        user_viewed: alert.user_viewed,
+        was_overridden: wasOverridden
+      };
+    }));
+
+    res.json({
+      success: true,
+      count: enrichedAlerts.length,
+      alerts: enrichedAlerts
+    });
+  } catch (error) {
+    console.error("Error fetching position alerts:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch position alerts",
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/v1/positions/summary
+ * Quick summary for app home screen - badge counts
+ */
+router.get("/summary", auth, async (req, res) => {
+  try {
+    // Get open positions count
+    const openPositions = await UserPosition.countDocuments({
+      user_id: req.user._id,
+      status: 'OPEN'
+    });
+
+    // Get alert summary from last 24 hours
+    const alertSummary = await PositionAlert.getSummaryForUser(req.user._id, 24);
+
+    res.json({
+      success: true,
+      summary: {
+        total_open: openPositions,
+        action_needed: alertSummary.action_needed,
+        watching: alertSummary.watching,
+        on_track: alertSummary.on_track,
+        last_scan: alertSummary.total > 0 ? 'Last 24 hours' : 'No recent scan'
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching position summary:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch position summary",
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/v1/positions/alerts/:alertId/viewed
+ * Mark an alert as viewed by the user
+ */
+router.post("/alerts/:alertId/viewed", auth, async (req, res) => {
+  try {
+    const alert = await PositionAlert.markViewed(req.params.alertId, req.user._id);
+
+    if (!alert) {
+      return res.status(404).json({
+        success: false,
+        message: "Alert not found"
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Alert marked as viewed",
+      viewed_at: alert.user_viewed_at
+    });
+  } catch (error) {
+    console.error("Error marking alert as viewed:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark alert as viewed",
       error: error.message
     });
   }
