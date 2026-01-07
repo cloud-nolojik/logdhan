@@ -24,8 +24,6 @@ router.get("/morning-glance", auth, async (req, res) => {
   try {
     const user_id = req.user._id;
     console.log("📊 [MORNING GLANCE] User ID:", user_id);
-    console.log("📊 [MORNING GLANCE] User watchlist length:", req.user?.watchlist?.length || 0);
-    console.log("📊 [MORNING GLANCE] User watchlist:", JSON.stringify(req.user?.watchlist?.map(w => w.trading_symbol) || []));
 
     // 1. Get open positions
     const positions = await UserPosition.findAllOpenPositions(user_id);
@@ -90,37 +88,13 @@ router.get("/morning-glance", auth, async (req, res) => {
       };
     }));
 
-    // 3. Get user's personal watchlist and generate alerts
-    const userWatchlist = req.user?.watchlist || [];
-    const watchlistAlerts = [];
-
-    // Generate watchlist alerts from user's watchlist stocks
-    for (const stock of userWatchlist) {
-      try {
-        const priceDoc = await LatestPrice.findOne({ instrument_key: stock.instrument_key });
-        const currentPrice = priceDoc?.last_traded_price || priceDoc?.close;
-
-        if (currentPrice) {
-          // Show each watchlist stock with current price info
-          watchlistAlerts.push({
-            symbol: stock.trading_symbol,
-            message: `₹${round2(currentPrice)}`,
-            type: "WATCHING",
-            urgency: "low"
-          });
-        }
-      } catch (err) {
-        console.warn(`Failed to get price for watchlist stock ${stock.trading_symbol}:`, err.message);
-      }
-    }
-
-    // 4. Calculate overall status (only executed positions count towards P&L)
+    // 3. Calculate overall status (only executed positions count towards P&L)
     const executedPositions = positionSummaries.filter(p => p.execution_status === "EXECUTED");
     const pendingPositions = positionSummaries.filter(p => p.execution_status === "PENDING");
     const totalPnl = executedPositions.reduce((sum, p) => sum + p.pnl_inr, 0);
     const needsAttention = positionSummaries.filter(p => p.needs_attention).length;
 
-    // 5. Generate market vibe (simple heuristic)
+    // 4. Generate market vibe (simple heuristic)
     let marketVibe = "Markets steady, follow your plan";
     if (needsAttention > 0) {
       marketVibe = `${needsAttention} position(s) need attention`;
@@ -154,11 +128,11 @@ router.get("/morning-glance", auth, async (req, res) => {
           items: pendingPositions
         },
 
-        // Watchlist alerts
-        watchlist_alerts: watchlistAlerts,
+        // Watchlist alerts - removed, Morning Glance now only shows positions
+        watchlist_alerts: [],
 
         // Overall
-        action_needed: needsAttention > 0 || watchlistAlerts.some(a => a.urgency === "high"),
+        action_needed: needsAttention > 0,
         market_vibe: marketVibe,
 
         // Quick stats
@@ -166,8 +140,8 @@ router.get("/morning-glance", auth, async (req, res) => {
           open_positions: executedPositions.length,
           pending_positions: pendingPositions.length,
           positions_in_profit: executedPositions.filter(p => p.pnl_pct > 0).length,
-          watchlist_stocks: userWatchlist.length,
-          alerts_count: watchlistAlerts.length
+          watchlist_stocks: 0,
+          alerts_count: 0
         }
       }
     });
