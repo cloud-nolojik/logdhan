@@ -63,25 +63,29 @@ async function testWeekendScreening() {
 
       // Run ChartInk scans
       console.log('\n📊 Running ChartInk scans...');
-      const scanTypes = ['breakout', 'pullback', 'momentum', 'consolidation_breakout'];
+      const scanTypes = ['a_plus_nextweek'];
       const allResults = [];
 
       for (const scanType of scanTypes) {
         try {
           let scanResults = [];
           switch (scanType) {
-            case 'breakout':
-              scanResults = await chartinkService.runBreakoutScan();
+            case 'a_plus_nextweek':
+              scanResults = await chartinkService.runAPlusNextWeekScan();
               break;
-            case 'pullback':
-              scanResults = await chartinkService.runPullbackScan();
-              break;
-            case 'momentum':
-              scanResults = await chartinkService.runMomentumScan();
-              break;
-            case 'consolidation_breakout':
-              scanResults = await chartinkService.runConsolidationScan();
-              break;
+            // Legacy scans - commented out
+            // case 'breakout':
+            //   scanResults = await chartinkService.runBreakoutScan();
+            //   break;
+            // case 'pullback':
+            //   scanResults = await chartinkService.runPullbackScan();
+            //   break;
+            // case 'momentum':
+            //   scanResults = await chartinkService.runMomentumScan();
+            //   break;
+            // case 'consolidation_breakout':
+            //   scanResults = await chartinkService.runConsolidationScan();
+            //   break;
           }
           console.log(`   ${scanType}: ${scanResults.length} results`);
           allResults.push(...scanResults.map(s => ({ ...s, scan_type: scanType })));
@@ -131,7 +135,7 @@ async function testWeekendScreening() {
       console.log('\n🚀 Triggering weekend screening job...');
 
       const options = {
-        scanTypes: ['breakout', 'pullback', 'momentum', 'consolidation_breakout']
+        scanTypes: ['a_plus_nextweek']
       };
 
       // If skip-bulk flag, we need to modify the job behavior

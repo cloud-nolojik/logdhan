@@ -16,25 +16,31 @@ router.get("/scans", auth, async (req, res) => {
       success: true,
       scans: [
         {
-          id: "breakout",
-          name: "Breakout Candidates",
-          description: "Stocks at 20-day highs with volume surge"
-        },
-        {
-          id: "pullback",
-          name: "Pullback to 20 DMA",
-          description: "Stocks pulling back to moving average support"
-        },
-        {
-          id: "momentum",
-          name: "Momentum with Volume",
-          description: "Strong momentum stocks with volume confirmation"
-        },
-        {
-          id: "consolidation",
-          name: "Consolidation Breakout",
-          description: "Breaking out of tight consolidation range"
+          id: "a_plus_nextweek",
+          name: "A+ Next Week",
+          description: "NR7 compression with tight base for explosive moves"
         }
+        // Legacy scans - commented out
+        // {
+        //   id: "breakout",
+        //   name: "Breakout Candidates",
+        //   description: "Stocks at 20-day highs with volume surge"
+        // },
+        // {
+        //   id: "pullback",
+        //   name: "Pullback to 20 DMA",
+        //   description: "Stocks pulling back to moving average support"
+        // },
+        // {
+        //   id: "momentum",
+        //   name: "Momentum with Volume",
+        //   description: "Strong momentum stocks with volume confirmation"
+        // },
+        // {
+        //   id: "consolidation",
+        //   name: "Consolidation Breakout",
+        //   description: "Breaking out of tight consolidation range"
+        // }
       ]
     });
   } catch (error) {
@@ -49,10 +55,10 @@ router.get("/scans", auth, async (req, res) => {
  */
 router.post("/run", auth, async (req, res) => {
   try {
-    const { scan_type = "breakout", min_score = 40, limit = 20 } = req.body;
+    const { scan_type = "a_plus_nextweek", min_score = 40, limit = 20 } = req.body;
 
     // Validate scan type
-    const validTypes = ["breakout", "pullback", "momentum", "consolidation", "combined"];
+    const validTypes = ["a_plus_nextweek", "combined"];
     if (!validTypes.includes(scan_type)) {
       return res.status(400).json({
         success: false,
@@ -65,22 +71,26 @@ router.post("/run", auth, async (req, res) => {
     console.log(`[SCREENER] Running ${scan_type} scan...`);
 
     switch (scan_type) {
-      case "breakout":
-        scanResults = await chartinkService.runBreakoutScan();
-        break;
-      case "pullback":
-        scanResults = await chartinkService.runPullbackScan();
-        break;
-      case "momentum":
-        scanResults = await chartinkService.runMomentumScan();
-        break;
-      case "consolidation":
-        scanResults = await chartinkService.runConsolidationScan();
+      case "a_plus_nextweek":
+        scanResults = await chartinkService.runAPlusNextWeekScan();
         break;
       case "combined":
         const combined = await chartinkService.runCombinedScan();
         scanResults = combined.combined;
         break;
+      // Legacy scans - commented out
+      // case "breakout":
+      //   scanResults = await chartinkService.runBreakoutScan();
+      //   break;
+      // case "pullback":
+      //   scanResults = await chartinkService.runPullbackScan();
+      //   break;
+      // case "momentum":
+      //   scanResults = await chartinkService.runMomentumScan();
+      //   break;
+      // case "consolidation":
+      //   scanResults = await chartinkService.runConsolidationScan();
+      //   break;
     }
 
     if (scanResults.length === 0) {
@@ -176,22 +186,27 @@ router.get("/queries", auth, async (req, res) => {
     res.json({
       success: true,
       queries: {
-        breakout: {
-          name: "Breakout Candidates",
-          query: SCAN_QUERIES.breakout
-        },
-        pullback: {
-          name: "Pullback to 20 DMA",
-          query: SCAN_QUERIES.pullback
-        },
-        momentum: {
-          name: "Momentum with Volume",
-          query: SCAN_QUERIES.momentum
-        },
-        consolidation_breakout: {
-          name: "Consolidation Breakout",
-          query: SCAN_QUERIES.consolidation_breakout
+        a_plus_nextweek: {
+          name: "A+ Next Week",
+          query: SCAN_QUERIES.a_plus_nextweek
         }
+        // Legacy queries - commented out
+        // breakout: {
+        //   name: "Breakout Candidates",
+        //   query: SCAN_QUERIES.breakout
+        // },
+        // pullback: {
+        //   name: "Pullback to 20 DMA",
+        //   query: SCAN_QUERIES.pullback
+        // },
+        // momentum: {
+        //   name: "Momentum with Volume",
+        //   query: SCAN_QUERIES.momentum
+        // },
+        // consolidation_breakout: {
+        //   name: "Consolidation Breakout",
+        //   query: SCAN_QUERIES.consolidation_breakout
+        // }
       }
     });
   } catch (error) {
@@ -253,7 +268,7 @@ router.post("/trigger-weekend", auth, async (req, res) => {
     //   return res.status(403).json({ success: false, error: "Admin access required" });
     // }
 
-    const { scan_types = ["breakout", "pullback"], user_id } = req.body;
+    const { scan_types = ["a_plus_nextweek"], user_id } = req.body;
 
     const result = await weekendScreeningJob.triggerNow({
       scanTypes: scan_types,

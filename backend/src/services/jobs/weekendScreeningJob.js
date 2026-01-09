@@ -119,7 +119,7 @@ class WeekendScreeningJob {
       try {
         const result = await this.runWeekendScreening({
           userId,
-          scanTypes: scanTypes || ['breakout', 'pullback', 'momentum', 'consolidation_breakout']
+          scanTypes: scanTypes || ['a_plus_nextweek']
         });
 
         return result;
@@ -184,7 +184,7 @@ class WeekendScreeningJob {
   async runWeekendScreening(options = {}) {
     const {
       userId = null,
-      scanTypes = ['breakout', 'pullback', 'momentum', 'consolidation_breakout'],
+      scanTypes = ['a_plus_nextweek'],
       maxStocksPerUser = 10
     } = options;
 
@@ -206,18 +206,22 @@ class WeekendScreeningJob {
           let scanResults = [];
 
           switch (scanType) {
-            case 'breakout':
-              scanResults = await chartinkService.runBreakoutScan();
+            case 'a_plus_nextweek':
+              scanResults = await chartinkService.runAPlusNextWeekScan();
               break;
-            case 'pullback':
-              scanResults = await chartinkService.runPullbackScan();
-              break;
-            case 'momentum':
-              scanResults = await chartinkService.runMomentumScan();
-              break;
-            case 'consolidation_breakout':
-              scanResults = await chartinkService.runConsolidationScan();
-              break;
+            // Legacy scans - commented out
+            // case 'breakout':
+            //   scanResults = await chartinkService.runBreakoutScan();
+            //   break;
+            // case 'pullback':
+            //   scanResults = await chartinkService.runPullbackScan();
+            //   break;
+            // case 'momentum':
+            //   scanResults = await chartinkService.runMomentumScan();
+            //   break;
+            // case 'consolidation_breakout':
+            //   scanResults = await chartinkService.runConsolidationScan();
+            //   break;
             default:
               console.warn(`[SCREENING JOB] Unknown scan type: ${scanType}`);
           }

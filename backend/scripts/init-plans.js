@@ -68,7 +68,7 @@ const plans = [
     cashfreePlanId: 'pro_monthly'
   },
   {
-    planId: 'pro_yearly',
+    planId: 'pro_yearly1',
     name: 'Pro Yearly',
     description: 'Best value - Save 44%',
     type: 'ANNUAL',
@@ -97,7 +97,7 @@ const plans = [
     },
     isActive: true,
     sortOrder: 3,
-    cashfreePlanId: 'pro_yearly'
+    cashfreePlanId: 'pro_yearly1'
   }
 ];
 
