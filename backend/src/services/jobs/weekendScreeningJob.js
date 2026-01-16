@@ -119,7 +119,7 @@ class WeekendScreeningJob {
       try {
         const result = await this.runWeekendScreening({
           userId,
-          scanTypes: scanTypes || ['a_plus_nextweek']
+          scanTypes: scanTypes || ['a_plus_momentum']
         });
 
         return result;
@@ -184,7 +184,7 @@ class WeekendScreeningJob {
   async runWeekendScreening(options = {}) {
     const {
       userId = null,
-      scanTypes = ['a_plus_nextweek'],
+      scanTypes = ['a_plus_momentum'],
       maxStocksPerUser = 10
     } = options;
 
@@ -206,7 +206,7 @@ class WeekendScreeningJob {
           let scanResults = [];
 
           switch (scanType) {
-            case 'a_plus_nextweek':
+            case 'a_plus_momentum':
               scanResults = await chartinkService.runAPlusNextWeekScan();
               break;
             // Legacy scans - commented out

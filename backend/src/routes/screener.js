@@ -16,7 +16,7 @@ router.get("/scans", auth, async (req, res) => {
       success: true,
       scans: [
         {
-          id: "a_plus_nextweek",
+          id: "a_plus_momentum",
           name: "A+ Next Week",
           description: "NR7 compression with tight base for explosive moves"
         }
@@ -55,10 +55,10 @@ router.get("/scans", auth, async (req, res) => {
  */
 router.post("/run", auth, async (req, res) => {
   try {
-    const { scan_type = "a_plus_nextweek", min_score = 40, limit = 20 } = req.body;
+    const { scan_type = "a_plus_momentum", min_score = 40, limit = 20 } = req.body;
 
     // Validate scan type
-    const validTypes = ["a_plus_nextweek", "combined"];
+    const validTypes = ["a_plus_momentum", "combined"];
     if (!validTypes.includes(scan_type)) {
       return res.status(400).json({
         success: false,
@@ -71,7 +71,7 @@ router.post("/run", auth, async (req, res) => {
     console.log(`[SCREENER] Running ${scan_type} scan...`);
 
     switch (scan_type) {
-      case "a_plus_nextweek":
+      case "a_plus_momentum":
         scanResults = await chartinkService.runAPlusNextWeekScan();
         break;
       case "combined":
@@ -186,9 +186,9 @@ router.get("/queries", auth, async (req, res) => {
     res.json({
       success: true,
       queries: {
-        a_plus_nextweek: {
+        a_plus_momentum: {
           name: "A+ Next Week",
-          query: SCAN_QUERIES.a_plus_nextweek
+          query: SCAN_QUERIES.a_plus_momentum
         }
         // Legacy queries - commented out
         // breakout: {
@@ -268,7 +268,7 @@ router.post("/trigger-weekend", auth, async (req, res) => {
     //   return res.status(403).json({ success: false, error: "Admin access required" });
     // }
 
-    const { scan_types = ["a_plus_nextweek"], user_id } = req.body;
+    const { scan_types = ["a_plus_momentum"], user_id } = req.body;
 
     const result = await weekendScreeningJob.triggerNow({
       scanTypes: scan_types,

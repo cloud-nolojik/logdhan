@@ -31,33 +31,63 @@ const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
 export const SCAN_QUERIES = {
   // A+ Next Week - NR7 compression with tight base for explosive moves
   // True compression pattern: NR7 + 10-day tight base + strong close
-  a_plus_nextweek: `( {cash} (
-  /* Trend filter */
+
+  a_plus_momentum: `( {cash} (
+  /* Trend filter - Confirmed uptrend */
   latest ema( close, 20 ) > latest ema( close, 50 )
   and latest ema( close, 50 ) > latest sma( close, 200 )
   and latest close > latest ema( close, 20 )
 
-  /* True compression: NR7 */
-  and latest range < min( 7, range )
+  /* MOMENTUM: Stock gained 3%+ in last week */
+  and latest close > 1 week ago close * 1.03
 
-  /* Tight 10-day base (optional but powerful) */
-  and ( max( 10, high ) - min( 10, low ) ) < latest close * 0.06
+  /* Price near recent highs (within 5%) */
+  and latest close >= max( 20, high ) * 0.95
 
-  /* Strong close near the top of the day */
-  and latest close >= latest high * 0.98
+  /* Strong close - buyers in control */
   and latest close > latest open
 
-  /* Volume confirmation (not crazy spike, but demand present) */
-  and latest volume > 1.2 * latest sma( volume, 20 )
+  /* Momentum strong but not exhausted */
+  and latest rsi( 14 ) >= 55
+  and latest rsi( 14 ) <= 75
 
-  /* Momentum not overheated */
-  and latest rsi( 14 ) >= 52
-  and latest rsi( 14 ) <= 66
+  /* Volume healthy - consistent participation */
+  and latest volume > latest sma( volume, 20 ) * 0.8
 
   /* Tradability */
   and latest sma( volume, 20 ) > 500000
   and market cap > 10000
 ) )`
+
+
+
+//   a_plus_momentum: `( {cash} (
+//   /* Trend filter */
+//   latest ema( close, 20 ) > latest ema( close, 50 )
+//   and latest ema( close, 50 ) > latest sma( close, 200 )
+//   and latest close > latest ema( close, 20 )
+
+//   /* True compression: NR7 */
+//   and latest range < min( 7, range )
+
+//   /* Tight 10-day base (optional but powerful) */
+//   and ( max( 10, high ) - min( 10, low ) ) < latest close * 0.06
+
+//   /* Strong close near the top of the day */
+//   and latest close >= latest high * 0.98
+//   and latest close > latest open
+
+//   /* Volume confirmation (not crazy spike, but demand present) */
+//   and latest volume > 1.2 * latest sma( volume, 20 )
+
+//   /* Momentum not overheated */
+//   and latest rsi( 14 ) >= 52
+//   and latest rsi( 14 ) <= 66
+
+//   /* Tradability */
+//   and latest sma( volume, 20 ) > 500000
+//   and market cap > 10000
+// ) )`
 
   // // Breakout Candidates - Near 20-day high with volume surge
   // // EMA20 > EMA50 > SMA200, RSI 55-70, Volume 1.5x avg
@@ -189,7 +219,7 @@ export async function runChartinkScan(scanQuery) {
  * @returns {Promise<Array>}
  */
 export async function runAPlusNextWeekScan() {
-  return runChartinkScan(SCAN_QUERIES.a_plus_nextweek);
+  return runChartinkScan(SCAN_QUERIES.a_plus_momentum);
 }
 
 // Legacy scan functions - commented out
@@ -227,15 +257,15 @@ export async function runAPlusNextWeekScan() {
 
 /**
  * Run combined scan - now just runs A+ Next Week
- * @returns {Promise<{ a_plus_nextweek: Array, combined: Array }>}
+ * @returns {Promise<{ a_plus_momentum: Array, combined: Array }>}
  */
 export async function runCombinedScan() {
   try {
     const results = await runAPlusNextWeekScan();
 
     return {
-      a_plus_nextweek: results,
-      combined: results.map(stock => ({ ...stock, scan_type: 'a_plus_nextweek' }))
+      a_plus_momentum: results,
+      combined: results.map(stock => ({ ...stock, scan_type: 'a_plus_momentum' }))
     };
   } catch (error) {
     console.error('Error running combined scan:', error.message);

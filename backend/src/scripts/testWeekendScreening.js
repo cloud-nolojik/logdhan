@@ -63,14 +63,14 @@ async function testWeekendScreening() {
 
       // Run ChartInk scans
       console.log('\n📊 Running ChartInk scans...');
-      const scanTypes = ['a_plus_nextweek'];
+      const scanTypes = ['a_plus_momentum'];
       const allResults = [];
 
       for (const scanType of scanTypes) {
         try {
           let scanResults = [];
           switch (scanType) {
-            case 'a_plus_nextweek':
+            case 'a_plus_momentum':
               scanResults = await chartinkService.runAPlusNextWeekScan();
               break;
             // Legacy scans - commented out
@@ -135,7 +135,7 @@ async function testWeekendScreening() {
       console.log('\n🚀 Triggering weekend screening job...');
 
       const options = {
-        scanTypes: ['a_plus_nextweek']
+        scanTypes: ['a_plus_momentum']
       };
 
       // If skip-bulk flag, we need to modify the job behavior
