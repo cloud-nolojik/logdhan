@@ -76,45 +76,77 @@ class WeekendScreeningJob {
    * Define all job types
    */
   defineJobs() {
+    console.log('[SCREENING JOB] 📝 defineJobs() called - registering job handlers...');
+
     // Main weekend screening job
     this.agenda.define('weekend-screening', async (job) => {
-      console.log('[SCREENING JOB] Starting weekend screening run...');
+      console.log('');
+      console.log('═'.repeat(80));
+      console.log('[SCREENING JOB] 🚀 WEEKEND-SCREENING JOB TRIGGERED');
+      console.log('═'.repeat(80));
+      console.log(`[SCREENING JOB] ⏰ Triggered at: ${new Date().toISOString()}`);
+      console.log(`[SCREENING JOB] 📋 Job ID: ${job.attrs._id}`);
+      console.log(`[SCREENING JOB] 📋 Job Name: ${job.attrs.name}`);
+      console.log(`[SCREENING JOB] 📋 Job Data: ${JSON.stringify(job.attrs.data)}`);
+      console.log(`[SCREENING JOB] 📋 Last Run At: ${job.attrs.lastRunAt}`);
+      console.log(`[SCREENING JOB] 📋 Next Run At: ${job.attrs.nextRunAt}`);
+      console.log('─'.repeat(80));
 
       try {
+        console.log('[SCREENING JOB] 📌 STEP 1: Calling runWeekendScreening()...');
         const result = await this.runWeekendScreening(job.attrs.data || {});
         this.stats.runsCompleted++;
         this.stats.lastRunAt = new Date();
-        console.log(`[SCREENING JOB] Completed: ${result.totalStocksAdded} stocks added across ${result.usersProcessed} users`);
+        console.log(`[SCREENING JOB] ✅ STEP 1 COMPLETE: ${result.totalStocksAdded} stocks added, ${result.totalStocksUpdated || 0} updated`);
 
         // Trigger bulk analysis after screening completes (for freshly screened stocks)
-        // analyzeAllChartink=true: Analyze ALL screened stocks, not just those in user watchlists
-        // useLastFridayData=true: Use only Friday's closing data for consistent weekly analysis
-        console.log('[SCREENING JOB] 🚀 Triggering bulk analysis for screened stocks...');
-        console.log('[SCREENING JOB] 🔧 Passing analyzeAllChartink=true, useLastFridayData=true for weekly analysis');
+        console.log('─'.repeat(80));
+        console.log('[SCREENING JOB] 📌 STEP 2: Triggering bulk analysis for screened stocks...');
+        console.log('[SCREENING JOB] 🔧 Options: analyzeAllChartink=true, useLastFridayData=true');
         try {
           const bulkResult = await agendaScheduledBulkAnalysisService.triggerManually('Post-weekend-screening analysis', {
             source: 'chartink',
             analyzeAllChartink: true,  // Analyze all ChartInk stocks from weekly watchlist
             useLastFridayData: true    // Use only Friday's closing data for consistent weekly analysis
           });
-          console.log('[SCREENING JOB] ✅ Bulk analysis triggered successfully');
+          console.log('[SCREENING JOB] ✅ STEP 2 COMPLETE: Bulk analysis triggered');
           console.log(`[SCREENING JOB] 📋 Bulk job ID: ${bulkResult.jobId}, scheduled at: ${bulkResult.scheduledAt}`);
         } catch (bulkError) {
-          console.error('[SCREENING JOB] ❌ Failed to trigger bulk analysis:', bulkError.message);
+          console.error('[SCREENING JOB] ❌ STEP 2 FAILED: Bulk analysis error:', bulkError.message);
+          console.error('[SCREENING JOB] ❌ Stack:', bulkError.stack);
           // Don't throw - screening completed successfully
         }
 
+        console.log('═'.repeat(80));
+        console.log('[SCREENING JOB] ✅ WEEKEND-SCREENING JOB COMPLETED SUCCESSFULLY');
+        console.log('═'.repeat(80));
+        console.log('');
+
       } catch (error) {
-        console.error('[SCREENING JOB] Weekend screening failed:', error);
+        console.error('═'.repeat(80));
+        console.error('[SCREENING JOB] ❌ WEEKEND-SCREENING JOB FAILED');
+        console.error('═'.repeat(80));
+        console.error('[SCREENING JOB] ❌ Error:', error.message);
+        console.error('[SCREENING JOB] ❌ Stack:', error.stack);
         this.stats.errors++;
         throw error;
       }
     });
 
+    console.log('[SCREENING JOB] ✅ Registered handler: weekend-screening');
+
     // Manual trigger for testing
     this.agenda.define('manual-screening', async (job) => {
       const { userId, scanTypes } = job.attrs.data || {};
-      console.log(`[SCREENING JOB] Manual screening run for user: ${userId || 'all'}`);
+      console.log('');
+      console.log('═'.repeat(80));
+      console.log('[SCREENING JOB] 🔧 MANUAL-SCREENING JOB TRIGGERED');
+      console.log('═'.repeat(80));
+      console.log(`[SCREENING JOB] ⏰ Triggered at: ${new Date().toISOString()}`);
+      console.log(`[SCREENING JOB] 📋 Job ID: ${job.attrs._id}`);
+      console.log(`[SCREENING JOB] 📋 User ID: ${userId || 'all'}`);
+      console.log(`[SCREENING JOB] 📋 Scan Types: ${JSON.stringify(scanTypes || ['a_plus_momentum'])}`);
+      console.log('─'.repeat(80));
 
       try {
         const result = await this.runWeekendScreening({
@@ -122,54 +154,95 @@ class WeekendScreeningJob {
           scanTypes: scanTypes || ['a_plus_momentum']
         });
 
+        console.log('═'.repeat(80));
+        console.log('[SCREENING JOB] ✅ MANUAL-SCREENING JOB COMPLETED');
+        console.log('═'.repeat(80));
+        console.log('');
+
         return result;
       } catch (error) {
-        console.error('[SCREENING JOB] Manual screening failed:', error);
+        console.error('[SCREENING JOB] ❌ Manual screening failed:', error.message);
+        console.error('[SCREENING JOB] ❌ Stack:', error.stack);
         throw error;
       }
     });
+
+    console.log('[SCREENING JOB] ✅ Registered handler: manual-screening');
+    console.log('[SCREENING JOB] 📝 defineJobs() complete');
   }
 
   /**
    * Setup event handlers
    */
   setupEventHandlers() {
+    console.log('[SCREENING JOB] 📝 Setting up Agenda event handlers...');
+
     this.agenda.on('ready', () => {
-      console.log('[SCREENING JOB] Agenda ready');
+      console.log('[SCREENING JOB] 🟢 EVENT: Agenda ready - can now process jobs');
     });
 
     this.agenda.on('start', (job) => {
-      console.log(`[SCREENING JOB] Job starting: ${job.attrs.name}`);
+      console.log('');
+      console.log('[SCREENING JOB] 🟡 EVENT: Job STARTING');
+      console.log(`[SCREENING JOB]    Name: ${job.attrs.name}`);
+      console.log(`[SCREENING JOB]    ID: ${job.attrs._id}`);
+      console.log(`[SCREENING JOB]    Data: ${JSON.stringify(job.attrs.data)}`);
+      console.log(`[SCREENING JOB]    Scheduled for: ${job.attrs.nextRunAt}`);
     });
 
     this.agenda.on('complete', (job) => {
-      console.log(`[SCREENING JOB] Job completed: ${job.attrs.name}`);
+      console.log('[SCREENING JOB] 🟢 EVENT: Job COMPLETED');
+      console.log(`[SCREENING JOB]    Name: ${job.attrs.name}`);
+      console.log(`[SCREENING JOB]    ID: ${job.attrs._id}`);
+      console.log(`[SCREENING JOB]    Finished at: ${new Date().toISOString()}`);
+      console.log('');
     });
 
     this.agenda.on('fail', (err, job) => {
-      console.error(`[SCREENING JOB] Job failed: ${job.attrs.name}`, err);
+      console.error('[SCREENING JOB] 🔴 EVENT: Job FAILED');
+      console.error(`[SCREENING JOB]    Name: ${job.attrs.name}`);
+      console.error(`[SCREENING JOB]    ID: ${job.attrs._id}`);
+      console.error(`[SCREENING JOB]    Error: ${err.message}`);
+      console.error(`[SCREENING JOB]    Stack: ${err.stack}`);
+      console.error('');
     });
+
+    this.agenda.on('error', (err) => {
+      console.error('[SCREENING JOB] 🔴 EVENT: Agenda ERROR');
+      console.error(`[SCREENING JOB]    Error: ${err.message}`);
+      console.error(`[SCREENING JOB]    Stack: ${err.stack}`);
+    });
+
+    console.log('[SCREENING JOB] ✅ Event handlers configured');
   }
 
   /**
    * Schedule recurring jobs
    */
   async scheduleRecurringJobs() {
+    console.log('[SCREENING JOB] 📝 scheduleRecurringJobs() called...');
+
     try {
       // Cancel existing jobs to avoid duplicates
-      await this.agenda.cancel({
+      console.log('[SCREENING JOB] 🗑️ Cancelling existing weekend-screening jobs...');
+      const cancelResult = await this.agenda.cancel({
         name: 'weekend-screening'
       });
+      console.log(`[SCREENING JOB] 🗑️ Cancelled ${cancelResult} existing jobs`);
 
       // Saturday 6 PM IST only
-      await this.agenda.every('0 18 * * 6', 'weekend-screening', { day: 'saturday' }, {
+      console.log('[SCREENING JOB] 📅 Scheduling new recurring job: "0 18 * * 6" (Sat 6PM IST)');
+      const job = await this.agenda.every('0 18 * * 6', 'weekend-screening', { day: 'saturday' }, {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log('[SCREENING JOB] Recurring job scheduled: Sat 6PM IST');
+      console.log('[SCREENING JOB] ✅ Recurring job scheduled: Sat 6PM IST');
+      console.log(`[SCREENING JOB] 📋 Job ID: ${job.attrs._id}`);
+      console.log(`[SCREENING JOB] 📋 Next Run At: ${job.attrs.nextRunAt}`);
 
     } catch (error) {
-      console.error('[SCREENING JOB] Failed to schedule jobs:', error);
+      console.error('[SCREENING JOB] ❌ Failed to schedule jobs:', error.message);
+      console.error('[SCREENING JOB] ❌ Stack:', error.stack);
       throw error;
     }
   }
@@ -182,11 +255,22 @@ class WeekendScreeningJob {
    * @param {number} [options.maxStocksPerUser] - Max stocks per user
    */
   async runWeekendScreening(options = {}) {
+    console.log('');
+    console.log('[SCREENING JOB] ┌─────────────────────────────────────────────────────────────┐');
+    console.log('[SCREENING JOB] │          runWeekendScreening() STARTED                      │');
+    console.log('[SCREENING JOB] └─────────────────────────────────────────────────────────────┘');
+    console.log(`[SCREENING JOB] 📋 Input options: ${JSON.stringify(options)}`);
+
     const {
       userId = null,
       scanTypes = ['a_plus_momentum'],
       maxStocksPerUser = 10
     } = options;
+
+    console.log(`[SCREENING JOB] 📋 Parsed options:`);
+    console.log(`[SCREENING JOB]    - userId: ${userId}`);
+    console.log(`[SCREENING JOB]    - scanTypes: ${JSON.stringify(scanTypes)}`);
+    console.log(`[SCREENING JOB]    - maxStocksPerUser: ${maxStocksPerUser}`);
 
     const result = {
       usersProcessed: 0,
@@ -197,7 +281,10 @@ class WeekendScreeningJob {
 
     try {
       // Step 1: Run ChartInk scans
-      console.log('[SCREENING JOB] Running ChartInk scans...');
+      console.log('');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
+      console.log('[SCREENING JOB] 📌 STEP 1/4: Running ChartInk scans...');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
 
       const allResults = [];
 
@@ -241,13 +328,18 @@ class WeekendScreeningJob {
         }
       }
 
+      console.log(`[SCREENING JOB] ✅ STEP 1 COMPLETE: Total ${allResults.length} results from all scans`);
+
       if (allResults.length === 0) {
-        console.log('[SCREENING JOB] No results from any scan');
+        console.log('[SCREENING JOB] ⚠️ No results from any scan - EXITING EARLY');
         return result;
       }
 
       // Step 2: PREFETCH FRESH PRICES before enrichment
-      // This ensures enrichment uses fresh closing prices, not stale weekend data
+      console.log('');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
+      console.log('[SCREENING JOB] 📌 STEP 2/4: Prefetching fresh prices...');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log(`[SCREENING JOB] 📊 Prefetching fresh prices for ${allResults.length} stocks...`);
 
       // First map all symbols to instrument_keys
@@ -300,9 +392,13 @@ class WeekendScreeningJob {
         }
       }
 
-      console.log(`[SCREENING JOB] ✅ Price prefetch complete: ${priceSuccessCount} success, ${priceFailCount} failed`);
+      console.log(`[SCREENING JOB] ✅ STEP 2 COMPLETE: Price prefetch - ${priceSuccessCount} success, ${priceFailCount} failed`);
 
       // Step 3: Enrich with technical data and scores (now uses fresh prices)
+      console.log('');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
+      console.log('[SCREENING JOB] 📌 STEP 3/4: Enriching stocks with technical data...');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log(`[SCREENING JOB] Enriching ${allResults.length} stocks...`);
 
       // First pass: Get all enriched stocks with basic filter
@@ -342,15 +438,20 @@ class WeekendScreeningJob {
 
       const enrichedStocks = deduplicatedStocks.slice(0, MAX_STOCKS);
 
-      console.log(`[SCREENING JOB] Qualified stocks (${MIN_SCORE}+): ${qualifiedStocks.length} total, ${deduplicatedStocks.length} unique, ${enrichedStocks.length} selected`);
+      console.log(`[SCREENING JOB] ✅ STEP 3 COMPLETE: Qualified stocks (${MIN_SCORE}+): ${qualifiedStocks.length} total, ${deduplicatedStocks.length} unique, ${enrichedStocks.length} selected`);
 
       if (enrichedStocks.length === 0) {
-        console.log('[SCREENING JOB] No qualified stocks found this week');
+        console.log('[SCREENING JOB] ⚠️ No qualified stocks found this week - EXITING EARLY');
         return result;
       }
 
-      // Step 3: Add to global WeeklyWatchlist (no user concept)
+      // Step 4: Add to global WeeklyWatchlist (no user concept)
+      console.log('');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
+      console.log('[SCREENING JOB] 📌 STEP 4/4: Adding stocks to WeeklyWatchlist...');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log(`[SCREENING JOB] Adding ${enrichedStocks.length} stocks to global WeeklyWatchlist...`);
+      console.log(`[SCREENING JOB] Stocks to add: ${enrichedStocks.map(s => `${s.symbol}(${s.setup_score})`).join(', ')}`);
 
       const stocksToAdd = enrichedStocks.map(stock => ({
         instrument_key: stock.instrument_key,
@@ -388,14 +489,27 @@ class WeekendScreeningJob {
 
       result.totalStocksAdded = addResult.added;
       result.totalStocksUpdated = addResult.updated;
-      console.log(`[SCREENING JOB] Added ${addResult.added} new stocks, updated ${addResult.updated} existing stocks`);
+      console.log(`[SCREENING JOB] ✅ STEP 4 COMPLETE: Added ${addResult.added} new stocks, updated ${addResult.updated} existing stocks`);
 
       this.stats.stocksProcessed += enrichedStocks.length;
+
+      console.log('');
+      console.log('[SCREENING JOB] ┌─────────────────────────────────────────────────────────────┐');
+      console.log('[SCREENING JOB] │          runWeekendScreening() COMPLETED                    │');
+      console.log('[SCREENING JOB] └─────────────────────────────────────────────────────────────┘');
+      console.log(`[SCREENING JOB] 📊 Final Result: ${JSON.stringify(result)}`);
+      console.log('');
 
       return result;
 
     } catch (error) {
-      console.error('[SCREENING JOB] runWeekendScreening failed:', error);
+      console.error('');
+      console.error('[SCREENING JOB] ┌─────────────────────────────────────────────────────────────┐');
+      console.error('[SCREENING JOB] │          runWeekendScreening() FAILED                       │');
+      console.error('[SCREENING JOB] └─────────────────────────────────────────────────────────────┘');
+      console.error(`[SCREENING JOB] ❌ Error: ${error.message}`);
+      console.error(`[SCREENING JOB] ❌ Stack: ${error.stack}`);
+      console.error('');
       throw error;
     }
   }
@@ -404,13 +518,27 @@ class WeekendScreeningJob {
    * Manually trigger screening
    */
   async triggerNow(options = {}) {
+    console.log('');
+    console.log('[SCREENING JOB] ═══════════════════════════════════════════════════════════════');
+    console.log('[SCREENING JOB] 🔧 triggerNow() called - Manual trigger requested');
+    console.log('[SCREENING JOB] ═══════════════════════════════════════════════════════════════');
+    console.log(`[SCREENING JOB] 📋 Options: ${JSON.stringify(options)}`);
+    console.log(`[SCREENING JOB] 📋 Is Initialized: ${this.isInitialized}`);
+
     if (!this.isInitialized) {
+      console.error('[SCREENING JOB] ❌ Cannot trigger - not initialized!');
       throw new Error('Screening job not initialized');
     }
 
-    console.log('[SCREENING JOB] Manual trigger requested');
+    console.log('[SCREENING JOB] 📤 Calling agenda.now("manual-screening", options)...');
 
     const job = await this.agenda.now('manual-screening', options);
+
+    console.log('[SCREENING JOB] ✅ Job scheduled successfully');
+    console.log(`[SCREENING JOB] 📋 Job ID: ${job.attrs._id}`);
+    console.log(`[SCREENING JOB] 📋 Scheduled At: ${job.attrs.nextRunAt}`);
+    console.log('[SCREENING JOB] ═══════════════════════════════════════════════════════════════');
+    console.log('');
 
     return {
       success: true,
