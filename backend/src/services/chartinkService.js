@@ -32,32 +32,7 @@ export const SCAN_QUERIES = {
   // A+ Next Week - NR7 compression with tight base for explosive moves
   // True compression pattern: NR7 + 10-day tight base + strong close
 
-  a_plus_momentum: `( {cash} (
-  /* Trend filter - Confirmed uptrend */
-  latest ema( close, 20 ) > latest ema( close, 50 )
-  and latest ema( close, 50 ) > latest sma( close, 200 )
-  and latest close > latest ema( close, 20 )
-
-  /* MOMENTUM: Stock gained 3%+ in last week */
-  and latest close > 1 week ago close * 1.03
-
-  /* Price near recent highs (within 5%) */
-  and latest close >= max( 20, high ) * 0.95
-
-  /* Strong close - buyers in control */
-  and latest close > latest open
-
-  /* Momentum strong but not exhausted */
-  and latest rsi( 14 ) >= 55
-  and latest rsi( 14 ) <= 75
-
-  /* Volume healthy - consistent participation */
-  and latest volume > latest sma( volume, 20 ) * 0.8
-
-  /* Tradability */
-  and latest sma( volume, 20 ) > 500000
-  and market cap > 10000
-) )`
+  a_plus_momentum: `( {cash} ( latest ema( close, 20 ) > latest ema( close, 50 ) and latest ema( close, 50 ) > latest sma( close, 200 ) and latest close > latest ema( close, 20 ) and latest close > 1 week ago close * 1.03 and latest close >= max( 20, high ) * 0.95 and latest close > latest open and latest rsi( 14 ) >= 55 and latest rsi( 14 ) <= 75 and latest volume > latest sma( volume, 20 ) * 0.8 and latest sma( volume, 20 ) > 500000 and market cap > 10000 ) )`
 
 
 
