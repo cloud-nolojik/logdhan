@@ -506,51 +506,41 @@ function calculateConsolidationLevels(data) {
  * - Green close (buyers in control)
  * - RSI 55-75 (strong but not exhausted)
  *
- * Strategy: Momentum continuation with breakout potential
- * Entry above Friday high for confirmation, tight stop below EMA20
+ * Strategy: Simple momentum continuation
+ * - Entry: Above Friday high (confirms continuation)
+ * - Stop: Below EMA20 (momentum support)
+ * - Target: R:R based (2:1 minimum), not price-level based
  */
 function calculateAPlusMomentumLevels(data) {
-  const { ema20, high20D, fridayHigh, fridayClose, atr } = data;
+  const { ema20, fridayHigh, fridayClose, atr } = data;
 
   if (!isNum(fridayHigh) || fridayHigh <= 0) {
     return { valid: false, reason: 'Friday high required for A+ momentum entry' };
   }
 
-  // Check if already at breakout zone (within 2% of 20D high)
-  const nearBreakout = isNum(high20D) && fridayClose >= high20D * 0.98;
-
-  if (nearBreakout) {
-    // At breakout zone - treat as breakout with tighter stop
-    const breakoutLevels = calculateBreakoutLevels(data);
-    if (breakoutLevels.valid) {
-      breakoutLevels.mode = 'A_PLUS_BREAKOUT';
-      breakoutLevels.archetype = 'breakout';
-      breakoutLevels.reason = 'A+ Momentum at breakout zone: Stock near 20D high with strong weekly gains. ' +
-                              'Treating as breakout entry for immediate expansion.';
-    }
-    return breakoutLevels;
+  if (!isNum(ema20) || ema20 <= 0) {
+    return { valid: false, reason: 'EMA20 required for A+ momentum stop' };
   }
 
-  // Entry: Above Friday high for continuation confirmation
+  // ENTRY: Above Friday high + small buffer for confirmation
   const entry = fridayHigh + (0.15 * atr);
 
   // Entry range for slippage
   const entryRange = [roundToTick(entry), roundToTick(entry + 0.3 * atr)];
 
-  // Stop: Below EMA20 (trend break) but cap at 1.5 ATR from entry
+  // STOP: Below EMA20 (momentum support), capped at 1.5 ATR from entry
   const ema20Stop = ema20 - (0.2 * atr);
-  const atrStop = entry - (1.5 * atr);
-  const stop = Math.max(ema20Stop, atrStop);
+  const maxStop = entry - (1.5 * atr);
+  const stop = Math.max(ema20Stop, maxStop);
 
-  // Calculate risk
+  // RISK calculation
   const risk = entry - stop;
 
-  // Target: Push toward 20D high and beyond
-  // Since this stock has momentum + near highs, expect breakout potential
-  const targetToHigh = isNum(high20D) ? high20D * 1.03 : entry + (1.5 * atr);
-  const targetFromATR = entry + (1.8 * atr);
-  const targetFromRisk = entry + (risk * 1.8);  // Aim for 1.8 R:R
-  const target = Math.max(targetToHigh, targetFromATR, targetFromRisk);
+  // TARGET: R:R based (2:1 minimum) - momentum stocks can run
+  // Use higher of: 2x risk OR 2.5 ATR
+  const rrTarget = entry + (risk * 2.0);      // 2:1 R:R
+  const atrTarget = entry + (2.5 * atr);      // ATR-based
+  const target = Math.max(rrTarget, atrTarget);
 
   // Calculate distance from EMA20 for context
   const distanceFromEMA = ((fridayClose - ema20) / ema20) * 100;
@@ -564,8 +554,8 @@ function calculateAPlusMomentumLevels(data) {
     stop,
     target,
     entryType: 'buy_above',
-    reason: `A+ Momentum: Stock ${round2(distanceFromEMA)}% above EMA20 with 3%+ weekly gains, ` +
-            `within striking distance of 20D high. Entry above ${round2(fridayHigh)} confirms continuation.`
+    reason: `A+ Momentum: Stock ${round2(distanceFromEMA)}% above EMA20 with 3%+ weekly gains. ` +
+            `Entry above ${round2(fridayHigh)} confirms continuation. Target based on 2:1 R:R.`
   };
 }
 
