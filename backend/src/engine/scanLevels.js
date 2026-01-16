@@ -11,6 +11,7 @@
  * - pullback: Stock pulled back to EMA20 support
  * - momentum: Stock already running (3-10% above EMA20)
  * - consolidation_breakout: Stock in tight range near highs
+ * - a_plus_momentum: Uptrend + 3% weekly gain + near 20d high (momentum continuation)
  */
 
 import { round2, isNum } from './helpers.js';
@@ -69,6 +70,13 @@ export function calculateTradingLevels(scanType, data) {
     case 'consolidation_breakout':
       console.log(`🔍 [SCAN_LEVELS] Calling calculateConsolidationLevels`);
       result = calculateConsolidationLevels(data);
+      break;
+
+    case 'a_plus_momentum':
+      // A+ Momentum: Uptrend + 3% weekly gain + near 20d high
+      // Similar to momentum but with stronger confirmation (near highs)
+      console.log(`🔍 [SCAN_LEVELS] Calling calculateAPlusMomentumLevels`);
+      result = calculateAPlusMomentumLevels(data);
       break;
 
     default:
@@ -488,6 +496,82 @@ function calculateConsolidationLevels(data) {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
+ * A+ MOMENTUM SCAN FORMULAS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * What ChartInk found:
+ * - Strong uptrend (EMA20 > EMA50 > SMA200, close > EMA20)
+ * - 3%+ weekly gain (momentum confirmed)
+ * - Within 5% of 20-day high (near breakout zone)
+ * - Green close (buyers in control)
+ * - RSI 55-75 (strong but not exhausted)
+ *
+ * Strategy: Momentum continuation with breakout potential
+ * Entry above Friday high for confirmation, tight stop below EMA20
+ */
+function calculateAPlusMomentumLevels(data) {
+  const { ema20, high20D, fridayHigh, fridayClose, atr } = data;
+
+  if (!isNum(fridayHigh) || fridayHigh <= 0) {
+    return { valid: false, reason: 'Friday high required for A+ momentum entry' };
+  }
+
+  // Check if already at breakout zone (within 2% of 20D high)
+  const nearBreakout = isNum(high20D) && fridayClose >= high20D * 0.98;
+
+  if (nearBreakout) {
+    // At breakout zone - treat as breakout with tighter stop
+    const breakoutLevels = calculateBreakoutLevels(data);
+    if (breakoutLevels.valid) {
+      breakoutLevels.mode = 'A_PLUS_BREAKOUT';
+      breakoutLevels.archetype = 'breakout';
+      breakoutLevels.reason = 'A+ Momentum at breakout zone: Stock near 20D high with strong weekly gains. ' +
+                              'Treating as breakout entry for immediate expansion.';
+    }
+    return breakoutLevels;
+  }
+
+  // Entry: Above Friday high for continuation confirmation
+  const entry = fridayHigh + (0.15 * atr);
+
+  // Entry range for slippage
+  const entryRange = [roundToTick(entry), roundToTick(entry + 0.3 * atr)];
+
+  // Stop: Below EMA20 (trend break) but cap at 1.5 ATR from entry
+  const ema20Stop = ema20 - (0.2 * atr);
+  const atrStop = entry - (1.5 * atr);
+  const stop = Math.max(ema20Stop, atrStop);
+
+  // Calculate risk
+  const risk = entry - stop;
+
+  // Target: Push toward 20D high and beyond
+  // Since this stock has momentum + near highs, expect breakout potential
+  const targetToHigh = isNum(high20D) ? high20D * 1.03 : entry + (1.5 * atr);
+  const targetFromATR = entry + (1.8 * atr);
+  const targetFromRisk = entry + (risk * 1.8);  // Aim for 1.8 R:R
+  const target = Math.max(targetToHigh, targetFromATR, targetFromRisk);
+
+  // Calculate distance from EMA20 for context
+  const distanceFromEMA = ((fridayClose - ema20) / ema20) * 100;
+
+  return {
+    valid: true,
+    mode: 'A_PLUS_MOMENTUM',
+    archetype: 'trend-follow',
+    entry,
+    entryRange,
+    stop,
+    target,
+    entryType: 'buy_above',
+    reason: `A+ Momentum: Stock ${round2(distanceFromEMA)}% above EMA20 with 3%+ weekly gains, ` +
+            `within striking distance of 20D high. Entry above ${round2(fridayHigh)} confirms continuation.`
+  };
+}
+
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
  * GUARDRAILS
  * ═══════════════════════════════════════════════════════════════════════════
  *
@@ -646,6 +730,7 @@ export default {
   calculatePullbackLevels,
   calculateMomentumLevels,
   calculateConsolidationLevels,
+  calculateAPlusMomentumLevels,
   applyGuardrails,
   roundToTick
 };

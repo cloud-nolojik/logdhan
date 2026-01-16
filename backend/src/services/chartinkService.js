@@ -20,7 +20,7 @@ const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
  * Pre-defined scan queries for swing trading
  *
  * ACTIVE SCAN:
- * - A+ Next Week: NR7 compression + tight 10-day base + strong trend
+ * - A+ Momentum: Uptrend + 3% weekly gain + near 20d high + RSI 55-75
  *
  * COMMENTED OUT (legacy scans):
  * - BREAKOUT: Near 20-day HIGH + Volume 1.5x + RSI 55-70
@@ -29,9 +29,8 @@ const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
  * - CONSOLIDATION: Near 20-day HIGH + Tight range <2.5% + RSI 50-65
  */
 export const SCAN_QUERIES = {
-  // A+ Next Week - NR7 compression with tight base for explosive moves
-  // True compression pattern: NR7 + 10-day tight base + strong close
-
+  // A+ Momentum - Strong uptrend stocks with weekly gains near highs
+  // Trend + 3% weekly gain + near 20d high + green close + RSI 55-75
   a_plus_momentum: `( {cash} ( latest ema( close, 20 ) > latest ema( close, 50 ) and latest ema( close, 50 ) > latest sma( close, 200 ) and latest close > latest ema( close, 20 ) and latest close > 1 week ago close * 1.03 and latest close >= max( 20, high ) * 0.95 and latest close > latest open and latest rsi( 14 ) >= 55 and latest rsi( 14 ) <= 75 and latest volume > latest sma( volume, 20 ) * 0.8 and latest sma( volume, 20 ) > 500000 and market cap > 10000 ) )`
 
 

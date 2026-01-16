@@ -336,7 +336,7 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   // NORMALIZE scan_type ONCE - use this everywhere instead of raw scan_type
   const scanType = (scan_type || "").toString().trim().toLowerCase();
   console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - Normalized scanType: "${scanType}"`);
-  console.log(`   Will generate C0: ${scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType)}`);
+  console.log(`   Will generate C0: ${scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout', 'a_plus_momentum'].includes(scanType)}`);
 
   const last = get(marketPayload, "priceContext.last", current_price);
   const ema20 = get(marketPayload, "trendMomentum.ema20_1D");
@@ -387,9 +387,9 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - C0 GENERATION CHECK`);
   console.log(`   scanType: "${scanType}"`);
   console.log(`   scanType truthy: ${!!scanType}`);
-  console.log(`   scanType in valid list: ${['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType)}`);
+  console.log(`   scanType in valid list: ${['breakout', 'pullback', 'momentum', 'consolidation_breakout', 'a_plus_momentum'].includes(scanType)}`);
 
-  if (scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType)) {
+  if (scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout', 'a_plus_momentum'].includes(scanType)) {
     console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - GENERATING C0 for scanType="${scanType}"`);
 
     // Build data object for scanLevels
@@ -470,7 +470,7 @@ export function buildStage2({ stock_name, stock_symbol, current_price, marketPay
   // GENERIC CANDIDATES (C1-C5) - Only generate if scan_type is NOT provided
   // When scan_type exists, we ONLY use C0 regardless of whether it succeeded
   // ═══════════════════════════════════════════════════════════════════════════
-  const hasScanType = scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout'].includes(scanType);
+  const hasScanType = scanType && ['breakout', 'pullback', 'momentum', 'consolidation_breakout', 'a_plus_momentum'].includes(scanType);
 
   if (hasScanType) {
     console.log(`🔍 [BUILD_STAGE2] ${stock_symbol} - SKIPPING C1-C5 (scan_type="${scanType}" provided, using C0 only)`);

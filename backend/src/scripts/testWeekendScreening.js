@@ -163,7 +163,8 @@ async function testWeekendScreening() {
       }
 
       // Trigger bulk analysis unless skipped
-      if (!skipBulk && result.totalStocksAdded > 0) {
+      const hasStocksToAnalyze = (result.totalStocksAdded > 0) || (result.totalStocksUpdated > 0);
+      if (!skipBulk && hasStocksToAnalyze) {
         console.log('\n🤖 Running bulk AI analysis (this may take a few minutes)...');
         try {
           const agendaScheduledBulkAnalysisService = (await import('../services/agendaScheduledBulkAnalysis.service.js')).default;
@@ -173,7 +174,8 @@ async function testWeekendScreening() {
           console.log('[BULK ANALYSIS] Starting synchronous analysis run...');
           await agendaScheduledBulkAnalysisService.runScheduledAnalysis({
             source: 'chartink',
-            skipTradingDayCheck: true
+            skipTradingDayCheck: true,
+            analyzeAllChartink: true  // Analyze ALL ChartInk stocks from weekly watchlist
           });
           console.log('✅ Bulk analysis completed!');
         } catch (bulkError) {
@@ -182,8 +184,8 @@ async function testWeekendScreening() {
         }
       } else if (skipBulk) {
         console.log('\n⏭️ Skipping bulk AI analysis (--skip-bulk flag)');
-      } else if (result.totalStocksAdded === 0) {
-        console.log('\n⏭️ Skipping bulk AI analysis (no stocks added)');
+      } else if (!hasStocksToAnalyze) {
+        console.log('\n⏭️ Skipping bulk AI analysis (no stocks added or updated)');
       }
 
       console.log('\n✅ Weekend screening completed successfully');
