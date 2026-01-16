@@ -34,33 +34,33 @@ export const SCAN_QUERIES = {
   a_plus_momentum: `( {cash} ( latest ema( close, 20 ) > latest ema( close, 50 ) and latest ema( close, 50 ) > latest sma( close, 200 ) and latest close > latest ema( close, 20 ) and latest close > 1 week ago close * 1.03 and latest close >= max( 20, high ) * 0.98 and latest close > latest open and latest rsi( 14 ) >= 55 and latest rsi( 14 ) <= 68 and latest volume > latest sma( volume, 20 ) * 1.2 and latest sma( volume, 20 ) > 500000 and market cap > 10000 ) )`,
 
 
-  a_plus_nextweek: `( {cash} (
-  /* Trend filter */
-  latest ema( close, 20 ) > latest ema( close, 50 )
-  and latest ema( close, 50 ) > latest sma( close, 200 )
-  and latest close > latest ema( close, 20 )
+//   a_plus_nextweek: `( {cash} (
+//   /* Trend filter */
+//   latest ema( close, 20 ) > latest ema( close, 50 )
+//   and latest ema( close, 50 ) > latest sma( close, 200 )
+//   and latest close > latest ema( close, 20 )
 
-  /* True compression: NR7 */
-  and latest range < min( 7, range )
+//   /* True compression: NR7 */
+//   and latest range < min( 7, range )
 
-  /* Tight 10-day base (optional but powerful) */
-  and ( max( 10, high ) - min( 10, low ) ) < latest close * 0.06
+//   /* Tight 10-day base (optional but powerful) */
+//   and ( max( 10, high ) - min( 10, low ) ) < latest close * 0.06
 
-  /* Strong close near the top of the day */
-  and latest close >= latest high * 0.98
-  and latest close > latest open
+//   /* Strong close near the top of the day */
+//   and latest close >= latest high * 0.98
+//   and latest close > latest open
 
-  /* Volume confirmation (not crazy spike, but demand present) */
-  and latest volume > 1.2 * latest sma( volume, 20 )
+//   /* Volume confirmation (not crazy spike, but demand present) */
+//   and latest volume > 1.2 * latest sma( volume, 20 )
 
-  /* Momentum not overheated */
-  and latest rsi( 14 ) >= 52
-  and latest rsi( 14 ) <= 66
+//   /* Momentum not overheated */
+//   and latest rsi( 14 ) >= 52
+//   and latest rsi( 14 ) <= 66
 
-  /* Tradability */
-  and latest sma( volume, 20 ) > 500000
-  and market cap > 10000
-) )`
+//   /* Tradability */
+//   and latest sma( volume, 20 ) > 500000
+//   and market cap > 10000
+// ) )`
   
 
 //   a_plus_momentum: `( {cash} (
