@@ -335,13 +335,13 @@ app.listen(PORT, async () => {
   await initializeMessagingService();
   await initializePriceCacheService(); // Start price caching for watchlist + indices
 
-  // Scheduled jobs:
-  await initializeAgendaMonitoringService(); // check-triggers-batch (every 15 min)
-  await initializeAgendaScheduledBulkAnalysisService(); // watchlist-bulk-analysis (4:00 PM Mon-Fri)
-  await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST only)
-  await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
-  await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
-  await initializePositionScanJob(); // position-scan (4 PM Mon-Fri, rule-based, zero AI cost)
+  // Scheduled jobs (commented out for local testing):
+  // await initializeAgendaMonitoringService(); // check-triggers-batch (every 15 min)
+  // await initializeAgendaScheduledBulkAnalysisService(); // watchlist-bulk-analysis (4:00 PM Mon-Fri)
+  // await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST only)
+  // await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
+  // await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
+  // await initializePositionScanJob(); // position-scan (4 PM Mon-Fri, rule-based, zero AI cost)
 
 });
 
