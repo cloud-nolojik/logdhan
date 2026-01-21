@@ -271,6 +271,8 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
   try {
     const { instrumentKey } = req.params;
     const { analysis_type = 'swing' } = req.query;
+
+    console.log(`[BY-INSTRUMENT] Request for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
     const userId = req.user.id;
 
     const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
@@ -297,6 +299,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     }).sort({ created_at: -1 }); // Get most recent analysis
 
     if (!anyAnalysis) {
+      console.log(`[BY-INSTRUMENT] ❌ No analysis found for instrumentKey: "${instrumentKey}"`);
       const messageToUser = 'This stock has not been analyzed yet';
       const callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
 
@@ -309,6 +312,8 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         can_analyze_manually: true
       });
     }
+
+    console.log(`[BY-INSTRUMENT] ✅ Found analysis: ${anyAnalysis._id}, status: ${anyAnalysis.status}, symbol: ${anyAnalysis.stock_symbol}`);
 
     // If analysis is not completed, return in_progress status (unless failed)
     // Valid completed statuses: 'completed', 'in_position', 'exited', 'expired'
