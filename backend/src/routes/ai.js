@@ -311,7 +311,9 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     }
 
     // If analysis is not completed, return in_progress status (unless failed)
-    if (anyAnalysis.status !== 'completed') {
+    // Valid completed statuses: 'completed', 'in_position', 'exited', 'expired'
+    const completedStatuses = ['completed', 'in_position', 'exited', 'expired'];
+    if (!completedStatuses.includes(anyAnalysis.status)) {
       // If analysis failed, return 404 to stop polling
       if (anyAnalysis.status === 'failed') {
 
