@@ -4,13 +4,26 @@
  * Enriches ChartInk scan results with:
  * - Upstox instrument keys
  * - Technical indicators (RSI, ATR, DMAs)
- * - Setup scores for ranking
+ * - Trading levels (Entry, Target, StopLoss)
+ * - Setup scores for ranking (Framework-based)
+ *
+ * UPDATED: Now calculates trading levels BEFORE scoring
+ * to include R:R and upside % in the framework score.
  */
 
 import Stock from '../models/stock.js';
 import LatestPrice from '../models/latestPrice.js';
 import PreFetchedData from '../models/preFetchedData.js';
-import { calculateSetupScore, getEntryZone, round2, indicators as indicatorsEngine } from '../engine/index.js';
+import {
+  calculateSetupScore,
+  getEntryZone,
+  round2,
+  indicators as indicatorsEngine
+} from '../engine/index.js';
+
+// Import scanLevels for calculating trading levels
+import scanLevels from '../engine/scanLevels.js';
+const { calculateTradingLevels } = scanLevels;
 
 // Alias for backward compatibility
 const calculateTechnicalIndicators = indicatorsEngine.calculate;
@@ -86,7 +99,7 @@ export async function getStockIndicators(instrument_key, debug = false) {
     // Then try PreFetchedData for daily candles with indicators
     const prefetched = await PreFetchedData.findOne({
       instrument_key,
-      timeframe: '1d'  // lowercase 'd'
+      timeframe: '1d'
     }).lean();
 
     if (debug) {
@@ -150,6 +163,29 @@ export async function getStockIndicators(instrument_key, debug = false) {
       }
     }
 
+    // Get Friday (last trading day) data for levels calculation
+    let fridayHigh = null;
+    let fridayLow = null;
+    let fridayClose = null;
+    let fridayVolume = null;
+
+    if (lastCandle) {
+      fridayHigh = Array.isArray(lastCandle) ? lastCandle[2] : lastCandle.high;
+      fridayLow = Array.isArray(lastCandle) ? lastCandle[3] : lastCandle.low;
+      fridayClose = Array.isArray(lastCandle) ? lastCandle[4] : lastCandle.close;
+      fridayVolume = Array.isArray(lastCandle) ? lastCandle[5] : lastCandle.volume;
+    }
+
+    // Calculate weekly change (for A+ momentum scoring)
+    let weekly_change_pct = null;
+    if (candles?.length >= 5 && currentPrice) {
+      const weekAgoCandle = candles[candles.length - 5];
+      const weekAgoClose = Array.isArray(weekAgoCandle) ? weekAgoCandle[4] : weekAgoCandle.close;
+      if (weekAgoClose) {
+        weekly_change_pct = round2(((currentPrice - weekAgoClose) / weekAgoClose) * 100);
+      }
+    }
+
     return {
       price: currentPrice,
       dma20: round2(indicators.sma20 || indicators.ema20),
@@ -167,11 +203,47 @@ export async function getStockIndicators(instrument_key, debug = false) {
       high_20d: round2(high_20d),
       return_1m,
       distance_from_20dma_pct: indicators.sma20 && currentPrice ?
-        round2(((currentPrice - indicators.sma20) / indicators.sma20) * 100) : null
+        round2(((currentPrice - indicators.sma20) / indicators.sma20) * 100) : null,
+      // Additional fields for levels calculation
+      fridayHigh: round2(fridayHigh),
+      fridayLow: round2(fridayLow),
+      fridayClose: round2(fridayClose),
+      fridayVolume,
+      weekly_change_pct
     };
   } catch (error) {
     console.error(`Error getting indicators for ${instrument_key}:`, error.message);
     return null;
+  }
+}
+
+/**
+ * Calculate trading levels for a stock based on scan type
+ * @param {Object} stockData - Stock data with indicators
+ * @param {string} scanType - Scan type (e.g., 'a_plus_momentum')
+ * @returns {Object} Trading levels { entry, stop, target, riskReward, ... }
+ */
+function calculateLevelsForStock(stockData, scanType) {
+  const { ema20, atr, fridayHigh, fridayClose, fridayLow, high_20d, fridayVolume, volume_20avg } = stockData;
+
+  // Build data object for scanLevels
+  const levelsData = {
+    ema20,
+    atr,
+    fridayHigh,
+    fridayClose,
+    fridayLow,
+    high20D: high_20d,
+    fridayVolume,
+    avgVolume: volume_20avg
+  };
+
+  try {
+    const levels = calculateTradingLevels(scanType || 'a_plus_momentum', levelsData);
+    return levels;
+  } catch (error) {
+    console.error(`Error calculating levels:`, error.message);
+    return { valid: false, reason: error.message };
   }
 }
 
@@ -198,19 +270,77 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
   // If no indicators available, use ChartInk data
   const stockData = {
     price: indicators?.price || close,
+    last: indicators?.price || close,
+    close: indicators?.price || close,
     dma20: indicators?.dma20,
     dma50: indicators?.dma50,
     dma200: indicators?.dma200,
+    ema20: indicators?.ema20,
+    ema50: indicators?.ema50,
     rsi: indicators?.rsi,
+    rsi14: indicators?.rsi,
     atr: indicators?.atr,
+    atr_pct: indicators?.atr_pct,
     volume: indicators?.volume || volume,
     volume_20avg: indicators?.volume_20avg,
+    volume_vs_avg: indicators?.volume_vs_avg,
     high_20d: indicators?.high_20d,
-    return_1m: indicators?.return_1m
+    return_1m: indicators?.return_1m,
+    distance_from_20dma_pct: indicators?.distance_from_20dma_pct,
+    // Additional fields for levels
+    fridayHigh: indicators?.fridayHigh,
+    fridayLow: indicators?.fridayLow,
+    fridayClose: indicators?.fridayClose,
+    fridayVolume: indicators?.fridayVolume,
+    weekly_change_pct: indicators?.weekly_change_pct
   };
 
-  // Calculate setup score
-  const scoreResult = calculateSetupScore(stockData, niftyReturn1M, debug);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 1: Calculate trading levels FIRST (NEW - for framework scoring)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const scanTypeForLevels = scan_type || 'a_plus_momentum';
+  const levels = calculateLevelsForStock(stockData, scanTypeForLevels);
+
+  if (debug) {
+    console.log(`[ENRICH DEBUG] ${nsecode} - Levels calculated:`, {
+      valid: levels.valid,
+      entry: levels.entry,
+      stop: levels.stop,
+      target: levels.target,
+      riskReward: levels.riskReward,
+      reason: levels.reason
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2: Calculate setup score WITH levels (Framework-based scoring)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const scoreResult = calculateSetupScore(stockData, levels, niftyReturn1M, debug);
+
+  if (debug) {
+    console.log(`[ENRICH DEBUG] ${nsecode} - Score result:`, {
+      score: scoreResult.score,
+      grade: scoreResult.grade,
+      eliminated: scoreResult.eliminated,
+      eliminationReason: scoreResult.eliminationReason
+    });
+  }
+
+  // Check if stock was eliminated (e.g., RSI > 72)
+  if (scoreResult.eliminated) {
+    console.log(`[ENRICH] ${nsecode} ELIMINATED: ${scoreResult.eliminationReason}`);
+    return {
+      instrument_key: mapping.instrument_key,
+      symbol: mapping.trading_symbol,
+      stock_name: mapping.stock_name || name,
+      eliminated: true,
+      eliminationReason: scoreResult.eliminationReason,
+      setup_score: 0,
+      grade: 'X'
+    };
+  }
+
+  // Calculate entry zone (for backward compatibility)
   const entryZone = getEntryZone(stockData);
 
   return {
@@ -232,21 +362,47 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
       dma20: stockData.dma20,
       dma50: stockData.dma50,
       dma200: stockData.dma200,
+      ema20: stockData.ema20,
+      ema50: stockData.ema50,
       rsi: stockData.rsi,
       atr: stockData.atr,
-      atr_pct: indicators?.atr_pct,
-      volume_vs_avg: indicators?.volume_vs_avg,
-      distance_from_20dma_pct: indicators?.distance_from_20dma_pct,
+      atr_pct: stockData.atr_pct,
+      volume_vs_avg: stockData.volume_vs_avg,
+      distance_from_20dma_pct: stockData.distance_from_20dma_pct,
       high_20d: stockData.high_20d,
-      return_1m: stockData.return_1m
+      return_1m: stockData.return_1m,
+      weekly_change_pct: stockData.weekly_change_pct
     },
 
-    // Scoring
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Trading Levels (NEW - from scanLevels)
+    // ═══════════════════════════════════════════════════════════════════════════
+    levels: levels.valid ? {
+      entry: levels.entry,
+      entryRange: levels.entryRange,
+      stop: levels.stop,
+      target: levels.target,
+      riskReward: levels.riskReward,
+      riskPercent: levels.riskPercent,
+      rewardPercent: levels.rewardPercent,
+      entryType: levels.entryType,
+      mode: levels.mode,
+      reason: levels.reason
+    } : {
+      valid: false,
+      reason: levels.reason
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Scoring (Framework-based)
+    // ═══════════════════════════════════════════════════════════════════════════
     setup_score: scoreResult.score,
     score_breakdown: scoreResult.breakdown,
     grade: scoreResult.grade,
+    eliminated: false,
+    eliminationReason: null,
 
-    // Entry zone suggestion
+    // Entry zone suggestion (backward compatibility)
     entry_zone: entryZone,
 
     // Metadata
@@ -275,6 +431,7 @@ export async function enrichStocks(chartinkResults, options = {}) {
   } = options;
 
   const enrichedResults = [];
+  const eliminatedResults = [];
   let debuggedCount = 0;
 
   for (const stock of chartinkResults) {
@@ -288,7 +445,17 @@ export async function enrichStocks(chartinkResults, options = {}) {
 
       const enriched = await enrichStock(stock, niftyReturn1M, shouldDebug);
 
-      if (enriched && enriched.setup_score >= minScore) {
+      if (!enriched) {
+        continue;
+      }
+
+      // Track eliminated stocks separately
+      if (enriched.eliminated) {
+        eliminatedResults.push(enriched);
+        continue;
+      }
+
+      if (enriched.setup_score >= minScore) {
         enrichedResults.push(enriched);
         if (shouldDebug) {
           console.log(`[ENRICH DEBUG] ${stock.nsecode} - Final score: ${enriched.setup_score}, Grade: ${enriched.grade}`);
@@ -300,6 +467,14 @@ export async function enrichStocks(chartinkResults, options = {}) {
 
     // Small delay to avoid overwhelming the database
     await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  // Log elimination stats
+  if (eliminatedResults.length > 0) {
+    console.log(`\n[ENRICH] Eliminated ${eliminatedResults.length} stocks:`);
+    eliminatedResults.forEach(s => {
+      console.log(`  - ${s.symbol}: ${s.eliminationReason}`);
+    });
   }
 
   // Log score distribution
@@ -349,11 +524,9 @@ export async function getNiftyReturn1M() {
     // Fallback: Fetch from Upstox API directly
     const { default: candleFetcherService } = await import('./candleFetcher.service.js');
 
-    // Calculate date range for ~1 month of daily data
-    // Use 45 calendar days to ensure we get 22 trading days (accounts for weekends + holidays)
     const toDate = new Date();
     const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 45); // 45 days back to ensure enough trading days
+    fromDate.setDate(fromDate.getDate() - 45);
 
     const formatDate = (d) => d.toISOString().split('T')[0];
 
@@ -362,7 +535,7 @@ export async function getNiftyReturn1M() {
       'day',
       formatDate(fromDate),
       formatDate(toDate),
-      true // skipIntraday
+      true
     );
 
     if (candles && candles.length >= 22) {
@@ -396,7 +569,7 @@ export async function runEnrichmentPipeline(chartinkResults, options = {}) {
   // Get Nifty return for relative strength
   const niftyReturn1M = await getNiftyReturn1M();
 
-  // Enrich all stocks
+  // Enrich all stocks (now includes levels calculation)
   const enrichedStocks = await enrichStocks(chartinkResults, {
     ...options,
     niftyReturn1M
@@ -404,11 +577,12 @@ export async function runEnrichmentPipeline(chartinkResults, options = {}) {
 
   // Categorize by grade
   const gradeDistribution = {
+    'A+': enrichedStocks.filter(s => s.grade === 'A+').length,
     A: enrichedStocks.filter(s => s.grade === 'A').length,
+    'B+': enrichedStocks.filter(s => s.grade === 'B+').length,
     B: enrichedStocks.filter(s => s.grade === 'B').length,
     C: enrichedStocks.filter(s => s.grade === 'C').length,
-    D: enrichedStocks.filter(s => s.grade === 'D').length,
-    F: enrichedStocks.filter(s => s.grade === 'F').length
+    D: enrichedStocks.filter(s => s.grade === 'D').length
   };
 
   // Categorize by scan type
@@ -418,6 +592,12 @@ export async function runEnrichmentPipeline(chartinkResults, options = {}) {
     scanTypeDistribution[type] = (scanTypeDistribution[type] || 0) + 1;
   }
 
+  // Count stocks with valid levels
+  const levelsStats = {
+    with_levels: enrichedStocks.filter(s => s.levels?.entry).length,
+    without_levels: enrichedStocks.filter(s => !s.levels?.entry).length
+  };
+
   return {
     stocks: enrichedStocks,
     metadata: {
@@ -426,6 +606,7 @@ export async function runEnrichmentPipeline(chartinkResults, options = {}) {
       nifty_return_1m: niftyReturn1M,
       grade_distribution: gradeDistribution,
       scan_type_distribution: scanTypeDistribution,
+      levels_stats: levelsStats,
       processing_time_ms: Date.now() - startTime,
       enriched_at: new Date()
     }

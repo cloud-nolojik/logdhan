@@ -387,9 +387,10 @@ router.get('/status', auth, async (req, res) => {
         if (stockStatus === 'completed') {
           try {
             const StockAnalysis = (await import('../models/stockAnalysis.js')).default;
+            // Valid completed statuses: completed, in_position, exited, expired
             const analysis = await StockAnalysis.findOne({
               stock_symbol: stock.trading_symbol,
-              status: 'completed',
+              status: { $in: ['completed', 'in_position', 'exited', 'expired'] },
               expires_at: { $gt: new Date() },
               // Only get valid analyses with actual strategies
               $and: [

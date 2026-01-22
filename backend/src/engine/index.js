@@ -4,8 +4,8 @@
  * Single source of truth for ALL technical calculations in Logdhan.
  * This module orchestrates indicators, levels, zones, candidates, scoring, risk, and alerts.
  *
- * IMPORTANT: This engine fixes the Entry Zone inconsistency.
- * Both card display and analysis page now use the same unified logic.
+ * UPDATED: calculateSetupScore now accepts (stock, levels, niftyReturn1M, debug)
+ * to include R:R and upside % in framework-based scoring.
  */
 
 // Import all engine modules
@@ -18,18 +18,20 @@ import * as scoring from './scoring.js';
 import * as risk from './risk.js';
 import * as alerts from './alerts.js';
 import * as regime from './regime.js';
+import scanLevels from './scanLevels.js';
 
 // Re-export all modules for direct access
-export { helpers, indicators, levels, zones, candidates, scoring, risk, alerts, regime };
+export { helpers, indicators, levels, zones, candidates, scoring, risk, alerts, regime, scanLevels };
 
 // Re-export commonly used functions at top level for convenience
 export const { round2, isNum, clamp, get, normalizeCandles } = helpers;
-export const { calculateSetupScore, pickBestCandidate, calculateConfidence, rankStocks, getGrade } = scoring;
+export const { calculateSetupScore, calculateSetupScoreLegacy, pickBestCandidate, calculateConfidence, rankStocks, getGrade } = scoring;
 export const { calculateEntryZone, checkEntryZoneStatus, generateEntryVerdict, checkGapCondition } = zones;
 export const { calculateTrailingStop, recommendTrailingStrategy, calculateRiskReduction, calculatePositionSize, rrBuy, rrSell } = risk;
 export const { checkExitConditions, checkEntryZoneProximity, checkPositionStatus, generateMorningGlance } = alerts;
 export const { calcClassicPivots } = levels;
 export const { REGIME, checkMarketRegime, getRegimeWarning, fetchAndCheckRegime } = regime;
+export const { calculateTradingLevels, calculateAPlusMomentumLevels } = scanLevels;
 
 /**
  * Analyze a stock from candle data
@@ -69,10 +71,24 @@ export function analyzeStock(candles, options = {}) {
   // Step 6: Pick best candidate
   const selection = scoring.pickBestCandidate(cand);
 
-  // Step 7: Calculate setup score
-  const setupScore = scoring.calculateSetupScore(ind, niftyReturn1M, true);
+  // Step 7: Calculate scan-specific trading levels (if scanType provided)
+  let tradingLevels = null;
+  if (scanType) {
+    const levelsData = {
+      ema20: ind.ema20,
+      atr: ind.atr,
+      fridayHigh: ind.prev_high || ind.high,
+      fridayClose: ind.prev_close || ind.close,
+      fridayLow: ind.prev_low || ind.low,
+      high20D: ind.high_20d
+    };
+    tradingLevels = scanLevels.calculateTradingLevels(scanType, levelsData);
+  }
 
-  // Step 8: Check data health
+  // Step 8: Calculate setup score WITH trading levels (Framework-based)
+  const setupScore = scoring.calculateSetupScore(ind, tradingLevels, niftyReturn1M, true);
+
+  // Step 9: Check data health
   const dataHealth = indicators.checkDataHealth(ind);
 
   return {
@@ -94,10 +110,15 @@ export function analyzeStock(candles, options = {}) {
     selected: selection.best,
     selection_trace: selection.ranked,
 
-    // Scoring
+    // Trading levels (scan-specific)
+    trading_levels: tradingLevels,
+
+    // Scoring (Framework-based)
     setup_score: setupScore.score,
     grade: setupScore.grade,
     score_breakdown: setupScore.breakdown,
+    eliminated: setupScore.eliminated,
+    eliminationReason: setupScore.eliminationReason,
 
     // Data quality
     data_health: dataHealth,
@@ -192,15 +213,31 @@ export function managePosition(position, currentData) {
  * @param {Object} stock - Raw stock data
  * @param {Array} candles - Candle data for the stock
  * @param {number} niftyReturn1M - Nifty 1-month return
+ * @param {string} scanType - Scan type for levels calculation
  * @returns {Object} Enriched stock data
  */
-export function enrichStock(stock, candles, niftyReturn1M = 0) {
+export function enrichStock(stock, candles, niftyReturn1M = 0, scanType = null) {
   // Calculate indicators from candles
   const ind = indicators.calculate(candles);
 
-  // Calculate setup score
-  const { score, grade, breakdown } = scoring.calculateSetupScore(
+  // Calculate trading levels if scanType provided
+  let tradingLevels = null;
+  if (scanType) {
+    const levelsData = {
+      ema20: ind.ema20,
+      atr: ind.atr,
+      fridayHigh: ind.prev_high || ind.high,
+      fridayClose: ind.prev_close || ind.close,
+      fridayLow: ind.prev_low || ind.low,
+      high20D: ind.high_20d
+    };
+    tradingLevels = scanLevels.calculateTradingLevels(scanType, levelsData);
+  }
+
+  // Calculate setup score WITH levels (Framework-based)
+  const { score, grade, breakdown, eliminated, eliminationReason } = scoring.calculateSetupScore(
     { ...stock, ...ind },
+    tradingLevels,
     niftyReturn1M,
     true
   );
@@ -225,10 +262,15 @@ export function enrichStock(stock, candles, niftyReturn1M = 0) {
     return_1m: ind.return_1m,
     distance_from_20dma_pct: ind.distance_from_20dma_pct,
 
-    // Scoring
+    // Trading levels
+    levels: tradingLevels,
+
+    // Scoring (Framework-based)
     setup_score: score,
     grade,
     score_breakdown: breakdown,
+    eliminated,
+    eliminationReason,
 
     // Entry zone (UNIFIED)
     entry_zone: entryZone
@@ -323,5 +365,6 @@ export default {
   scoring,
   risk,
   alerts,
-  regime
+  regime,
+  scanLevels
 };

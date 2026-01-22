@@ -1,18 +1,22 @@
 /**
  * Agenda-based Scheduled Bulk Analysis Service
- * Runs at 4:00 PM every trading day to analyze watchlist stocks
  *
- * PURPOSE: Discovery Mode - analyze stocks for NEW trade opportunities
+ * PURPOSE: Discovery Mode (Swing Analysis) - analyze stocks for NEW trade opportunities
+ *
+ * USAGE:
+ * - Weekend ChartInk screening (manual trigger with analyzeAllChartink=true)
+ * - Manual trigger for testing/debugging
+ *
+ * NOTE: Daily 4 PM swing re-analysis is DISABLED.
+ * - Position management for weekly_track stocks → weeklyTrackAnalysisJob.js (4:00 PM)
+ * - Swing analysis has weekly cache validity (until Friday 3:30 PM)
+ * - Manual stocks get swing analysis on-demand via "Analyze" button
  *
  * Sources:
  * - User.watchlist: Per-user stocks from Screener.in sync
  * - WeeklyWatchlist: Global stocks from ChartInk weekend screening (shared by all users)
  *
- * So users see fresh analysis for next day's trading (market closes at 3:30 PM)
  * Uses MongoDB for job persistence via Agenda
- *
- * NOTE: Position management (existing trades) is handled by positionScanJob.js
- * which runs a separate rule-based scan at 4 PM (zero AI cost).
  */
 
 import Agenda from 'agenda';
@@ -166,6 +170,18 @@ class AgendaScheduledBulkAnalysisService {
 
   /**
    * Schedule the recurring job
+   *
+   * NOTE: The 4 PM daily swing re-analysis is DISABLED.
+   *
+   * Reason:
+   * - Swing analysis has weekly validity (until Friday 3:30 PM)
+   * - Position management for weekly_track stocks is handled by weeklyTrackAnalysisJob.js at 4:00 PM
+   * - Manual stocks need swing analysis first (on-demand via "Analyze" button)
+   * - Running swing re-analysis daily with forceRevalidate=true was expensive (250+ AI calls/week)
+   *
+   * This service is still used for:
+   * - Weekend ChartInk screening (via manual trigger with analyzeAllChartink=true)
+   * - Manual trigger for testing
    */
   async scheduleRecurringJobs() {
     try {
@@ -174,16 +190,19 @@ class AgendaScheduledBulkAnalysisService {
         name: 'watchlist-bulk-analysis'
       });
 
-      // Schedule for 4:00 PM IST every day (Monday-Friday)
-      // Cron format: minute hour * * day-of-week
-      // source='screener': Only analyze User.watchlist stocks (no ChartInk/WeeklyWatchlist)
-      // forceRevalidate=true: Re-analyze even if cached, using latest market data
-      await this.agenda.every('0 16 * * 1-5', 'watchlist-bulk-analysis', {
-        source: 'screener',
-        forceRevalidate: true
-      }, {
-        timezone: 'Asia/Kolkata'
-      });
+      // DISABLED: Daily 4 PM swing re-analysis
+      // Position management is handled by weeklyTrackAnalysisJob.js
+      // Swing analysis uses weekly cache (valid until Friday 3:30 PM)
+      //
+      // await this.agenda.every('0 16 * * 1-5', 'watchlist-bulk-analysis', {
+      //   source: 'screener',
+      //   forceRevalidate: true
+      // }, {
+      //   timezone: 'Asia/Kolkata'
+      // });
+
+      console.log('[SCHEDULED BULK] No recurring jobs scheduled (4 PM swing re-analysis disabled)');
+      console.log('[SCHEDULED BULK] Position management is handled by weeklyTrackAnalysisJob.js at 4:00 PM');
 
     } catch (error) {
       console.error('❌ [SCHEDULED BULK] Failed to schedule recurring jobs:', error);
@@ -513,7 +532,9 @@ class AgendaScheduledBulkAnalysisService {
           // Check if existing completed strategy exists
           const existing = await StockAnalysis.findByInstrument(stock.instrument_key, 'swing');
 
-          if (existing && existing.status === 'completed' && existing.valid_until) {
+          // Valid completed statuses: completed, in_position, exited, expired
+          const completedStatuses = ['completed', 'in_position', 'exited', 'expired'];
+          if (existing && completedStatuses.includes(existing.status) && existing.valid_until) {
             const now = new Date();
 
             if (forceRevalidate) {

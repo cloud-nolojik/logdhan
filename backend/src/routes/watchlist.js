@@ -92,6 +92,100 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
+// Add stock to watchlist for weekly tracking (from AI Analysis screen)
+router.post('/track-weekly', auth, async (req, res) => {
+  try {
+    const { instrument_key } = req.body;
+
+    // Get stock details
+    const stock = await getExactStock(instrument_key);
+    if (!stock) {
+      return res.status(404).json({ success: false, error: 'Stock not found' });
+    }
+
+    // Check if stock is already in watchlist
+    const user = await User.findById(req.user.id);
+    const existingIndex = user.watchlist.findIndex((item) =>
+      item.instrument_key === instrument_key
+    );
+
+    if (existingIndex !== -1) {
+      // Stock already exists - update source to weekly_track if it was manual
+      const currentSource = user.watchlist[existingIndex].added_source;
+      if (currentSource === 'manual') {
+        user.watchlist[existingIndex].added_source = 'weekly_track';
+        await user.save();
+      }
+      return res.status(200).json({
+        success: true,
+        message: 'Stock already being tracked',
+        stock: {
+          instrument_key: stock.instrument_key,
+          trading_symbol: stock.trading_symbol,
+          name: stock.name,
+          exchange: stock.exchange,
+          added_source: user.watchlist[existingIndex].added_source
+        }
+      });
+    }
+
+    // Check stock limit based on subscription
+    const currentStockCount = user.watchlist.length;
+
+    try {
+      const stockLimitCheck = await Subscription.canUserAddStock(req.user.id, currentStockCount);
+
+      if (!stockLimitCheck.canAdd) {
+        return res.status(403).json({
+          success: false,
+          error: 'Stock limit reached',
+          message: `You can add maximum ${stockLimitCheck.stockLimit} stocks. Current: ${stockLimitCheck.currentCount}`,
+          data: {
+            stockLimit: stockLimitCheck.stockLimit,
+            currentCount: stockLimitCheck.currentCount,
+            canAdd: false,
+            needsUpgrade: true
+          }
+        });
+      }
+    } catch (subscriptionError) {
+      console.error('Error checking subscription limits:', subscriptionError);
+      return res.status(400).json({
+        success: false,
+        error: 'Subscription check failed',
+        message: subscriptionError.message
+      });
+    }
+
+    // Add to watchlist with weekly_track source
+    user.watchlist.push({
+      instrument_key: stock.instrument_key,
+      trading_symbol: stock.trading_symbol,
+      name: stock.name,
+      exchange: stock.exchange,
+      addedAt: new Date(),
+      added_source: 'weekly_track'
+    });
+    await user.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Stock added for weekly tracking',
+      stock: {
+        instrument_key: stock.instrument_key,
+        trading_symbol: stock.trading_symbol,
+        name: stock.name,
+        exchange: stock.exchange,
+        addedAt: user.watchlist[user.watchlist.length - 1].addedAt,
+        added_source: 'weekly_track'
+      }
+    });
+  } catch (error) {
+    console.error('Error adding stock for weekly tracking:', error);
+    res.status(500).json({ success: false, error: 'Error adding stock for weekly tracking' });
+  }
+});
+
 // Get user's watchlist
 router.get('/', auth, async (req, res) => {
   try {
@@ -151,9 +245,8 @@ router.get('/', auth, async (req, res) => {
             trading_symbol: item.trading_symbol,
             name: item.name,
             exchange: item.exchange,
-            exchange: item.exchange,
             addedAt: item.addedAt,
-            added_source: item.added_source || 'screener', // Default to screener if missing
+            added_source: item.added_source || 'manual', // Default to manual if missing
             current_price,
             // Analysis status fields
             has_analysis: !!analysis,
@@ -173,7 +266,6 @@ router.get('/', auth, async (req, res) => {
             instrument_key: item.instrument_key,
             trading_symbol: item.trading_symbol,
             name: item.name,
-            exchange: item.exchange,
             exchange: item.exchange,
             addedAt: item.addedAt,
             added_source: item.added_source || 'screener',
@@ -315,6 +407,57 @@ router.get('/', auth, async (req, res) => {
   } catch (error) {
     console.error('Error fetching watchlist:', error);
     res.status(500).json({ error: 'Error fetching watchlist' });
+  }
+});
+
+/**
+ * GET /api/v1/watchlist/:instrument_key/position-analysis
+ * Get latest position management analysis for a weekly_track stock
+ *
+ * This returns the GLOBAL analysis (same for all users tracking this stock).
+ * Analysis includes: status (GREEN/YELLOW/RED), recommendations for holders/watchers,
+ * updated levels, today's price action verdict, and alerts.
+ */
+router.get('/:instrument_key/position-analysis', auth, async (req, res) => {
+  try {
+    const { instrument_key } = req.params;
+
+    // Get latest position management analysis
+    const analysis = await StockAnalysis.findOne({
+      instrument_key,
+      analysis_type: 'position_management',
+      status: 'completed'
+    }).sort({ created_at: -1 }).lean();
+
+    if (!analysis) {
+      return res.json({
+        success: true,
+        has_analysis: false,
+        message: 'No position analysis available yet. Analysis runs at 4:00 PM on trading days.'
+      });
+    }
+
+    // Check if analysis is still valid
+    const now = new Date();
+    const isExpired = analysis.valid_until && now > new Date(analysis.valid_until);
+
+    // Extract position management data
+    const positionData = analysis.analysis_data?.position_management || null;
+
+    res.json({
+      success: true,
+      has_analysis: true,
+      is_expired: isExpired,
+      analysis: positionData,
+      original_levels: analysis.analysis_data?.original_levels || null,
+      analyzed_at: analysis.created_at,
+      valid_until: analysis.valid_until,
+      current_price: analysis.current_price,
+      original_swing_analysis_id: analysis.analysis_data?.original_swing_analysis_id || null
+    });
+  } catch (error) {
+    console.error('Error fetching position analysis:', error);
+    res.status(500).json({ success: false, error: 'Error fetching position analysis' });
   }
 });
 

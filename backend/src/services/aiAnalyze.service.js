@@ -13,8 +13,10 @@ import { messagingService } from './messaging/messaging.service.js';
 import { User } from '../models/user.js';
 import modelSelectorService from './ai/modelSelector.service.js';
 import AnalysisSession from '../models/analysisSession.js';
-import { buildStage1, buildStage2, buildStage3Prompt } from '../prompts/swingPrompts.js';
+import { buildStage1, buildWeeklyDiscoveryPrompt } from '../prompts/swingPrompts.js';
 import { pickBestCandidate } from '../engine/index.js';
+import scanLevels from '../engine/scanLevels.js';
+import { calculateSetupScore } from '../engine/scoring.js';
 import Notification from '../models/notification.js';
 import { firebaseService } from './firebase/firebase.service.js';
 import FineTuneData from '../models/fineTuneData.js';
@@ -475,8 +477,11 @@ class AIAnalyzeService {
       const existing = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
       const cacheCheckTime = Date.now() - cacheCheckStart;
 
+      // Valid completed statuses: completed, in_position, exited, expired
+      const completedStatuses = ['completed', 'in_position', 'exited', 'expired'];
+
       if (existing) {
-        if (existing.status === 'completed') {
+        if (completedStatuses.includes(existing.status)) {
           const now = new Date();
 
           // Check if strategy is still valid (unless forceRevalidate is true)
@@ -2433,34 +2438,11 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     }
   }
 
-  /**
-   * Stage 2: Strategy Skeleton & Triggers
-   * Builds candidate skeletons (BUY/SELL/NO_TRADE) with entry/stop/target ranges (no LLM call - pure code)
-   */
-  stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1, scan_type = null }) {
-    // 🔍 DEBUG: Log scan_type received in stage2Skeleton
-    console.log(`🔍 [STAGE2_SKELETON] ${stock_symbol} - scan_type param: ${scan_type === null ? 'null' : scan_type === undefined ? 'undefined' : `"${scan_type}"`}`);
-
-    try {
-      // buildStage2 now returns { system, user } where user is JSON string of computed data
-      // Pass scan_type to enable C0 (scan-specific) candidate generation
-      console.log(`🔍 [STAGE2_SKELETON] ${stock_symbol} - Calling buildStage2 with scan_type="${scan_type}"`);
-      const { user } = buildStage2({ stock_name, stock_symbol, current_price, marketPayload, s1, scan_type });
-      const s2 = JSON.parse(user);
-
-      // Gate: if insufficientData is returned
-      if (s2.insufficientData === true) {
-        return { ok: false, s2 };
-      }
-
-      return { ok: true, s2 };
-    } catch (error) {
-      console.error(`❌ [STAGE 2] ${stock_symbol} - FAILED`);
-      console.error(`❌ [STAGE 2] Error message: ${error.message}`);
-      console.error(`❌ [STAGE 2] Error stack: ${error.stack}`);
-      throw error;
-    }
-  }
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NOTE: stage2Skeleton has been REMOVED
+  // Trading levels are now calculated directly in generateStockAnalysis3Call
+  // using scanLevels.calculateTradingLevels() instead of buildStage2()
+  // ═══════════════════════════════════════════════════════════════════════════
 
   /**
    * Slim market payload for Stage 3 to cut token bloat while keeping needed context
@@ -2498,13 +2480,53 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
   }
 
   /**
-   * Stage 3: Final Assembly (v1.4)
-   * Combines MARKET DATA + S1 + S2 + sentimentContext
+   * Stage 3: Final Assembly (v1.5 - Weekly Discovery)
+   * Uses buildWeeklyDiscoveryPrompt with pre-calculated levels and scores
    */
-  async stage3Finalize({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode = 'cricket', analysisMode = 'DISCOVERY', userTradeState = null, scan_type = null, setup_score = null, regimeCheck = null }) {
+  async stage3Finalize({
+    stock_name,
+    stock_symbol,
+    current_price,
+    marketPayload,
+    sectorInfo,
+    s1,
+    instrument_key,
+    analysisMode = 'DISCOVERY',
+    userTradeState = null,
+    scan_type = null,
+    // Framework scoring (pre-calculated)
+    setup_score = null,
+    grade = null,
+    score_breakdown = null,
+    // Trading levels (pre-calculated)
+    trading_levels = null,
+    // Market regime
+    regimeCheck = null
+  }) {
     try {
       const generatedAtIst = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30';
-      const { system, user } = await buildStage3Prompt({ stock_name, stock_symbol, current_price, marketPayload, sectorInfo, s1, s2, instrument_key, game_mode, generatedAtIst, analysisMode, userTradeState, scan_type, setup_score, regimeCheck });
+
+      // Use the new Weekly Discovery prompt
+      const { system, user } = await buildWeeklyDiscoveryPrompt({
+        stock_name,
+        stock_symbol,
+        current_price,
+        marketPayload,
+        sectorInfo,
+        s1,
+        generatedAtIst,
+        // ChartInk screening context
+        scan_type,
+        // Framework scoring (from scoring.js)
+        setup_score,
+        grade,
+        score_breakdown,
+        // Trading levels (from scanLevels.js)
+        trading_levels,
+        // Market regime
+        regimeCheck
+      });
+
       const msgs = this.formatMessagesForModel(this.analysisModel, system, user);
 
       const { data: out, tokenUsage } = await this.callOpenAIJsonStrict(this.analysisModel, msgs, true);
@@ -2693,67 +2715,105 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
       };
     }
 
-    // STAGE 2 (code-based, no LLM call)
-    const stage2Start = Date.now();
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CALCULATE TRADING LEVELS (replaces Stage 2)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const levelsStart = Date.now();
 
-    // 🔍 DEBUG: Log scan_type before Stage 2
-    console.log(`🔍 [SCAN_TYPE DEBUG] ${stock_symbol} - Before Stage 2:`);
-    console.log(`   scan_type received: ${scan_type === null ? 'null' : scan_type === undefined ? 'undefined' : `"${scan_type}"`}`);
-    console.log(`   scan_type type: ${typeof scan_type}`);
+    console.log(`📊 [LEVELS] ${stock_symbol} - Calculating trading levels for scan_type: "${scan_type || 'a_plus_momentum'}"`);
 
-    let s2r;
-    let stage2Time = 0;
+    // Extract data for levels calculation from marketPayload
+    const trendMomentum = marketPayload?.trendMomentum || {};
+    const swingContext = marketPayload?.swingContext || {};
+    const priceContext = marketPayload?.priceContext || {};
+
+    const levelsData = {
+      ema20: trendMomentum.ema20_1D,
+      atr: trendMomentum.atr14_1D,
+      fridayHigh: swingContext.prevSession?.high || priceContext.high,
+      fridayClose: swingContext.prevSession?.close || priceContext.close,
+      fridayLow: swingContext.prevSession?.low || priceContext.low,
+      high20D: swingContext.swingLevels?.recent20?.high
+    };
+
+    // Calculate trading levels using scanLevels
+    let trading_levels = null;
     try {
-      s2r = this.stage2Skeleton({ stock_name, stock_symbol, current_price, marketPayload, s1: s1r.s1, scan_type });
-      stage2Time = Date.now() - stage2Start;
-
-      // 🔍 DEBUG: Log Stage 2 result candidates
-      const candidateIds = s2r?.s2?.candidates?.map(c => `${c.id}(${c.name})`).join(', ') || 'none';
-      const hasC0 = s2r?.s2?.candidates?.some(c => c.id === 'C0');
-      console.log(`🔍 [SCAN_TYPE DEBUG] ${stock_symbol} - Stage 2 result:`);
-      console.log(`   candidates: [${candidateIds}]`);
-      console.log(`   has C0 (scan-specific): ${hasC0}`);
-      if (hasC0) {
-        const c0 = s2r.s2.candidates.find(c => c.id === 'C0');
-        console.log(`   C0 entry: ${c0?.skeleton?.entry}, entryType: ${c0?.skeleton?.entryType}`);
-      }
-
+      trading_levels = scanLevels.calculateTradingLevels(scan_type || 'a_plus_momentum', levelsData);
+      console.log(`📊 [LEVELS] ${stock_symbol} - Levels calculated:`, {
+        valid: trading_levels?.valid,
+        entry: trading_levels?.entry,
+        stop: trading_levels?.stop,
+        target: trading_levels?.target,
+        riskReward: trading_levels?.riskReward
+      });
     } catch (error) {
-      stage2Time = Date.now() - stage2Start;
-      console.error(`⏱️ [STAGE 2] ${stock_symbol} - FAILED in ${stage2Time}ms`);
-      console.error(`❌ [STAGE 2 ERROR] ${stock_symbol}:`, error.message);
-      throw error;
+      console.error(`❌ [LEVELS] ${stock_symbol} - Failed to calculate levels:`, error.message);
+      trading_levels = { valid: false, reason: error.message };
     }
 
+    const levelsTime = Date.now() - levelsStart;
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CALCULATE SETUP SCORE (Framework-based)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const scoreStart = Date.now();
+
+    // Build stock data for scoring
+    const stockDataForScoring = {
+      last: current_price,
+      price: current_price,
+      rsi: trendMomentum.rsi14_1h || trendMomentum.rsi14_1D,
+      volume_vs_avg: marketPayload?.volumeContext?.volume_vs_avg,
+      return_1m: marketPayload?.indicators?.return_1m,
+      weekly_change_pct: marketPayload?.indicators?.weekly_change_pct
+    };
+
+    // Get Nifty return (if available from regime check)
+    const niftyReturn1M = regimeCheck?.niftyReturn1M || 0;
+
+    // Calculate score with levels
+    let scoreResult = { score: setup_score || 50, grade: 'C', breakdown: [] };
+    try {
+      scoreResult = calculateSetupScore(stockDataForScoring, trading_levels, niftyReturn1M, true);
+      console.log(`📊 [SCORE] ${stock_symbol} - Score: ${scoreResult.score}, Grade: ${scoreResult.grade}`);
+    } catch (error) {
+      console.error(`❌ [SCORE] ${stock_symbol} - Failed to calculate score:`, error.message);
+    }
+
+    const scoreTime = Date.now() - scoreStart;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STAGE 3: AI ANALYSIS (Weekly Discovery)
+    // ═══════════════════════════════════════════════════════════════════════════
     let s3result;
     let stage3Time = 0;
 
-    let game_mode = "badminton";
     const stage3Payload = this.slimMarketPayloadForStage3(marketPayload);
-
-    // STAGE 3
     const stage3Start = Date.now();
 
     try {
-     s3result = await this.stage3Finalize({
-  stock_name,
-  stock_symbol,
-  current_price,
-  marketPayload: stage3Payload,
-  sectorInfo,
-  s1: s1r.s1,
-  s2: s2r.s2,   // 👈 pass only Top-1 (or empty)
-  instrument_key,
-  game_mode,
-  analysisMode,
-  userTradeState,
-  // ChartInk screening context
-  scan_type,
-  setup_score,
-  // Market regime context
-  regimeCheck
-});
+      s3result = await this.stage3Finalize({
+        stock_name,
+        stock_symbol,
+        current_price,
+        marketPayload: stage3Payload,
+        sectorInfo,
+        s1: s1r.s1,
+        instrument_key,
+        analysisMode,
+        userTradeState,
+        // ChartInk screening context
+        scan_type,
+        // Framework scoring (calculated above)
+        setup_score: scoreResult.score,
+        grade: scoreResult.grade,
+        score_breakdown: scoreResult.breakdown,
+        // Trading levels (calculated above)
+        trading_levels,
+        // Market regime context
+        regimeCheck
+      });
       tokenTracking.stage3 = s3result.tokenUsage;
       stage3Time = Date.now() - stage3Start;
 
@@ -2766,17 +2826,21 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
 
 
 
-    // Generate Stage 3 prompts for fine-tune data
-    const stage3Prompts = await buildStage3Prompt({
+    // Generate Stage 3 prompts for fine-tune data (using the same parameters)
+    const stage3Prompts = await buildWeeklyDiscoveryPrompt({
       stock_name,
       stock_symbol,
       current_price,
       marketPayload: stage3Payload,
       sectorInfo,
       s1: s1r.s1,
-      s2: s2r.s2,
-      instrument_key,
-      game_mode
+      generatedAtIst: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata', hour12: false }).replace(' ', 'T') + '+05:30',
+      scan_type,
+      setup_score: scoreResult.score,
+      grade: scoreResult.grade,
+      score_breakdown: scoreResult.breakdown,
+      trading_levels,
+      regimeCheck
     });
 
     // Save Stage 3 fine-tune data
@@ -2798,32 +2862,30 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
           volatility: marketPayload?.market_summary?.volatility,
           volume: marketPayload?.market_summary?.volume,
           sentiment: marketPayload?.sentimentContext?.basicSentiment
-        }
+        },
+        // Include trading levels in fine-tune data
+        trading_levels: trading_levels?.valid ? {
+          entry: trading_levels.entry,
+          stop: trading_levels.stop,
+          target: trading_levels.target,
+          riskReward: trading_levels.riskReward
+        } : null
       }).catch((err) => console.error('Failed to save stage3 fine-tune data:', err));
     }
 
     const finalOut = s3result.data;
     const analysisMeta = finalOut.analysis_meta || finalOut.meta || {};
 
-    // Inject triggers from Stage 2 best candidate into final output
-    // The LLM doesn't copy triggers from selectedCandidate, so we do it in code
-    if (finalOut.strategies?.[0] && s2r?.s2?.candidates?.length > 0) {
-      const { best } = pickBestCandidate(s2r.s2);
-      if (best?.skeleton?.triggers?.length > 0) {
-        finalOut.strategies[0].triggers = best.skeleton.triggers;
-        console.log(`✅ [TRIGGERS] Injected ${best.skeleton.triggers.length} trigger(s) from ${best.id} (${best.name}) into ${stock_symbol}`);
-      }
-      // Also inject invalidations_pre_entry if available
-      if (best?.skeleton?.invalidations_pre_entry?.length > 0) {
-        // Merge with existing invalidations if any, or set if empty
-        const existingInvalidations = finalOut.strategies[0].invalidations || [];
-        const preEntryInvalidations = best.skeleton.invalidations_pre_entry.map(inv => ({
-          ...inv,
-          scope: 'pre_entry'
-        }));
-        finalOut.strategies[0].invalidations = [...preEntryInvalidations, ...existingInvalidations];
-      }
+    // Inject trading levels into final output if not present
+    if (finalOut.trading_plan && trading_levels?.valid) {
+      finalOut.trading_plan.entry = trading_levels.entry;
+      finalOut.trading_plan.stop_loss = trading_levels.stop;
+      finalOut.trading_plan.target = trading_levels.target;
+      finalOut.trading_plan.risk_reward = trading_levels.riskReward;
     }
+
+    // Note: Old Stage 2 candidate injection removed - levels come from scanLevels now
+    // Trading levels and triggers are now generated by AI based on the pre-calculated levels
 
     // Calculate total token usage (sentiment + stage3 LLM calls)
     Object.keys(tokenTracking.total).forEach((key) => {
@@ -2834,14 +2896,24 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     analysisMeta.model_used = this.analysisModel;
     analysisMeta.sentiment_model_used = this.sentimentalModel;
     analysisMeta.processing_time_ms = Date.now() - t0;
-    analysisMeta.stage_chain = ["s1", "s2", "s3"];
+    analysisMeta.stage_chain = ["s1", "levels", "score", "s3"]; // Updated: s2 removed, levels/score added
     analysisMeta.token_usage = tokenTracking;
 
     // Add ChartInk screening context if available
     if (scan_type) {
       analysisMeta.screening_source = 'chartink';
-      analysisMeta.scan_type = scan_type;  // breakout, pullback, momentum, consolidation_breakout
-      analysisMeta.setup_score = setup_score;
+      analysisMeta.scan_type = scan_type;  // a_plus_momentum, breakout, pullback, etc.
+    }
+    // Always add setup score and trading levels to meta
+    analysisMeta.setup_score = scoreResult.score;
+    analysisMeta.grade = scoreResult.grade;
+    if (trading_levels?.valid) {
+      analysisMeta.trading_levels = {
+        entry: trading_levels.entry,
+        stop: trading_levels.stop,
+        target: trading_levels.target,
+        riskReward: trading_levels.riskReward
+      };
     }
 
     // Add candle metadata for UI display

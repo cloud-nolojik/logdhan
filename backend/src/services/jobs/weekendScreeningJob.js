@@ -3,6 +3,8 @@
  *
  * Runs ChartInk scans and populates weekly watchlists
  * Schedule: Saturday 6 PM IST
+ *
+ * UPDATED: Now handles eliminated stocks (RSI > 72) and stores trading levels
  */
 
 import Agenda from 'agenda';
@@ -20,6 +22,7 @@ class WeekendScreeningJob {
     this.stats = {
       runsCompleted: 0,
       stocksProcessed: 0,
+      stocksEliminated: 0,  // NEW: Track eliminated stocks
       errors: 0,
       lastRunAt: null
     };
@@ -97,7 +100,7 @@ class WeekendScreeningJob {
         const result = await this.runWeekendScreening(job.attrs.data || {});
         this.stats.runsCompleted++;
         this.stats.lastRunAt = new Date();
-        console.log(`[SCREENING JOB] ✅ STEP 1 COMPLETE: ${result.totalStocksAdded} stocks added, ${result.totalStocksUpdated || 0} updated`);
+        console.log(`[SCREENING JOB] ✅ STEP 1 COMPLETE: ${result.totalStocksAdded} stocks added, ${result.totalStocksUpdated || 0} updated, ${result.totalStocksEliminated || 0} eliminated`);
 
         // Trigger bulk analysis after screening completes (for freshly screened stocks)
         console.log('─'.repeat(80));
@@ -275,6 +278,7 @@ class WeekendScreeningJob {
     const result = {
       usersProcessed: 0,
       totalStocksAdded: 0,
+      totalStocksEliminated: 0,  // NEW: Track eliminated stocks
       errors: [],
       scanResults: {}
     };
@@ -394,10 +398,10 @@ class WeekendScreeningJob {
 
       console.log(`[SCREENING JOB] ✅ STEP 2 COMPLETE: Price prefetch - ${priceSuccessCount} success, ${priceFailCount} failed`);
 
-      // Step 3: Enrich with technical data and scores (now uses fresh prices)
+      // Step 3: Enrich with technical data, LEVELS, and scores (now uses fresh prices)
       console.log('');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
-      console.log('[SCREENING JOB] 📌 STEP 3/4: Enriching stocks with technical data...');
+      console.log('[SCREENING JOB] 📌 STEP 3/4: Enriching stocks with technical data & levels...');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log(`[SCREENING JOB] Enriching ${allResults.length} stocks...`);
 
@@ -405,21 +409,38 @@ class WeekendScreeningJob {
       const { stocks: allEnrichedStocks, metadata } = await stockEnrichmentService.runEnrichmentPipeline(
         allResults,
         {
-          minScore: 0,   // Get all for filtering
-          maxResults: 100
+          minScore: 0,   // Get all for filtering (including eliminated)
+          maxResults: 100,
+          debug: true,   // Enable debug for first few stocks
+          debugCount: 3
         }
       );
 
       console.log(`[SCREENING JOB] Enriched ${allEnrichedStocks.length} stocks`);
-      console.log(`[SCREENING JOB] Grade distribution: A=${metadata.grade_distribution.A}, B=${metadata.grade_distribution.B}, C=${metadata.grade_distribution.C}`);
+      console.log(`[SCREENING JOB] Grade distribution: A+=${metadata.grade_distribution['A+'] || 0}, A=${metadata.grade_distribution.A || 0}, B+=${metadata.grade_distribution['B+'] || 0}, B=${metadata.grade_distribution.B || 0}, C=${metadata.grade_distribution.C || 0}`);
+      
+      // NEW: Log levels stats
+      if (metadata.levels_stats) {
+        console.log(`[SCREENING JOB] Levels stats: ${metadata.levels_stats.with_levels} with levels, ${metadata.levels_stats.without_levels} without`);
+      }
 
       // Filter for quality stocks - minimum score threshold
+      // NEW: Eliminated stocks are already filtered out by enrichment service
       const MIN_SCORE = 60;
       const MAX_STOCKS = 15;
 
       const qualifiedStocks = allEnrichedStocks
-        .filter(s => s.setup_score >= MIN_SCORE)
+        .filter(s => !s.eliminated && s.setup_score >= MIN_SCORE)
         .sort((a, b) => b.setup_score - a.setup_score);
+
+      // Count eliminated stocks for reporting
+      const eliminatedCount = allEnrichedStocks.filter(s => s.eliminated).length;
+      result.totalStocksEliminated = eliminatedCount;
+      this.stats.stocksEliminated += eliminatedCount;
+
+      if (eliminatedCount > 0) {
+        console.log(`[SCREENING JOB] ⚠️ ${eliminatedCount} stocks eliminated (RSI > 72 or other criteria)`);
+      }
 
       // Deduplicate by instrument_key - keep the entry with highest score
       // Same stock may appear from multiple scans (breakout + momentum) with different grades
@@ -451,7 +472,7 @@ class WeekendScreeningJob {
       console.log('[SCREENING JOB] 📌 STEP 4/4: Adding stocks to WeeklyWatchlist...');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log(`[SCREENING JOB] Adding ${enrichedStocks.length} stocks to global WeeklyWatchlist...`);
-      console.log(`[SCREENING JOB] Stocks to add: ${enrichedStocks.map(s => `${s.symbol}(${s.setup_score})`).join(', ')}`);
+      console.log(`[SCREENING JOB] Stocks to add: ${enrichedStocks.map(s => `${s.symbol}(${s.setup_score}/${s.grade})`).join(', ')}`);
 
       const stocksToAdd = enrichedStocks.map(stock => ({
         instrument_key: stock.instrument_key,
@@ -466,12 +487,28 @@ class WeekendScreeningJob {
           dma20: stock.indicators.dma20,
           dma50: stock.indicators.dma50,
           dma200: stock.indicators.dma200,
+          ema20: stock.indicators.ema20,
+          ema50: stock.indicators.ema50,
           rsi: stock.indicators.rsi,
           atr: stock.indicators.atr,
           atr_pct: stock.indicators.atr_pct,
           volume_vs_avg: stock.indicators.volume_vs_avg,
-          distance_from_20dma_pct: stock.indicators.distance_from_20dma_pct
+          distance_from_20dma_pct: stock.indicators.distance_from_20dma_pct,
+          weekly_change_pct: stock.indicators.weekly_change_pct  // NEW: Weekly change for framework
         },
+        // NEW: Include trading levels
+        levels: stock.levels ? {
+          entry: stock.levels.entry,
+          entryRange: stock.levels.entryRange,
+          stop: stock.levels.stop,
+          target: stock.levels.target,
+          riskReward: stock.levels.riskReward,
+          riskPercent: stock.levels.riskPercent,
+          rewardPercent: stock.levels.rewardPercent,
+          entryType: stock.levels.entryType,
+          mode: stock.levels.mode,
+          reason: stock.levels.reason
+        } : null,
         entry_zone: stock.entry_zone,
         status: 'WATCHING'
       }));
@@ -483,8 +520,10 @@ class WeekendScreeningJob {
       watchlist.screening_run_at = new Date();
       watchlist.scan_types_used = scanTypes;
       watchlist.total_screener_results = allResults.length;
-      // Count actual Grade A stocks in the watchlist
-      watchlist.grade_a_count = watchlist.stocks.filter(s => s.grade === 'A').length;
+      watchlist.total_eliminated = eliminatedCount;  // NEW: Track eliminated count
+      // Count actual Grade A+ and A stocks in the watchlist
+      watchlist.grade_a_plus_count = watchlist.stocks.filter(s => s.grade === 'A+').length;
+      watchlist.grade_a_count = watchlist.stocks.filter(s => s.grade === 'A' || s.grade === 'A+').length;
       await watchlist.save();
 
       result.totalStocksAdded = addResult.added;

@@ -185,7 +185,7 @@ const analysisDataV14Schema = new mongoose.Schema(
     symbol: String,
     analysis_type: {
       type: String,
-      enum: ['swing', 'intraday']
+      enum: ['swing', 'intraday', 'position_management']
     },
     // Intraday-specific data (only present for intraday analysis)
     intraday: { type: intradayDataSchema, default: null },
@@ -313,7 +313,7 @@ const stockAnalysisSchema = new mongoose.Schema({
   },
   analysis_type: {
     type: String,
-    enum: ['swing', 'intraday'],
+    enum: ['swing', 'intraday', 'position_management'],
     required: true,
     default: 'swing'
   },

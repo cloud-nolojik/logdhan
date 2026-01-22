@@ -1,10 +1,20 @@
 /**
- * Scoring Module
+ * Scoring Module - Framework-Based Scoring
  *
  * Single source of truth for:
- * - Setup Score (0-100 rating for swing trading quality)
- * - Candidate Ranking (picking best trade candidate)
+ * - Setup Score (0-100 rating based on 6-factor framework)
+ * - RSI Elimination (pre-filter for extended stocks)
+ * - Candidate Ranking
  * - Confidence Calculation
+ *
+ * FRAMEWORK FACTORS (100 points total):
+ * 1. Volume Conviction     - 20 pts (Critical)
+ * 2. Risk:Reward Ratio     - 20 pts (Critical)
+ * 3. RSI Position          - 15 pts (High) + Elimination filter
+ * 4. % Weekly Move         - 15 pts (High)
+ * 5. Upside % to Target    - 15 pts (High)
+ * 6. Relative Strength     - 10 pts (Medium)
+ * 7. Price Accessibility   -  5 pts (Low)
  */
 
 import { round2, isNum, clamp } from './helpers.js';
@@ -13,246 +23,390 @@ import { round2, isNum, clamp } from './helpers.js';
  * Grade thresholds for setup scores
  */
 const GRADE_THRESHOLDS = {
-  A: 80,
-  B: 65,
-  C: 50,
-  D: 35
-  // Below 35 = F
+  'A+': 80,
+  A: 70,
+  'B+': 60,
+  B: 50,
+  C: 40
+  // Below 40 = D
 };
 
 /**
  * Get letter grade from numeric score
  */
 export function getGrade(score) {
+  if (score >= GRADE_THRESHOLDS['A+']) return 'A+';
   if (score >= GRADE_THRESHOLDS.A) return 'A';
+  if (score >= GRADE_THRESHOLDS['B+']) return 'B+';
   if (score >= GRADE_THRESHOLDS.B) return 'B';
   if (score >= GRADE_THRESHOLDS.C) return 'C';
-  if (score >= GRADE_THRESHOLDS.D) return 'D';
-  return 'F';
+  return 'D';
 }
 
 /**
- * Calculate Setup Score for a stock
+ * Calculate Setup Score for a stock (Framework-Based)
  *
- * Evaluates swing trading quality on 0-100 scale.
+ * Evaluates swing trading quality on 0-100 scale using 6-factor framework.
+ * Requires trading levels for R:R and upside calculation.
  *
  * @param {Object} stock - Stock data with indicators
+ * @param {Object} levels - Trading levels from calculateAPlusMomentumLevels (optional)
  * @param {number} niftyReturn1M - Nifty 1-month return for relative strength
  * @param {boolean} debug - Include detailed breakdown
- * @returns {Object} { score, grade, breakdown }
+ * @returns {Object} { score, grade, breakdown, eliminated, eliminationReason }
  */
-export function calculateSetupScore(stock, niftyReturn1M = 0, debug = false) {
+export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, debug = false) {
   const {
     last,
     price,
-    dma20,
-    ema20,
-    atr,
-    atr_pct,
+    close,
     rsi,
+    rsi14,
     volume,
     volume_20avg,
     volume_vs_avg,
-    high_20d,
     return_1m,
-    distance_from_20dma_pct
+    weekly_change_pct,
+    weeklyChangePercent
   } = stock;
 
-  const currentPrice = last || price;
-  const ma20 = ema20 || dma20;
+  const currentPrice = last || price || close;
+  const currentRsi = rsi14 || rsi;
 
   // Validate minimum required data
-  if (!isNum(currentPrice) || !isNum(atr)) {
+  if (!isNum(currentPrice)) {
     return {
       score: 0,
-      grade: 'F',
-      breakdown: [{ factor: 'error', points: 0, reason: 'Missing price or ATR' }]
+      grade: 'D',
+      breakdown: [{ factor: 'error', points: 0, reason: 'Missing price data' }],
+      eliminated: true,
+      eliminationReason: 'Missing price data'
+    };
+  }
+
+  // ============================================
+  // PRE-FILTER: RSI Elimination (Hard Gate)
+  // ============================================
+  if (isNum(currentRsi) && currentRsi > 72) {
+    return {
+      score: 0,
+      grade: 'X',
+      breakdown: [{ factor: 'RSI_ELIMINATED', points: 0, reason: `RSI ${round2(currentRsi)} > 72 (too extended)` }],
+      eliminated: true,
+      eliminationReason: `RSI ${round2(currentRsi)} > 72 (too extended)`
     };
   }
 
   const breakdown = [];
   let totalScore = 0;
 
-  // 1. ATR% Volatility (max 20 points)
-  // Sweet spot: 2-3.5% daily volatility
-  const atrPercent = atr_pct || (atr / currentPrice * 100);
-  let atrPoints = 0;
-  let atrReason = '';
-
-  if (atrPercent >= 2 && atrPercent <= 3.5) {
-    atrPoints = 20;
-    atrReason = `Ideal volatility (${round2(atrPercent)}%)`;
-  } else if (atrPercent >= 1.5 && atrPercent < 2) {
-    atrPoints = 12;
-    atrReason = `Acceptable volatility (${round2(atrPercent)}%)`;
-  } else if (atrPercent > 3.5 && atrPercent <= 5) {
-    atrPoints = 8;
-    atrReason = `High volatility (${round2(atrPercent)}%)`;
-  } else if (atrPercent < 1.5) {
-    atrPoints = 4;
-    atrReason = `Low volatility (${round2(atrPercent)}%)`;
-  } else {
-    atrPoints = 0;
-    atrReason = `Excessive volatility (${round2(atrPercent)}%)`;
-  }
-  totalScore += atrPoints;
-  breakdown.push({ factor: 'ATR%', points: atrPoints, max: 20, reason: atrReason });
-
-  // 2. Distance from 20 DMA (max 20 points)
-  // Ideal: 0-3% above (momentum zone)
-  let dmaPoints = 0;
-  let dmaReason = '';
-
-  if (isNum(ma20)) {
-    const distancePct = distance_from_20dma_pct || ((currentPrice - ma20) / ma20 * 100);
-
-    if (distancePct >= 0 && distancePct <= 3) {
-      dmaPoints = 20;
-      dmaReason = `Good entry zone (${round2(distancePct)}% from 20DMA)`;
-    } else if (distancePct > 3 && distancePct <= 6) {
-      dmaPoints = 12;
-      dmaReason = `Acceptable (${round2(distancePct)}% from 20DMA)`;
-    } else if (distancePct >= -2 && distancePct < 0) {
-      dmaPoints = 15;
-      dmaReason = `Pullback zone (${round2(distancePct)}% from 20DMA)`;
-    } else if (distancePct > 6) {
-      dmaPoints = 0;
-      dmaReason = `Overextended (${round2(distancePct)}% from 20DMA)`;
-    } else {
-      dmaPoints = 5;
-      dmaReason = `Below support (${round2(distancePct)}% from 20DMA)`;
-    }
-  } else {
-    dmaReason = 'No 20DMA data';
-  }
-  totalScore += dmaPoints;
-  breakdown.push({ factor: '20DMA Distance', points: dmaPoints, max: 20, reason: dmaReason });
-
-  // 3. RSI Position (max 15 points)
-  // Pullback-first strategy: favors neutral zone for pullback entries
-  // While giving reasonable credit to momentum for breakouts
-  let rsiPoints = 0;
-  let rsiReason = '';
-
-  if (isNum(rsi)) {
-    if (rsi >= 40 && rsi <= 60) {
-      // Best for pullback entries - neutral zone
-      rsiPoints = 15;
-      rsiReason = `Ideal pullback zone (RSI ${round2(rsi)})`;
-    } else if (rsi > 60 && rsi <= 70) {
-      // Good momentum for breakouts - slightly reward, don't penalize
-      rsiPoints = 12;
-      rsiReason = `Bullish momentum (RSI ${round2(rsi)})`;
-    } else if (rsi >= 30 && rsi < 40) {
-      // Oversold potential - caution for catching falling knives
-      rsiPoints = 8;
-      rsiReason = `Oversold bounce zone (RSI ${round2(rsi)})`;
-    } else if (rsi > 70) {
-      // Overbought - risky for new entries
-      rsiPoints = 3;
-      rsiReason = `Overbought caution (RSI ${round2(rsi)})`;
-    } else if (rsi < 30) {
-      // Very oversold - high risk
-      rsiPoints = 3;
-      rsiReason = `Very oversold - high risk (RSI ${round2(rsi)})`;
-    } else {
-      rsiPoints = 5;
-      rsiReason = `RSI outside sweet spot (${round2(rsi)})`;
-    }
-  } else {
-    rsiReason = 'No RSI data';
-  }
-  totalScore += rsiPoints;
-  breakdown.push({ factor: 'RSI', points: rsiPoints, max: 15, reason: rsiReason });
-
-  // 4. Volume Confirmation (max 15 points)
-  // Above 1.3x average = strong confirmation
-  let volPoints = 0;
-  let volReason = '';
-
+  // ============================================
+  // FACTOR 1: Volume Conviction (20 pts) - CRITICAL
+  // ============================================
   const volRatio = volume_vs_avg || (volume && volume_20avg ? volume / volume_20avg : null);
 
+  let volumeScore = 0;
+  let volumeReason = '';
+
   if (isNum(volRatio)) {
-    if (volRatio >= 1.3) {
-      volPoints = 15;
-      volReason = `Strong volume (${round2(volRatio)}x average)`;
-    } else if (volRatio >= 1.1) {
-      volPoints = 10;
-      volReason = `Above average (${round2(volRatio)}x)`;
-    } else if (volRatio >= 0.8) {
-      volPoints = 5;
-      volReason = `Average volume (${round2(volRatio)}x)`;
+    if (volRatio >= 3.0) {
+      volumeScore = 20;
+      volumeReason = `Exceptional volume (${round2(volRatio)}x avg) - strong institutional interest`;
+    } else if (volRatio >= 2.5) {
+      volumeScore = 18;
+      volumeReason = `Very high volume (${round2(volRatio)}x avg)`;
+    } else if (volRatio >= 2.0) {
+      volumeScore = 16;
+      volumeReason = `High volume (${round2(volRatio)}x avg) - good conviction`;
+    } else if (volRatio >= 1.5) {
+      volumeScore = 12;
+      volumeReason = `Above average volume (${round2(volRatio)}x avg)`;
+    } else if (volRatio >= 1.2) {
+      volumeScore = 8;
+      volumeReason = `Slightly above average (${round2(volRatio)}x avg)`;
+    } else if (volRatio >= 1.0) {
+      volumeScore = 5;
+      volumeReason = `Average volume (${round2(volRatio)}x avg)`;
     } else {
-      volPoints = 0;
-      volReason = `Low volume (${round2(volRatio)}x average)`;
+      volumeScore = 2;
+      volumeReason = `Below average volume (${round2(volRatio)}x avg) - weak conviction`;
     }
   } else {
-    volReason = 'No volume data';
+    volumeScore = 5;
+    volumeReason = 'No volume data available';
   }
-  totalScore += volPoints;
-  breakdown.push({ factor: 'Volume', points: volPoints, max: 15, reason: volReason });
 
-  // 5. Breakout Proximity (max 20 points)
-  // How close to 20-day high
-  let breakoutPoints = 0;
-  let breakoutReason = '';
+  totalScore += volumeScore;
+  breakdown.push({ factor: 'Volume Conviction', points: volumeScore, max: 20, reason: volumeReason });
 
-  if (isNum(high_20d)) {
-    const breakoutDist = ((high_20d - currentPrice) / currentPrice) * 100;
+  // ============================================
+  // FACTOR 2: Risk:Reward Ratio (20 pts) - CRITICAL
+  // ============================================
+  let rrScore = 0;
+  let rrReason = '';
+  let rrValue = null;
 
-    if (breakoutDist >= 0 && breakoutDist <= 1) {
-      breakoutPoints = 20;
-      breakoutReason = `Near breakout (${round2(breakoutDist)}% from 20D high)`;
-    } else if (breakoutDist > 1 && breakoutDist <= 2) {
-      breakoutPoints = 15;
-      breakoutReason = `Close to breakout (${round2(breakoutDist)}%)`;
-    } else if (breakoutDist > 2 && breakoutDist <= 5) {
-      breakoutPoints = 8;
-      breakoutReason = `Approaching high (${round2(breakoutDist)}%)`;
-    } else if (breakoutDist < 0) {
-      breakoutPoints = 18;
-      breakoutReason = `New high! (${round2(Math.abs(breakoutDist))}% above)`;
+  if (levels && levels.valid && isNum(levels.riskReward)) {
+    rrValue = levels.riskReward;
+
+    if (rrValue >= 3.0) {
+      rrScore = 20;
+      rrReason = `Excellent R:R (1:${round2(rrValue)}) - high quality setup`;
+    } else if (rrValue >= 2.5) {
+      rrScore = 17;
+      rrReason = `Very good R:R (1:${round2(rrValue)})`;
+    } else if (rrValue >= 2.0) {
+      rrScore = 14;
+      rrReason = `Good R:R (1:${round2(rrValue)}) - meets framework minimum`;
+    } else if (rrValue >= 1.5) {
+      rrScore = 10;
+      rrReason = `Acceptable R:R (1:${round2(rrValue)})`;
+    } else if (rrValue >= 1.2) {
+      rrScore = 5;
+      rrReason = `Marginal R:R (1:${round2(rrValue)}) - consider skipping`;
     } else {
-      breakoutPoints = 0;
-      breakoutReason = `Far from high (${round2(breakoutDist)}%)`;
+      rrScore = 0;
+      rrReason = `Poor R:R (1:${round2(rrValue)}) - not recommended`;
+    }
+  } else if (levels && !levels.valid) {
+    rrScore = 0;
+    rrReason = `Levels invalid: ${levels.reason || 'unknown'}`;
+  } else {
+    // No levels provided - give neutral score
+    rrScore = 10;
+    rrReason = 'R:R not calculated (levels not provided)';
+  }
+
+  totalScore += rrScore;
+  breakdown.push({ factor: 'Risk:Reward', points: rrScore, max: 20, reason: rrReason, value: rrValue ? `1:${round2(rrValue)}` : 'N/A' });
+
+  // ============================================
+  // FACTOR 3: RSI Position (15 pts)
+  // ============================================
+  let rsiScore = 0;
+  let rsiReason = '';
+
+  if (isNum(currentRsi)) {
+    if (currentRsi >= 55 && currentRsi <= 62) {
+      rsiScore = 15;
+      rsiReason = `Sweet spot (RSI ${round2(currentRsi)}) - ideal entry zone`;
+    } else if (currentRsi >= 52 && currentRsi < 55) {
+      rsiScore = 12;
+      rsiReason = `Building momentum (RSI ${round2(currentRsi)})`;
+    } else if (currentRsi > 62 && currentRsi <= 65) {
+      rsiScore = 12;
+      rsiReason = `Good momentum (RSI ${round2(currentRsi)})`;
+    } else if (currentRsi > 65 && currentRsi <= 68) {
+      rsiScore = 10;
+      rsiReason = `Strong but acceptable (RSI ${round2(currentRsi)})`;
+    } else if (currentRsi > 68 && currentRsi <= 72) {
+      rsiScore = 5;
+      rsiReason = `Caution zone (RSI ${round2(currentRsi)}) - near overbought`;
+    } else if (currentRsi >= 45 && currentRsi < 52) {
+      rsiScore = 8;
+      rsiReason = `Neutral zone (RSI ${round2(currentRsi)})`;
+    } else {
+      rsiScore = 3;
+      rsiReason = `Outside ideal range (RSI ${round2(currentRsi)})`;
     }
   } else {
-    breakoutReason = 'No 20-day high data';
+    rsiScore = 7;
+    rsiReason = 'No RSI data available';
   }
-  totalScore += breakoutPoints;
-  breakdown.push({ factor: 'Breakout', points: breakoutPoints, max: 20, reason: breakoutReason });
 
-  // 6. Relative Strength vs Nifty (max 10 points)
-  let rsPoints = 0;
+  totalScore += rsiScore;
+  breakdown.push({ factor: 'RSI Position', points: rsiScore, max: 15, reason: rsiReason, value: currentRsi ? round2(currentRsi) : 'N/A' });
+
+  // ============================================
+  // FACTOR 4: % Weekly Move (15 pts)
+  // ============================================
+  const weeklyChange = weekly_change_pct || weeklyChangePercent || 0;
+
+  let weeklyScore = 0;
+  let weeklyReason = '';
+
+  if (isNum(weeklyChange)) {
+    if (weeklyChange >= 7) {
+      weeklyScore = 15;
+      weeklyReason = `Strong momentum (+${round2(weeklyChange)}% this week)`;
+    } else if (weeklyChange >= 5) {
+      weeklyScore = 13;
+      weeklyReason = `Good momentum (+${round2(weeklyChange)}% this week)`;
+    } else if (weeklyChange >= 4) {
+      weeklyScore = 11;
+      weeklyReason = `Solid momentum (+${round2(weeklyChange)}% this week)`;
+    } else if (weeklyChange >= 3) {
+      weeklyScore = 9;
+      weeklyReason = `Meets minimum (+${round2(weeklyChange)}% this week)`;
+    } else if (weeklyChange >= 2) {
+      weeklyScore = 6;
+      weeklyReason = `Moderate move (+${round2(weeklyChange)}% this week)`;
+    } else if (weeklyChange >= 1) {
+      weeklyScore = 3;
+      weeklyReason = `Weak momentum (+${round2(weeklyChange)}% this week)`;
+    } else {
+      weeklyScore = 0;
+      weeklyReason = `No momentum (${round2(weeklyChange)}% this week)`;
+    }
+  } else {
+    weeklyScore = 5;
+    weeklyReason = 'Weekly change not available';
+  }
+
+  totalScore += weeklyScore;
+  breakdown.push({ factor: 'Weekly Move', points: weeklyScore, max: 15, reason: weeklyReason, value: `${round2(weeklyChange)}%` });
+
+  // ============================================
+  // FACTOR 5: Upside % to Target (15 pts)
+  // ============================================
+  let upsideScore = 0;
+  let upsideReason = '';
+  let upsidePct = 0;
+
+  if (levels && levels.valid && isNum(levels.target) && isNum(currentPrice)) {
+    upsidePct = ((levels.target - currentPrice) / currentPrice) * 100;
+
+    if (upsidePct >= 15) {
+      upsideScore = 15;
+      upsideReason = `Excellent upside (${round2(upsidePct)}% to target)`;
+    } else if (upsidePct >= 12) {
+      upsideScore = 13;
+      upsideReason = `Very good upside (${round2(upsidePct)}% to target)`;
+    } else if (upsidePct >= 10) {
+      upsideScore = 11;
+      upsideReason = `Good upside (${round2(upsidePct)}% to target)`;
+    } else if (upsidePct >= 8) {
+      upsideScore = 9;
+      upsideReason = `Decent upside (${round2(upsidePct)}% to target)`;
+    } else if (upsidePct >= 6) {
+      upsideScore = 7;
+      upsideReason = `Moderate upside (${round2(upsidePct)}% to target)`;
+    } else if (upsidePct >= 4) {
+      upsideScore = 4;
+      upsideReason = `Limited upside (${round2(upsidePct)}% to target)`;
+    } else {
+      upsideScore = 2;
+      upsideReason = `Minimal upside (${round2(upsidePct)}% to target)`;
+    }
+  } else if (levels && levels.rewardPercent) {
+    // Use rewardPercent from levels if available
+    upsidePct = levels.rewardPercent;
+    if (upsidePct >= 10) upsideScore = 11;
+    else if (upsidePct >= 7) upsideScore = 8;
+    else if (upsidePct >= 5) upsideScore = 5;
+    else upsideScore = 3;
+    upsideReason = `${round2(upsidePct)}% reward potential`;
+  } else {
+    upsideScore = 7;
+    upsideReason = 'Upside not calculated (no target)';
+  }
+
+  totalScore += upsideScore;
+  breakdown.push({ factor: 'Upside to Target', points: upsideScore, max: 15, reason: upsideReason, value: `${round2(upsidePct)}%` });
+
+  // ============================================
+  // FACTOR 6: Relative Strength vs Nifty (10 pts)
+  // ============================================
+  let rsScore = 0;
   let rsReason = '';
 
   if (isNum(return_1m) && isNum(niftyReturn1M)) {
     const outperformance = return_1m - niftyReturn1M;
 
-    if (outperformance > 5) {
-      rsPoints = 10;
-      rsReason = `Strong outperformance (+${round2(outperformance)}% vs Nifty)`;
-    } else if (outperformance > 0) {
-      rsPoints = 6;
+    if (outperformance >= 10) {
+      rsScore = 10;
+      rsReason = `Strong outperformer (+${round2(outperformance)}% vs Nifty)`;
+    } else if (outperformance >= 7) {
+      rsScore = 8;
+      rsReason = `Good outperformer (+${round2(outperformance)}% vs Nifty)`;
+    } else if (outperformance >= 5) {
+      rsScore = 7;
       rsReason = `Outperforming (+${round2(outperformance)}% vs Nifty)`;
-    } else if (outperformance >= -5) {
-      rsPoints = 3;
+    } else if (outperformance >= 3) {
+      rsScore = 5;
+      rsReason = `Slight outperformer (+${round2(outperformance)}% vs Nifty)`;
+    } else if (outperformance >= 0) {
+      rsScore = 3;
       rsReason = `In line with Nifty (${round2(outperformance)}%)`;
     } else {
-      rsPoints = 0;
+      rsScore = 0;
       rsReason = `Underperforming (${round2(outperformance)}% vs Nifty)`;
     }
+  } else if (isNum(return_1m)) {
+    // No Nifty data, use absolute return
+    if (return_1m >= 10) rsScore = 7;
+    else if (return_1m >= 5) rsScore = 5;
+    else if (return_1m >= 0) rsScore = 3;
+    else rsScore = 0;
+    rsReason = `1M return: ${round2(return_1m)}% (no Nifty comparison)`;
   } else {
+    rsScore = 3;
     rsReason = 'No relative strength data';
   }
-  totalScore += rsPoints;
-  breakdown.push({ factor: 'Rel Strength', points: rsPoints, max: 10, reason: rsReason });
 
+  totalScore += rsScore;
+  breakdown.push({ factor: 'Relative Strength', points: rsScore, max: 10, reason: rsReason });
+
+  // ============================================
+  // FACTOR 7: Price Accessibility (5 pts) - Bonus
+  // ============================================
+  let priceScore = 0;
+  let priceReason = '';
+
+  if (isNum(currentPrice) && currentPrice > 0) {
+    if (currentPrice <= 200) {
+      priceScore = 5;
+      priceReason = `Low price (₹${round2(currentPrice)}) - easy position sizing`;
+    } else if (currentPrice <= 500) {
+      priceScore = 4;
+      priceReason = `Moderate price (₹${round2(currentPrice)})`;
+    } else if (currentPrice <= 1000) {
+      priceScore = 3;
+      priceReason = `Higher price (₹${round2(currentPrice)})`;
+    } else if (currentPrice <= 2000) {
+      priceScore = 2;
+      priceReason = `Expensive (₹${round2(currentPrice)})`;
+    } else {
+      priceScore = 1;
+      priceReason = `Very expensive (₹${round2(currentPrice)}) - needs larger capital`;
+    }
+  } else {
+    priceScore = 2;
+    priceReason = 'Price not available';
+  }
+
+  totalScore += priceScore;
+  breakdown.push({ factor: 'Price Accessibility', points: priceScore, max: 5, reason: priceReason });
+
+  // ============================================
+  // FINAL RESULT
+  // ============================================
   return {
     score: round2(totalScore),
     grade: getGrade(totalScore),
-    breakdown: debug ? breakdown : undefined
+    breakdown: debug ? breakdown : undefined,
+    eliminated: false,
+    eliminationReason: null,
+    // Include levels info in result for reference
+    levels_valid: levels?.valid || false,
+    risk_reward: rrValue
   };
+}
+
+/**
+ * Calculate Setup Score (Legacy Signature)
+ *
+ * Backward-compatible wrapper that accepts old signature.
+ * Use calculateSetupScore(stock, levels, niftyReturn1M, debug) for new code.
+ *
+ * @param {Object} stock - Stock data with indicators
+ * @param {number} niftyReturn1M - Nifty 1-month return for relative strength
+ * @param {boolean} debug - Include detailed breakdown
+ * @returns {Object} { score, grade, breakdown }
+ */
+export function calculateSetupScoreLegacy(stock, niftyReturn1M = 0, debug = false) {
+  // Call new function without levels
+  return calculateSetupScore(stock, null, niftyReturn1M, debug);
 }
 
 /**
@@ -288,8 +442,6 @@ export function pickBestCandidate(stage2Result) {
   const pool = goodRR.length > 0 ? goodRR : valid;
 
   // Score each candidate
-  // Formula: (RR * 0.55) + (trend_align * 0.35) - (min(distance_pct, 5) * 0.10) + scan_type_bonus
-  // rawScore typically ranges 1.5-3.5 for viable candidates
   const scored = pool.map(c => {
     const { rr, trend_align = 0.5, distance_pct = 0, scan_type_bonus = 0 } = c.score || {};
 
@@ -300,13 +452,12 @@ export function pickBestCandidate(stage2Result) {
       scan_type_bonus
     );
 
-    // 🔍 DEBUG: Log scoring for each candidate
     console.log(`🔍 [SCORING] ${c.id}(${c.name}): RR=${rr}, trend=${trend_align}, dist=${distance_pct}, bonus=${scan_type_bonus} → score=${rawScore}`);
 
     return {
       ...c,
-      totalScore: rawScore,  // Keep raw for ranking (higher = better)
-      rawScore               // Store raw for confidence normalization
+      totalScore: rawScore,
+      rawScore
     };
   });
 
@@ -347,18 +498,12 @@ export function calculateConfidence({
   const { trend_align = 0.5 } = score || {};
 
   // Normalize rawScore to 0.50-0.85 range for base confidence
-  // rawScore typically ranges 1.5-3.5 for viable candidates
-  // Formula: 0.35 + (rawScore / 6) maps 1.5-3.5 → 0.60-0.93, clamped to 0.50-0.85
-  // This ensures good candidates start with solid confidence while leaving room for adjustments
-  // Example: RR=3.14, trend=0.4 → rawScore≈1.83 → base = 0.35 + 0.305 = 0.655 (65.5%)
   const normalizedScore = rawScore ? 0.35 + (rawScore / 6) : 0.5;
   let baseConfidence = Math.min(0.85, Math.max(0.50, normalizedScore));
 
   const adjustments = [];
 
   // === NEGATIVE ADJUSTMENTS (max -0.40) ===
-
-  // Sentiment conflict with strategy
   const isBuySetup = type === 'BUY';
   const sentimentConflict = (isBuySetup && sentiment === 'BEARISH') ||
                             (!isBuySetup && sentiment === 'BULLISH');
@@ -366,58 +511,47 @@ export function calculateConfidence({
     adjustments.push({ factor: 'SENT_CONFLICT', adjustment: -0.08 });
   }
 
-  // High volatility + Low R:R
   const volatility = indicators?.atr_pct > 2 ? 'HIGH' : 'NORMAL';
   if (volatility === 'HIGH' && riskReward < 1.5) {
     adjustments.push({ factor: 'HIGH_VOL_LOW_RR', adjustment: -0.05 });
   }
 
-  // Low sentiment confidence
   if (sentimentConfidence < 0.5) {
     adjustments.push({ factor: 'LOW_SENT_CONF', adjustment: -0.04 });
   }
 
-  // Below average volume
   if (indicators?.volume_vs_avg < 0.8) {
     adjustments.push({ factor: 'LOW_VOLUME', adjustment: -0.03 });
   }
 
-  // Poor R:R
   if (riskReward < 1.0) {
     adjustments.push({ factor: 'POOR_RR', adjustment: -0.07 });
   }
 
-  // Price far from entry
   const distancePct = score?.distance_pct || 0;
   if (distancePct > 3) {
     adjustments.push({ factor: 'FAR_ENTRY', adjustment: -0.04 });
   }
 
   // === POSITIVE ADJUSTMENTS (max +0.18) ===
-
-  // Sentiment aligned + high confidence
   const sentimentAligned = (isBuySetup && sentiment === 'BULLISH') ||
                            (!isBuySetup && sentiment === 'BEARISH');
   if (sentimentAligned && sentimentConfidence >= 0.7) {
     adjustments.push({ factor: 'SENT_ALIGNED', adjustment: +0.04 });
   }
 
-  // Strong R:R
   if (riskReward >= 2.0) {
     adjustments.push({ factor: 'STRONG_RR', adjustment: +0.04 });
   }
 
-  // Above average volume
   if (indicators?.volume_vs_avg >= 1.3) {
     adjustments.push({ factor: 'HIGH_VOLUME', adjustment: +0.02 });
   }
 
-  // Price very close to entry
   if (distancePct < 0.5) {
     adjustments.push({ factor: 'CLOSE_ENTRY', adjustment: +0.03 });
   }
 
-  // Strong trend alignment
   if (trend_align >= 0.9) {
     adjustments.push({ factor: 'TREND_ALIGNED', adjustment: +0.05 });
   }
@@ -436,9 +570,9 @@ export function calculateConfidence({
 }
 
 /**
- * Rank stocks by setup quality
+ * Rank stocks by setup quality (with levels)
  *
- * @param {Array} stocks - Array of stock data with indicators
+ * @param {Array} stocks - Array of stock data with indicators and levels
  * @param {number} niftyReturn1M - Nifty 1-month return
  * @returns {Array} Stocks sorted by score with grades
  */
@@ -446,20 +580,31 @@ export function rankStocks(stocks, niftyReturn1M = 0) {
   if (!Array.isArray(stocks)) return [];
 
   const scored = stocks.map(stock => {
-    const { score, grade, breakdown } = calculateSetupScore(stock, niftyReturn1M);
+    const { score, grade, breakdown, eliminated, eliminationReason } = calculateSetupScore(
+      stock,
+      stock.levels || null,
+      niftyReturn1M,
+      true
+    );
     return {
       ...stock,
       setup_score: score,
       grade,
-      score_breakdown: breakdown
+      score_breakdown: breakdown,
+      eliminated,
+      eliminationReason
     };
   });
 
-  return scored.sort((a, b) => b.setup_score - a.setup_score);
+  // Filter out eliminated stocks, then sort by score
+  return scored
+    .filter(s => !s.eliminated)
+    .sort((a, b) => b.setup_score - a.setup_score);
 }
 
 export default {
   calculateSetupScore,
+  calculateSetupScoreLegacy,
   pickBestCandidate,
   calculateConfidence,
   rankStocks,

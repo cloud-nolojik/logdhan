@@ -31,8 +31,7 @@ const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
 export const SCAN_QUERIES = {
   // A+ Momentum - Strong uptrend stocks with weekly gains near highs
   // Trend + 3% weekly gain + near 20d high + green close + RSI 55-75
-  a_plus_momentum: `( {cash} ( latest ema( close, 20 ) > latest ema( close, 50 ) and latest ema( close, 50 ) > latest sma( close, 200 ) and latest close > latest ema( close, 20 ) and latest close > 1 week ago close * 1.03 and latest close >= max( 20, high ) * 0.98 and latest close > latest open and latest rsi( 14 ) >= 55 and latest rsi( 14 ) <= 68 and latest volume > latest sma( volume, 20 ) * 1.2 and latest sma( volume, 20 ) > 500000 and market cap > 10000 ) )`,
-
+  a_plus_momentum: `( {cash} ( latest ema( close, 20 ) > latest ema( close, 50 ) and latest ema( close, 50 ) > latest sma( close, 200 ) and latest close > latest ema( close, 20 ) and latest close > 1 week ago close * 1.03 and latest close >= max( 20, high ) * 0.98 and latest rsi( 14 ) >= 55 and latest rsi( 14 ) <= 68 and latest volume > latest sma( volume, 20 ) * 1.2 and latest sma( volume, 20 ) > 500000 and market cap > 10000 ) )`,
 
 //   a_plus_nextweek: `( {cash} (
 //   /* Trend filter */

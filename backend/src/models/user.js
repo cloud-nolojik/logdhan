@@ -26,8 +26,8 @@ const watchlistItemSchema = new mongoose.Schema({
   },
   added_source: {
     type: String,
-    enum: ['screener', 'manual', 'order'],
-    default: 'screener'
+    enum: ['manual', 'weekly_track'],
+    default: 'manual'
   }
 });
 
