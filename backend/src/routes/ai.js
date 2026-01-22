@@ -252,10 +252,23 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
 router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (req, res) => {
   try {
     const { instrumentKey } = req.params;
-    const { analysis_type = 'swing' } = req.query;
+    let { analysis_type = 'swing' } = req.query;
 
-    console.log(`[BY-INSTRUMENT] Request for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
     const userId = req.user.id;
+
+    // Check if stock is in user's watchlist with weekly_track source
+    // If so, return position_management analysis instead of swing
+    const user = await User.findById(userId).select('watchlist').lean();
+    const watchlistItem = user?.watchlist?.find(item => item.instrument_key === instrumentKey);
+    const isWeeklyTrack = watchlistItem?.added_source === 'weekly_track';
+
+    if (isWeeklyTrack && analysis_type === 'swing') {
+      // For weekly_track stocks, return position_management analysis
+      analysis_type = 'position_management';
+      console.log(`[BY-INSTRUMENT] Stock is weekly_track, switching to position_management analysis`);
+    }
+
+    console.log(`[BY-INSTRUMENT] Request for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}", isWeeklyTrack: ${isWeeklyTrack}`);
 
     const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
 
@@ -281,7 +294,21 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     }).sort({ created_at: -1 }); // Get most recent analysis
 
     if (!anyAnalysis) {
-      console.log(`[BY-INSTRUMENT] ❌ No analysis found for instrumentKey: "${instrumentKey}"`);
+      console.log(`[BY-INSTRUMENT] ❌ No analysis found for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
+
+      // For position_management (weekly_track stocks), show specific message
+      if (analysis_type === 'position_management') {
+        return res.status(200).json({
+          success: true,
+          status: 'not_analyzed',
+          error: 'position_analysis_pending',
+          message: 'Position analysis will be available after 4:00 PM on trading days.',
+          call_to_action: 'Check back after 4:00 PM for today\'s position update.',
+          is_weekly_track: true,
+          can_analyze_manually: false
+        });
+      }
+
       const messageToUser = 'This stock has not been analyzed yet';
       const callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
 
@@ -415,6 +442,52 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       console.log(`[INTRADAY BY-INSTRUMENT] Response analysis_data.analysis_type: ${responsePayload.data.analysis_data.analysis_type}`);
       console.log(`========== [INTRADAY BY-INSTRUMENT] END ==========\n`);
 
+      return res.json(responsePayload);
+    }
+
+    // Handle position_management analysis (for weekly_track stocks)
+    if (analysis_type === 'position_management') {
+      const analysis = anyAnalysis;
+
+      console.log(`[POSITION-MGMT BY-INSTRUMENT] Found analysis for: ${instrumentKey}`);
+
+      // Check if analysis is expired
+      const now = new Date();
+      const isExpired = analysis.valid_until && now > new Date(analysis.valid_until);
+
+      // Extract position management data
+      const positionData = analysis.analysis_data?.position_management || analysis.analysis_data || {};
+
+      const responsePayload = {
+        success: true,
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: 'position_management',
+          current_price: analysis.current_price,
+          analysis_data: {
+            ...positionData,
+            analysis_type: 'position_management',
+            symbol: analysis.stock_symbol,
+            generated_at_ist: analysis.created_at?.toISOString() || new Date().toISOString()
+          },
+          original_levels: analysis.analysis_data?.original_levels || null,
+          original_swing_analysis_id: analysis.analysis_data?.original_swing_analysis_id || null,
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          is_expired: isExpired,
+          created_at: analysis.created_at
+        },
+        cached: true,
+        analysis_id: analysis._id.toString(),
+        is_weekly_track: true,
+        error: null,
+        message: isExpired ? 'Position analysis expired. New analysis runs at 4:00 PM.' : null
+      };
+
+      console.log(`[POSITION-MGMT BY-INSTRUMENT] Returning position_management for ${analysis.stock_symbol}`);
       return res.json(responsePayload);
     }
 
