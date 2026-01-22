@@ -5,7 +5,6 @@ import candleFetcherService from '../services/candleFetcher.service.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
 import { Subscription } from '../models/subscription.js';
-import MonitoringSubscription from '../models/monitoringSubscription.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import rateLimit from 'express-rate-limit';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
@@ -57,23 +56,6 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
 
     // Get user ID first to check subscription and watchlist
     const userId = req.user.id;
-
-    // ⚡ NEW: Check if we're in downtime (4:00-5:00 PM IST)
-    // During downtime, NO manual analysis is allowed - bulk processing is running
-    const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
-    const now = new Date();
-    const downtimeCheck = await MarketHoursUtil.isDowntimeWindow(now);
-
-    if (downtimeCheck.isDowntime) {
-
-      return res.status(423).json({
-        success: false,
-        error: 'downtime_window',
-        message: downtimeCheck.message,
-        reason: 'downtime_window',
-        nextAllowed: downtimeCheck.nextAllowed
-      });
-    }
 
     // Lookup stock details from database
     const stockInfo = await Stock.getByInstrumentKey(instrument_key);
@@ -481,34 +463,6 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
 
     const analysis = anyAnalysis; // Use the found analysis
 
-    // Check monitoring status for all strategies in this analysis
-    const monitoringStatus = {};
-    let globalCanStartMonitoring = true;
-    let globalMonitoringMessage = null;
-    let globalConditionsMetAt = null;
-
-    if (analysis.analysis_data?.strategies) {
-      for (const strategy of analysis.analysis_data.strategies) {
-        const canMonitor = await MonitoringSubscription.canUserStartMonitoring(
-          analysis._id,
-          strategy.id
-        );
-
-        monitoringStatus[strategy.id] = {
-          can_start_monitoring: canMonitor.can_start,
-          reason: canMonitor.reason,
-          conditions_met_at: canMonitor.conditions_met_at
-        };
-
-        // If any strategy cannot be monitored, disable global monitoring
-        if (!canMonitor.can_start) {
-          globalCanStartMonitoring = false;
-          globalMonitoringMessage = canMonitor.reason;
-          globalConditionsMetAt = canMonitor.conditions_met_at;
-        }
-      }
-    }
-
     // Check if analysis is expired (for weekly watchlist stocks)
     const now = new Date();
     const isExpired = analysis.valid_until && now > new Date(analysis.valid_until);
@@ -530,17 +484,10 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       analysis_data: analysis.analysis_data,
       status: analysis.status,
       created_at: analysis.created_at,
-      valid_until: analysis.valid_until, // 🆕 Add validity period for swing analysis
+      valid_until: analysis.valid_until,
       expires_at: analysis.expires_at,
-      is_expired: isExpired, // 🆕 Flag to indicate if analysis is expired
-      expiry_message: expiryMessage, // 🆕 User-friendly message when expired
-      // NEW: Monitoring flags
-      can_start_monitoring: globalCanStartMonitoring,
-      monitoring_status: !globalCanStartMonitoring ? 'conditions_met' : null,
-      conditions_met_at: globalConditionsMetAt,
-      monitoring_message: globalMonitoringMessage,
-      strategy_monitoring_status: monitoringStatus // Per-strategy monitoring status
-      // user_id removed - not needed in frontend
+      is_expired: isExpired,
+      expiry_message: expiryMessage
     };
 
     res.json({

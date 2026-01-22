@@ -3,17 +3,11 @@ import { auth } from '../middleware/auth.js';
 import { User } from '../models/user.js';
 import { Subscription } from '../models/subscription.js';
 import StockAnalysis from '../models/stockAnalysis.js';
-import MonitoringSubscription from '../models/monitoringSubscription.js';
-import MarketHoursUtil from '../utils/marketHours.js';
 // Use database version instead of JSON file version
 import { getExactStock } from '../utils/stockDb.js';
 import priceCacheService from '../services/priceCache.service.js';
-import { getMonitoringState } from '../services/monitoringState.service.js';
 import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 import { checkEntryZoneProximity } from '../engine/index.js';
-import pLimit from 'p-limit';
-// Upstox allows 50 requests/second, so 20 concurrent is safe with 10s timeouts
-const limit = pLimit(20); // Optimized for better performance while staying within rate limits
 
 const router = express.Router();
 
@@ -217,9 +211,6 @@ router.get('/', auth, async (req, res) => {
             }).sort({ created_at: -1 }).lean();
           }
 
-          // Monitoring state (active subscription + history fallback)
-          const monitoringInfo = await getMonitoringState({ analysis, userId: req.user._id });
-
           // Calculate AI confidence from strategies and get strategy type
           let ai_confidence = null;
           let strategy_type = null; // BUY, SELL, HOLD, NO_TRADE
@@ -252,13 +243,7 @@ router.get('/', auth, async (req, res) => {
             has_analysis: !!analysis,
             analysis_status: analysis?.status || null,
             ai_confidence,
-            strategy_type, // BUY, SELL, HOLD, NO_TRADE
-            is_monitoring: monitoringInfo.is_monitoring,
-            monitoring_strategy_id: monitoringInfo.strategy_id,
-            monitoring_state: monitoringInfo.state,
-            monitoring_analysis_id: monitoringInfo.analysis_id,
-            monitoring_conditions_met_at: monitoringInfo.conditions_met_at,
-            auto_order: monitoringInfo.auto_order // Auto-order flag for this user
+            strategy_type // BUY, SELL, HOLD, NO_TRADE
           };
         } catch (err) {
           console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
@@ -273,10 +258,7 @@ router.get('/', auth, async (req, res) => {
             has_analysis: false,
             analysis_status: null,
             ai_confidence: null,
-            strategy_type: null,
-            is_monitoring: false,
-            monitoring_strategy_id: null,
-            auto_order: false
+            strategy_type: null
           };
         }
       })
@@ -333,9 +315,6 @@ router.get('/', auth, async (req, res) => {
                 }).sort({ created_at: -1 }).lean();
               }
 
-              // Get monitoring state
-              const monitoringInfo = await getMonitoringState({ analysis, userId: req.user._id });
-
               // Calculate AI confidence
               let ai_confidence = null;
               let strategy_type = null;
@@ -366,13 +345,7 @@ router.get('/', auth, async (req, res) => {
                 has_analysis: !!analysis,
                 analysis_status: analysis?.status || null,
                 ai_confidence,
-                strategy_type,
-                is_monitoring: monitoringInfo.is_monitoring,
-                monitoring_strategy_id: monitoringInfo.strategy_id,
-                monitoring_state: monitoringInfo.state,
-                monitoring_analysis_id: monitoringInfo.analysis_id,
-                monitoring_conditions_met_at: monitoringInfo.conditions_met_at,
-                auto_order: monitoringInfo.auto_order
+                strategy_type
               };
             })
         );

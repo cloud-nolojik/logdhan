@@ -1486,16 +1486,7 @@ router.get('/analysis-details/:analysisId', auth, async (req, res) => {
       });
     }
 
-    // Get monitoring status for each strategy
     const strategies = analysis.analysis_data?.strategies || [];
-    const strategyStatuses = {};
-
-    for (const strategy of strategies) {
-      // Import monitoring service dynamically
-      const agendaMonitoringService = (await import('../services/agendaMonitoringService.js')).default;
-      const monitoringStatus = await agendaMonitoringService.getMonitoringStatus(analysisId, strategy.id);
-      strategyStatuses[strategy.id] = monitoringStatus;
-    }
 
     // Check if orders are placed
     const hasPlacedOrders = analysis.hasActiveOrders();
@@ -1515,7 +1506,6 @@ router.get('/analysis-details/:analysisId', auth, async (req, res) => {
         },
         strategies: strategies.map((strategy) => ({
           ...strategy,
-          monitoring: strategyStatuses[strategy.id] || { isMonitoring: false },
           hasOrders: placedOrders.some((order) => order.strategy_id === strategy.id)
         })),
         orders: {
@@ -1532,11 +1522,6 @@ router.get('/analysis-details/:analysisId', auth, async (req, res) => {
             placed_at: order.placed_at,
             hasAutomaticStopLossTarget: order.hasAutomaticStopLossTarget || false
           }))
-        },
-        monitoring: {
-          anyActiveMonitoring: Object.values(strategyStatuses).some((s) => s.isMonitoring),
-          activeStrategiesCount: Object.values(strategyStatuses).filter((s) => s.isMonitoring).length,
-          totalStrategies: strategies.length
         },
         history: {
           totalOrdersPlaced: analysis.total_orders_placed || 0,

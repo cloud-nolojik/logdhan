@@ -28,12 +28,9 @@ import { subscriptionService } from './services/subscription/subscriptionService
 import { azureStorageService } from './services/storage/azureStorage.service.js';
 import { messagingService } from './services/messaging/messaging.service.js';
 import priceCacheService from './services/priceCache.service.js'; // In-memory price caching service
-import agendaMonitoringService from './services/agendaMonitoringService.js'; // check-triggers-batch (every 15 min)
-import agendaScheduledBulkAnalysisService from './services/agendaScheduledBulkAnalysis.service.js'; // watchlist-bulk-analysis (7:30 AM Mon-Fri)
-import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM, Sun 10AM)
+import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM IST)
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
 import dailyNewsStocksJob from './services/jobs/dailyNewsStocksJob.js'; // daily-news-scrape (8:30 AM Mon-Fri)
-// positionScanJob REMOVED - it scans UserPosition (actual trades), not watchlist tracking
 import weeklyTrackAnalysisJob from './services/jobs/weeklyTrackAnalysisJob.js'; // weekly-track-analysis (4:00 PM Mon-Fri, position management for weekly_track)
 
 import authRoutes from './routes/auth.js';
@@ -54,7 +51,6 @@ import aiRoutes from './routes/ai.js';
 import upstoxRoutes from './routes/upstox.js';
 import bulkAnalysisRoutes from './routes/bulkAnalysis.js';
 import webhookRoutes from './routes/webhook.js';
-import monitoringRoutes from './routes/agendaMonitoring.js'; // Using Agenda instead of BullMQ
 import publicRoutes from './routes/public.js';
 import consentRoutes from './routes/consent.js';
 import appRedirectRoutes from './routes/app-redirect.js';
@@ -186,7 +182,6 @@ app.use('/api/v1/ai', aiRoutes);
 app.use('/api/v1/upstox', upstoxRoutes);
 app.use('/api/v1/bulk-analysis', bulkAnalysisRoutes);
 app.use('/api/v1/webhook', webhookRoutes);
-app.use('/api/v1/monitoring', monitoringRoutes);
 app.use('/api/v1/feedback', feedbackRoutes);
 app.use('/api/v1/public', publicRoutes);
 app.use('/api/v1/consent', consentRoutes);
@@ -244,29 +239,7 @@ async function initializeMessagingService() {
   }
 }
 
-// Initialize Agenda monitoring service
-async function initializeAgendaMonitoringService() {
-  try {
-
-    await agendaMonitoringService.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize Agenda monitoring service:', error);
-  }
-}
-
-// Initialize Agenda scheduled bulk analysis service (7:30 AM pre-analysis)
-async function initializeAgendaScheduledBulkAnalysisService() {
-  try {
-
-    await agendaScheduledBulkAnalysisService.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize Agenda scheduled bulk analysis service:', error);
-  }
-}
-
-// Initialize weekend screening job (Sat 6PM, Sun 10AM IST)
+// Initialize weekend screening job (Sat 6PM IST)
 async function initializeWeekendScreeningJob() {
   try {
 
@@ -337,9 +310,7 @@ app.listen(PORT, async () => {
   await initializePriceCacheService(); // Start price caching for watchlist + indices
 
   // Scheduled jobs (commented out for local testing):
-  // await initializeAgendaMonitoringService(); // check-triggers-batch (every 15 min)
-  // await initializeAgendaScheduledBulkAnalysisService(); // watchlist-bulk-analysis (4:00 PM Mon-Fri)
-  // await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST only)
+  // await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST)
   // await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
   // await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
   // await initializeWeeklyTrackAnalysisJob(); // weekly-track-analysis (4:00 PM Mon-Fri, position management for weekly_track)
@@ -356,8 +327,6 @@ process.on('SIGINT', async () => {
 
     // Stop all Agenda services gracefully
     await Promise.all([
-      agendaMonitoringService.agenda?.stop?.(),
-      agendaScheduledBulkAnalysisService.stop(),
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
       dailyNewsStocksJob.shutdown(),
@@ -381,8 +350,6 @@ process.on('SIGTERM', async () => {
 
     // Stop all Agenda services gracefully
     await Promise.all([
-      agendaMonitoringService.agenda?.stop?.(),
-      agendaScheduledBulkAnalysisService.stop(),
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
       dailyNewsStocksJob.shutdown(),

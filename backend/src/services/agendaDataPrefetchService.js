@@ -303,7 +303,6 @@ class AgendaDataPrefetchService {
   /**
    * Schedule all recurring jobs
    * - daily-price-prefetch: 3:35 PM IST - Fetches closing prices for all watchlist stocks
-   * NOTE: Bulk analysis is handled by agendaScheduledBulkAnalysis.service.js at 4:30 PM
    */
   async scheduleRecurringJobs() {
     try {

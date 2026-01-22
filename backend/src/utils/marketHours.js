@@ -691,8 +691,8 @@ class MarketHoursUtil {
 
   /**
    * Get the current quota date in IST
-   * Quota window: 5:00 PM (Day T) → 4:00 PM (Day T+1)
-   * During 4:00-5:00 PM (downtime), quota_date is still the previous trading day
+   * Quota window: 4:00 PM (Day T) → 4:00 PM (Day T+1)
+   * Quota resets at 4:00 PM IST (no downtime window)
    *
    * @param {Date} now - Current date (defaults to now)
    * @returns {Promise<string>} Quota date in YYYY-MM-DD format (IST)
@@ -700,18 +700,10 @@ class MarketHoursUtil {
   static async getCurrentQuotaDate(now = new Date()) {
     try {
       const istNow = this.toIST(now);
-      const hours = istNow.getHours();
-      const minutes = hours * 60 + istNow.getMinutes();
+      const totalMinutes = istNow.getHours() * 60 + istNow.getMinutes();
 
-      // Downtime: 4:00 PM - 5:00 PM (16:00 - 17:00)
-      if (minutes >= 16 * 60 && minutes < 17 * 60) {
-        // During downtime, quota_date is still the previous trading day
-        const lastTradingDay = await this.getLastTradingDay(istNow);
-        return this.formatDateIST(lastTradingDay);
-      }
-
-      // After 5:00 PM (>= 17:00)
-      if (minutes >= 17 * 60) {
+      // After 4:00 PM (>= 16:00) - new quota window starts
+      if (totalMinutes >= 16 * 60) {
         // If today is a trading day, quota_date is today
         // Otherwise, quota_date is last trading day
         const isTodayTrading = await this.isTradingDay(istNow);
@@ -772,7 +764,8 @@ class MarketHoursUtil {
 
   /**
    * Get quota window start and end times in UTC
-   * Quota window: 5:00 PM IST (Day T) → 4:00 PM IST (Day T+1)
+   * Quota window: 4:00 PM IST (Day T) → 4:00 PM IST (Day T+1)
+   * Full 24-hour window, no downtime
    *
    * @param {Date} now - Current date (defaults to now)
    * @returns {Promise<{startUtc: Date, endUtc: Date, quotaDate: string}>}
@@ -784,13 +777,13 @@ class MarketHoursUtil {
       // Parse quota_date
       const [year, month, day] = quotaDate.split('-').map(Number);
 
-      // Create start time: quotaDate 5:00 PM IST → convert to UTC
-      // IST is UTC+5:30, so 5:00 PM IST = 11:30 AM UTC (same day)
+      // Create start time: quotaDate 4:00 PM IST → convert to UTC
+      // IST is UTC+5:30, so 4:00 PM IST = 10:30 AM UTC (same day)
       const startUtc = new Date(Date.UTC(
         year,
         month - 1,
         day,
-        11, // 17:00 IST - 5.5 hours = 11:30 UTC
+        10, // 16:00 IST - 5.5 hours = 10:30 UTC
         30,
         0,
         0

@@ -11,7 +11,6 @@ import Agenda from 'agenda';
 import chartinkService from '../chartinkService.js';
 import stockEnrichmentService from '../stockEnrichmentService.js';
 import WeeklyWatchlist from '../../models/weeklyWatchlist.js';
-import agendaScheduledBulkAnalysisService from '../agendaScheduledBulkAnalysis.service.js';
 import { getCurrentPrice } from '../../utils/stockDb.js';
 import priceCacheService from '../priceCache.service.js';
 
@@ -100,25 +99,7 @@ class WeekendScreeningJob {
         const result = await this.runWeekendScreening(job.attrs.data || {});
         this.stats.runsCompleted++;
         this.stats.lastRunAt = new Date();
-        console.log(`[SCREENING JOB] ✅ STEP 1 COMPLETE: ${result.totalStocksAdded} stocks added, ${result.totalStocksUpdated || 0} updated, ${result.totalStocksEliminated || 0} eliminated`);
-
-        // Trigger bulk analysis after screening completes (for freshly screened stocks)
-        console.log('─'.repeat(80));
-        console.log('[SCREENING JOB] 📌 STEP 2: Triggering bulk analysis for screened stocks...');
-        console.log('[SCREENING JOB] 🔧 Options: analyzeAllChartink=true, useLastFridayData=true');
-        try {
-          const bulkResult = await agendaScheduledBulkAnalysisService.triggerManually('Post-weekend-screening analysis', {
-            source: 'chartink',
-            analyzeAllChartink: true,  // Analyze all ChartInk stocks from weekly watchlist
-            useLastFridayData: true    // Use only Friday's closing data for consistent weekly analysis
-          });
-          console.log('[SCREENING JOB] ✅ STEP 2 COMPLETE: Bulk analysis triggered');
-          console.log(`[SCREENING JOB] 📋 Bulk job ID: ${bulkResult.jobId}, scheduled at: ${bulkResult.scheduledAt}`);
-        } catch (bulkError) {
-          console.error('[SCREENING JOB] ❌ STEP 2 FAILED: Bulk analysis error:', bulkError.message);
-          console.error('[SCREENING JOB] ❌ Stack:', bulkError.stack);
-          // Don't throw - screening completed successfully
-        }
+        console.log(`[SCREENING JOB] ✅ Screening complete: ${result.totalStocksAdded} stocks added, ${result.totalStocksUpdated || 0} updated, ${result.totalStocksEliminated || 0} eliminated`);
 
         console.log('═'.repeat(80));
         console.log('[SCREENING JOB] ✅ WEEKEND-SCREENING JOB COMPLETED SUCCESSFULLY');
