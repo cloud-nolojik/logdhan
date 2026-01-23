@@ -100,7 +100,77 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
       console.warn(`⚠️ [PRICE CACHE] Error fetching from cache: ${error.message}`);
     }
 
-    // Route to appropriate service based on analysis type
+    // Check if stock is weekly_track - if so, run position_management instead of swing
+    const user = await User.findById(userId).select('watchlist').lean();
+    const watchlistItem = user?.watchlist?.find(item => item.instrument_key === instrument_key);
+    const isWeeklyTrack = watchlistItem?.added_source === 'weekly_track';
+
+    // Route to appropriate service based on analysis type or stock source
+    if (isWeeklyTrack && analysis_type === 'swing') {
+      // Weekly track stock - run position_management analysis
+      console.log(`[AI ROUTE] Stock is weekly_track, routing to position_management for ${stock_symbol}`);
+
+      // Check if it's after 4 PM IST (required for manual position analysis)
+      const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
+      const now = new Date();
+      const istNow = MarketHoursUtil.toIST(now);
+      const currentHour = istNow.getHours();
+
+      if (currentHour < 16) {
+        return res.status(200).json({
+          success: false,
+          error: 'position_analysis_not_available',
+          message: 'Position analysis is only available after 4:00 PM on trading days.',
+          is_weekly_track: true
+        });
+      }
+
+      // Use weeklyTrackAnalysisJob to run position management analysis
+      const weeklyTrackAnalysisJob = (await import('../services/jobs/weeklyTrackAnalysisJob.js')).default;
+
+      const result = await weeklyTrackAnalysisJob.analyzeStock(
+        { instrument_key, trading_symbol: stock_symbol, name: stock_name },
+        current_price,
+        { forceReanalyze: forceFresh }
+      );
+
+      if (!result.success) {
+        return res.status(200).json({
+          success: false,
+          error: result.error || 'position_analysis_failed',
+          message: result.error || 'Could not generate position analysis. Make sure this stock has a swing analysis first.',
+          is_weekly_track: true
+        });
+      }
+
+      // Fetch the newly created analysis
+      const analysis = await StockAnalysis.findOne({
+        instrument_key,
+        analysis_type: 'position_management',
+        status: 'completed'
+      }).sort({ created_at: -1 }).lean();
+
+      return res.status(200).json({
+        success: true,
+        status: 'completed',
+        message: result.cached ? 'Position analysis retrieved from cache' : 'Position analysis generated successfully',
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: 'position_management',
+          current_price: analysis.current_price,
+          analysis_data: analysis.analysis_data,
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          created_at: analysis.created_at
+        },
+        is_weekly_track: true,
+        from_cache: result.cached || false
+      });
+    }
+
     if (analysis_type === 'intraday') {
       // Use intradayAnalyzeService for news-based intraday analysis
       console.log(`[AI ROUTE] Routing to intradayAnalyzeService for ${stock_symbol}`);
@@ -296,17 +366,38 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     if (!anyAnalysis) {
       console.log(`[BY-INSTRUMENT] ❌ No analysis found for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
 
-      // For position_management (weekly_track stocks), show specific message
+      // For position_management (weekly_track stocks), check time
       if (analysis_type === 'position_management') {
-        return res.status(200).json({
-          success: true,
-          status: 'not_analyzed',
-          error: 'position_analysis_pending',
-          message: 'Position analysis will be available after 4:00 PM on trading days.',
-          call_to_action: 'Check back after 4:00 PM for today\'s position update.',
-          is_weekly_track: true,
-          can_analyze_manually: false
-        });
+        // Check if it's after 4 PM IST
+        const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
+        const now = new Date();
+        const istNow = MarketHoursUtil.toIST(now);
+        const currentHour = istNow.getHours();
+        const isAfter4PM = currentHour >= 16;
+
+        if (isAfter4PM) {
+          // After 4 PM - allow manual analysis
+          return res.status(200).json({
+            success: true,
+            status: 'not_analyzed',
+            error: 'position_analysis_pending',
+            message: 'Position analysis not yet available for today.',
+            call_to_action: 'Analyze Position',
+            is_weekly_track: true,
+            can_analyze_manually: true
+          });
+        } else {
+          // Before 4 PM - show watchlist card, no button
+          return res.status(200).json({
+            success: true,
+            status: 'not_analyzed',
+            error: 'position_analysis_pending',
+            message: 'Position analysis runs at 4:00 PM on trading days.',
+            call_to_action: null,
+            is_weekly_track: true,
+            can_analyze_manually: false
+          });
+        }
       }
 
       const messageToUser = 'This stock has not been analyzed yet';
