@@ -211,23 +211,41 @@ router.get('/', auth, async (req, res) => {
             }).sort({ created_at: -1 }).lean();
           }
 
-          // Calculate AI confidence from strategies and get strategy type
+          // Calculate AI confidence and get strategy type/simple_verdict
+          // Support both old schema (strategies array) and new schema v1.5 (verdict/setup_score)
           let ai_confidence = null;
-          let strategy_type = null; // BUY, SELL, HOLD, NO_TRADE
-          if (analysis && analysis.analysis_data && analysis.analysis_data.strategies) {
-            const strategies = analysis.analysis_data.strategies;
-            if (strategies.length > 0) {
+          let strategy_type = null; // BUY, SELL, HOLD, NO_TRADE, WAIT, SKIP
+          let simple_verdict = null;
+
+          if (analysis && analysis.analysis_data) {
+            const data = analysis.analysis_data;
+
+            // Check for new schema v1.5 (verdict + setup_score)
+            if (data.verdict && data.setup_score) {
+              // New schema v1.5 - extract from verdict
+              ai_confidence = data.verdict.confidence || null;
+              strategy_type = data.verdict.action || null; // BUY, WAIT, SKIP
+
+              // Build simple_verdict for display
+              const action = data.verdict.action || 'N/A';
+              const score = data.setup_score.total || 0;
+              const grade = data.setup_score.grade || '';
+              simple_verdict = `${action} • ${score}/100 (${grade})`;
+            }
+            // Check for old schema (strategies array)
+            else if (data.strategies && data.strategies.length > 0) {
+              const strategies = data.strategies;
               // Get average confidence from all strategies
-              const confidences = strategies.
-                filter((s) => s.confidence != null).
-                map((s) => s.confidence);
+              const confidences = strategies
+                .filter((s) => s.confidence != null)
+                .map((s) => s.confidence);
               if (confidences.length > 0) {
                 ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
               }
 
               // Get the strategy type from the first/best strategy
-              // Strategies are typically sorted by confidence, so first one is best
               strategy_type = strategies[0]?.type || null;
+              simple_verdict = strategies[0]?.entry?.simple_verdict || null;
             }
           }
 
@@ -243,7 +261,8 @@ router.get('/', auth, async (req, res) => {
             has_analysis: !!analysis,
             analysis_status: analysis?.status || null,
             ai_confidence,
-            strategy_type // BUY, SELL, HOLD, NO_TRADE
+            strategy_type, // BUY, SELL, HOLD, NO_TRADE, WAIT, SKIP
+            simple_verdict // Human-friendly verdict for display
           };
         } catch (err) {
           console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
@@ -315,16 +334,33 @@ router.get('/', auth, async (req, res) => {
                 }).sort({ created_at: -1 }).lean();
               }
 
-              // Calculate AI confidence
+              // Calculate AI confidence - support both old and new schema
               let ai_confidence = null;
               let strategy_type = null;
-              if (analysis?.analysis_data?.strategies?.length > 0) {
-                const strategies = analysis.analysis_data.strategies;
-                const confidences = strategies.filter(s => s.confidence != null).map(s => s.confidence);
-                if (confidences.length > 0) {
-                  ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
+              let simple_verdict = null;
+
+              if (analysis?.analysis_data) {
+                const data = analysis.analysis_data;
+
+                // Check for new schema v1.5 (verdict + setup_score)
+                if (data.verdict && data.setup_score) {
+                  ai_confidence = data.verdict.confidence || null;
+                  strategy_type = data.verdict.action || null;
+                  const action = data.verdict.action || 'N/A';
+                  const score = data.setup_score.total || 0;
+                  const grade = data.setup_score.grade || '';
+                  simple_verdict = `${action} • ${score}/100 (${grade})`;
                 }
-                strategy_type = strategies[0]?.type || null;
+                // Check for old schema (strategies array)
+                else if (data.strategies?.length > 0) {
+                  const strategies = data.strategies;
+                  const confidences = strategies.filter(s => s.confidence != null).map(s => s.confidence);
+                  if (confidences.length > 0) {
+                    ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
+                  }
+                  strategy_type = strategies[0]?.type || null;
+                  simple_verdict = strategies[0]?.entry?.simple_verdict || null;
+                }
               }
 
               return {
@@ -345,7 +381,8 @@ router.get('/', auth, async (req, res) => {
                 has_analysis: !!analysis,
                 analysis_status: analysis?.status || null,
                 ai_confidence,
-                strategy_type
+                strategy_type,
+                simple_verdict
               };
             })
         );
