@@ -111,6 +111,29 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
       console.log(`[AI ROUTE] 🎯 Step 1: Stock is weekly_track, routing to position_management for ${stock_symbol}`);
 
       try {
+        // If no cached price, try to fetch from candle data
+        if (!current_price) {
+          console.log(`[AI ROUTE] 🎯 Step 1.5: No cached price, fetching from candles...`);
+          try {
+            const candleFetcherService = (await import('../services/candleFetcher.service.js')).default;
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const candles = await candleFetcherService.fetchCandlesFromAPI(
+              instrument_key,
+              '1d',
+              yesterday,
+              new Date(),
+              false
+            );
+            if (candles && candles.length > 0) {
+              current_price = candles[candles.length - 1].close;
+              console.log(`[AI ROUTE] 🎯 Step 1.5: Got price from candles: ${current_price}`);
+            }
+          } catch (priceError) {
+            console.warn(`[AI ROUTE] ⚠️ Could not fetch price: ${priceError.message}`);
+          }
+        }
+
         console.log(`[AI ROUTE] 🎯 Step 2: Importing weeklyTrackAnalysisJob...`);
         const weeklyTrackAnalysisJob = (await import('../services/jobs/weeklyTrackAnalysisJob.js')).default;
 
