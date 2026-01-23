@@ -189,6 +189,11 @@ const analysisDataV14Schema = new mongoose.Schema(
     },
     // Intraday-specific data (only present for intraday analysis)
     intraday: { type: intradayDataSchema, default: null },
+    // Position management data (only present for position_management analysis)
+    position_management: { type: mongoose.Schema.Types.Mixed, default: null },
+    // Original swing analysis reference (for position_management)
+    original_swing_analysis_id: { type: mongoose.Schema.Types.ObjectId, default: null },
+    original_levels: { type: mongoose.Schema.Types.Mixed, default: null },
     generated_at_ist: String,
     insufficientData: {
       type: Boolean,
@@ -212,7 +217,7 @@ const analysisDataV14Schema = new mongoose.Schema(
     overall_sentiment: {
       type: String,
       enum: ['BULLISH', 'BEARISH', 'NEUTRAL'],
-      required: true
+      default: null
     },
     sentiment_analysis: {
       confidence: Number,
