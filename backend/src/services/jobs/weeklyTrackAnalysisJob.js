@@ -411,16 +411,21 @@ class WeeklyTrackAnalysisJob {
       console.warn(`[POSITION-MGMT] ⚠️ Could not fetch candles for ${trading_symbol}: ${error.message}`);
     }
 
-    // Fallback if no candle data
+    // Fallback if no candle data - use currentPrice or swing analysis entry as last resort
     if (!todayCandle) {
-      console.log(`[POSITION-MGMT] 📍 A6: Using fallback candle with current price ${currentPrice}`);
+      const fallbackPrice = currentPrice || swingAnalysis.current_price || swingAnalysis.analysis_data?.market_summary?.last;
+      console.log(`[POSITION-MGMT] 📍 A6: Using fallback candle with price ${fallbackPrice}`);
       todayCandle = {
-        open: currentPrice,
-        high: currentPrice,
-        low: currentPrice,
-        close: currentPrice
+        open: fallbackPrice,
+        high: fallbackPrice,
+        low: fallbackPrice,
+        close: fallbackPrice
       };
     }
+
+    // Use candle close as the definitive current price
+    const finalCurrentPrice = todayCandle.close || currentPrice || swingAnalysis.current_price;
+    console.log(`[POSITION-MGMT] 📍 A6b: Final current price: ${finalCurrentPrice}`);
 
     // 3. Extract original levels from swing analysis
     console.log(`[POSITION-MGMT] 📍 A7: Extracting levels from swing analysis...`);
@@ -466,7 +471,7 @@ class WeeklyTrackAnalysisJob {
     const { system, user } = await buildPositionManagementPrompt({
       stock_name: name || trading_symbol,
       stock_symbol: trading_symbol,
-      current_price: currentPrice,
+      current_price: finalCurrentPrice,
       generatedAtIst,
       original_levels: originalLevels,
       original_score: {
@@ -476,7 +481,7 @@ class WeeklyTrackAnalysisJob {
       today_open: todayCandle.open,
       today_high: todayCandle.high,
       today_low: todayCandle.low,
-      today_close: todayCandle.close || currentPrice,
+      today_close: todayCandle.close || finalCurrentPrice,
       today_change_pct: todayCandle.close && todayCandle.open
         ? ((todayCandle.close - todayCandle.open) / todayCandle.open) * 100
         : null,
@@ -503,7 +508,7 @@ class WeeklyTrackAnalysisJob {
     console.log(`[POSITION-MGMT] 📍 A11: Valid until ${validUntil}`);
 
     // 9. Store in StockAnalysis
-    console.log(`[POSITION-MGMT] 📍 A12: Saving to DB...`);
+    console.log(`[POSITION-MGMT] 📍 A12: Saving to DB with price ${finalCurrentPrice}...`);
     const savedAnalysis = await StockAnalysis.findOneAndUpdate(
       {
         instrument_key,
@@ -515,7 +520,7 @@ class WeeklyTrackAnalysisJob {
         stock_name: name || trading_symbol,
         stock_symbol: trading_symbol,
         analysis_type: 'position_management',
-        current_price: currentPrice,
+        current_price: finalCurrentPrice,
         analysis_data: {
           schema_version: '1.0',
           symbol: trading_symbol,
