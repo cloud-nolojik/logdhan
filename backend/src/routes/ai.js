@@ -108,22 +108,8 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
     // Route to appropriate service based on analysis type or stock source
     if (isWeeklyTrack && analysis_type === 'swing') {
       // Weekly track stock - run position_management analysis
+      // Uses last trading day's candle data if current day's data not available
       console.log(`[AI ROUTE] Stock is weekly_track, routing to position_management for ${stock_symbol}`);
-
-      // Check if it's after 4 PM IST (required for manual position analysis)
-      const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
-      const now = new Date();
-      const istNow = MarketHoursUtil.toIST(now);
-      const currentHour = istNow.getHours();
-
-      if (currentHour < 16) {
-        return res.status(200).json({
-          success: false,
-          error: 'position_analysis_not_available',
-          message: 'Position analysis is only available after 4:00 PM on trading days.',
-          is_weekly_track: true
-        });
-      }
 
       // Use weeklyTrackAnalysisJob to run position management analysis
       const weeklyTrackAnalysisJob = (await import('../services/jobs/weeklyTrackAnalysisJob.js')).default;
@@ -366,38 +352,17 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     if (!anyAnalysis) {
       console.log(`[BY-INSTRUMENT] ❌ No analysis found for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
 
-      // For position_management (weekly_track stocks), check time
+      // For position_management (weekly_track stocks) - always allow manual analysis
       if (analysis_type === 'position_management') {
-        // Check if it's after 4 PM IST
-        const MarketHoursUtil = (await import('../utils/marketHours.js')).default;
-        const now = new Date();
-        const istNow = MarketHoursUtil.toIST(now);
-        const currentHour = istNow.getHours();
-        const isAfter4PM = currentHour >= 16;
-
-        if (isAfter4PM) {
-          // After 4 PM - allow manual analysis
-          return res.status(200).json({
-            success: true,
-            status: 'not_analyzed',
-            error: 'position_analysis_pending',
-            message: 'Position analysis not yet available for today.',
-            call_to_action: 'Analyze Position',
-            is_weekly_track: true,
-            can_analyze_manually: true
-          });
-        } else {
-          // Before 4 PM - show watchlist card, no button
-          return res.status(200).json({
-            success: true,
-            status: 'not_analyzed',
-            error: 'position_analysis_pending',
-            message: 'Position analysis runs at 4:00 PM on trading days.',
-            call_to_action: null,
-            is_weekly_track: true,
-            can_analyze_manually: false
-          });
-        }
+        return res.status(200).json({
+          success: true,
+          status: 'not_analyzed',
+          error: 'position_analysis_pending',
+          message: 'No position analysis available yet.',
+          call_to_action: 'Analyze Position',
+          is_weekly_track: true,
+          can_analyze_manually: true
+        });
       }
 
       const messageToUser = 'This stock has not been analyzed yet';
