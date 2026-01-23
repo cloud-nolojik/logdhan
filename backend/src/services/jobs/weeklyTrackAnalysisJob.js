@@ -555,7 +555,7 @@ class WeeklyTrackAnalysisJob {
             model,
             messages,
             temperature: 0.3,
-            max_tokens: 2000
+            max_tokens: 3000
           },
           {
             headers: {
@@ -571,16 +571,41 @@ class WeeklyTrackAnalysisJob {
           throw new Error('Empty response from AI');
         }
 
-        // Parse JSON response - use non-greedy match to get first complete JSON object
-        const jsonMatch = content.match(/\{[\s\S]*?\}(?=\s*$|\n|$)/);
-        if (!jsonMatch) {
-          throw new Error('No JSON found in AI response');
-        }
-
+        // Parse JSON response - extract JSON object with proper brace matching
         let analysisData;
         try {
-          analysisData = JSON.parse(jsonMatch[0]);
+          // Try direct parse first (if response is pure JSON)
+          const trimmedContent = content.trim();
+          if (trimmedContent.startsWith('{')) {
+            analysisData = JSON.parse(trimmedContent);
+          } else {
+            // Find JSON object with brace matching
+            const startIdx = content.indexOf('{');
+            if (startIdx === -1) {
+              throw new Error('No JSON found in AI response');
+            }
+
+            // Find matching closing brace
+            let braceCount = 0;
+            let endIdx = -1;
+            for (let i = startIdx; i < content.length; i++) {
+              if (content[i] === '{') braceCount++;
+              if (content[i] === '}') braceCount--;
+              if (braceCount === 0) {
+                endIdx = i;
+                break;
+              }
+            }
+
+            if (endIdx === -1) {
+              throw new Error('Incomplete JSON in AI response - missing closing brace');
+            }
+
+            const jsonStr = content.substring(startIdx, endIdx + 1);
+            analysisData = JSON.parse(jsonStr);
+          }
         } catch (parseError) {
+          console.error('[POSITION-MGMT] JSON parse error. Raw content:', content.substring(0, 500));
           throw new Error(`Invalid JSON in AI response: ${parseError.message}`);
         }
 
