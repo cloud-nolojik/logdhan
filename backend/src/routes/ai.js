@@ -571,6 +571,58 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       // Extract position management data
       const positionData = analysis.analysis_data?.position_management || analysis.analysis_data || {};
 
+      // Fix: Ensure current_price is never null (app fails to parse null)
+      let currentPrice = analysis.current_price;
+      if (currentPrice === null || currentPrice === undefined) {
+        console.log(`[POSITION-MGMT BY-INSTRUMENT] ⚠️ current_price is null, fetching from cache/candles...`);
+
+        // Try price cache first
+        try {
+          const priceCacheService = (await import('../services/priceCache.service.js')).default;
+          currentPrice = priceCacheService.getPrice(instrumentKey);
+          console.log(`[POSITION-MGMT BY-INSTRUMENT] Price from cache: ${currentPrice}`);
+        } catch (e) {
+          console.warn(`[POSITION-MGMT BY-INSTRUMENT] Price cache error: ${e.message}`);
+        }
+
+        // If still null, try from candle data
+        if (!currentPrice) {
+          try {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const candles = await candleFetcherService.fetchCandlesFromAPI(
+              instrumentKey,
+              '1d',
+              yesterday,
+              new Date(),
+              false
+            );
+            if (candles && candles.length > 0) {
+              currentPrice = candles[candles.length - 1].close;
+              console.log(`[POSITION-MGMT BY-INSTRUMENT] Price from candles: ${currentPrice}`);
+            }
+          } catch (e) {
+            console.warn(`[POSITION-MGMT BY-INSTRUMENT] Candle fetch error: ${e.message}`);
+          }
+        }
+
+        // Fallback to original_levels entry price or market_summary
+        if (!currentPrice) {
+          currentPrice = analysis.analysis_data?.original_levels?.entry
+            || analysis.analysis_data?.market_summary?.last
+            || 0;
+          console.log(`[POSITION-MGMT BY-INSTRUMENT] Price from fallback: ${currentPrice}`);
+        }
+
+        // Update the cached analysis with the correct price (async, don't wait)
+        if (currentPrice && currentPrice !== 0) {
+          StockAnalysis.updateOne(
+            { _id: analysis._id },
+            { $set: { current_price: currentPrice } }
+          ).catch(err => console.warn(`[POSITION-MGMT] Failed to update price: ${err.message}`));
+        }
+      }
+
       const responsePayload = {
         success: true,
         data: {
@@ -579,7 +631,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
           stock_name: analysis.stock_name,
           stock_symbol: analysis.stock_symbol,
           analysis_type: 'position_management',
-          current_price: analysis.current_price,
+          current_price: currentPrice,
           analysis_data: {
             ...positionData,
             analysis_type: 'position_management',
@@ -600,7 +652,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         message: isExpired ? 'Position analysis expired. New analysis runs at 4:00 PM.' : null
       };
 
-      console.log(`[POSITION-MGMT BY-INSTRUMENT] Returning position_management for ${analysis.stock_symbol}`);
+      console.log(`[POSITION-MGMT BY-INSTRUMENT] Returning position_management for ${analysis.stock_symbol}, current_price: ${currentPrice}`);
       return res.json(responsePayload);
     }
 
