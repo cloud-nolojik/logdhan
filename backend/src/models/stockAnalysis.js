@@ -185,7 +185,7 @@ const analysisDataV14Schema = new mongoose.Schema(
     symbol: String,
     analysis_type: {
       type: String,
-      enum: ['swing', 'intraday', 'position_management']
+      enum: ['swing', 'intraday', 'position_management', 'weekly_discovery']
     },
     // Intraday-specific data (only present for intraday analysis)
     intraday: { type: intradayDataSchema, default: null },
@@ -266,9 +266,14 @@ const analysisDataV14Schema = new mongoose.Schema(
     disclaimer: {
       type: String,
       default: 'AI-generated educational interpretation of price behaviour. Not investment advice or a recommendation to buy or sell any security.'
-    }
+    },
+    // Additional fields that may be returned by AI for position_management or new analysis formats
+    what_to_watch: { type: mongoose.Schema.Types.Mixed, default: null },
+    setup_score: { type: mongoose.Schema.Types.Mixed, default: null },
+    trading_plan: { type: mongoose.Schema.Types.Mixed, default: null },
+    risk_factors: { type: [mongoose.Schema.Types.Mixed], default: null }
   },
-  { _id: false, strict: 'throw' }
+  { _id: false, strict: false }  // Changed from 'throw' to false to allow additional AI response fields
 );
 
 const timeframeInfoSchema = new mongoose.Schema(

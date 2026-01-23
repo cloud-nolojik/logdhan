@@ -182,6 +182,10 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
         }
 
         console.log(`[AI ROUTE] ✅ Step 8: Returning success response`);
+        console.log(`[AI ROUTE] 🔍 DEBUG analysis_data keys:`, Object.keys(analysis.analysis_data || {}));
+        console.log(`[AI ROUTE] 🔍 DEBUG position_management exists:`, !!analysis.analysis_data?.position_management);
+        console.log(`[AI ROUTE] 🔍 DEBUG position_management.status:`, analysis.analysis_data?.position_management?.status);
+
         return res.status(200).json({
           success: true,
           status: 'completed',
@@ -332,7 +336,7 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
     const analysis = await StockAnalysis.findOne({
       _id: analysisId,
       user_id: userId
-    });
+    }).lean();
 
     if (!analysis) {
       return res.status(404).json({
@@ -365,23 +369,30 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
 router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (req, res) => {
   try {
     const { instrumentKey } = req.params;
-    let { analysis_type = 'swing' } = req.query;
+    let { analysis_type = 'swing', force_type } = req.query;
 
     const userId = req.user.id;
 
-    // Check if stock is in user's watchlist with weekly_track source
-    // If so, return position_management analysis instead of swing
-    const user = await User.findById(userId).select('watchlist').lean();
-    const watchlistItem = user?.watchlist?.find(item => item.instrument_key === instrumentKey);
-    const isWeeklyTrack = watchlistItem?.added_source === 'weekly_track';
+    // If force_type is specified, use that regardless of watchlist status
+    // This is used when opening from Weekly Discovery screen (always show swing)
+    if (force_type) {
+      analysis_type = force_type;
+      console.log(`[BY-INSTRUMENT] force_type specified: ${force_type}`);
+    } else {
+      // Check if stock is in user's watchlist with weekly_track source
+      // If so, return position_management analysis instead of swing
+      const user = await User.findById(userId).select('watchlist').lean();
+      const watchlistItem = user?.watchlist?.find(item => item.instrument_key === instrumentKey);
+      const isWeeklyTrack = watchlistItem?.added_source === 'weekly_track';
 
-    if (isWeeklyTrack && analysis_type === 'swing') {
-      // For weekly_track stocks, return position_management analysis
-      analysis_type = 'position_management';
-      console.log(`[BY-INSTRUMENT] Stock is weekly_track, switching to position_management analysis`);
+      if (isWeeklyTrack && analysis_type === 'swing') {
+        // For weekly_track stocks, return position_management analysis
+        analysis_type = 'position_management';
+        console.log(`[BY-INSTRUMENT] Stock is weekly_track, switching to position_management analysis`);
+      }
     }
 
-    console.log(`[BY-INSTRUMENT] Request for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}", isWeeklyTrack: ${isWeeklyTrack}`);
+    console.log(`[BY-INSTRUMENT] Request for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
 
     const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
 
@@ -401,10 +412,11 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     }
 
     // First check for any analysis (completed or in progress)
+    // Use .lean() to get plain JavaScript object without Mongoose internals
     const anyAnalysis = await StockAnalysis.findOne({
       instrument_key: instrumentKey,
       analysis_type: analysis_type
-    }).sort({ created_at: -1 }); // Get most recent analysis
+    }).sort({ created_at: -1 }).lean(); // Get most recent analysis as plain object
 
     if (!anyAnalysis) {
       console.log(`[BY-INSTRUMENT] ❌ No analysis found for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
@@ -633,13 +645,15 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
           analysis_type: 'position_management',
           current_price: currentPrice,
           analysis_data: {
-            ...positionData,
-            analysis_type: 'position_management',
+            schema_version: '1.0',
             symbol: analysis.stock_symbol,
-            generated_at_ist: analysis.created_at?.toISOString() || new Date().toISOString()
+            analysis_type: 'position_management',
+            generated_at_ist: analysis.created_at?.toISOString() || new Date().toISOString(),
+            // Wrap position data in position_management key (app expects this structure)
+            position_management: positionData,
+            original_levels: analysis.analysis_data?.original_levels || null,
+            original_swing_analysis_id: analysis.analysis_data?.original_swing_analysis_id || null
           },
-          original_levels: analysis.analysis_data?.original_levels || null,
-          original_swing_analysis_id: analysis.analysis_data?.original_swing_analysis_id || null,
           status: analysis.status,
           valid_until: analysis.valid_until,
           is_expired: isExpired,
@@ -657,11 +671,13 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     }
 
     // Validate required fields exist for completed SWING analysis
-    if (!anyAnalysis.analysis_data?.market_summary?.last ||
-      !anyAnalysis.analysis_data?.market_summary?.trend ||
-      !anyAnalysis.analysis_data?.market_summary?.volatility ||
-      !anyAnalysis.analysis_data?.market_summary?.volume) {
+    // Support both old schema (market_summary + strategies) and new schema (setup_score + verdict + trading_plan)
+    const hasOldSchemaData = anyAnalysis.analysis_data?.market_summary?.last &&
+      anyAnalysis.analysis_data?.market_summary?.trend;
+    const hasNewSchemaData = anyAnalysis.analysis_data?.setup_score &&
+      anyAnalysis.analysis_data?.verdict;
 
+    if (!hasOldSchemaData && !hasNewSchemaData) {
       // Create minimal analysis_data structure with required fields for incomplete analysis
       const defaultAnalysisData = {
         ...anyAnalysis.analysis_data,
@@ -797,7 +813,7 @@ router.delete('/analysis/:analysisId', authenticateToken, async (req, res) => {
     const analysis = await StockAnalysis.findOne({
       _id: analysisId,
       user_id: userId
-    });
+    }).lean();
 
     if (!analysis) {
       return res.status(404).json({
@@ -837,7 +853,7 @@ router.get('/analysis/:analysisId/progress', authenticateToken, async (req, res)
     const analysis = await StockAnalysis.findOne({
       _id: analysisId,
       user_id: userId
-    });
+    }).lean();
 
     if (!analysis) {
       return res.status(404).json({

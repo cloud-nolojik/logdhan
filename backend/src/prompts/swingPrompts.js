@@ -238,7 +238,7 @@ Return ONLY this JSON structure:
 {
   "schema_version": "1.5",
   "symbol": "${stock_symbol}",
-  "analysis_type": "weekly_discovery",
+  "analysis_type": "swing",
   "generated_at_ist": "${generatedAtIst}",
   
   "verdict": {
