@@ -499,6 +499,7 @@ class WeekendScreeningJob {
       // Update watchlist metadata
       const watchlist = addResult.watchlist;
       watchlist.screening_run_at = new Date();
+      watchlist.screening_completed = true;  // Mark screening as completed (even with 0 results)
       watchlist.scan_types_used = scanTypes;
       watchlist.total_screener_results = allResults.length;
       watchlist.total_eliminated = eliminatedCount;  // NEW: Track eliminated count

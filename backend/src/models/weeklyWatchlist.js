@@ -60,6 +60,7 @@ const weeklyWatchlistSchema = new mongoose.Schema({
 
   // Screening metadata
   screening_run_at: Date,
+  screening_completed: { type: Boolean, default: false },  // True when screening ran (even with 0 results)
   scan_types_used: [String],  // ['breakout', 'pullback', 'momentum', 'consolidation_breakout']
   total_screener_results: Number,
   grade_a_count: Number,
@@ -155,20 +156,20 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
   }
 
   // On weekends (Sat/Sun):
-  // 1. First check if next week's watchlist exists and has stocks (screening already ran)
+  // 1. First check if next week's watchlist exists and screening has completed
   const { weekStart: nextWeekStart } = getWeekBoundaries(now, true);
   const nextWeekWatchlist = await this.findOne({
     week_start: nextWeekStart,
     status: "ACTIVE"
   });
 
-  if (nextWeekWatchlist && nextWeekWatchlist.stocks?.length > 0) {
-    // Weekend screening already ran, show next week's stocks
+  // If screening completed (even with 0 stocks), show next week's watchlist
+  if (nextWeekWatchlist && nextWeekWatchlist.screening_completed) {
     return nextWeekWatchlist;
   }
 
-  // 2. Otherwise, show the most recent watchlist (the just-completed week)
-  //    This allows users to still see Friday's stocks on Saturday/Sunday
+  // 2. Otherwise (screening hasn't run yet), show the most recent watchlist
+  //    This allows users to still see Friday's stocks on Saturday before screening runs
   return this.findOne({
     status: "ACTIVE"
   }).sort({ week_start: -1 });
