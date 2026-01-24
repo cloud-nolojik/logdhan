@@ -31,7 +31,7 @@ const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
 export const SCAN_QUERIES = {
   // A+ Momentum - 52-week high breakout stocks with volume surge
   // Matches ChartInk scan: 52w high + Volume 1.5x (50-day) + RSI 55-75 + EMA20>EMA50 + 2% weekly gain
-  a_plus_momentum: `( {cash} ( latest close > max( 252, high ) and latest volume > latest sma( volume, 50 ) * 1.5 and latest close > latest sma( close, 200 ) and latest rsi( 14 ) > 55 and latest rsi( 14 ) < 75 and latest ema( close, 20 ) > latest ema( close, 50 ) and market cap > 1000 and latest close > 100 and latest close > 1 week ago close * 1.02 ) )`,
+  a_plus_momentum: `( {cash} ( latest close > 1 day ago max( 252, high ) and latest volume > latest sma( volume, 50 ) * 1.5 and latest close > latest sma( close, 200 ) and latest rsi( 14 ) > 55 and latest rsi( 14 ) < 75 and latest ema( close, 20 ) > latest ema( close, 50 ) and market cap > 1000 and latest close > 100 and latest close > 1 week ago close * 1.02 ) )`,
 
 //   a_plus_nextweek: `( {cash} (
 //   /* Trend filter */
