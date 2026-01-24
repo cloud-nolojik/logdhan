@@ -29,9 +29,9 @@ const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
  * - CONSOLIDATION: Near 20-day HIGH + Tight range <2.5% + RSI 50-65
  */
 export const SCAN_QUERIES = {
-  // A+ Momentum - Strong uptrend stocks with weekly gains near highs
-  // Trend + 3% weekly gain + near 20d high + green close + RSI 55-75
-  a_plus_momentum: `( {cash} ( latest ema( close, 20 ) > latest ema( close, 50 ) and latest ema( close, 50 ) > latest sma( close, 200 ) and latest close > latest ema( close, 20 ) and latest close > 1 week ago close * 1.03 and latest close >= max( 20, high ) * 0.98 and latest rsi( 14 ) >= 55 and latest rsi( 14 ) <= 68 and latest volume > latest sma( volume, 20 ) * 1.2 and latest sma( volume, 20 ) > 500000 and market cap > 10000 ) )`,
+  // A+ Momentum - 52-week high breakout stocks with volume surge
+  // Matches ChartInk scan: 52w high + Volume 1.5x (50-day) + RSI 55-75 + EMA20>EMA50 + 2% weekly gain
+  a_plus_momentum: `( {cash} ( latest close > max( 252, high ) and latest volume > latest sma( volume, 50 ) * 1.5 and latest close > latest sma( close, 200 ) and latest rsi( 14 ) > 55 and latest rsi( 14 ) < 75 and latest ema( close, 20 ) > latest ema( close, 50 ) and market cap > 1000 and latest close > 100 and latest close > 1 week ago close * 1.02 ) )`,
 
 //   a_plus_nextweek: `( {cash} (
 //   /* Trend filter */
