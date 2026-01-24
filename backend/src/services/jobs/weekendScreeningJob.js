@@ -490,10 +490,6 @@ class WeekendScreeningJob {
           mode: stock.levels.mode,
           reason: stock.levels.reason
         } : null,
-        // Entry zone: Prefer levels.entryRange (scan-aware) over generic entry_zone
-        entry_zone: (stock.levels?.entryRange?.length === 2)
-          ? { low: stock.levels.entryRange[0], high: stock.levels.entryRange[1] }
-          : stock.entry_zone,
         status: 'WATCHING'
       }));
 
