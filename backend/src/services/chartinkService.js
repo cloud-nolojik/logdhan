@@ -181,7 +181,11 @@ async function getChartinkSession() {
  */
 export async function runChartinkScan(scanQuery) {
   try {
+    console.log('[CHARTINK] 🔍 Running scan...');
+    console.log('[CHARTINK] Query:', scanQuery.substring(0, 100) + '...');
+
     const csrfToken = await getChartinkSession();
+    console.log('[CHARTINK] ✅ Got CSRF token');
 
     const response = await client.post(SCAN_URL,
       `scan_clause=${encodeURIComponent(scanQuery)}`,
@@ -197,8 +201,11 @@ export async function runChartinkScan(scanQuery) {
       }
     );
 
+    console.log('[CHARTINK] 📥 Response status:', response.status);
+    console.log('[CHARTINK] 📥 Raw data count:', response.data?.data?.length || 0);
+
     if (response.data && response.data.data) {
-      return response.data.data.map(stock => ({
+      const results = response.data.data.map(stock => ({
         nsecode: stock.nsecode || stock[0],
         bsecode: stock.bsecode || stock[1],
         name: stock.name || stock[2],
@@ -206,11 +213,20 @@ export async function runChartinkScan(scanQuery) {
         close: parseFloat(stock.close || stock[4]) || 0,
         volume: parseInt(stock.volume || stock[5]) || 0
       }));
+
+      // Log each stock found
+      console.log('[CHARTINK] ✅ Stocks found:');
+      results.forEach((stock, i) => {
+        console.log(`[CHARTINK]    ${i + 1}. ${stock.nsecode} (${stock.name}) - ₹${stock.close} | ${stock.per_change}%`);
+      });
+
+      return results;
     }
 
+    console.log('[CHARTINK] ⚠️ No data in response');
     return [];
   } catch (error) {
-    console.error('Error running ChartInk scan:', error.message);
+    console.error('[CHARTINK] ❌ Error running scan:', error.message);
     throw new Error(`ChartInk scan error: ${error.message}`);
   }
 }
