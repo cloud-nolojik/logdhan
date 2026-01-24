@@ -477,7 +477,7 @@ class WeekendScreeningJob {
           distance_from_20dma_pct: stock.indicators.distance_from_20dma_pct,
           weekly_change_pct: stock.indicators.weekly_change_pct  // NEW: Weekly change for framework
         },
-        // NEW: Include trading levels
+        // Trading levels (scan-type aware calculations)
         levels: stock.levels ? {
           entry: stock.levels.entry,
           entryRange: stock.levels.entryRange,
@@ -490,7 +490,10 @@ class WeekendScreeningJob {
           mode: stock.levels.mode,
           reason: stock.levels.reason
         } : null,
-        entry_zone: stock.entry_zone,
+        // Entry zone: Prefer levels.entryRange (scan-aware) over generic entry_zone
+        entry_zone: (stock.levels?.entryRange?.length === 2)
+          ? { low: stock.levels.entryRange[0], high: stock.levels.entryRange[1] }
+          : stock.entry_zone,
         status: 'WATCHING'
       }));
 

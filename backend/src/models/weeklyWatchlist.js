@@ -24,10 +24,24 @@ const watchlistStockSchema = new mongoose.Schema({
     distance_from_20dma_pct: Number
   },
 
-  // Suggested entry zone (from screening)
+  // Suggested entry zone (from screening) - DEPRECATED: Use levels.entryRange instead
   entry_zone: {
     low: Number,
     high: Number
+  },
+
+  // Trading levels (from scanLevels - scan-type aware calculations)
+  levels: {
+    entry: Number,           // Single entry price
+    entryRange: [Number],    // [low, high] entry range
+    stop: Number,            // Stop loss price
+    target: Number,          // Target price
+    riskReward: Number,      // Risk:Reward ratio (e.g., 2.0 = 1:2)
+    riskPercent: Number,     // Risk as % of entry
+    rewardPercent: Number,   // Reward as % of entry
+    entryType: String,       // 'buy_above', 'buy_at', 'buy_below'
+    mode: String,            // 'BREAKOUT', 'PULLBACK', 'A_PLUS_MOMENTUM', etc.
+    reason: String           // Human-readable explanation
   },
 
   // Status tracking (global status, not per-user)
@@ -261,6 +275,7 @@ weeklyWatchlistSchema.statics.addStocks = async function(stocksData) {
       existing.scan_type = stockData.scan_type;
       existing.selection_reason = stockData.selection_reason;
       existing.entry_zone = stockData.entry_zone;
+      existing.levels = stockData.levels;  // Update trading levels
       // Clear old analysis link - new analysis will be triggered
       existing.analysis_id = null;
       existing.ai_notes = null;
