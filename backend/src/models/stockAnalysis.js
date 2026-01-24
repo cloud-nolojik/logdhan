@@ -391,10 +391,10 @@ const stockAnalysisSchema = new mongoose.Schema({
     index: true
   },
   // Valid until next market close - strategy should be revalidated after this time
+  // TTL index set separately to auto-delete expired documents
   valid_until: {
     type: Date,
-    default: null,
-    index: true
+    default: null
   },
   // Track when strategy was last validated by AI
   last_validated_at: {
@@ -463,8 +463,8 @@ stockAnalysisSchema.index({
   created_at: 1
 });
 
-// TTL index removed - strategies no longer auto-expire
-// Validation and cleanup handled by bulk analysis service
+// TTL index - auto-delete documents when valid_until expires
+stockAnalysisSchema.index({ valid_until: 1 }, { expireAfterSeconds: 0 });
 
 // Static methods
 stockAnalysisSchema.statics.findActive = function (limit = 10) {
