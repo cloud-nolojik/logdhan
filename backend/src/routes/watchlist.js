@@ -212,9 +212,9 @@ router.get('/', auth, async (req, res) => {
           }
 
           // Calculate AI confidence and get strategy type/simple_verdict
-          // Support both old schema (strategies array) and new schema v1.5 (verdict/setup_score)
+          // Support: new schema v1.5 (verdict/setup_score), position_management, old schema (strategies)
           let ai_confidence = null;
-          let strategy_type = null; // BUY, SELL, HOLD, NO_TRADE, WAIT, SKIP
+          let strategy_type = null; // BUY, SELL, HOLD, NO_TRADE, WAIT, SKIP, TRAIL_STOP
           let simple_verdict = null;
 
           if (analysis && analysis.analysis_data) {
@@ -231,6 +231,19 @@ router.get('/', auth, async (req, res) => {
               const score = data.setup_score.total || 0;
               const grade = data.setup_score.grade || '';
               simple_verdict = `${action} • ${score}/100 (${grade})`;
+            }
+            // Check for position_management analysis (weekly_track stocks)
+            else if (data.position_management && data.position_management.recommendation) {
+              const pm = data.position_management;
+              ai_confidence = pm.recommendation.confidence || null;
+              // Get recommendation for holders (TRAIL_STOP, HOLD, EXIT, etc.)
+              strategy_type = pm.recommendation.for_holders || null;
+
+              // Build simple_verdict from status
+              const statusLabel = pm.status?.label || 'TRACKING';
+              const statusColor = pm.status?.color || 'YELLOW';
+              const colorEmoji = statusColor === 'GREEN' ? '🟢' : statusColor === 'RED' ? '🔴' : '🟡';
+              simple_verdict = `${colorEmoji} ${statusLabel}`;
             }
             // Check for old schema (strategies array)
             else if (data.strategies && data.strategies.length > 0) {
@@ -334,7 +347,7 @@ router.get('/', auth, async (req, res) => {
                 }).sort({ created_at: -1 }).lean();
               }
 
-              // Calculate AI confidence - support both old and new schema
+              // Calculate AI confidence - support new schema v1.5, position_management, and old schema
               let ai_confidence = null;
               let strategy_type = null;
               let simple_verdict = null;
@@ -350,6 +363,16 @@ router.get('/', auth, async (req, res) => {
                   const score = data.setup_score.total || 0;
                   const grade = data.setup_score.grade || '';
                   simple_verdict = `${action} • ${score}/100 (${grade})`;
+                }
+                // Check for position_management analysis (weekly_track stocks)
+                else if (data.position_management && data.position_management.recommendation) {
+                  const pm = data.position_management;
+                  ai_confidence = pm.recommendation.confidence || null;
+                  strategy_type = pm.recommendation.for_holders || null;
+                  const statusLabel = pm.status?.label || 'TRACKING';
+                  const statusColor = pm.status?.color || 'YELLOW';
+                  const colorEmoji = statusColor === 'GREEN' ? '🟢' : statusColor === 'RED' ? '🔴' : '🟡';
+                  simple_verdict = `${colorEmoji} ${statusLabel}`;
                 }
                 // Check for old schema (strategies array)
                 else if (data.strategies?.length > 0) {
