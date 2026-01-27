@@ -66,6 +66,19 @@ router.get('/:instrument_key', auth, async (req, res) => {
       currentPrice = null; // Set to null if price fetch fails
     }
 
+    // Fallback: Try to get cached price from LatestPrice collection
+    if (!currentPrice) {
+      try {
+        const priceDoc = await LatestPrice.findOne({ instrument_key });
+        currentPrice = priceDoc?.last_traded_price || priceDoc?.close || null;
+        if (currentPrice) {
+          console.log(`Using cached price for ${stock.tradingsymbol || stock.trading_symbol}: ₹${currentPrice}`);
+        }
+      } catch (fallbackError) {
+        console.warn('Fallback price fetch also failed:', fallbackError.message);
+      }
+    }
+
     // Check if stock is in user's watchlist
     let isInWatchlist = false;
     try {
@@ -81,11 +94,11 @@ router.get('/:instrument_key', auth, async (req, res) => {
       success: true,
       data: {
         instrument_key: stock.instrument_key,
-        trading_symbol: stock.trading_symbol,
+        trading_symbol: stock.tradingsymbol || stock.trading_symbol,
         name: stock.name,
         exchange: stock.exchange,
         currentPrice: currentPrice,
-        tradingViewLink: `https://www.tradingview.com/chart?symbol=${stock.exchange}:${stock.trading_symbol}`,
+        tradingViewLink: `https://www.tradingview.com/chart?symbol=${stock.exchange}:${stock.tradingsymbol || stock.trading_symbol}`,
         is_in_watchlist: isInWatchlist
       }
     });
