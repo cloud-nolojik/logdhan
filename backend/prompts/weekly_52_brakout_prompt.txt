@@ -1,0 +1,151 @@
+# WEEKLY SWING ANALYSIS PROMPT
+## Copy-Paste This Every Week in a New Chat
+
+---
+
+## 📋 THE PROMPT (Copy Everything Below)
+
+```
+## Weekly Swing Trade Analysis - Week of [DD MMM YYYY]
+
+### My Scanner (ChartInk - 52 Week Breakout with Volume)
+I use a ChartInk scanner with these filters:
+- Daily Close > 252-day High (fresh 52-week breakout)
+- Daily Volume > 1.5x 50-day average (volume confirmation)
+- Daily Close > 200 SMA (long-term uptrend)
+- Daily RSI between 55-75 (momentum, not overbought)
+- EMA 20 > EMA 50 (short-term trend bullish)
+- Market Cap > ₹1000 Cr (quality filter)
+- Price > ₹100 (liquidity filter)
+- Weekly Close > 1.02x last week close (weekly momentum)
+
+### Stocks From Today's Scan
+1. ASHOKLEY
+2. APLAPOLLO
+
+
+### What I Need From You
+For each stock, fetch data from TradingView and Screener.in, then provide:
+
+1. **Quick Data**
+   - CMP, 52W High/Low
+   - Daily & Weekly RSI
+   - EMA 20/50/200 position
+   - Today's volume vs average
+
+2. **Institutional Activity**
+   - FII holding trend (last 2-3 quarters)
+   - DII holding trend
+   - Promoter holding
+
+3. **Fundamentals (Quick Check)**
+   - Market Cap
+   - P/E, ROCE
+   - Recent quarterly results (beat/miss)
+   - Any red flags (debt, promoter pledge)
+
+4. **Trade Setup**
+   - Entry zone (ideal buy price)
+   - Stop loss
+   - Target 1 and Target 2
+   - Risk:Reward ratio
+
+5. **Verdict**
+   - Confidence (1-5 stars)
+   - Action: BUY NOW / BUY ON PULLBACK / WAIT / AVOID
+   - Key reason in 1 line
+
+### Final Output Format
+Give me a ranked table of top picks:
+
+| Rank | Stock | Confidence | Entry | SL | Target | R:R | Action |
+|------|-------|------------|-------|-----|--------|-----|--------|
+
+Then list:
+- Watchlist stocks (wait for pullback)
+- Stocks to avoid (with reason)
+- Alerts to set
+
+### My Trading Rules (Keep in Mind)
+- I prefer PULLBACK entries, not chasing breakouts
+- Minimum R:R should be 1:2
+- Holding period: 1 week
+- I avoid stocks AT resistance
+- I avoid stocks with RSI > 72
+- Max 3-4 positions at a time
+
+### Current Market Context
+- Nifty: _____ 
+- Trend: Bullish / Bearish / Sideways
+- Any event this week: 
+
+---
+START ANALYSIS
+```
+
+---
+
+## 🏷️ CHAT NAMING CONVENTION
+
+Rename each chat as:
+```
+Swing Analysis - Week [X] [Month] [Year]
+```
+
+Examples:
+- Swing Analysis - Week 1 Feb 2026
+- Swing Analysis - Week 2 Feb 2026
+- Swing Analysis - Week 4 Jan 2026
+
+---
+
+## ✅ QUICK VERSION (If You Want Shorter)
+
+```
+## Swing Analysis - Week of [DATE]
+
+ChartInk Scanner: 52-Week Breakout + Volume + RSI 55-75 + EMA20>EMA50
+
+Stocks:
+1. 
+2. 
+3. 
+4. 
+5. 
+
+Nifty: _____ (Bullish/Bearish/Sideways)
+
+Analyze each stock. Fetch from TradingView + Screener.
+Give: Entry/SL/Target, R:R, FII/DII activity, confidence rating.
+Rank them. Tell me buy now vs wait for pullback.
+My rule: No chasing, prefer pullbacks, min 1:2 R:R.
+```
+
+---
+
+## 📅 WEEKLY ROUTINE
+
+| Day | Action |
+|-----|--------|
+| **Friday 4 PM** | Run ChartInk scan after market close |
+| **Saturday** | Start new chat, paste prompt, add stocks |
+| **Saturday** | Get analysis from Claude |
+| **Sunday** | Set alerts, plan position sizes |
+| **Monday** | Execute if setup triggers |
+| **Friday** | Review trades, note learnings |
+
+---
+
+## 💡 TIPS
+
+1. **Always start fresh chat each week** — Keeps context clean
+
+2. **Add market context** — Helps me adjust recommendations
+
+3. **Mention if holding any positions** — I'll factor that in
+
+4. **If scan gives 20+ stocks** — Share top 10-15 only
+
+5. **Ask follow-up questions** — "Should I enter X at current price?"
+
+---

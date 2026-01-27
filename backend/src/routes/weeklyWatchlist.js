@@ -13,7 +13,7 @@ const router = express.Router();
  */
 router.get("/", auth, async (req, res) => {
   try {
-    const watchlist = await WeeklyWatchlist.getCurrentWeek(req.user._id);
+    const watchlist = await WeeklyWatchlist.getCurrentWeek();
 
     if (!watchlist) {
       return res.json({
@@ -134,7 +134,7 @@ router.post("/:stockId/update-status", auth, async (req, res) => {
       });
     }
 
-    const watchlist = await WeeklyWatchlist.getCurrentWeek(req.user._id);
+    const watchlist = await WeeklyWatchlist.getCurrentWeek();
     if (!watchlist) {
       return res.status(404).json({ success: false, error: "No active watchlist" });
     }
@@ -162,7 +162,7 @@ router.post("/:stockId/notes", auth, async (req, res) => {
   try {
     const { user_notes } = req.body;
 
-    const watchlist = await WeeklyWatchlist.getCurrentWeek(req.user._id);
+    const watchlist = await WeeklyWatchlist.getCurrentWeek();
     if (!watchlist) {
       return res.status(404).json({ success: false, error: "No active watchlist" });
     }
@@ -194,7 +194,7 @@ router.post("/:stockId/alert", auth, async (req, res) => {
       return res.status(400).json({ success: false, error: "alert_price required and must be a number" });
     }
 
-    const watchlist = await WeeklyWatchlist.getCurrentWeek(req.user._id);
+    const watchlist = await WeeklyWatchlist.getCurrentWeek();
     if (!watchlist) {
       return res.status(404).json({ success: false, error: "No active watchlist" });
     }
@@ -224,7 +224,7 @@ router.post("/:stockId/alert", auth, async (req, res) => {
  */
 router.delete("/:stockId", auth, async (req, res) => {
   try {
-    const watchlist = await WeeklyWatchlist.getCurrentWeek(req.user._id);
+    const watchlist = await WeeklyWatchlist.getCurrentWeek();
     if (!watchlist) {
       return res.status(404).json({ success: false, error: "No active watchlist" });
     }
@@ -313,7 +313,7 @@ router.get("/stats", auth, async (req, res) => {
  */
 router.post("/complete-week", auth, async (req, res) => {
   try {
-    const watchlist = await WeeklyWatchlist.getCurrentWeek(req.user._id);
+    const watchlist = await WeeklyWatchlist.getCurrentWeek();
     if (!watchlist) {
       return res.status(404).json({ success: false, error: "No active watchlist" });
     }

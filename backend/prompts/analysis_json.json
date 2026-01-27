@@ -1,0 +1,335 @@
+{
+    "analysis_type" : "swing",
+    "instrument_key" : "NSE_EQ|INE062A01020",
+    "__v" : NumberInt(1),
+    "analysis_data" : {
+        "schema_version" : "1.5",
+        "symbol" : "SBIN",
+        "analysis_type" : "swing",
+        "intraday" : null,
+        "position_management" : null,
+        "original_swing_analysis_id" : null,
+        "original_levels" : null,
+        "generated_at_ist" : "2026-01-25T02:30:00+05:30",
+        "insufficientData" : false,
+        "overall_sentiment" : "BULLISH_CAUTIOUS",
+        "sentiment_analysis" : {
+            "key_factors" : [
+                "Fresh ATH breakout at ₹1,055 on Jan 22",
+                "PSU bank sector outperforming broader market",
+                "Trading above all key moving averages",
+                "ICICI Securities upgraded target to ₹1,120",
+                "Strong institutional buying in PSU banks",
+                "⚠️ Weekly RSI at 75.95 - OVERBOUGHT"
+            ]
+        },
+        "runtime" : {
+            "triggers_evaluated" : [
+                "ATH_BREAKOUT",
+                "ABOVE_ALL_MAs",
+                "SECTOR_MOMENTUM",
+                "WEEKLY_RSI_OVERBOUGHT"
+            ]
+        },
+        "confidence_breakdown" : {
+            "adjustments" : [
+                "+10% for ATH breakout confirmation",
+                "+5% for sector tailwind",
+                "+5% for brokerage consensus",
+                "-15% for weekly RSI overbought (75.95)",
+                "-5% for pullback from ATH in progress"
+            ]
+        },
+        "performance_hints" : {
+            "confidence_drivers" : [
+                "All-time high breakout with volume",
+                "Above 5/20/50/100/200 day MAs",
+                "Daily RSI 60-68 still healthy",
+                "PSU bank theme is hot sector"
+            ],
+            "uncertainty_factors" : [
+                "Weekly RSI 75.95 - overbought territory",
+                "Pullback from ATH started (red candle)",
+                "Earnings on Feb 7 - post trade window",
+                "Extended run from ₹600 to ₹1,055 (75% gain)"
+            ]
+        },
+        "disclaimer" : "Educational analysis only. Not investment advice.",
+        "what_to_watch" : {
+            "if_bought" : "Hold above ₹970 pivot support. Keep tight stop at ₹950. Book partial profits quickly at ₹1,055.",
+            "if_waiting" : "RECOMMENDED: Wait for pullback to ₹980-1,000 zone where daily RSI cools off and R:R improves significantly."
+        },
+        "setup_score" : {
+            "total" : NumberInt(70),
+            "grade" : "B+",
+            "factors" : [
+                {
+                    "name" : "Volume Conviction",
+                    "score" : "16/20",
+                    "status" : "✅",
+                    "value" : "1.8x avg",
+                    "explanation" : "Volume 1.8x average shows strong institutional participation"
+                },
+                {
+                    "name" : "Risk:Reward",
+                    "score" : "14/20",
+                    "status" : "✅",
+                    "value" : "1:1.8",
+                    "explanation" : "R:R of 1:1.8 at current levels - improves on pullback"
+                },
+                {
+                    "name" : "RSI Position",
+                    "score" : "8/15",
+                    "status" : "⚠️",
+                    "value" : "Daily 68 / Weekly 75.95",
+                    "explanation" : "Daily RSI okay but Weekly RSI 75.95 is OVERBOUGHT - major concern"
+                },
+                {
+                    "name" : "Weekly Move",
+                    "score" : "12/15",
+                    "status" : "✅",
+                    "value" : "+7%",
+                    "explanation" : "7% monthly gain shows sustained buying interest"
+                },
+                {
+                    "name" : "Upside to Target",
+                    "score" : "10/15",
+                    "status" : "✅",
+                    "value" : "8.7%",
+                    "explanation" : "8.7% upside to ₹1,120 target - decent but not great"
+                },
+                {
+                    "name" : "Relative Strength",
+                    "score" : "8/10",
+                    "status" : "✅",
+                    "value" : "+10.3% vs Nifty",
+                    "explanation" : "Outperforming Nifty but extended - may need to consolidate"
+                },
+                {
+                    "name" : "Price Accessibility",
+                    "score" : "5/5",
+                    "status" : "✅",
+                    "value" : "₹1,029",
+                    "explanation" : "At ₹1,029, easy to buy meaningful quantity"
+                }
+            ],
+            "strengths" : [
+                "Volume Conviction",
+                "Weekly Move",
+                "Relative Strength",
+                "Price Accessibility"
+            ],
+            "watch_factors" : [
+                "Weekly RSI OVERBOUGHT at 75.95",
+                "Pullback from ATH in progress",
+                "Earnings on Feb 7"
+            ]
+        },
+        "trading_plan" : {
+            "entry" : 990.0,
+            "entry_range" : [
+                980.0,
+                1000.0
+            ],
+            "aggressive_entry" : {
+                "price" : 1025.0,
+                "range" : [
+                    1020.0,
+                    1030.0
+                ],
+                "note" : "Only for aggressive traders with smaller position size"
+            },
+            "stop_loss" : 950.0,
+            "target" : 1100.0,
+            "target1" : 1055.0,
+            "target2" : 1100.0,
+            "risk_reward" : 2.5,
+            "risk_percent" : 4.1,
+            "reward_percent" : 11.1
+        },
+        "risk_factors" : [
+            "Weekly RSI at 75.95 - overbought, pullback likely",
+            "Stock pulling back from ATH ₹1,055",
+            "Earnings announcement on Feb 7 could cause volatility",
+            "Stock has run up 75% from ₹600 - consolidation expected"
+        ],
+        "verdict" : {
+            "action" : "WAIT_FOR_DIP",
+            "confidence" : 0.7,
+            "one_liner" : "Strong stock but weekly RSI overbought at 76. Wait for pullback to ₹980-1,000 for better entry with improved R:R."
+        },
+        "beginner_guide" : {
+            "what_stock_is_doing" : "SBI hit a lifetime high of ₹1,055 on Jan 22 but is now pulling back. The weekly RSI at 76 suggests the stock is temporarily overbought and may need to cool off before the next leg up.",
+            "why_this_is_interesting" : "PSU banks are the hottest sector. SBI is a quality stock in an uptrend. But chasing at current levels with overbought weekly RSI is risky. A pullback will offer much better entry.",
+            "steps_to_trade" : [
+                "Step 1: SET ALERT at ₹990-1,000 and WAIT",
+                "Step 2: When price dips to ₹980-1,000 zone, BUY",
+                "Step 3: Set stop loss at ₹950 (below S1 pivot)",
+                "Step 4: Book 50% at Target 1: ₹1,055 (previous ATH)",
+                "Step 5: Hold remaining for Target 2: ₹1,100"
+            ],
+            "if_it_fails" : {
+                "max_loss" : "₹4,000 per 100 shares (from ₹990 entry)",
+                "loss_percent" : "4.1%",
+                "why_okay" : "Stop loss is placed below weekly S1 pivot - a logical support level. If it breaks, the uptrend is weakening."
+            }
+        },
+        "warnings" : [
+            {
+                "code" : "WEEKLY_RSI_OVERBOUGHT",
+                "severity" : "high",
+                "message" : "Weekly RSI at 75.95 is in overbought territory. Same issue seen in Canara Bank (82) and Ashok Leyland (81) which were rejected.",
+                "mitigation" : "Wait for pullback to ₹980-1,000 where RSI will cool off and risk:reward improves."
+            },
+            {
+                "code" : "ATH_PULLBACK",
+                "severity" : "medium",
+                "message" : "Stock is pulling back from ATH ₹1,055. Current weekly candle is red (-1.23%).",
+                "mitigation" : "Let the pullback complete before entering. Don't catch a falling knife."
+            },
+            {
+                "code" : "EARNINGS_AHEAD",
+                "severity" : "low",
+                "message" : "Q3 results on Feb 7, 2026 - after the trade window.",
+                "mitigation" : "Book profits before earnings or hold with trailing stop if in profit."
+            }
+        ],
+        "strategies" : [
+            {
+                "name" : "Pullback Entry",
+                "description" : "Wait for RSI cooldown and enter on dip to ₹980-1,000 support zone"
+            },
+            {
+                "name" : "Aggressive Entry (Higher Risk)",
+                "description" : "Small position at ₹1,020-1,030 with tight stop at ₹985"
+            }
+        ],
+        "chart_observations" : {
+            "weekly" : {
+                "rsi" : 75.95,
+                "status" : "OVERBOUGHT",
+                "current_candle" : "RED (-1.23%)",
+                "support_s1" : 775.15,
+                "resistance_r1" : 1094.15
+            },
+            "daily" : {
+                "rsi" : 68.02,
+                "status" : "HEALTHY",
+                "pivot" : 1000.8,
+                "support_s1" : 954.05,
+                "resistance_r1" : 1019.35
+            }
+        }
+    },
+    "analysis_meta" : {
+        "candle_info" : {
+            "timeframes_used" : [
+                {
+                    "timeframe" : "15-min",
+                    "key" : "15m",
+                    "bars_count" : NumberInt(30),
+                    "last_candle_time" : "2026-01-24T15:15:00+05:30"
+                },
+                {
+                    "timeframe" : "1-hour",
+                    "key" : "1h",
+                    "bars_count" : NumberInt(30),
+                    "last_candle_time" : "2026-01-24T15:15:00+05:30"
+                },
+                {
+                    "timeframe" : "daily",
+                    "key" : "1d",
+                    "bars_count" : NumberInt(30),
+                    "last_candle_time" : "2026-01-24T00:00:00+05:30"
+                },
+                {
+                    "timeframe" : "weekly",
+                    "key" : "1w",
+                    "bars_count" : NumberInt(52),
+                    "last_candle_time" : "2026-01-20T00:00:00+05:30"
+                }
+            ],
+            "primary_timeframe" : "daily",
+            "last_candle_time" : "2026-01-24T00:00:00+05:30",
+            "data_quality" : {
+                "bars_15m" : NumberInt(250),
+                "bars_1h" : NumberInt(210),
+                "bars_1d" : NumberInt(240),
+                "bars_1w" : NumberInt(52)
+            }
+        },
+        "model_used" : "claude-opus-4-5-20250514",
+        "sentiment_model_used" : "claude-opus-4-5-20250514",
+        "processing_time_ms" : NumberInt(50000),
+        "stage_chain" : [
+            "web_research",
+            "technical_analysis",
+            "chart_review",
+            "levels",
+            "score",
+            "verdict"
+        ],
+        "token_usage" : {
+            "sentiment" : {
+                "input_tokens" : NumberInt(2500),
+                "output_tokens" : NumberInt(800),
+                "cached_tokens" : NumberInt(0),
+                "total_tokens" : NumberInt(3300)
+            },
+            "stage3" : {
+                "input_tokens" : NumberInt(5000),
+                "output_tokens" : NumberInt(1800),
+                "cached_tokens" : NumberInt(0),
+                "total_tokens" : NumberInt(6800)
+            },
+            "total" : {
+                "input_tokens" : NumberInt(7500),
+                "output_tokens" : NumberInt(2600),
+                "cached_tokens" : NumberInt(0),
+                "total_tokens" : NumberInt(10100)
+            }
+        },
+        "setup_score" : NumberInt(70),
+        "grade" : "B+",
+        "trading_levels" : {
+            "entry" : 990.0,
+            "entry_range" : [
+                980.0,
+                1000.0
+            ],
+            "aggressive_entry" : 1025.0,
+            "stop" : 950.0,
+            "target" : 1100.0,
+            "target1" : 1055.0,
+            "target2" : 1100.0,
+            "riskReward" : 2.5
+        },
+        "research_sources" : [
+            "ICICI Securities - Target ₹1,120",
+            "Business Standard - ATH news Jan 22",
+            "TradingView charts - Weekly & Daily",
+            "Investing.com indicators"
+        ],
+        "chart_analysis_note" : "Downgraded from A+ to B+ after reviewing weekly chart showing RSI 75.95 overbought. Similar to Canara Bank/Ashok Leyland rejection criteria."
+    },
+    "created_at" : ISODate("2026-01-25T10:30:00.000+0000"),
+    "current_price" : 1029.5,
+    "last_validated_at" : ISODate("2026-01-25T21:00:00.000+0000"),
+    "orders_placed_count" : NumberInt(0),
+    "placed_orders" : [
+
+    ],
+    "progress" : {
+        "percentage" : NumberInt(100),
+        "current_step" : "Analysis revised after chart review",
+        "steps_completed" : NumberInt(8),
+        "total_steps" : NumberInt(8),
+        "estimated_time_remaining" : NumberInt(0),
+        "last_updated" : ISODate("2026-01-25T21:00:00.000+0000")
+    },
+    "scheduled_release_time" : null,
+    "status" : "completed",
+    "stock_name" : "STATE BANK OF INDIA",
+    "stock_symbol" : "SBIN",
+    "valid_until" : ISODate("2026-01-31T09:59:59.000+0000")
+}
