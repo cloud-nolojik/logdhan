@@ -140,6 +140,33 @@ export class MessagingService {
 
     return await this.infobipProvider.getMessageStatus(messageId);
   }
+
+  /**
+   * Send bulk alert notification via WhatsApp (weekly/daily setups)
+   */
+  async sendBulkAlert(mobileNumber, alertData) {
+    if (!this.infobipProvider) {
+      console.warn('⚠️ Infobip provider not initialized. Bulk alert not sent.');
+      return null;
+    }
+
+    try {
+      const templateName = alertData.alertType === 'weekly'
+        ? 'weekly_setups_alert'
+        : 'daily_setups_alert';
+
+      return await this.infobipProvider.sendMessage({
+        to: mobileNumber,
+        templateName,
+        templateData: {
+          userName: alertData.userName || 'User'
+        }
+      });
+    } catch (error) {
+      console.error('❌ Failed to send bulk alert:', error.message);
+      throw error;
+    }
+  }
 }
 
 // Create and export a singleton instance

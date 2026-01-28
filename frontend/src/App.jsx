@@ -13,6 +13,7 @@ import PrivacyPolicy from './pages/PrivacyPolicy';
 import Terms from './pages/Terms';
 import RefundPolicy from './pages/RefundPolicy';
 import Contact from './pages/Contact';
+import WhatsAppAlerts from './pages/admin/WhatsAppAlerts';
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/admin/whatsapp-alerts" element={<WhatsAppAlerts />} />
         </Routes>
       </main>
       <Footer />

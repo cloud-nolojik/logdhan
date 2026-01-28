@@ -29,6 +29,22 @@ export class InfobipProvider extends MessagingProvider {
         placeholderCount: 2, // userName, stockSymbol
         hasButton: true,
         buttonUrl: 'https://logdhan.com/app/monitoring/completed/' // Base URL, parameter added dynamically
+      },
+      weekly_setups_alert: {
+        templateName: 'weekly_setups_alert', // Template for weekly bulk alerts
+        templateId: '<TEMPLATE_ID>', // Update after Infobip approval
+        language: 'en',
+        placeholderCount: 1, // userName
+        hasButton: true,
+        buttonUrl: 'https://logdhan.com/app/setups/weekly'
+      },
+      daily_setups_alert: {
+        templateName: 'daily_setups_alert', // Template for daily bulk alerts
+        templateId: '<TEMPLATE_ID>', // Update after Infobip approval
+        language: 'en',
+        placeholderCount: 1, // userName
+        hasButton: true,
+        buttonUrl: 'https://logdhan.com/app/setups/daily'
       }
     };
   }
@@ -175,6 +191,11 @@ export class InfobipProvider extends MessagingProvider {
         return [
         templateData.userName || 'logdhanuser',
         templateData.stockSymbol || 'Stock'];
+
+      case 'weekly_setups_alert':
+      case 'daily_setups_alert':
+        return [
+        templateData.userName || 'User'];
 
       default:
         return [];

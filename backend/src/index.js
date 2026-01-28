@@ -62,6 +62,7 @@ import screenerRoutes from './routes/screener.js';
 import journalRoutes from './routes/journal.js';
 import dailyNewsStocksRoutes from './routes/dailyNewsStocks.js';
 import apiUsageRoutes from './routes/apiUsage.js';
+import adminRoutes from './routes/admin.js';
 
 const app = express();
 
@@ -192,6 +193,7 @@ app.use('/api/v1/screener', screenerRoutes);
 app.use('/api/v1/journal', journalRoutes);
 app.use('/api/v1/daily-news-stocks', dailyNewsStocksRoutes);
 app.use('/api/v1/usage', apiUsageRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
 // App redirect routes for WhatsApp deep links
 app.use('/app', appRedirectRoutes);
