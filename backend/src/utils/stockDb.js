@@ -201,43 +201,40 @@ export async function getCurrentPrice(instrumentKey, sendCandles = false) {
   try {
     // Try different API endpoints
     const apiFormats = [
-    // Current day intraday data
+    // Current day intraday data (1-minute candles)
     {
       name: 'v3-intraday-current',
       url: `https://api.upstox.com/v3/historical-candle/intraday/${instrumentKey}/minutes/1`
     },
-    // Historical data with date range
+    // Historical data with date range (1-minute candles)
     {
-      name: 'v3-historical-with-dates',
+      name: 'v3-historical-minutes',
       url: `https://api.upstox.com/v3/historical-candle/${instrumentKey}/minutes/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
+    },
+    // Daily candles fallback (for non-market hours when intraday data is unavailable)
+    {
+      name: 'v3-historical-daily',
+      url: `https://api.upstox.com/v3/historical-candle/${instrumentKey}/day/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
     }];
 
     for (const format of apiFormats) {
       try {
-        //    console.log(`Trying ${format.name} API for ${instrumentKey}...`);
-
         const response = await axios.get(format.url, axiosConfig);
         const candles = response.data?.data?.candles || [];
 
         if (candles.length > 0) {
           if (sendCandles) {
             // Return full candle array for market route and other use cases
-            // console.log(`✅ Success with ${format.name} - Returning ${candles.length} candles for ${instrumentKey}`);
             return candles;
           } else {
             // Return only price for simple price queries
-            const latest = candles[0]; // last candle
+            const latest = candles[0]; // most recent candle
             const currentPrice = latest ? latest[4] : null; // close price
-            // console.log(`✅ Success with ${format.name} - Price for ${instrumentKey}: ${currentPrice}`);
             return currentPrice;
           }
         }
       } catch (apiError) {
-        // Only log significant errors
-        if (apiError.response?.status !== 400) {
-
-        }
-        // Continue to next format
+        // Continue to next format on error
         continue;
       }
     }

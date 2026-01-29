@@ -820,11 +820,12 @@ class PriceCacheService {
         // For still missing prices, fetch from Upstox API (historical data)
         const stillMissingKeys = instrumentKeys.filter((key) => priceMap[key] === undefined);
         if (stillMissingKeys.length > 0) {
-          console.log(`📡 [API FALLBACK] Fetching ${stillMissingKeys.length} missing prices from Upstox API (market closed)`);
+          console.log(`📡 [API FALLBACK] Fetching ${stillMissingKeys.length} missing prices from Upstox API (market closed): ${stillMissingKeys.join(', ')}`);
 
           const apiPromises = stillMissingKeys.map(async (instrumentKey) => {
             try {
               const price = await getCurrentPrice(instrumentKey, false);
+              console.log(`📡 [API FALLBACK] ${instrumentKey} -> price: ${price}`);
               return { instrumentKey, price };
             } catch (error) {
               console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
@@ -849,6 +850,8 @@ class PriceCacheService {
 
               // Queue DB update to persist for future requests
               dbUpdatePromises.push(this.storePriceInDB(instrumentKey, price, null, Date.now()));
+            } else {
+              console.warn(`⚠️ [API FALLBACK] No price returned for ${instrumentKey}`);
             }
           });
 
@@ -860,9 +863,7 @@ class PriceCacheService {
           }
 
           const apiFetchedCount = apiResults.filter(r => r.price !== null).length;
-          if (apiFetchedCount > 0) {
-            console.log(`✅ [API FALLBACK] Fetched ${apiFetchedCount}/${stillMissingKeys.length} prices from Upstox API`);
-          }
+          console.log(`✅ [API FALLBACK] Fetched ${apiFetchedCount}/${stillMissingKeys.length} prices from Upstox API`);
         }
 
         const dbTime = Date.now() - dbStart;
