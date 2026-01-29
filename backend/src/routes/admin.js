@@ -2,6 +2,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { User } from '../models/user.js';
 import BulkAlertLog from '../models/bulkAlertLog.js';
+import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 import { simpleAdminAuth } from '../middleware/simpleAdminAuth.js';
 import { messagingService } from '../services/messaging/messaging.service.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -127,12 +128,71 @@ router.get('/users', simpleAdminAuth, async (req, res) => {
 });
 
 /**
+ * GET /api/v1/admin/weekly-watchlist
+ * Get current week's watchlist summary for alert preview
+ */
+router.get('/weekly-watchlist', simpleAdminAuth, async (req, res) => {
+  try {
+    const watchlist = await WeeklyWatchlist.getCurrentWeek();
+
+    if (!watchlist || !watchlist.stocks || watchlist.stocks.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          stockCount: 0,
+          weekLabel: watchlist?.week_label || 'No active week',
+          topPick: null,
+          runnerUp: null,
+          stocks: []
+        }
+      });
+    }
+
+    // Sort stocks by setup_score (highest first) to get top picks
+    const sortedStocks = [...watchlist.stocks].sort((a, b) =>
+      (b.setup_score || 0) - (a.setup_score || 0)
+    );
+
+    const topPick = sortedStocks[0];
+    const runnerUp = sortedStocks[1];
+
+    res.json({
+      success: true,
+      data: {
+        stockCount: watchlist.stocks.length,
+        weekLabel: watchlist.week_label,
+        topPick: topPick ? {
+          symbol: topPick.symbol,
+          reason: topPick.selection_reason || topPick.ai_notes || `${topPick.scan_type} setup`
+        } : null,
+        runnerUp: runnerUp ? {
+          symbol: runnerUp.symbol,
+          reason: runnerUp.selection_reason || runnerUp.ai_notes || `${runnerUp.scan_type} setup`
+        } : null,
+        stocks: watchlist.stocks.map(s => ({
+          symbol: s.symbol,
+          scan_type: s.scan_type,
+          setup_score: s.setup_score,
+          grade: s.grade
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching weekly watchlist:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch weekly watchlist'
+    });
+  }
+});
+
+/**
  * POST /api/v1/admin/whatsapp/bulk-send
  * Send bulk WhatsApp alerts to selected users
  */
 router.post('/whatsapp/bulk-send', simpleAdminAuth, async (req, res) => {
   try {
-    const { userIds, alertType } = req.body;
+    const { userIds, alertType, watchlistData } = req.body;
 
     // Validate input
     if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
@@ -154,6 +214,24 @@ router.post('/whatsapp/bulk-send', simpleAdminAuth, async (req, res) => {
         success: false,
         error: 'Cannot send to more than 1000 users at once'
       });
+    }
+
+    // If weekly alert, fetch watchlist data if not provided
+    let alertData = watchlistData;
+    if (alertType === 'weekly' && !alertData) {
+      const watchlist = await WeeklyWatchlist.getCurrentWeek();
+      if (watchlist && watchlist.stocks && watchlist.stocks.length > 0) {
+        const sortedStocks = [...watchlist.stocks].sort((a, b) =>
+          (b.setup_score || 0) - (a.setup_score || 0)
+        );
+        alertData = {
+          stockCount: watchlist.stocks.length,
+          topPick: sortedStocks[0]?.symbol,
+          topPickReason: sortedStocks[0]?.selection_reason || sortedStocks[0]?.ai_notes,
+          runnerUp: sortedStocks[1]?.symbol,
+          runnerUpReason: sortedStocks[1]?.selection_reason || sortedStocks[1]?.ai_notes
+        };
+      }
     }
 
     // Fetch selected users
@@ -183,7 +261,7 @@ router.post('/whatsapp/bulk-send', simpleAdminAuth, async (req, res) => {
     await bulkAlertLog.save();
 
     // Start batch processing in background
-    processBulkAlerts(jobId, users, alertType);
+    processBulkAlerts(jobId, users, alertType, alertData);
 
     // Return immediately with job info
     res.json({
@@ -192,7 +270,8 @@ router.post('/whatsapp/bulk-send', simpleAdminAuth, async (req, res) => {
         jobId,
         totalUsers: users.length,
         status: 'processing',
-        message: `Sending ${alertType} alerts to ${users.length} users`
+        message: `Sending ${alertType} alerts to ${users.length} users`,
+        watchlistData: alertData
       }
     });
   } catch (error) {
@@ -263,7 +342,7 @@ router.get('/whatsapp/history', simpleAdminAuth, async (req, res) => {
 /**
  * Process bulk alerts in batches
  */
-async function processBulkAlerts(jobId, users, alertType) {
+async function processBulkAlerts(jobId, users, alertType, watchlistData) {
   const BATCH_SIZE = 10;
   const BATCH_DELAY_MS = 2000;
 
@@ -283,7 +362,12 @@ async function processBulkAlerts(jobId, users, alertType) {
       try {
         await messagingService.sendBulkAlert(user.mobileNumber, {
           alertType,
-          userName: user.firstName || 'User'
+          userName: user.firstName || 'User',
+          stockCount: watchlistData?.stockCount,
+          topPick: watchlistData?.topPick,
+          topPickReason: watchlistData?.topPickReason,
+          runnerUp: watchlistData?.runnerUp,
+          runnerUpReason: watchlistData?.runnerUpReason
         });
         successCount++;
       } catch (error) {

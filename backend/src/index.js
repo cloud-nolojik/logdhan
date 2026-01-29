@@ -314,7 +314,7 @@ app.listen(PORT, async () => {
   // Scheduled jobs:
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST)
   await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
-  // await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
+  await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
   await initializeWeeklyTrackAnalysisJob(); // weekly-track-analysis (4:00 PM Mon-Fri, position management for weekly_track)
 
 });

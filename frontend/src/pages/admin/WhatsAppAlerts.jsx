@@ -27,6 +27,10 @@ export default function WhatsAppAlerts() {
     usersWithoutApp: 0
   });
 
+  // Weekly watchlist data
+  const [watchlistData, setWatchlistData] = useState(null);
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
+
   // Send status
   const [sendingStatus, setSendingStatus] = useState(null);
 
@@ -38,12 +42,22 @@ export default function WhatsAppAlerts() {
     }
   }, []);
 
-  // Fetch users when logged in
+  // Fetch users and watchlist when logged in
   useEffect(() => {
     if (isLoggedIn) {
       fetchUsers();
+      if (alertType === 'weekly') {
+        fetchWatchlist();
+      }
     }
   }, [isLoggedIn, pagination.page, searchQuery]);
+
+  // Fetch watchlist when alert type changes to weekly
+  useEffect(() => {
+    if (isLoggedIn && alertType === 'weekly') {
+      fetchWatchlist();
+    }
+  }, [alertType]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -80,6 +94,7 @@ export default function WhatsAppAlerts() {
     setIsLoggedIn(false);
     setUsers([]);
     setSelectedUsers([]);
+    setWatchlistData(null);
   };
 
   const fetchUsers = async () => {
@@ -116,6 +131,28 @@ export default function WhatsAppAlerts() {
       console.error('Error fetching users:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchWatchlist = async () => {
+    setWatchlistLoading(true);
+    try {
+      const token = localStorage.getItem('adminToken');
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/weekly-watchlist`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setWatchlistData(data.data);
+      }
+    } catch (error) {
+      console.error('Error fetching watchlist:', error);
+    } finally {
+      setWatchlistLoading(false);
     }
   };
 
@@ -156,7 +193,14 @@ export default function WhatsAppAlerts() {
         },
         body: JSON.stringify({
           userIds: selectedUsers,
-          alertType
+          alertType,
+          watchlistData: alertType === 'weekly' && watchlistData ? {
+            stockCount: watchlistData.stockCount,
+            topPick: watchlistData.topPick?.symbol,
+            topPickReason: watchlistData.topPick?.reason,
+            runnerUp: watchlistData.runnerUp?.symbol,
+            runnerUpReason: watchlistData.runnerUp?.reason
+          } : null
         })
       });
 
@@ -263,6 +307,52 @@ export default function WhatsAppAlerts() {
             </button>
           </div>
         </div>
+
+        {/* Weekly Watchlist Preview */}
+        {alertType === 'weekly' && (
+          <div className="bg-slate-800 rounded-lg p-4 md:p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4">Weekly Watchlist Preview</h2>
+            {watchlistLoading ? (
+              <p className="text-slate-400">Loading watchlist...</p>
+            ) : watchlistData ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-4">
+                  <div className="bg-emerald-600/20 px-4 py-2 rounded-lg">
+                    <span className="text-emerald-400 font-bold text-2xl">{watchlistData.stockCount}</span>
+                    <span className="text-slate-400 ml-2">Stocks</span>
+                  </div>
+                  <span className="text-slate-400">{watchlistData.weekLabel}</span>
+                </div>
+
+                {watchlistData.topPick && (
+                  <div className="bg-slate-700/50 p-4 rounded-lg">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded text-xs font-medium">TOP PICK</span>
+                      <span className="font-bold text-lg">{watchlistData.topPick.symbol}</span>
+                    </div>
+                    <p className="text-slate-400 text-sm">{watchlistData.topPick.reason}</p>
+                  </div>
+                )}
+
+                {watchlistData.runnerUp && (
+                  <div className="bg-slate-700/50 p-4 rounded-lg">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="bg-slate-500/20 text-slate-400 px-2 py-0.5 rounded text-xs font-medium">RUNNER UP</span>
+                      <span className="font-bold text-lg">{watchlistData.runnerUp.symbol}</span>
+                    </div>
+                    <p className="text-slate-400 text-sm">{watchlistData.runnerUp.reason}</p>
+                  </div>
+                )}
+
+                {watchlistData.stockCount === 0 && (
+                  <p className="text-orange-400">No stocks in the current weekly watchlist</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-slate-400">No watchlist data available</p>
+            )}
+          </div>
+        )}
 
         {/* Summary Cards */}
         <div className="grid grid-cols-3 gap-4 mb-6">
