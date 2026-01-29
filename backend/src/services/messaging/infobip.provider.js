@@ -11,7 +11,7 @@ export class InfobipProvider extends MessagingProvider {
       otp: {
         templateName: 'otp_verify', // Your Infobip template name
         templateId: '899224292857442', // Your Infobip template ID
-        language: 'en_GB',
+        language: 'en',
         placeholderCount: 1 // Only OTP
       },
       analysis_service_update: {
@@ -122,6 +122,9 @@ export class InfobipProvider extends MessagingProvider {
       }]
 
     };
+
+    // Debug logging
+    console.log('📤 Infobip Request:', JSON.stringify(postData, null, 2));
 
     return new Promise((resolve, reject) => {
       const options = {
