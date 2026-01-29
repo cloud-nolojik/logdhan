@@ -193,6 +193,29 @@ class FirebaseService {
 
     return this.sendToUser(userId, title, body, data);
   }
+
+  /**
+   * Send weekly setups alert notification
+   */
+  async sendWeeklySetupsAlert(userId, alertData) {
+    const stockCount = alertData.stockCount || 0;
+    const topPick = alertData.topPick || '';
+
+    const title = 'Weekly Setups Ready!';
+    const body = topPick
+      ? `${stockCount} new setups available. Top pick: ${topPick}. Open app to view.`
+      : `${stockCount} new setups available for this week. Open app to view.`;
+
+    const data = {
+      type: 'WEEKLY_SETUPS',
+      stockCount: String(stockCount),
+      topPick: topPick || '',
+      route: '/setups/weekly',
+      timestamp: new Date().toISOString()
+    };
+
+    return this.sendToUser(userId, title, body, data);
+  }
 }
 
 // Create and export a singleton instance

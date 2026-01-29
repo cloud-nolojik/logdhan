@@ -5,6 +5,7 @@ import BulkAlertLog from '../models/bulkAlertLog.js';
 import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 import { simpleAdminAuth } from '../middleware/simpleAdminAuth.js';
 import { messagingService } from '../services/messaging/messaging.service.js';
+import { firebaseService } from '../services/firebase/firebase.service.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const router = express.Router();
@@ -284,6 +285,103 @@ router.post('/whatsapp/bulk-send', simpleAdminAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/v1/admin/push/bulk-send
+ * Send bulk push notifications to selected users (for weekly alerts)
+ */
+router.post('/push/bulk-send', simpleAdminAuth, async (req, res) => {
+  try {
+    const { userIds, alertType, watchlistData } = req.body;
+
+    // Validate input
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No users selected for alert'
+      });
+    }
+
+    if (!alertType || !['weekly', 'daily'].includes(alertType)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid alert type. Must be "weekly" or "daily"'
+      });
+    }
+
+    if (userIds.length > 1000) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot send to more than 1000 users at once'
+      });
+    }
+
+    // If weekly alert, fetch watchlist data if not provided
+    let alertData = watchlistData;
+    if (alertType === 'weekly' && !alertData) {
+      const watchlist = await WeeklyWatchlist.getCurrentWeek();
+      if (watchlist && watchlist.stocks && watchlist.stocks.length > 0) {
+        const sortedStocks = [...watchlist.stocks].sort((a, b) =>
+          (b.setup_score || 0) - (a.setup_score || 0)
+        );
+        alertData = {
+          stockCount: watchlist.stocks.length,
+          topPick: sortedStocks[0]?.symbol,
+          topPickReason: sortedStocks[0]?.selection_reason || sortedStocks[0]?.ai_notes,
+          runnerUp: sortedStocks[1]?.symbol,
+          runnerUpReason: sortedStocks[1]?.selection_reason || sortedStocks[1]?.ai_notes
+        };
+      }
+    }
+
+    // Fetch selected users with FCM tokens
+    const users = await User.find({
+      _id: { $in: userIds },
+      fcmTokens: { $exists: true, $ne: [] }
+    })
+      .select('_id firstName fcmTokens')
+      .lean();
+
+    if (users.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No valid users found with push notification tokens'
+      });
+    }
+
+    // Create job record
+    const jobId = uuidv4();
+    const bulkAlertLog = new BulkAlertLog({
+      jobId,
+      alertType: `${alertType}_push`,
+      totalUsers: users.length,
+      status: 'processing',
+      startedAt: new Date()
+    });
+    await bulkAlertLog.save();
+
+    // Start batch processing in background
+    processBulkPushAlerts(jobId, users, alertType, alertData);
+
+    // Return immediately with job info
+    res.json({
+      success: true,
+      data: {
+        jobId,
+        totalUsers: users.length,
+        status: 'processing',
+        message: `Sending ${alertType} push notifications to ${users.length} users`,
+        watchlistData: alertData
+      }
+    });
+  } catch (error) {
+    console.error('Error starting bulk push send:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to start bulk push send'
+    });
+  }
+});
+
+/**
  * GET /api/v1/admin/whatsapp/job/:jobId
  * Get status of a bulk send job
  */
@@ -415,6 +513,90 @@ async function processBulkAlerts(jobId, users, alertType, watchlistData) {
   );
 
   console.log(`Bulk alert job ${jobId} completed: ${successCount} success, ${failureCount} failures`);
+}
+
+/**
+ * Process bulk push notifications in batches
+ */
+async function processBulkPushAlerts(jobId, users, alertType, watchlistData) {
+  const BATCH_SIZE = 10;
+  const BATCH_DELAY_MS = 500; // Faster than WhatsApp since FCM is more efficient
+
+  let successCount = 0;
+  let failureCount = 0;
+  const failures = [];
+
+  const totalBatches = Math.ceil(users.length / BATCH_SIZE);
+
+  for (let i = 0; i < totalBatches; i++) {
+    const batchStart = i * BATCH_SIZE;
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, users.length);
+    const batch = users.slice(batchStart, batchEnd);
+
+    // Process batch in parallel
+    const batchPromises = batch.map(async (user) => {
+      try {
+        const result = await firebaseService.sendWeeklySetupsAlert(user._id, {
+          stockCount: watchlistData?.stockCount || 0,
+          topPick: watchlistData?.topPick || '',
+          topPickReason: watchlistData?.topPickReason || '',
+          runnerUp: watchlistData?.runnerUp || '',
+          runnerUpReason: watchlistData?.runnerUpReason || ''
+        });
+
+        if (result.success) {
+          successCount++;
+        } else {
+          failureCount++;
+          failures.push({
+            userId: user._id,
+            error: result.error || 'Unknown error'
+          });
+        }
+      } catch (error) {
+        failureCount++;
+        failures.push({
+          userId: user._id,
+          error: error.message
+        });
+        console.error(`Failed to send push to user ${user._id}:`, error.message);
+      }
+    });
+
+    await Promise.all(batchPromises);
+
+    // Update job progress
+    await BulkAlertLog.findOneAndUpdate(
+      { jobId },
+      {
+        'results.successCount': successCount,
+        'results.failureCount': failureCount
+      }
+    );
+
+    // Delay between batches (except for last batch)
+    if (i < totalBatches - 1) {
+      await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+    }
+  }
+
+  // Mark job as completed
+  const finalStatus = failureCount === 0 ? 'completed' : (successCount === 0 ? 'failed' : 'partial');
+
+  await BulkAlertLog.findOneAndUpdate(
+    { jobId },
+    {
+      status: finalStatus,
+      completedAt: new Date(),
+      results: {
+        successCount,
+        failureCount,
+        failures: failures.slice(0, 100)
+      }
+    }
+  );
+
+  console.log(`Bulk push alert job ${jobId} completed: ${successCount} success, ${failureCount} failures`);
 }
 
 export default router;

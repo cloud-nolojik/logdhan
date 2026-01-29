@@ -34,6 +34,9 @@ export default function WhatsAppAlerts() {
   // Send status
   const [sendingStatus, setSendingStatus] = useState(null);
 
+  // Notification method for weekly alerts
+  const [notificationMethod, setNotificationMethod] = useState('push'); // 'push' or 'whatsapp'
+
   // Check for existing token on mount
   useEffect(() => {
     const token = localStorage.getItem('adminToken');
@@ -175,8 +178,11 @@ export default function WhatsAppAlerts() {
   const handleSendAlerts = async () => {
     if (selectedUsers.length === 0) return;
 
+    const method = notificationMethod;
+    const methodLabel = method === 'push' ? 'Push Notification' : 'WhatsApp';
+
     const confirmed = window.confirm(
-      `Are you sure you want to send ${alertType} alerts to ${selectedUsers.length} users via WhatsApp?`
+      `Are you sure you want to send ${alertType} alerts to ${selectedUsers.length} users via ${methodLabel}?`
     );
 
     if (!confirmed) return;
@@ -185,7 +191,11 @@ export default function WhatsAppAlerts() {
 
     try {
       const token = localStorage.getItem('adminToken');
-      const response = await fetch(`${API_BASE_URL}/api/v1/admin/whatsapp/bulk-send`, {
+      const endpoint = method === 'push'
+        ? `${API_BASE_URL}/api/v1/admin/push/bulk-send`
+        : `${API_BASE_URL}/api/v1/admin/whatsapp/bulk-send`;
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -306,6 +316,38 @@ export default function WhatsAppAlerts() {
               Daily Analysis
             </button>
           </div>
+        </div>
+
+        {/* Notification Method Toggle */}
+        <div className="bg-slate-800 rounded-lg p-4 md:p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-4">Notification Method</h2>
+          <div className="flex gap-4">
+            <button
+              onClick={() => setNotificationMethod('push')}
+              className={`px-6 py-3 rounded-lg font-medium transition ${
+                notificationMethod === 'push'
+                  ? 'bg-purple-600 text-white'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              }`}
+            >
+              Push Notification
+            </button>
+            <button
+              onClick={() => setNotificationMethod('whatsapp')}
+              className={`px-6 py-3 rounded-lg font-medium transition ${
+                notificationMethod === 'whatsapp'
+                  ? 'bg-green-600 text-white'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              }`}
+            >
+              WhatsApp
+            </button>
+          </div>
+          <p className="text-slate-400 text-sm mt-2">
+            {notificationMethod === 'push'
+              ? 'Send in-app push notifications to users with the app installed'
+              : 'Send WhatsApp messages to users with mobile numbers'}
+          </p>
         </div>
 
         {/* Weekly Watchlist Preview */}
@@ -487,11 +529,15 @@ export default function WhatsAppAlerts() {
           <button
             onClick={handleSendAlerts}
             disabled={selectedUsers.length === 0 || sendingStatus?.status === 'sending'}
-            className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:cursor-not-allowed px-8 py-3 rounded-lg font-semibold transition"
+            className={`${
+              notificationMethod === 'push'
+                ? 'bg-purple-600 hover:bg-purple-700'
+                : 'bg-emerald-600 hover:bg-emerald-700'
+            } disabled:bg-slate-600 disabled:cursor-not-allowed px-8 py-3 rounded-lg font-semibold transition`}
           >
             {sendingStatus?.status === 'sending'
               ? 'Sending...'
-              : `Send ${alertType === 'weekly' ? 'Weekly' : 'Daily'} Alert to ${selectedUsers.length} Users`}
+              : `Send ${alertType === 'weekly' ? 'Weekly' : 'Daily'} ${notificationMethod === 'push' ? 'Push' : 'WhatsApp'} Alert to ${selectedUsers.length} Users`}
           </button>
         </div>
 
