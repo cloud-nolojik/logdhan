@@ -107,19 +107,21 @@ router.post('/track-weekly', auth, async (req, res) => {
 
     if (existingIndex !== -1) {
       // Stock already exists - update source to weekly_track if it was manual
-      const currentSource = user.watchlist[existingIndex].added_source;
+      const existingItem = user.watchlist[existingIndex];
+      const currentSource = existingItem.added_source;
       if (currentSource === 'manual') {
         user.watchlist[existingIndex].added_source = 'weekly_track';
         await user.save();
       }
+      // Use existing watchlist item data (in case stock lookup failed)
       return res.status(200).json({
         success: true,
         message: 'Stock already being tracked',
         stock: {
-          instrument_key: stock.instrument_key,
-          trading_symbol: stock.trading_symbol,
-          name: stock.name,
-          exchange: stock.exchange,
+          instrument_key: existingItem.instrument_key,
+          trading_symbol: existingItem.trading_symbol || stock?.trading_symbol,
+          name: existingItem.name || stock?.name,
+          exchange: existingItem.exchange || stock?.exchange,
           added_source: user.watchlist[existingIndex].added_source
         }
       });

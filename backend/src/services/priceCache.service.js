@@ -788,7 +788,7 @@ class PriceCacheService {
         }
       }
     } else {
-      // NON-MARKET HOURS: Use LatestPrice collection, fallback to PreFetchedData candles
+      // NON-MARKET HOURS: Use LatestPrice collection, fallback to PreFetchedData candles, then Upstox API
       const dbStart = Date.now();
       try {
         const latestPrices = await LatestPrice.getPricesForInstruments(instrumentKeys);
@@ -815,6 +815,54 @@ class PriceCacheService {
               }
             }
           });
+        }
+
+        // For still missing prices, fetch from Upstox API (historical data)
+        const stillMissingKeys = instrumentKeys.filter((key) => priceMap[key] === undefined);
+        if (stillMissingKeys.length > 0) {
+          console.log(`📡 [API FALLBACK] Fetching ${stillMissingKeys.length} missing prices from Upstox API (market closed)`);
+
+          const apiPromises = stillMissingKeys.map(async (instrumentKey) => {
+            try {
+              const price = await getCurrentPrice(instrumentKey, false);
+              return { instrumentKey, price };
+            } catch (error) {
+              console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
+              return { instrumentKey, price: null };
+            }
+          });
+
+          const apiResults = await Promise.all(apiPromises);
+          const dbUpdatePromises = [];
+
+          apiResults.forEach(({ instrumentKey, price }) => {
+            if (price !== null) {
+              priceMap[instrumentKey] = price;
+
+              // Update memory cache
+              this.priceCache.set(instrumentKey, {
+                ltp: price,
+                candles: null,
+                timestamp: Date.now(),
+                lastUpdated: new Date().toISOString()
+              });
+
+              // Queue DB update to persist for future requests
+              dbUpdatePromises.push(this.storePriceInDB(instrumentKey, price, null, Date.now()));
+            }
+          });
+
+          // Store fetched prices to DB in background (non-blocking)
+          if (dbUpdatePromises.length > 0) {
+            Promise.all(dbUpdatePromises).catch((err) => {
+              console.error(`❌ [DB] Failed to persist API-fetched prices: ${err.message}`);
+            });
+          }
+
+          const apiFetchedCount = apiResults.filter(r => r.price !== null).length;
+          if (apiFetchedCount > 0) {
+            console.log(`✅ [API FALLBACK] Fetched ${apiFetchedCount}/${stillMissingKeys.length} prices from Upstox API`);
+          }
         }
 
         const dbTime = Date.now() - dbStart;
