@@ -90,9 +90,11 @@ router.post('/', auth, async (req, res) => {
 router.post('/track-weekly', auth, async (req, res) => {
   try {
     const { instrument_key } = req.body;
+    console.log('📥 track-weekly request:', { instrument_key, userId: req.user.id });
 
     // Get stock details
     const stock = await getExactStock(instrument_key);
+    console.log('📊 Stock lookup result:', stock ? stock.trading_symbol : 'NOT FOUND');
     if (!stock) {
       return res.status(404).json({ success: false, error: 'Stock not found' });
     }
@@ -161,6 +163,7 @@ router.post('/track-weekly', auth, async (req, res) => {
       added_source: 'weekly_track'
     });
     await user.save();
+    console.log('✅ Stock added to watchlist:', stock.trading_symbol, 'for user:', req.user.id);
 
     res.status(201).json({
       success: true,
