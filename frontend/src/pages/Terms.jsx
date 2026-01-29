@@ -96,8 +96,8 @@ export default function Terms() {
             <p className="text-slate-600">
               For queries regarding these terms:
               <br />
-              <a href="mailto:hello@nolojik.com" className="text-blue-600 hover:text-emerald-500 hover:underline transition">
-                hello@nolojik.com
+              <a href="mailto:contact-swingsetups@nolojik.com" className="text-blue-600 hover:text-emerald-500 hover:underline transition">
+                contact-swingsetups@nolojik.com
               </a>
             </p>
           </div>

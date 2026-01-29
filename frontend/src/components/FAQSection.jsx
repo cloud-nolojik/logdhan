@@ -138,7 +138,7 @@ export default function FAQSection() {
             Get in touch with our team for any clarification
           </p>
           <a
-            href="mailto:hello@nolojik.com"
+            href="mailto:contact-swingsetups@nolojik.com"
             className="inline-flex items-center bg-gradient-to-r from-blue-600 to-emerald-500 hover:from-blue-700 hover:to-emerald-600 text-white font-bold px-8 py-4 rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-lg shadow-blue-500/20"
           >
             <span className="mr-2">📧</span>

@@ -141,10 +141,10 @@ export default function PrivacyPolicy() {
             <p className="text-slate-300 mt-2">
               To exercise these rights, please write to us at{' '}
               <a
-                href="mailto:hello@nolojik.com"
+                href="mailto:contact-swingsetups@nolojik.com"
                 className="text-emerald-300 hover:text-emerald-200 underline underline-offset-2 font-semibold"
               >
-                hello@nolojik.com
+                contact-swingsetups@nolojik.com
               </a>.
             </p>
           </div>
@@ -173,10 +173,10 @@ export default function PrivacyPolicy() {
               <span className="font-semibold">Nolojik Innovations Pvt Ltd</span><br />
               Email:{' '}
               <a
-                href="mailto:hello@nolojik.com"
+                href="mailto:contact-swingsetups@nolojik.com"
                 className="text-emerald-300 hover:text-emerald-200 underline underline-offset-2 font-semibold"
               >
-                hello@nolojik.com
+                contact-swingsetups@nolojik.com
               </a>
             </p>
           </div>

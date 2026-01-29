@@ -151,10 +151,10 @@ export default function PricingPolicy() {
               If you have any questions about this pricing policy, please write
               to us at{" "}
               <a
-                href="mailto:hello@nolojik.com"
+                href="mailto:contact-swingsetups@nolojik.com"
                 className="font-semibold text-blue-600 hover:text-blue-700 hover:underline"
               >
-                hello@nolojik.com
+                contact-swingsetups@nolojik.com
               </a>
               .
             </p>

@@ -9,8 +9,8 @@ export class InfobipProvider extends MessagingProvider {
     super(config);
     this.templates = {
       otp: {
-        templateName: 'logdhan_otp_verify', // Your Infobip template name
-        templateId: '1277969390643822', // Your Infobip template ID
+        templateName: 'otp_verify', // Your Infobip template name
+        templateId: '899224292857442', // Your Infobip template ID
         language: 'en_GB',
         placeholderCount: 1 // Only OTP
       },

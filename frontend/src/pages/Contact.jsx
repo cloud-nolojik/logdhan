@@ -90,10 +90,10 @@ export default function Contact() {
               For detailed questions and feedback
             </p>
             <a
-              href="mailto:hello@nolojik.com"
+              href="mailto:contact-swingsetups@nolojik.com"
               className="text-emerald-600 text-base font-semibold hover:text-emerald-700 transition break-all"
             >
-              hello@nolojik.com
+              contact-swingsetups@nolojik.com
             </a>
             <div className="text-slate-400 text-xs mt-2">
               Typically replies within 24 hours
@@ -157,8 +157,8 @@ export default function Contact() {
           <p className="text-sm text-emerald-700 max-w-xl mx-auto">
             We speak plain English, not trading jargon. If anything in the app confuses you,
             email us at{" "}
-            <a href="mailto:hello@nolojik.com" className="font-semibold underline underline-offset-2">
-              hello@nolojik.com
+            <a href="mailto:contact-swingsetups@nolojik.com" className="font-semibold underline underline-offset-2">
+              contact-swingsetups@nolojik.com
             </a>{" "}
             and we&apos;ll explain it like we&apos;re chatting over coffee.
           </p>

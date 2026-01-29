@@ -21,8 +21,8 @@ export default function RefundPolicy() {
             <p className="text-blue-700 font-semibold">📩 For Refund Requests</p>
             <p className="text-blue-600 text-sm mt-1">
               Email us at{" "}
-              <a href="mailto:hello@nolojik.com" className="text-emerald-600 hover:text-blue-600 hover:underline transition font-semibold">
-                hello@nolojik.com
+              <a href="mailto:contact-swingsetups@nolojik.com" className="text-emerald-600 hover:text-blue-600 hover:underline transition font-semibold">
+                contact-swingsetups@nolojik.com
               </a>{" "}
               with your registered mobile number and transaction details.
             </p>
@@ -83,7 +83,7 @@ export default function RefundPolicy() {
           <div>
             <h2 className="text-lg font-semibold text-slate-900 mb-1">6. Support Contact</h2>
             <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
-              <p className="text-slate-700"><strong>Email:</strong> <a className="text-blue-600 hover:text-emerald-500 hover:underline transition" href="mailto:hello@nolojik.com">hello@nolojik.com</a></p>
+              <p className="text-slate-700"><strong>Email:</strong> <a className="text-blue-600 hover:text-emerald-500 hover:underline transition" href="mailto:contact-swingsetups@nolojik.com">contact-swingsetups@nolojik.com</a></p>
               <p className="text-xs text-slate-500 mt-2">Include registered phone number + transaction details</p>
             </div>
           </div>

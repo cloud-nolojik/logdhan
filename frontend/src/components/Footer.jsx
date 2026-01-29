@@ -31,7 +31,7 @@ export default function Footer() {
         </div>
         <div className="border-t border-slate-700 pt-6 text-center">
           <div className="text-sm text-slate-300 mb-2">
-            Email: <a href="mailto:hello@nolojik.com" className="text-blue-400 hover:text-emerald-400 transition hover:underline">hello@nolojik.com</a>
+            Email: <a href="mailto:contact-swingsetups@nolojik.com" className="text-blue-400 hover:text-emerald-400 transition hover:underline">contact-swingsetups@nolojik.com</a>
           </div>
           <div className="text-xs text-slate-400 space-y-1">
             <p>SwingSetups is a product of Nolojik Innovations Private Limited</p>

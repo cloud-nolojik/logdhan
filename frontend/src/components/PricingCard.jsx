@@ -38,7 +38,7 @@ export default function PricingCard() {
       <Link to="/pricing">
         <button className="bg-gold-light hover:bg-gold text-primary font-bold px-8 py-3 rounded-lg shadow-lg transition text-lg">View All Plans</button>
       </Link>
-      <div className="mt-4 text-xs text-white/70">Contact: <a href="mailto:hello@nolojik.com" className="text-gold-light hover:underline">hello@nolojik.com</a></div>
+      <div className="mt-4 text-xs text-white/70">Contact: <a href="mailto:contact-swingsetups@nolojik.com" className="text-gold-light hover:underline">contact-swingsetups@nolojik.com</a></div>
     </div>
   );
 } 

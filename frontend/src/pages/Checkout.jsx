@@ -51,7 +51,7 @@
 //           Credits will be credited instantly upon successful payment.<br />
 //           <strong>You will receive {amount || '0'} credits for ₹{amount || '0'}</strong><br />
 //           <strong>= {amount ? Math.floor(amount / 1) : '0'} AI reviews (1 credit = 1 review)</strong><br />
-//           Support: <a href="mailto:hello@nolojik.com" className="text-gold-light hover:underline">hello@nolojik.com</a>
+//           Support: <a href="mailto:contact-swingsetups@nolojik.com" className="text-gold-light hover:underline">contact-swingsetups@nolojik.com</a>
 //         </div>
 //       </div>
 //       {showModal && (
