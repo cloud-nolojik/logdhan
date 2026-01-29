@@ -186,9 +186,12 @@ export async function validateStock(instrumentKey) {
 export async function getCurrentPrice(instrumentKey, sendCandles = false) {
   const currentDate = new Date();
   const previousDay = new Date(currentDate);
-  previousDay.setDate(currentDate.getDate() - 3);
+  previousDay.setDate(currentDate.getDate() - 7); // Look back 7 days to cover weekends/holidays
   const currentDayFormattedDate = getFormattedDate(currentDate);
   const previousDayFormattedDate = getFormattedDate(previousDay);
+
+  // URL-encode the instrument key (| needs to be encoded as %7C)
+  const encodedInstrumentKey = encodeURIComponent(instrumentKey);
 
   const axiosConfig = {
     headers: {
@@ -204,17 +207,17 @@ export async function getCurrentPrice(instrumentKey, sendCandles = false) {
     // Current day intraday data (1-minute candles)
     {
       name: 'v3-intraday-current',
-      url: `https://api.upstox.com/v3/historical-candle/intraday/${instrumentKey}/minutes/1`
+      url: `https://api.upstox.com/v3/historical-candle/intraday/${encodedInstrumentKey}/minutes/1`
     },
     // Historical data with date range (1-minute candles)
     {
       name: 'v3-historical-minutes',
-      url: `https://api.upstox.com/v3/historical-candle/${instrumentKey}/minutes/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
+      url: `https://api.upstox.com/v3/historical-candle/${encodedInstrumentKey}/minutes/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
     },
     // Daily candles fallback (for non-market hours when intraday data is unavailable)
     {
       name: 'v3-historical-daily',
-      url: `https://api.upstox.com/v3/historical-candle/${instrumentKey}/day/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
+      url: `https://api.upstox.com/v3/historical-candle/${encodedInstrumentKey}/day/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
     }];
 
     for (const format of apiFormats) {

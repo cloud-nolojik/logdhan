@@ -792,7 +792,15 @@ class PriceCacheService {
       const dbStart = Date.now();
       try {
         const latestPrices = await LatestPrice.getPricesForInstruments(instrumentKeys);
+        const staleKeys = []; // Track keys with stale prices that need refresh
+        const stalePriceThreshold = 24 * 60 * 60 * 1000; // 24 hours
+
         latestPrices.forEach((priceDoc) => {
+          const priceAge = Date.now() - new Date(priceDoc.updated_at).getTime();
+          if (priceAge > stalePriceThreshold) {
+            // Price is stale, mark for refresh but use as fallback
+            staleKeys.push(priceDoc.instrument_key);
+          }
           priceMap[priceDoc.instrument_key] = priceDoc.last_traded_price;
         });
 
@@ -817,12 +825,15 @@ class PriceCacheService {
           });
         }
 
-        // For still missing prices, fetch from Upstox API (historical data)
+        // For still missing prices OR stale prices, fetch from Upstox API (historical data)
         const stillMissingKeys = instrumentKeys.filter((key) => priceMap[key] === undefined);
-        if (stillMissingKeys.length > 0) {
-          console.log(`📡 [API FALLBACK] Fetching ${stillMissingKeys.length} missing prices from Upstox API (market closed): ${stillMissingKeys.join(', ')}`);
+        const keysToRefresh = [...new Set([...stillMissingKeys, ...staleKeys])]; // Combine missing + stale, dedupe
+        if (keysToRefresh.length > 0) {
+          const missingCount = stillMissingKeys.length;
+          const staleCount = staleKeys.length;
+          console.log(`📡 [API FALLBACK] Fetching ${keysToRefresh.length} prices from Upstox API (market closed) - ${missingCount} missing, ${staleCount} stale`);
 
-          const apiPromises = stillMissingKeys.map(async (instrumentKey) => {
+          const apiPromises = keysToRefresh.map(async (instrumentKey) => {
             try {
               const price = await getCurrentPrice(instrumentKey, false);
               console.log(`📡 [API FALLBACK] ${instrumentKey} -> price: ${price}`);
@@ -863,7 +874,7 @@ class PriceCacheService {
           }
 
           const apiFetchedCount = apiResults.filter(r => r.price !== null).length;
-          console.log(`✅ [API FALLBACK] Fetched ${apiFetchedCount}/${stillMissingKeys.length} prices from Upstox API`);
+          console.log(`✅ [API FALLBACK] Fetched ${apiFetchedCount}/${keysToRefresh.length} prices from Upstox API`);
         }
 
         const dbTime = Date.now() - dbStart;
