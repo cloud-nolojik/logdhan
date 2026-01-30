@@ -13,15 +13,29 @@ const router = express.Router();
  */
 router.get("/", auth, async (req, res) => {
   try {
+    const now = new Date();
+    console.log(`[WEEKLY-WATCHLIST] GET request at ${now.toISOString()}`);
+    console.log(`[WEEKLY-WATCHLIST] Day of week: ${now.getDay()} (0=Sun, 5=Fri, 6=Sat)`);
+
     const watchlist = await WeeklyWatchlist.getCurrentWeek();
 
     if (!watchlist) {
+      console.log(`[WEEKLY-WATCHLIST] No watchlist found for current week`);
       return res.json({
         success: true,
         watchlist: null,
         message: "No watchlist for current week. Add stocks to create one."
       });
     }
+
+    console.log(`[WEEKLY-WATCHLIST] Found watchlist: ${watchlist.week_label}`);
+    console.log(`[WEEKLY-WATCHLIST] week_start: ${watchlist.week_start?.toISOString()}`);
+    console.log(`[WEEKLY-WATCHLIST] week_end: ${watchlist.week_end?.toISOString()}`);
+    console.log(`[WEEKLY-WATCHLIST] stocks count: ${watchlist.stocks?.length || 0}`);
+    console.log(`[WEEKLY-WATCHLIST] Is now (${now.toISOString()}) between week_start and week_end?`);
+    console.log(`[WEEKLY-WATCHLIST] now >= week_start: ${now >= watchlist.week_start}`);
+    console.log(`[WEEKLY-WATCHLIST] now <= week_end: ${now <= watchlist.week_end}`);
+    console.log(`[WEEKLY-WATCHLIST] week_end already passed: ${now > watchlist.week_end}`)
 
     // Enrich with current prices (real-time from Upstox API)
     const enrichedStocks = await Promise.all(watchlist.stocks.map(async (stock) => {

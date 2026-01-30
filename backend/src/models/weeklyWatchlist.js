@@ -179,20 +179,36 @@ function getWeekBoundaries(date, forScreening = false) {
 //              OR returns next week if it has stocks (after weekend screening runs)
 weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
   const now = new Date();
-  const dayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
 
-  // On weekdays (Mon-Fri), use strict week boundaries
-  if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-    return this.findOne({
+  // Convert to IST to determine day of week (IST = UTC + 5:30)
+  const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in ms
+  const nowIST = new Date(now.getTime() + istOffset);
+  const dayOfWeekIST = nowIST.getUTCDay(); // Use getUTCDay since we manually added IST offset
+
+  console.log(`[getCurrentWeek] Called at UTC: ${now.toISOString()}`);
+  console.log(`[getCurrentWeek] IST time: ${nowIST.toISOString().replace('Z', ' IST')}`);
+  console.log(`[getCurrentWeek] Day of week (IST): ${dayOfWeekIST} (0=Sun, 1=Mon, 5=Fri, 6=Sat)`);
+
+  // On weekdays (Mon-Fri) in IST, use strict week boundaries
+  if (dayOfWeekIST >= 1 && dayOfWeekIST <= 5) {
+    console.log(`[getCurrentWeek] Weekday (IST) - querying for week containing now`);
+    const result = await this.findOne({
       week_start: { $lte: now },
       week_end: { $gte: now },
       status: "ACTIVE"
     });
+    console.log(`[getCurrentWeek] Query result: ${result ? result.week_label : 'null'}`);
+    if (result) {
+      console.log(`[getCurrentWeek] Found: week_start=${result.week_start?.toISOString()}, week_end=${result.week_end?.toISOString()}`);
+    }
+    return result;
   }
 
-  // On weekends (Sat/Sun):
+  // On weekends (Sat/Sun) in IST:
+  console.log(`[getCurrentWeek] Weekend (IST) - checking for next week's watchlist`);
   // 1. First check if next week's watchlist exists and screening has completed
   const { weekStart: nextWeekStart } = getWeekBoundaries(now, true);
+  console.log(`[getCurrentWeek] Next week start: ${nextWeekStart.toISOString()}`);
   const nextWeekWatchlist = await this.findOne({
     week_start: nextWeekStart,
     status: "ACTIVE"
@@ -200,14 +216,14 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
 
   // If screening completed (even with 0 stocks), show next week's watchlist
   if (nextWeekWatchlist && nextWeekWatchlist.screening_completed) {
+    console.log(`[getCurrentWeek] Returning next week's watchlist (screening completed)`);
     return nextWeekWatchlist;
   }
 
-  // 2. Otherwise (screening hasn't run yet), show the most recent watchlist
-  //    This allows users to still see Friday's stocks on Saturday before screening runs
-  return this.findOne({
-    status: "ACTIVE"
-  }).sort({ week_start: -1 });
+  // 2. Otherwise (screening hasn't run yet for next week)
+  //    Don't show expired watchlist - return null until new screening runs
+  console.log(`[getCurrentWeek] No next week watchlist yet - returning null (week ended)`);
+  return null;
 };
 
 // Static: Get or create current week (global)
