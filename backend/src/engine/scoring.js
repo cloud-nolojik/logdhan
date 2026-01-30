@@ -78,7 +78,7 @@ export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, deb
     return {
       score: 0,
       grade: 'D',
-      breakdown: [{ factor: 'error', points: 0, reason: 'Missing price data' }],
+      breakdown: [{ factor: 'DATA_ERROR', points: 0, max: 100, value: null, reason: 'Missing price data' }],
       eliminated: true,
       eliminationReason: 'Missing price data'
     };
@@ -91,7 +91,7 @@ export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, deb
     return {
       score: 0,
       grade: 'X',
-      breakdown: [{ factor: 'RSI_ELIMINATED', points: 0, reason: `RSI ${round2(currentRsi)} > 72 (too extended)` }],
+      breakdown: [{ factor: 'RSI_ELIMINATED', points: 0, max: 100, value: round2(currentRsi), reason: `RSI ${round2(currentRsi)} > 72 (too extended)` }],
       eliminated: true,
       eliminationReason: `RSI ${round2(currentRsi)} > 72 (too extended)`
     };

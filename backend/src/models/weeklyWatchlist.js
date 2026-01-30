@@ -100,7 +100,18 @@ weeklyWatchlistSchema.index({ status: 1 });
 weeklyWatchlistSchema.index({ "stocks.instrument_key": 1 });
 
 /**
- * Get week boundaries (Monday to Friday IST)
+ * Convert IST time to UTC
+ * IST is UTC+5:30, so we subtract 5 hours 30 minutes
+ * @param {Date} istDate - Date with IST time set via setHours
+ * @returns {Date} - UTC equivalent
+ */
+function istToUtc(istDate) {
+  // IST is UTC+5:30, so subtract 5:30 to get UTC
+  return new Date(istDate.getTime() - (5 * 60 + 30) * 60 * 1000);
+}
+
+/**
+ * Get week boundaries (Monday to Friday IST, stored as UTC)
  * On weekends (Sat/Sun), returns NEXT week's boundaries for screening prep
  * @param {Date} date
  * @param {boolean} forScreening - If true, on weekends returns next week
@@ -114,19 +125,25 @@ function getWeekBoundaries(date, forScreening = false) {
   if (forScreening && (dayOfWeek === 0 || dayOfWeek === 6)) {
     // Calculate days until next Monday
     const daysUntilMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
-    const weekStart = new Date(d);
-    weekStart.setDate(d.getDate() + daysUntilMonday);
-    weekStart.setHours(0, 0, 0, 0);
+    const weekStartIST = new Date(d);
+    weekStartIST.setDate(d.getDate() + daysUntilMonday);
+    weekStartIST.setUTCHours(0, 0, 0, 0); // Set to midnight UTC first
 
     // Get Friday of that week
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 4);
-    weekEnd.setHours(23, 59, 59, 999);
+    const weekEndIST = new Date(weekStartIST);
+    weekEndIST.setDate(weekStartIST.getDate() + 4);
+    weekEndIST.setUTCHours(23, 59, 59, 999); // Set to end of day UTC first
 
-    // Week label
-    const options = { month: 'short', day: 'numeric' };
-    const startStr = weekStart.toLocaleDateString('en-IN', options);
-    const endStr = weekEnd.toLocaleDateString('en-IN', { ...options, year: 'numeric' });
+    // Convert IST midnight/end-of-day to UTC
+    // Monday 00:00:00 IST = Sunday 18:30:00 UTC (subtract 5:30)
+    // Friday 23:59:59 IST = Friday 18:29:59 UTC (subtract 5:30)
+    const weekStart = istToUtc(weekStartIST);
+    const weekEnd = istToUtc(weekEndIST);
+
+    // Week label (display in IST)
+    const options = { month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' };
+    const startStr = weekStartIST.toLocaleDateString('en-IN', options);
+    const endStr = weekEndIST.toLocaleDateString('en-IN', { ...options, year: 'numeric' });
     const weekLabel = `${startStr} - ${endStr}`;
 
     return { weekStart, weekEnd, weekLabel };
@@ -135,18 +152,22 @@ function getWeekBoundaries(date, forScreening = false) {
   // Get Monday of current week
   const day = d.getDay();
   const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  const weekStart = new Date(d.setDate(diff));
-  weekStart.setHours(0, 0, 0, 0);
+  const weekStartIST = new Date(d.setDate(diff));
+  weekStartIST.setUTCHours(0, 0, 0, 0); // Set to midnight UTC first
 
   // Get Friday
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekStart.getDate() + 4);
-  weekEnd.setHours(23, 59, 59, 999);
+  const weekEndIST = new Date(weekStartIST);
+  weekEndIST.setDate(weekStartIST.getDate() + 4);
+  weekEndIST.setUTCHours(23, 59, 59, 999); // Set to end of day UTC first
 
-  // Week label
-  const options = { month: 'short', day: 'numeric' };
-  const startStr = weekStart.toLocaleDateString('en-IN', options);
-  const endStr = weekEnd.toLocaleDateString('en-IN', { ...options, year: 'numeric' });
+  // Convert IST midnight/end-of-day to UTC
+  const weekStart = istToUtc(weekStartIST);
+  const weekEnd = istToUtc(weekEndIST);
+
+  // Week label (display in IST)
+  const options = { month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' };
+  const startStr = weekStartIST.toLocaleDateString('en-IN', options);
+  const endStr = weekEndIST.toLocaleDateString('en-IN', { ...options, year: 'numeric' });
   const weekLabel = `${startStr} - ${endStr}`;
 
   return { weekStart, weekEnd, weekLabel };
