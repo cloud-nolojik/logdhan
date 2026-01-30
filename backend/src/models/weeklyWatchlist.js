@@ -206,9 +206,23 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
 
   // On weekends (Sat/Sun) in IST:
   console.log(`[getCurrentWeek] Weekend (IST) - checking for next week's watchlist`);
-  // 1. First check if next week's watchlist exists and screening has completed
-  const { weekStart: nextWeekStart } = getWeekBoundaries(now, true);
-  console.log(`[getCurrentWeek] Next week start: ${nextWeekStart.toISOString()}`);
+
+  // Calculate next Monday in IST
+  // If Saturday (6), next Monday is +2 days; if Sunday (0), next Monday is +1 day
+  const daysUntilMonday = dayOfWeekIST === 0 ? 1 : (8 - dayOfWeekIST);
+
+  // Create IST date for next Monday midnight
+  const nextMondayIST = new Date(nowIST);
+  nextMondayIST.setUTCDate(nowIST.getUTCDate() + daysUntilMonday);
+  nextMondayIST.setUTCHours(0, 0, 0, 0);
+
+  // Convert IST midnight to UTC (subtract 5:30)
+  const nextWeekStart = new Date(nextMondayIST.getTime() - istOffset);
+
+  console.log(`[getCurrentWeek] Days until Monday: ${daysUntilMonday}`);
+  console.log(`[getCurrentWeek] Next Monday IST: ${nextMondayIST.toISOString()}`);
+  console.log(`[getCurrentWeek] Next week start (UTC): ${nextWeekStart.toISOString()}`);
+
   const nextWeekWatchlist = await this.findOne({
     week_start: nextWeekStart,
     status: "ACTIVE"
@@ -216,7 +230,7 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
 
   // If screening completed (even with 0 stocks), show next week's watchlist
   if (nextWeekWatchlist && nextWeekWatchlist.screening_completed) {
-    console.log(`[getCurrentWeek] Returning next week's watchlist (screening completed)`);
+    console.log(`[getCurrentWeek] Returning next week's watchlist: ${nextWeekWatchlist.week_label}`);
     return nextWeekWatchlist;
   }
 
@@ -230,12 +244,39 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
 // On weekends, creates NEXT week's watchlist for screening prep
 weeklyWatchlistSchema.statics.getOrCreateCurrentWeek = async function() {
   const now = new Date();
-  const dayOfWeek = now.getDay();
-  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+  // Convert to IST to determine day of week (IST = UTC + 5:30)
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const nowIST = new Date(now.getTime() + istOffset);
+  const dayOfWeekIST = nowIST.getUTCDay();
+  const isWeekend = dayOfWeekIST === 0 || dayOfWeekIST === 6;
+
+  console.log(`[getOrCreateCurrentWeek] Day of week (IST): ${dayOfWeekIST}, isWeekend: ${isWeekend}`);
 
   // On weekends, always check/create next week's watchlist
   if (isWeekend) {
-    const { weekStart, weekEnd, weekLabel } = getWeekBoundaries(now, true);
+    // Calculate next Monday in IST (same logic as getCurrentWeek)
+    const daysUntilMonday = dayOfWeekIST === 0 ? 1 : (8 - dayOfWeekIST);
+    const nextMondayIST = new Date(nowIST);
+    nextMondayIST.setUTCDate(nowIST.getUTCDate() + daysUntilMonday);
+    nextMondayIST.setUTCHours(0, 0, 0, 0);
+
+    // Friday of next week (Monday + 4 days)
+    const nextFridayIST = new Date(nextMondayIST);
+    nextFridayIST.setUTCDate(nextMondayIST.getUTCDate() + 4);
+    nextFridayIST.setUTCHours(23, 59, 59, 999);
+
+    // Convert IST to UTC
+    const weekStart = new Date(nextMondayIST.getTime() - istOffset);
+    const weekEnd = new Date(nextFridayIST.getTime() - istOffset);
+
+    // Week label
+    const options = { month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' };
+    const startStr = nextMondayIST.toLocaleDateString('en-IN', options);
+    const endStr = nextFridayIST.toLocaleDateString('en-IN', { ...options, year: 'numeric' });
+    const weekLabel = `${startStr} - ${endStr}`;
+
+    console.log(`[getOrCreateCurrentWeek] Next week: ${weekLabel}, start: ${weekStart.toISOString()}`);
 
     // Check if next week's watchlist already exists
     let nextWeekWatchlist = await this.findOne({ week_start: weekStart });
@@ -255,11 +296,28 @@ weeklyWatchlistSchema.statics.getOrCreateCurrentWeek = async function() {
     return nextWeekWatchlist;
   }
 
-  // On weekdays, use getCurrentWeek or create current week
+  // On weekdays (IST), use getCurrentWeek or create current week
   let watchlist = await this.getCurrentWeek();
 
   if (!watchlist) {
-    const { weekStart, weekEnd, weekLabel } = getWeekBoundaries(now, false);
+    // Calculate current week boundaries in IST
+    // Get Monday of current week
+    const daysFromMonday = dayOfWeekIST === 0 ? 6 : dayOfWeekIST - 1;
+    const mondayIST = new Date(nowIST);
+    mondayIST.setUTCDate(nowIST.getUTCDate() - daysFromMonday);
+    mondayIST.setUTCHours(0, 0, 0, 0);
+
+    const fridayIST = new Date(mondayIST);
+    fridayIST.setUTCDate(mondayIST.getUTCDate() + 4);
+    fridayIST.setUTCHours(23, 59, 59, 999);
+
+    const weekStart = new Date(mondayIST.getTime() - istOffset);
+    const weekEnd = new Date(fridayIST.getTime() - istOffset);
+
+    const options = { month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' };
+    const startStr = mondayIST.toLocaleDateString('en-IN', options);
+    const endStr = fridayIST.toLocaleDateString('en-IN', { ...options, year: 'numeric' });
+    const weekLabel = `${startStr} - ${endStr}`;
 
     watchlist = await this.create({
       week_start: weekStart,
