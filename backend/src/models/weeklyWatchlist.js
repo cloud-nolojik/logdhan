@@ -17,11 +17,21 @@ const watchlistStockSchema = new mongoose.Schema({
     dma20: Number,
     dma50: Number,
     dma200: Number,
+    ema20: Number,                  // Entry/stop anchor
+    ema50: Number,                  // Trend confirmation
     rsi: Number,
+    weekly_rsi: Number,             // For dual-timeframe RSI gate (both daily + weekly < 72)
     atr: Number,
     atr_pct: Number,
-    volume_vs_avg: Number,  // e.g., 1.3 = 30% above average
-    distance_from_20dma_pct: Number
+    volume_vs_avg: Number,          // e.g., 1.3 = 30% above average
+    distance_from_20dma_pct: Number,
+    weekly_change_pct: Number,      // Scoring factor for A+ momentum
+    high_52w: Number,               // 52-week high (for breakout context)
+    ema_stack_bullish: Boolean,     // EMA20 > EMA50 > SMA200
+    weekly_pivot: Number,           // Weekly pivot level
+    weekly_r1: Number,              // Weekly R1 resistance
+    weekly_r2: Number,              // Weekly R2 resistance
+    weekly_s1: Number               // Weekly S1 support
   },
 
   // Suggested entry zone (from screening) - DEPRECATED: Use levels.entryRange instead
@@ -31,16 +41,21 @@ const watchlistStockSchema = new mongoose.Schema({
   },
 
   // Trading levels (from scanLevels - scan-type aware calculations)
+  // STRUCTURAL LADDER: Weekly R1 → R2 → 52W High → REJECT
   levels: {
     entry: Number,           // Single entry price
     entryRange: [Number],    // [low, high] entry range
     stop: Number,            // Stop loss price
-    target: Number,          // Target price
+    target: Number,          // T1 (primary target from structural ladder)
+    target2: Number,         // T2 extension target (trail only, null if not applicable)
+    targetBasis: String,     // 'weekly_r1', 'weekly_r2', 'atr_extension_52w_breakout', etc.
+    dailyR1Check: Number,    // Momentum confirmation checkpoint (not a target)
     riskReward: Number,      // Risk:Reward ratio (e.g., 2.0 = 1:2)
     riskPercent: Number,     // Risk as % of entry
     rewardPercent: Number,   // Reward as % of entry
     entryType: String,       // 'buy_above', 'buy_at', 'buy_below'
     mode: String,            // 'BREAKOUT', 'PULLBACK', 'A_PLUS_MOMENTUM', etc.
+    archetype: String,       // '52w_breakout', 'pullback', 'trend-follow', 'breakout', etc.
     reason: String           // Human-readable explanation
   },
 
@@ -58,6 +73,7 @@ const watchlistStockSchema = new mongoose.Schema({
 
   // AI Analysis reference
   analysis_id: { type: mongoose.Schema.Types.ObjectId, ref: "StockAnalysis" },
+  has_ai_analysis: { type: Boolean, default: false },  // True when Claude analysis generated
   ai_notes: String,
 
   added_at: { type: Date, default: Date.now }
@@ -77,7 +93,9 @@ const weeklyWatchlistSchema = new mongoose.Schema({
   screening_completed: { type: Boolean, default: false },  // True when screening ran (even with 0 results)
   scan_types_used: [String],  // ['breakout', 'pullback', 'momentum', 'consolidation_breakout']
   total_screener_results: Number,
+  total_eliminated: Number,      // Stocks eliminated by RSI gate or structural ladder rejection
   grade_a_count: Number,
+  grade_a_plus_count: Number,    // A+ grade count
 
   // Week summary (filled at week end)
   week_summary: {

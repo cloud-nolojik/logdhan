@@ -80,7 +80,18 @@ export function analyzeStock(candles, options = {}) {
       fridayHigh: ind.prev_high || ind.high,
       fridayClose: ind.prev_close || ind.close,
       fridayLow: ind.prev_low || ind.low,
-      high20D: ind.high_20d
+      high20D: ind.high_20d,
+      high52W: ind.high_52w || null,     // For structural ladder (last resort before rejection)
+      // Pivot levels for target anchoring - STRUCTURAL LADDER
+      // Priority: Weekly R1 → Weekly R2 → 52W High → REJECT
+      weeklyR1: lvl?.weekly_r1 || null,
+      weeklyR2: lvl?.weekly_r2 || null,   // NEW: Second level in structural ladder
+      weeklyS1: lvl?.weekly_s1 || null,
+      weeklyPivot: lvl?.weekly_pivot || null,
+      dailyR1: lvl?.r1 || null,
+      dailyR2: lvl?.r2 || null,           // NEW: For pullback targets
+      dailyS1: lvl?.s1 || null,
+      dailyPivot: lvl?.pivot || null
     };
     tradingLevels = scanLevels.calculateTradingLevels(scanType, levelsData);
   }
@@ -220,6 +231,9 @@ export function enrichStock(stock, candles, niftyReturn1M = 0, scanType = null) 
   // Calculate indicators from candles
   const ind = indicators.calculate(candles);
 
+  // Calculate levels for pivot data
+  const lvl = levels.calculate(ind);
+
   // Calculate trading levels if scanType provided
   let tradingLevels = null;
   if (scanType) {
@@ -229,7 +243,17 @@ export function enrichStock(stock, candles, niftyReturn1M = 0, scanType = null) 
       fridayHigh: ind.prev_high || ind.high,
       fridayClose: ind.prev_close || ind.close,
       fridayLow: ind.prev_low || ind.low,
-      high20D: ind.high_20d
+      high20D: ind.high_20d,
+      high52W: ind.high_52w || null,     // For structural ladder
+      // Pivot levels for target anchoring - STRUCTURAL LADDER
+      weeklyR1: lvl?.weekly_r1 || null,
+      weeklyR2: lvl?.weekly_r2 || null,
+      weeklyS1: lvl?.weekly_s1 || null,
+      weeklyPivot: lvl?.weekly_pivot || null,
+      dailyR1: lvl?.r1 || null,
+      dailyR2: lvl?.r2 || null,
+      dailyS1: lvl?.s1 || null,
+      dailyPivot: lvl?.pivot || null
     };
     tradingLevels = scanLevels.calculateTradingLevels(scanType, levelsData);
   }

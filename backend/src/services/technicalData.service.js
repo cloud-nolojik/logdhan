@@ -303,6 +303,7 @@ async function calculateStockData(symbol, instrumentKey) {
 
       if (pivotWeekIndex >= 0) {
         const prevWeek = weeklyCandles[pivotWeekIndex];
+        // calcClassicPivots returns: { pivot, r1, r2, r3, s1, s2, s3 }
         weeklyPivot = calcClassicPivots(prevWeek[2], prevWeek[3], prevWeek[4]);
       }
     }
@@ -319,24 +320,72 @@ async function calculateStockData(symbol, instrumentKey) {
       ? dailyIndicators.ema20 > dailyIndicators.ema50 && dailyIndicators.ema50 > dailyIndicators.sma200
       : null;
 
+    // Calculate 20-day high for level calculations
+    const last20Candles = dailyCandles.slice(-20);
+    const high20d = last20Candles.length > 0
+      ? Math.max(...last20Candles.map(c => c[2]))
+      : null;
+
+    // Calculate 1-month return (22 trading days)
+    let return1m = null;
+    if (dailyCandles.length >= 22) {
+      const currentClose = latestCandle[4];
+      const monthAgoClose = dailyCandles[dailyCandles.length - 22][4];
+      if (currentClose && monthAgoClose) {
+        return1m = round2(((currentClose - monthAgoClose) / monthAgoClose) * 100);
+      }
+    }
+
+    // Calculate weekly change (5 trading days)
+    let weeklyChangePct = null;
+    if (dailyCandles.length >= 5) {
+      const currentClose = latestCandle[4];
+      const weekAgoClose = dailyCandles[dailyCandles.length - 5][4];
+      if (currentClose && weekAgoClose) {
+        weeklyChangePct = round2(((currentClose - weekAgoClose) / weekAgoClose) * 100);
+      }
+    }
+
+    // Calculate distance from 20 DMA
+    let distanceFrom20DmaPct = null;
+    if (dailyIndicators.sma20 && latestCandle[4]) {
+      distanceFrom20DmaPct = round2(((latestCandle[4] - dailyIndicators.sma20) / dailyIndicators.sma20) * 100);
+    }
+
     return {
       symbol,
       cmp: round2(latestCandle[4]),
       todays_high: round2(latestCandle[2]),
       todays_low: round2(latestCandle[3]),
       high_52w: round2(high52w),
+      high_20d: round2(high20d),                              // NEW: For level calculations
       daily_rsi: round2(dailyIndicators.rsi14) || null,
       weekly_rsi: round2(weeklyIndicators.rsi14) || null,
       daily_pivot: dailyPivot?.pivot || null,
       daily_s1: dailyPivot?.s1 || null,
       daily_r1: dailyPivot?.r1 || null,
+      daily_r2: dailyPivot?.r2 || null,           // NEW: For structural ladder
       weekly_pivot: weeklyPivot?.pivot || null,
       weekly_s1: weeklyPivot?.s1 || null,
       weekly_r1: weeklyPivot?.r1 || null,
+      weekly_r2: weeklyPivot?.r2 || null,         // NEW: For structural ladder
       atr_14: round2(dailyIndicators.atr14) || null,
+      atr_pct: dailyIndicators.atr14 && latestCandle[4] > 0
+        ? round2((dailyIndicators.atr14 / latestCandle[4]) * 100)
+        : null,
+      // Moving averages (NEW: needed for level calculations)
+      ema_20: round2(dailyIndicators.ema20) || null,
+      ema_50: round2(dailyIndicators.ema50) || null,
+      sma_50: round2(dailyIndicators.sma50) || null,  // For dma50 fallback chain
+      sma_200: round2(dailyIndicators.sma200) || null,
+      sma_20: round2(dailyIndicators.sma20) || null,
       ema_stack_bullish: emaStackBullish,
       todays_volume: latestCandle[5] || 0,
-      avg_volume_50d: avgVolume50d
+      avg_volume_50d: avgVolume50d,
+      // Returns (NEW: for scoring)
+      return_1m: return1m,
+      weekly_change_pct: weeklyChangePct,
+      distance_from_20dma_pct: distanceFrom20DmaPct
     };
   } catch (error) {
     console.error(`[TechnicalData] Error calculating data for ${symbol}:`, error.message);

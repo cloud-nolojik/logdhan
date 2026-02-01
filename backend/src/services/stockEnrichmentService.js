@@ -25,6 +25,9 @@ import {
 import scanLevels from '../engine/scanLevels.js';
 const { calculateTradingLevels } = scanLevels;
 
+// Import technicalData service as data layer (provides richer data + API fallback)
+import technicalDataService from './technicalData.service.js';
+
 // Alias for backward compatibility
 const calculateTechnicalIndicators = indicatorsEngine.calculate;
 
@@ -224,7 +227,12 @@ export async function getStockIndicators(instrument_key, debug = false) {
  * @returns {Object} Trading levels { entry, stop, target, riskReward, ... }
  */
 function calculateLevelsForStock(stockData, scanType) {
-  const { ema20, atr, fridayHigh, fridayClose, fridayLow, high_20d, fridayVolume, volume_20avg } = stockData;
+  const {
+    ema20, atr, fridayHigh, fridayClose, fridayLow, high_20d, high_52w, fridayVolume, volume_20avg,
+    // Pivot levels for target anchoring (NEW)
+    weekly_r1, weekly_r2, weekly_s1, weekly_pivot,
+    daily_r1, daily_r2, daily_s1, daily_pivot
+  } = stockData;
 
   // Build data object for scanLevels
   const levelsData = {
@@ -234,8 +242,19 @@ function calculateLevelsForStock(stockData, scanType) {
     fridayClose,
     fridayLow,
     high20D: high_20d,
+    high52W: high_52w,     // NEW: For structural ladder (last resort before rejection)
     fridayVolume,
-    avgVolume: volume_20avg
+    avgVolume20: volume_20avg,  // Named to match scanLevels.js expectation
+    // Pivot levels for target anchoring (STRUCTURAL LADDER)
+    // Priority: Weekly R1 → Weekly R2 → 52W High → REJECT
+    weeklyR1: weekly_r1,
+    weeklyR2: weekly_r2,   // NEW: Second level in structural ladder
+    weeklyS1: weekly_s1,
+    weeklyPivot: weekly_pivot,
+    dailyR1: daily_r1,
+    dailyR2: daily_r2,     // NEW: For pullback targets
+    dailyS1: daily_s1,
+    dailyPivot: daily_pivot
   };
 
   try {
@@ -249,6 +268,15 @@ function calculateLevelsForStock(stockData, scanType) {
 
 /**
  * Enrich a single ChartInk result
+ *
+ * REFACTORED: Now uses technicalDataService.calculateStockData() as the data layer
+ * This provides:
+ * - Weekly RSI (for dual-timeframe elimination - catches BAJAJCON-like cases)
+ * - 52W high (instead of just 20D high)
+ * - EMA stack bullish check
+ * - Weekly pivot levels
+ * - API fallback if DB data is missing
+ *
  * @param {Object} chartinkStock - Stock from ChartInk
  * @param {number} [niftyReturn1M=0] - Nifty 1-month return
  * @param {boolean} [debug=false] - Enable debug logging
@@ -264,39 +292,45 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
     return null;
   }
 
-  // Get indicators
-  const indicators = await getStockIndicators(mapping.instrument_key, debug);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DATA LAYER: Use technicalDataService for richer data + API fallback
+  // ═══════════════════════════════════════════════════════════════════════════
+  const techData = await technicalDataService.calculateStockData(
+    mapping.trading_symbol,
+    mapping.instrument_key
+  );
 
-  // If no indicators available, use ChartInk data
-  const stockData = {
-    price: indicators?.price || close,
-    last: indicators?.price || close,
-    close: indicators?.price || close,
-    dma20: indicators?.dma20,
-    dma50: indicators?.dma50,
-    dma200: indicators?.dma200,
-    ema20: indicators?.ema20,
-    ema50: indicators?.ema50,
-    rsi: indicators?.rsi,
-    rsi14: indicators?.rsi,
-    atr: indicators?.atr,
-    atr_pct: indicators?.atr_pct,
-    volume: indicators?.volume || volume,
-    volume_20avg: indicators?.volume_20avg,
-    volume_vs_avg: indicators?.volume_vs_avg,
-    high_20d: indicators?.high_20d,
-    return_1m: indicators?.return_1m,
-    distance_from_20dma_pct: indicators?.distance_from_20dma_pct,
-    // Additional fields for levels
-    fridayHigh: indicators?.fridayHigh,
-    fridayLow: indicators?.fridayLow,
-    fridayClose: indicators?.fridayClose,
-    fridayVolume: indicators?.fridayVolume,
-    weekly_change_pct: indicators?.weekly_change_pct
-  };
+  if (debug) {
+    console.log(`[ENRICH DEBUG] ${nsecode} - TechData from service:`, {
+      cmp: techData.cmp,
+      daily_rsi: techData.daily_rsi,
+      weekly_rsi: techData.weekly_rsi,
+      high_52w: techData.high_52w,
+      ema_stack_bullish: techData.ema_stack_bullish,
+      error: techData.error
+    });
+  }
+
+  // If technicalDataService failed, fall back to legacy getStockIndicators
+  let stockData;
+  let dataSource;
+  if (techData.error) {
+    console.warn(`[ENRICH] TechData failed for ${nsecode}, falling back to legacy method`);
+    const legacyIndicators = await getStockIndicators(mapping.instrument_key, debug);
+    stockData = buildStockDataFromLegacy(legacyIndicators, close, volume);
+    dataSource = 'LEGACY';
+  } else {
+    // Map technicalDataService output to stockData format
+    stockData = buildStockDataFromTechService(techData, close, volume);
+    dataSource = 'TECH_SERVICE';
+  }
+
+  if (debug) {
+    console.log(`[ENRICH DEBUG] ${nsecode} - Data source: ${dataSource}`);
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 1: Calculate trading levels FIRST (NEW - for framework scoring)
+  // STEP 1: Calculate trading levels FIRST (for framework scoring)
   // ═══════════════════════════════════════════════════════════════════════════
   const scanTypeForLevels = scan_type || 'a_plus_momentum';
   const levels = calculateLevelsForStock(stockData, scanTypeForLevels);
@@ -314,6 +348,7 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: Calculate setup score WITH levels (Framework-based scoring)
+  // Now includes weekly_rsi for dual-timeframe elimination
   // ═══════════════════════════════════════════════════════════════════════════
   const scoreResult = calculateSetupScore(stockData, levels, niftyReturn1M, debug);
 
@@ -326,7 +361,7 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
     });
   }
 
-  // Check if stock was eliminated (e.g., RSI > 72)
+  // Check if stock was eliminated (e.g., RSI > 72 on daily OR weekly)
   if (scoreResult.eliminated) {
     console.log(`[ENRICH] ${nsecode} ELIMINATED: ${scoreResult.eliminationReason}`);
     return {
@@ -357,7 +392,7 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
     // Current data
     current_price: stockData.price,
 
-    // Technical indicators
+    // Technical indicators (enriched with new fields)
     indicators: {
       dma20: stockData.dma20,
       dma50: stockData.dma50,
@@ -365,23 +400,35 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
       ema20: stockData.ema20,
       ema50: stockData.ema50,
       rsi: stockData.rsi,
+      weekly_rsi: stockData.weekly_rsi,           // NEW: For dual-timeframe analysis
       atr: stockData.atr,
       atr_pct: stockData.atr_pct,
       volume_vs_avg: stockData.volume_vs_avg,
       distance_from_20dma_pct: stockData.distance_from_20dma_pct,
       high_20d: stockData.high_20d,
+      high_52w: stockData.high_52w,               // NEW: For breakout detection
       return_1m: stockData.return_1m,
-      weekly_change_pct: stockData.weekly_change_pct
+      weekly_change_pct: stockData.weekly_change_pct,
+      ema_stack_bullish: stockData.ema_stack_bullish,  // NEW: Trend confirmation
+      // Weekly pivot levels (NEW)
+      weekly_pivot: stockData.weekly_pivot,
+      weekly_s1: stockData.weekly_s1,
+      weekly_r1: stockData.weekly_r1,
+      weekly_r2: stockData.weekly_r2             // NEW: For structural ladder visibility
     },
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Trading Levels (NEW - from scanLevels)
+    // Trading Levels (from scanLevels)
+    // STRUCTURAL LADDER: Weekly R1 → R2 → 52W High → REJECT
     // ═══════════════════════════════════════════════════════════════════════════
     levels: levels.valid ? {
       entry: levels.entry,
       entryRange: levels.entryRange,
       stop: levels.stop,
-      target: levels.target,
+      target: levels.target,                           // T1 (primary target from structural ladder)
+      target2: levels.target2 || null,                 // T2 (extension target, trail only)
+      targetBasis: levels.targetBasis,                 // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', or '52w_high'
+      dailyR1Check: levels.dailyR1Check || null,       // Momentum checkpoint (not a target)
       riskReward: levels.riskReward,
       riskPercent: levels.riskPercent,
       rewardPercent: levels.rewardPercent,
@@ -390,7 +437,8 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
       reason: levels.reason
     } : {
       valid: false,
-      reason: levels.reason
+      reason: levels.reason,
+      noData: levels.noData || false                   // NEW: Distinguishes missing data from bad setup
     },
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -407,6 +455,118 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
 
     // Metadata
     enriched_at: new Date()
+  };
+}
+
+/**
+ * Build stockData from technicalDataService output
+ * Maps the richer techData to the format expected by scoring and levels
+ */
+function buildStockDataFromTechService(techData, chartinkClose, chartinkVolume) {
+  const currentPrice = techData.cmp || chartinkClose;
+  const currentVolume = techData.todays_volume || chartinkVolume;
+  const avgVolume = techData.avg_volume_50d || 1;
+
+  return {
+    // Price data
+    price: currentPrice,
+    last: currentPrice,
+    close: currentPrice,
+
+    // RSI - both timeframes for dual-timeframe elimination
+    rsi: techData.daily_rsi,
+    rsi14: techData.daily_rsi,
+    weekly_rsi: techData.weekly_rsi,  // NEW: Catches extended stocks like BAJAJCON
+
+    // Moving averages (now properly exposed from techData)
+    // Note: dma50 prefers SMA50 with EMA50 fallback (matches legacy behavior)
+    dma20: techData.sma_20,
+    dma50: techData.sma_50 || techData.ema_50,  // SMA preferred, EMA fallback
+    dma200: techData.sma_200,
+    ema20: techData.ema_20,
+    ema50: techData.ema_50,
+    ema_stack_bullish: techData.ema_stack_bullish,  // NEW: Trend confirmation
+
+    // Volatility
+    atr: techData.atr_14,
+    atr_pct: techData.atr_pct,  // Now returned directly from technicalDataService
+
+    // Volume
+    volume: currentVolume,
+    volume_20avg: avgVolume,  // Using 50d avg from techData
+    volume_vs_avg: avgVolume > 0 ? round2(currentVolume / avgVolume) : null,
+
+    // Highs
+    high_20d: techData.high_20d,  // Now properly available
+    high_52w: techData.high_52w,  // NEW: For breakout detection
+
+    // Returns (now available from techData)
+    return_1m: techData.return_1m,
+    distance_from_20dma_pct: techData.distance_from_20dma_pct,
+
+    // For level calculations (using today's data as "Friday" data)
+    fridayHigh: techData.todays_high,
+    fridayLow: techData.todays_low,
+    fridayClose: currentPrice,
+    fridayVolume: currentVolume,
+
+    // Weekly change (now available from techData)
+    weekly_change_pct: techData.weekly_change_pct,
+
+    // Pivot levels for target anchoring (NEW)
+    // Weekly pivots
+    weekly_pivot: techData.weekly_pivot,
+    weekly_s1: techData.weekly_s1,
+    weekly_r1: techData.weekly_r1,
+    weekly_r2: techData.weekly_r2,     // NEW: For structural ladder
+    // Daily pivots
+    daily_pivot: techData.daily_pivot,
+    daily_s1: techData.daily_s1,
+    daily_r1: techData.daily_r1,
+    daily_r2: techData.daily_r2        // NEW: For structural ladder
+  };
+}
+
+/**
+ * Build stockData from legacy getStockIndicators output (fallback)
+ */
+function buildStockDataFromLegacy(indicators, chartinkClose, chartinkVolume) {
+  return {
+    price: indicators?.price || chartinkClose,
+    last: indicators?.price || chartinkClose,
+    close: indicators?.price || chartinkClose,
+    dma20: indicators?.dma20,
+    dma50: indicators?.dma50,
+    dma200: indicators?.dma200,
+    ema20: indicators?.ema20,
+    ema50: indicators?.ema50,
+    rsi: indicators?.rsi,
+    rsi14: indicators?.rsi,
+    weekly_rsi: null,  // Not available in legacy
+    atr: indicators?.atr,
+    atr_pct: indicators?.atr_pct,
+    volume: indicators?.volume || chartinkVolume,
+    volume_20avg: indicators?.volume_20avg,
+    volume_vs_avg: indicators?.volume_vs_avg,
+    high_20d: indicators?.high_20d,
+    high_52w: null,  // Not available in legacy
+    return_1m: indicators?.return_1m,
+    distance_from_20dma_pct: indicators?.distance_from_20dma_pct,
+    fridayHigh: indicators?.fridayHigh,
+    fridayLow: indicators?.fridayLow,
+    fridayClose: indicators?.fridayClose,
+    fridayVolume: indicators?.fridayVolume,
+    weekly_change_pct: indicators?.weekly_change_pct,
+    ema_stack_bullish: null,  // Not available in legacy
+    // Pivots not available in legacy
+    weekly_pivot: null,
+    weekly_s1: null,
+    weekly_r1: null,
+    weekly_r2: null,    // Not available in legacy
+    daily_pivot: null,
+    daily_s1: null,
+    daily_r1: null,
+    daily_r2: null      // Not available in legacy
   };
 }
 
@@ -486,9 +646,16 @@ export async function enrichStocks(chartinkResults, options = {}) {
   }
 
   // Sort by setup score (highest first) and limit results
-  return enrichedResults
+  const sortedResults = enrichedResults
     .sort((a, b) => b.setup_score - a.setup_score)
     .slice(0, maxResults);
+
+  // Return stocks AND eliminated count (for metadata tracking)
+  return {
+    stocks: sortedResults,
+    eliminatedCount: eliminatedResults.length,
+    eliminatedStocks: eliminatedResults
+  };
 }
 
 /**
@@ -570,10 +737,13 @@ export async function runEnrichmentPipeline(chartinkResults, options = {}) {
   const niftyReturn1M = await getNiftyReturn1M();
 
   // Enrich all stocks (now includes levels calculation)
-  const enrichedStocks = await enrichStocks(chartinkResults, {
+  // Returns { stocks, eliminatedCount, eliminatedStocks }
+  const enrichResult = await enrichStocks(chartinkResults, {
     ...options,
     niftyReturn1M
   });
+  const enrichedStocks = enrichResult.stocks;
+  const eliminatedCount = enrichResult.eliminatedCount;
 
   // Categorize by grade
   const gradeDistribution = {
@@ -603,6 +773,7 @@ export async function runEnrichmentPipeline(chartinkResults, options = {}) {
     metadata: {
       total_input: chartinkResults.length,
       total_enriched: enrichedStocks.length,
+      total_eliminated: eliminatedCount,  // NEW: Track eliminated stocks
       nifty_return_1m: niftyReturn1M,
       grade_distribution: gradeDistribution,
       scan_type_distribution: scanTypeDistribution,

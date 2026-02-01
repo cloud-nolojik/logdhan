@@ -72,6 +72,7 @@ export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, deb
 
   const currentPrice = last || price || close;
   const currentRsi = rsi14 || rsi;
+  const weeklyRsi = stock.weekly_rsi;  // NEW: For dual-timeframe elimination
 
   // Validate minimum required data
   if (!isNum(currentPrice)) {
@@ -86,14 +87,27 @@ export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, deb
 
   // ============================================
   // PRE-FILTER: RSI Elimination (Hard Gate)
+  // Now checks BOTH daily AND weekly RSI
+  // This catches cases like BAJAJCON (daily RSI ~72.3, weekly RSI 74.8)
   // ============================================
   if (isNum(currentRsi) && currentRsi > 72) {
     return {
       score: 0,
       grade: 'X',
-      breakdown: [{ factor: 'RSI_ELIMINATED', points: 0, max: 100, value: round2(currentRsi), reason: `RSI ${round2(currentRsi)} > 72 (too extended)` }],
+      breakdown: [{ factor: 'RSI_ELIMINATED', points: 0, max: 100, value: round2(currentRsi), reason: `Daily RSI ${round2(currentRsi)} > 72 (too extended)` }],
       eliminated: true,
-      eliminationReason: `RSI ${round2(currentRsi)} > 72 (too extended)`
+      eliminationReason: `Daily RSI ${round2(currentRsi)} > 72 (too extended)`
+    };
+  }
+
+  // NEW: Weekly RSI elimination - catches extended stocks that daily RSI might miss
+  if (isNum(weeklyRsi) && weeklyRsi > 72) {
+    return {
+      score: 0,
+      grade: 'X',
+      breakdown: [{ factor: 'WEEKLY_RSI_ELIMINATED', points: 0, max: 100, value: round2(weeklyRsi), reason: `Weekly RSI ${round2(weeklyRsi)} > 72 (weekly overbought)` }],
+      eliminated: true,
+      eliminationReason: `Weekly RSI ${round2(weeklyRsi)} > 72 (weekly overbought)`
     };
   }
 

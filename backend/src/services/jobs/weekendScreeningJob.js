@@ -5,6 +5,7 @@
  * Schedule: Saturday 6 PM IST
  *
  * UPDATED: Now handles eliminated stocks (RSI > 72) and stores trading levels
+ * UPDATED: Step 5 added - AI analysis for top 3-4 stocks using Claude
  */
 
 import Agenda from 'agenda';
@@ -13,6 +14,7 @@ import stockEnrichmentService from '../stockEnrichmentService.js';
 import WeeklyWatchlist from '../../models/weeklyWatchlist.js';
 import { getCurrentPrice } from '../../utils/stockDb.js';
 import priceCacheService from '../priceCache.service.js';
+import weeklyAnalysisService from '../weeklyAnalysisService.js';
 
 class WeekendScreeningJob {
   constructor() {
@@ -268,7 +270,7 @@ class WeekendScreeningJob {
       // Step 1: Run ChartInk scans
       console.log('');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
-      console.log('[SCREENING JOB] 📌 STEP 1/4: Running ChartInk scans...');
+      console.log('[SCREENING JOB] 📌 STEP 1/5: Running ChartInk scans...');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
 
       const allResults = [];
@@ -323,7 +325,7 @@ class WeekendScreeningJob {
       // Step 2: PREFETCH FRESH PRICES before enrichment
       console.log('');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
-      console.log('[SCREENING JOB] 📌 STEP 2/4: Prefetching fresh prices...');
+      console.log('[SCREENING JOB] 📌 STEP 2/5: Prefetching fresh prices...');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log(`[SCREENING JOB] 📊 Prefetching fresh prices for ${allResults.length} stocks...`);
 
@@ -382,7 +384,7 @@ class WeekendScreeningJob {
       // Step 3: Enrich with technical data, LEVELS, and scores (now uses fresh prices)
       console.log('');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
-      console.log('[SCREENING JOB] 📌 STEP 3/4: Enriching stocks with technical data & levels...');
+      console.log('[SCREENING JOB] 📌 STEP 3/5: Enriching stocks with technical data & levels...');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log(`[SCREENING JOB] Enriching ${allResults.length} stocks...`);
 
@@ -410,12 +412,16 @@ class WeekendScreeningJob {
       const MIN_SCORE = 60;
       const MAX_STOCKS = 15;
 
+      // Filter for quality stocks:
+      // - Not eliminated (RSI gate passed)
+      // - Meets minimum score threshold
+      // - Has valid trading levels (structural ladder didn't reject)
       const qualifiedStocks = allEnrichedStocks
-        .filter(s => !s.eliminated && s.setup_score >= MIN_SCORE)
+        .filter(s => !s.eliminated && s.setup_score >= MIN_SCORE && s.levels?.entry)
         .sort((a, b) => b.setup_score - a.setup_score);
 
-      // Count eliminated stocks for reporting
-      const eliminatedCount = allEnrichedStocks.filter(s => s.eliminated).length;
+      // Count eliminated stocks for reporting (now comes from metadata)
+      const eliminatedCount = metadata.total_eliminated || 0;
       result.totalStocksEliminated = eliminatedCount;
       this.stats.stocksEliminated += eliminatedCount;
 
@@ -443,14 +449,26 @@ class WeekendScreeningJob {
       console.log(`[SCREENING JOB] ✅ STEP 3 COMPLETE: Qualified stocks (${MIN_SCORE}+): ${qualifiedStocks.length} total, ${deduplicatedStocks.length} unique, ${enrichedStocks.length} selected`);
 
       if (enrichedStocks.length === 0) {
-        console.log('[SCREENING JOB] ⚠️ No qualified stocks found this week - EXITING EARLY');
+        // Still mark screening as completed (ran successfully, just no results)
+        // This is important for weekend display - shows "no opportunities" instead of "screening pending"
+        const watchlist = await WeeklyWatchlist.getOrCreateCurrentWeek();
+        watchlist.screening_run_at = new Date();
+        watchlist.screening_completed = true;
+        watchlist.scan_types_used = scanTypes;
+        watchlist.total_screener_results = allResults.length;
+        watchlist.total_eliminated = eliminatedCount;
+        watchlist.grade_a_count = 0;
+        watchlist.grade_a_plus_count = 0;
+        await watchlist.save();
+
+        console.log('[SCREENING JOB] ⚠️ No qualified stocks this week - watchlist marked complete (empty)');
         return result;
       }
 
       // Step 4: Add to global WeeklyWatchlist (no user concept)
       console.log('');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
-      console.log('[SCREENING JOB] 📌 STEP 4/4: Adding stocks to WeeklyWatchlist...');
+      console.log('[SCREENING JOB] 📌 STEP 4/5: Adding stocks to WeeklyWatchlist...');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log(`[SCREENING JOB] Adding ${enrichedStocks.length} stocks to global WeeklyWatchlist...`);
       console.log(`[SCREENING JOB] Stocks to add: ${enrichedStocks.map(s => `${s.symbol}(${s.setup_score}/${s.grade})`).join(', ')}`);
@@ -471,23 +489,35 @@ class WeekendScreeningJob {
           ema20: stock.indicators.ema20,
           ema50: stock.indicators.ema50,
           rsi: stock.indicators.rsi,
+          weekly_rsi: stock.indicators.weekly_rsi,          // For dual-timeframe RSI gate
           atr: stock.indicators.atr,
           atr_pct: stock.indicators.atr_pct,
           volume_vs_avg: stock.indicators.volume_vs_avg,
           distance_from_20dma_pct: stock.indicators.distance_from_20dma_pct,
-          weekly_change_pct: stock.indicators.weekly_change_pct  // NEW: Weekly change for framework
+          weekly_change_pct: stock.indicators.weekly_change_pct,
+          high_52w: stock.indicators.high_52w,              // For 52W breakout context
+          ema_stack_bullish: stock.indicators.ema_stack_bullish,  // EMA alignment
+          weekly_pivot: stock.indicators.weekly_pivot,      // Pivot levels
+          weekly_r1: stock.indicators.weekly_r1,
+          weekly_r2: stock.indicators.weekly_r2,
+          weekly_s1: stock.indicators.weekly_s1
         },
         // Trading levels (scan-type aware calculations)
+        // STRUCTURAL LADDER: Weekly R1 → R2 → 52W High → REJECT
         levels: stock.levels ? {
           entry: stock.levels.entry,
           entryRange: stock.levels.entryRange,
           stop: stock.levels.stop,
           target: stock.levels.target,
+          target2: stock.levels.target2 || null,           // T2 extension target (trail only)
+          targetBasis: stock.levels.targetBasis,           // 'weekly_r1', 'weekly_r2', 'atr_extension_52w_breakout', etc.
+          dailyR1Check: stock.levels.dailyR1Check || null, // Momentum confirmation checkpoint
           riskReward: stock.levels.riskReward,
           riskPercent: stock.levels.riskPercent,
           rewardPercent: stock.levels.rewardPercent,
           entryType: stock.levels.entryType,
           mode: stock.levels.mode,
+          archetype: stock.levels.archetype || null,       // '52w_breakout', 'pullback', 'trend-follow', etc.
           reason: stock.levels.reason
         } : null,
         status: 'WATCHING'
@@ -512,6 +542,52 @@ class WeekendScreeningJob {
       console.log(`[SCREENING JOB] ✅ STEP 4 COMPLETE: Added ${addResult.added} new stocks, updated ${addResult.updated} existing stocks`);
 
       this.stats.stocksProcessed += enrichedStocks.length;
+
+      // Step 5: Generate AI analysis for top 3-4 stocks
+      console.log('');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
+      console.log('[SCREENING JOB] 📌 STEP 5/5: Generating AI analysis for top stocks...');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
+
+      const MAX_AI_ANALYSIS = 4;  // Limit to top 4 stocks
+      const stocksForAI = enrichedStocks.slice(0, MAX_AI_ANALYSIS);
+
+      if (stocksForAI.length > 0) {
+        console.log(`[SCREENING JOB] Generating Claude analysis for: ${stocksForAI.map(s => s.symbol).join(', ')}`);
+
+        try {
+          const analysisResults = await weeklyAnalysisService.generateMultipleAnalyses(stocksForAI, MAX_AI_ANALYSIS);
+          const successCount = analysisResults.filter(a => a?.status === 'completed').length;
+
+          result.aiAnalysisGenerated = successCount;
+          result.aiAnalysisFailed = stocksForAI.length - successCount;
+
+          console.log(`[SCREENING JOB] ✅ STEP 5 COMPLETE: Generated ${successCount}/${stocksForAI.length} AI analyses`);
+
+          // Update watchlist with analysis links
+          if (successCount > 0) {
+            for (const analysis of analysisResults.filter(a => a?.status === 'completed')) {
+              const stockEntry = watchlist.stocks.find(s => s.instrument_key === analysis.instrument_key);
+              if (stockEntry) {
+                stockEntry.analysis_id = analysis._id;
+                stockEntry.has_ai_analysis = true;
+              }
+            }
+            await watchlist.save();
+            console.log(`[SCREENING JOB] 📎 Linked ${successCount} analyses to watchlist entries`);
+          }
+
+        } catch (aiError) {
+          console.error(`[SCREENING JOB] ⚠️ AI analysis failed:`, aiError.message);
+          result.aiAnalysisGenerated = 0;
+          result.aiAnalysisFailed = stocksForAI.length;
+          result.aiAnalysisError = aiError.message;
+          // Don't throw - AI analysis failure shouldn't fail the entire job
+        }
+      } else {
+        console.log('[SCREENING JOB] ⚠️ No stocks for AI analysis');
+        result.aiAnalysisGenerated = 0;
+      }
 
       console.log('');
       console.log('[SCREENING JOB] ┌─────────────────────────────────────────────────────────────┐');

@@ -11,7 +11,7 @@
  * - pullback: Stock pulled back to EMA20 support
  * - momentum: Stock already running (3-10% above EMA20)
  * - consolidation_breakout: Stock in tight range near highs
- * - a_plus_momentum: Uptrend + 3% weekly gain + near 20d high (momentum continuation)
+ * - a_plus_momentum: FRESH 52-WEEK HIGH BREAKOUT with 1.5x volume + uptrend + 2%+ weekly gain
  */
 
 import { round2, isNum } from './helpers.js';
@@ -22,6 +22,286 @@ import { round2, isNum } from './helpers.js';
 export function roundToTick(price, tick = 0.05) {
   if (!isNum(price)) return 0;
   return Math.round(price / tick) * tick;
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * STRUCTURAL LADDER - Target Selection
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Instead of falling back to arbitrary ATR targets, we climb a structural ladder:
+ *
+ * | Priority | Level               | Source          | Min R:R | When                          |
+ * |----------|---------------------|-----------------|---------|-------------------------------|
+ * | 0        | ATR Extension (2.5) | ATR-based       | 1.5:1   | ONLY when entry ≥ 52W high    |
+ * | 1        | Weekly R1           | Pivot formula   | 1.5:1   | Standard overhead resistance  |
+ * | 2        | Weekly R2           | Pivot formula   | 1.5:1   | If R1 too close               |
+ * | 3        | 52W High            | Historical      | 1.5:1   | If entry below 52W high       |
+ * | 4        | REJECT              | —               | —       | No viable target              |
+ *
+ * Level 0 exists because stocks at NEW 52-week highs have NO overhead resistance.
+ * The a_plus_momentum scan finds stocks that just broke their 252-day high,
+ * so high52W ≈ fridayHigh ≈ entry, making Level 3 dead code for those stocks.
+ * ATR extension targets are well-proven for breakout continuation trades.
+ *
+ * Inside Level 0, we still check Weekly R1/R2 first — if pivots happen to be
+ * above entry (possible if calculated from a strong intraweek move), prefer
+ * the structural level over the ATR extension.
+ *
+ * Each level is where institutional profit-taking naturally occurs.
+ * If none give adequate R:R → the setup is NOT viable for swing trading.
+ *
+ * @param {Object} params - { entry, risk, weeklyR1, weeklyR2, high52W, atr, minRR }
+ * @returns {Object} { target, target2, targetBasis, reason } or { rejected: true, reason }
+ */
+function findStructuralTarget(params) {
+  const { entry, risk, weeklyR1, weeklyR2, high52W, atr, minRR = 1.5 } = params;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GUARD: Invalid risk (stop >= entry)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (!isNum(risk) || risk <= 0) {
+    return { rejected: true, reason: 'Invalid risk (stop >= entry)', noData: false };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GUARD: No structural data available (all pivots null AND no ATR)
+  // ─────────────────────────────────────────────────────────────────────────
+  const hasAnyLevel = isNum(weeklyR1) || isNum(weeklyR2) || isNum(high52W);
+  const hasATR = isNum(atr) && atr > 0;
+  if (!hasAnyLevel && !hasATR) {
+    return {
+      rejected: true,
+      reason: 'No structural data available (pivot/52W data missing, no ATR)',
+      noData: true
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 0: ATR Extension — for stocks AT or ABOVE their 52-week high
+  // ─────────────────────────────────────────────────────────────────────────
+  // When a stock just broke its 52W high (a_plus_momentum scan), there is
+  // NO overhead resistance. The 52W high IS today's price, so Level 3
+  // (high52W > entry) is always false. Use ATR-based extension instead.
+  //
+  // Threshold: entry >= high52W * 0.995 (within 0.5% of 52W high)
+  // This catches stocks that broke their high even if high_52w is slightly
+  // above entry due to intraday wick on the breakout day.
+  //
+  // Priority within Level 0:
+  //   1. Weekly R1 (if above entry with good R:R) — structural always preferred
+  //   2. Weekly R2 (if R1 doesn't work)
+  //   3. ATR extension (2.5 ATR for T1, 4.0 ATR for T2/trail)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (hasATR && isNum(high52W) && entry >= high52W * 0.995) {
+    // Stock is at or within 0.5% of 52W high — treat as breakout-to-new-highs
+    const extensionTarget = entry + (2.5 * atr);
+    const extensionRR = (extensionTarget - entry) / risk;
+
+    if (extensionRR >= minRR) {
+      // Still prefer Weekly R1/R2 if they're above entry (rare but possible)
+      if (isNum(weeklyR1) && weeklyR1 > entry) {
+        const rrR1 = (weeklyR1 - entry) / risk;
+        if (rrR1 >= minRR) {
+          return {
+            target: weeklyR1,
+            target2: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 :
+                     roundToTick(entry + (4.0 * atr)),
+            targetBasis: 'weekly_r1',
+            reason: `52W breakout but Weekly R1 (${round2(weeklyR1)}) still overhead, R:R ${round2(rrR1)}:1`
+          };
+        }
+      }
+      if (isNum(weeklyR2) && weeklyR2 > entry) {
+        const rrR2 = (weeklyR2 - entry) / risk;
+        if (rrR2 >= minRR) {
+          return {
+            target: weeklyR2,
+            target2: roundToTick(entry + (4.0 * atr)),
+            targetBasis: 'weekly_r2',
+            reason: `52W breakout, Weekly R2 (${round2(weeklyR2)}) is the target, R:R ${round2(rrR2)}:1`
+          };
+        }
+      }
+
+      // No weekly pivots work — use ATR extension
+      return {
+        target: roundToTick(extensionTarget),
+        target2: roundToTick(entry + (4.0 * atr)),
+        targetBasis: 'atr_extension_52w_breakout',
+        reason: `52W HIGH BREAKOUT: No overhead resistance. ` +
+                `T1 at 2.5 ATR (${round2(extensionTarget)}), R:R ${round2(extensionRR)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 1: Weekly R1 - Primary institutional profit-taking zone
+  // ─────────────────────────────────────────────────────────────────────────
+  if (isNum(weeklyR1) && weeklyR1 > entry) {
+    const rr = (weeklyR1 - entry) / risk;
+    if (rr >= minRR) {
+      return {
+        target: weeklyR1,
+        target2: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 : null,
+        targetBasis: 'weekly_r1',
+        reason: `T1 at Weekly R1 (${round2(weeklyR1)}), R:R ${round2(rr)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 2: Weekly R2 - Secondary resistance (bigger move required)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (isNum(weeklyR2) && weeklyR2 > entry) {
+    const rr = (weeklyR2 - entry) / risk;
+    if (rr >= minRR) {
+      return {
+        target: weeklyR2,
+        target2: null,
+        targetBasis: 'weekly_r2',
+        reason: `Weekly R1 too close, T1 at Weekly R2 (${round2(weeklyR2)}), R:R ${round2(rr)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 3: 52-Week High - Historical resistance (last resort)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (isNum(high52W) && high52W > entry) {
+    const rr = (high52W - entry) / risk;
+    if (rr >= minRR) {
+      return {
+        target: high52W,
+        target2: null,
+        targetBasis: '52w_high',
+        reason: `Pivots too close, T1 at 52W High (${round2(high52W)}), R:R ${round2(rr)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 4: REJECT - No structural target gives adequate R:R
+  // ─────────────────────────────────────────────────────────────────────────
+  return {
+    rejected: true,
+    noData: false,  // Data exists, but R:R is insufficient
+    reason: `No structural target gives min ${minRR}:1 R:R. ` +
+            `Weekly R1=${round2(weeklyR1) || 'N/A'}, R2=${round2(weeklyR2) || 'N/A'}, ` +
+            `52W High=${round2(high52W) || 'N/A'}, Entry=${round2(entry)}, Risk=${round2(risk)}`
+  };
+}
+
+/**
+ * Structural ladder for pullback (uses Daily R1/R2 first, then weekly)
+ * Pullbacks are shorter-term trades, so daily pivots are more relevant
+ */
+function findPullbackTarget(params) {
+  const { entry, risk, dailyR1, dailyR2, weeklyR1, weeklyR2, high52W, minRR = 1.2 } = params;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GUARD: Invalid risk (stop >= entry)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (!isNum(risk) || risk <= 0) {
+    return { rejected: true, reason: 'Invalid risk (stop >= entry)', noData: false };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GUARD: No structural data available (all pivots null)
+  // ─────────────────────────────────────────────────────────────────────────
+  const hasAnyLevel = isNum(dailyR1) || isNum(dailyR2) || isNum(weeklyR1) || isNum(weeklyR2) || isNum(high52W);
+  if (!hasAnyLevel) {
+    return {
+      rejected: true,
+      reason: 'No structural data available (pivot/52W data missing)',
+      noData: true
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 1: Daily R1 - First profit-taking zone for pullback
+  // ─────────────────────────────────────────────────────────────────────────
+  if (isNum(dailyR1) && dailyR1 > entry) {
+    const rr = (dailyR1 - entry) / risk;
+    if (rr >= minRR) {
+      return {
+        target: dailyR1,
+        target2: isNum(weeklyR1) && weeklyR1 > dailyR1 ? weeklyR1 : null,
+        targetBasis: 'daily_r1',
+        reason: `T1 at Daily R1 (${round2(dailyR1)}), R:R ${round2(rr)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 2: Daily R2 - Secondary daily resistance
+  // ─────────────────────────────────────────────────────────────────────────
+  if (isNum(dailyR2) && dailyR2 > entry) {
+    const rr = (dailyR2 - entry) / risk;
+    if (rr >= minRR) {
+      return {
+        target: dailyR2,
+        target2: isNum(weeklyR1) && weeklyR1 > dailyR2 ? weeklyR1 : null,
+        targetBasis: 'daily_r2',
+        reason: `Daily R1 too close, T1 at Daily R2 (${round2(dailyR2)}), R:R ${round2(rr)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 3: Weekly R1 - Bigger move if daily pivots too close
+  // ─────────────────────────────────────────────────────────────────────────
+  if (isNum(weeklyR1) && weeklyR1 > entry) {
+    const rr = (weeklyR1 - entry) / risk;
+    if (rr >= minRR) {
+      return {
+        target: weeklyR1,
+        target2: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 : null,
+        targetBasis: 'weekly_r1',
+        reason: `Daily pivots too close, T1 at Weekly R1 (${round2(weeklyR1)}), R:R ${round2(rr)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 4: Weekly R2 - Last weekly level
+  // ─────────────────────────────────────────────────────────────────────────
+  if (isNum(weeklyR2) && weeklyR2 > entry) {
+    const rr = (weeklyR2 - entry) / risk;
+    if (rr >= minRR) {
+      return {
+        target: weeklyR2,
+        target2: null,
+        targetBasis: 'weekly_r2',
+        reason: `Weekly R1 too close, T1 at Weekly R2 (${round2(weeklyR2)}), R:R ${round2(rr)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 5: 52W High - Historical resistance (last resort)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (isNum(high52W) && high52W > entry) {
+    const rr = (high52W - entry) / risk;
+    if (rr >= minRR) {
+      return {
+        target: high52W,
+        target2: null,
+        targetBasis: '52w_high',
+        reason: `All pivots too close, T1 at 52W High (${round2(high52W)}), R:R ${round2(rr)}:1`
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LEVEL 6: REJECT - No structural target gives adequate R:R
+  // ─────────────────────────────────────────────────────────────────────────
+  return {
+    rejected: true,
+    noData: false,  // Data exists, but R:R is insufficient
+    reason: `No structural target gives min ${minRR}:1 R:R for pullback. ` +
+            `Daily R1=${round2(dailyR1) || 'N/A'}, Weekly R1=${round2(weeklyR1) || 'N/A'}`
+  };
 }
 
 /**
@@ -119,6 +399,9 @@ export function calculateTradingLevels(scanType, data) {
     entryRange: result.entryRange ? [roundToTick(result.entryRange[0]), roundToTick(result.entryRange[1])] : null,
     stop: roundToTick(guarded.stop),
     target: roundToTick(guarded.target),
+    target2: result.target2 ? roundToTick(result.target2) : null,           // Extension target (trail only)
+    targetBasis: result.targetBasis,                                        // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', or '52w_high'
+    dailyR1Check: result.dailyR1Check ? roundToTick(result.dailyR1Check) : null,  // Momentum checkpoint
     entryType: result.entryType,
     archetype: result.archetype,
     reason: result.reason,
@@ -166,9 +449,10 @@ function validateData(data) {
  * - RSI strong but not overbought (55-70)
  *
  * Strategy: Buy ABOVE resistance on breakout confirmation
+ * Target: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
  */
 function calculateBreakoutLevels(data) {
-  const { ema20, high20D, fridayHigh, fridayClose, atr } = data;
+  const { ema20, high20D, fridayHigh, fridayClose, atr, weeklyR1, weeklyR2, high52W, dailyR1 } = data;
 
   // Use 20D high if available, otherwise Friday high
   const resistanceLevel = isNum(high20D) && high20D > 0 ? high20D : fridayHigh;
@@ -189,11 +473,28 @@ function calculateBreakoutLevels(data) {
   // Calculate risk first
   const risk = entry - stop;
 
-  // Target: Must be at least 1.5x the risk (minimum R:R of 1.5)
-  // Use the larger of: 1.5x risk, or 2 ATR expansion
-  const targetFromRisk = entry + (risk * 1.5);
-  const targetFromATR = entry + (2.0 * atr);
-  const target = Math.max(targetFromRisk, targetFromATR);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TARGET: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
+  // No arbitrary ATR targets - only structural levels where institutions take profit
+  // ═══════════════════════════════════════════════════════════════════════════
+  const targetResult = findStructuralTarget({
+    entry,
+    risk,
+    weeklyR1,
+    weeklyR2,
+    high52W,
+    atr,
+    minRR: 1.5
+  });
+
+  // If no structural target gives adequate R:R → REJECT this setup
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      reason: `Breakout REJECTED: ${targetResult.reason}`
+    };
+  }
 
   // Entry range for slippage (0.3 ATR above entry)
   const entryRange = [roundToTick(entry), roundToTick(entry + 0.3 * atr)];
@@ -205,10 +506,13 @@ function calculateBreakoutLevels(data) {
     entry,
     entryRange,
     stop,
-    target,
+    target: targetResult.target,
+    target2: targetResult.target2,
+    targetBasis: targetResult.targetBasis,
+    dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
     reason: `Breakout setup: Price coiled near ${round2(resistanceLevel)} with volume. ` +
-            `Entry triggers above resistance for confirmation.`
+            `Entry triggers above resistance for confirmation. ${targetResult.reason}`
   };
 }
 
@@ -226,6 +530,9 @@ function calculateBreakoutLevels(data) {
  * Strategy: AUTOMATICALLY decides between:
  * - AGGRESSIVE (LIMIT at EMA20) - when pullback is healthy
  * - CONSERVATIVE (BUY_ABOVE) - when pullback needs confirmation
+ *
+ * Target: STRUCTURAL LADDER (Daily R1 → R2 → Weekly R1 → R2 → 52W High → REJECT)
+ * Pullbacks use daily pivots first (shorter-term trades)
  */
 function calculatePullbackLevels(data) {
   const {
@@ -236,7 +543,12 @@ function calculatePullbackLevels(data) {
     fridayVolume,
     avgVolume20,
     atr,
-    rsi
+    rsi,
+    weeklyR1,
+    weeklyR2,
+    dailyR1,
+    dailyR2,
+    high52W
   } = data;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -271,7 +583,7 @@ function calculatePullbackLevels(data) {
     rsiHealthy
   );
 
-  let entry, stop, target, entryType, entryRange, reason, mode;
+  let entry, stop, entryType, entryRange, reason, mode;
 
   if (isHealthyPullback) {
     // ─────────────────────────────────────────────────────────────────────
@@ -288,10 +600,6 @@ function calculatePullbackLevels(data) {
 
     // Stop: Below EMA20 support
     stop = ema20 - (0.6 * atr);
-
-    // Target: Previous high or EMA20 + 1.2 ATR
-    const targetFromHigh = isNum(high20D) && high20D > entry ? high20D : entry + (1.2 * atr);
-    target = Math.max(targetFromHigh, ema20 + (1.2 * atr));
 
     entryType = 'limit';
     mode = 'PULLBACK_AGGRESSIVE';
@@ -315,13 +623,36 @@ function calculatePullbackLevels(data) {
     // Stop: Below EMA20 support
     stop = ema20 - (0.6 * atr);
 
-    // Target: Previous high or entry + 1.2 ATR
-    const targetFromHigh = isNum(high20D) && high20D > entry ? high20D : entry + (1.2 * atr);
-    target = Math.max(targetFromHigh, entry + (1.2 * atr));
-
     entryType = 'buy_above';
     mode = 'PULLBACK_CONSERVATIVE';
     reason = buildConservativeReason(distanceATR, rsi, fridayClose, ema20, volumeRatio);
+  }
+
+  const risk = entry - stop;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TARGET: STRUCTURAL LADDER for pullbacks
+  // Daily R1 → Daily R2 → Weekly R1 → Weekly R2 → 52W High → REJECT
+  // Pullbacks are shorter-term, so daily pivots have higher priority
+  // ═══════════════════════════════════════════════════════════════════════════
+  const targetResult = findPullbackTarget({
+    entry,
+    risk,
+    dailyR1,
+    dailyR2,
+    weeklyR1,
+    weeklyR2,
+    high52W,
+    minRR: 1.2  // Lower bar for pullbacks (shorter-term)
+  });
+
+  // If no structural target gives adequate R:R → REJECT this setup
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      reason: `Pullback REJECTED: ${targetResult.reason}`
+    };
   }
 
   return {
@@ -331,9 +662,12 @@ function calculatePullbackLevels(data) {
     entry,
     entryRange,
     stop,
-    target,
+    target: targetResult.target,
+    target2: targetResult.target2,
+    targetBasis: targetResult.targetBasis,
+    dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType,
-    reason
+    reason: `${reason} ${targetResult.reason}`
   };
 }
 
@@ -376,10 +710,11 @@ function buildConservativeReason(distanceATR, rsi, close, ema20, volumeRatio) {
  * - Has room to run
  *
  * Strategy: Continuation entry above recent high
+ * Target: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
  * NOTE: If already within 2% of 20D high, treat as BREAKOUT instead
  */
 function calculateMomentumLevels(data) {
-  const { ema20, high20D, fridayHigh, fridayClose, atr } = data;
+  const { ema20, high20D, fridayHigh, fridayClose, atr, weeklyR1, weeklyR2, high52W, dailyR1 } = data;
 
   if (!isNum(fridayHigh) || fridayHigh <= 0) {
     return { valid: false, reason: 'Friday high required for momentum entry' };
@@ -414,11 +749,28 @@ function calculateMomentumLevels(data) {
   // Calculate risk first
   const risk = entry - stop;
 
-  // Target: Push toward new highs, but ensure minimum 1.5x risk
-  const targetFromHigh = isNum(high20D) ? high20D * 1.05 : entry + (1.5 * atr);
-  const targetFromATR = entry + (1.5 * atr);
-  const targetFromRisk = entry + (risk * 1.5);  // Minimum 1.5 R:R
-  const target = Math.max(targetFromHigh, targetFromATR, targetFromRisk);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TARGET: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
+  // No arbitrary ATR targets - only structural levels
+  // ═══════════════════════════════════════════════════════════════════════════
+  const targetResult = findStructuralTarget({
+    entry,
+    risk,
+    weeklyR1,
+    weeklyR2,
+    high52W,
+    atr,
+    minRR: 1.5
+  });
+
+  // If no structural target gives adequate R:R → REJECT this setup
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      reason: `Momentum REJECTED: ${targetResult.reason}`
+    };
+  }
 
   return {
     valid: true,
@@ -427,10 +779,13 @@ function calculateMomentumLevels(data) {
     entry,
     entryRange,
     stop,
-    target,
+    target: targetResult.target,
+    target2: targetResult.target2,
+    targetBasis: targetResult.targetBasis,
+    dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
     reason: `Momentum continuation: Stock running ${round2(((fridayClose - ema20) / ema20) * 100)}% above EMA20. ` +
-            `Entry above Friday high (${round2(fridayHigh)}) confirms continued buying.`
+            `Entry above Friday high (${round2(fridayHigh)}) confirms continued buying. ${targetResult.reason}`
   };
 }
 
@@ -446,9 +801,10 @@ function calculateMomentumLevels(data) {
  * - RSI neutral (50-65)
  *
  * Strategy: Buy above consolidation range, target range expansion
+ * Target: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
  */
 function calculateConsolidationLevels(data) {
-  const { ema20, high10D, low10D, fridayHigh, fridayLow, atr } = data;
+  const { ema20, high10D, low10D, fridayHigh, fridayLow, atr, weeklyR1, weeklyR2, high52W, dailyR1 } = data;
 
   if (!isNum(fridayHigh) || !isNum(fridayLow) || fridayHigh <= 0 || fridayLow <= 0) {
     return { valid: false, reason: 'Friday high/low required for consolidation entry' };
@@ -458,7 +814,6 @@ function calculateConsolidationLevels(data) {
 
   // Use 10-day range if available, otherwise use Friday range
   const has10DRange = isNum(high10D) && isNum(low10D) && high10D > low10D;
-  const range10D = has10DRange ? (high10D - low10D) : fridayRange;
 
   // Entry: Just above the tight range (small buffer since range is already tight)
   const entry = fridayHigh + (0.1 * atr);
@@ -470,14 +825,30 @@ function calculateConsolidationLevels(data) {
   const consolidationLow = has10DRange ? Math.min(low10D, fridayLow) : fridayLow;
   const stop = consolidationLow - (0.1 * atr);
 
-  // Target: Range expansion - tight ranges lead to big moves
-  // Use largest of: 60% of 10D range, 2x Friday range, or 1.5 ATR
-  const rangeExpansion = Math.max(
-    range10D * 0.6,
-    fridayRange * 2,
-    1.5 * atr
-  );
-  const target = entry + rangeExpansion;
+  const risk = entry - stop;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TARGET: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
+  // No arbitrary range expansion targets - only structural levels
+  // ═══════════════════════════════════════════════════════════════════════════
+  const targetResult = findStructuralTarget({
+    entry,
+    risk,
+    weeklyR1,
+    weeklyR2,
+    high52W,
+    atr,
+    minRR: 1.5
+  });
+
+  // If no structural target gives adequate R:R → REJECT this setup
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      reason: `Consolidation REJECTED: ${targetResult.reason}`
+    };
+  }
 
   return {
     valid: true,
@@ -486,33 +857,46 @@ function calculateConsolidationLevels(data) {
     entry,
     entryRange,
     stop,
-    target,
+    target: targetResult.target,
+    target2: targetResult.target2,
+    targetBasis: targetResult.targetBasis,
+    dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
     reason: `Consolidation breakout: Tight range (${round2((fridayRange / fridayHigh) * 100)}%) near highs signals energy buildup. ` +
-            `Expecting ${round2((rangeExpansion / entry) * 100)}% range expansion on breakout.`
+            `${targetResult.reason}`
   };
 }
 
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * A+ MOMENTUM SCAN FORMULAS
+ * A+ MOMENTUM SCAN FORMULAS — 52-WEEK HIGH BREAKOUT
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * What ChartInk found:
- * - Strong uptrend (EMA20 > EMA50 > SMA200, close > EMA20)
- * - 3%+ weekly gain (momentum confirmed)
- * - Within 5% of 20-day high (near breakout zone)
- * - Green close (buyers in control)
- * - RSI 55-75 (strong but not exhausted)
+ * ACTUAL ChartInk Query (decoded):
+ *   close > 1 day ago max(252, high)  →  FRESH 52-WEEK HIGH (today's close > previous 252-day max high)
+ *   volume > sma(volume, 50) * 1.5    →  Volume 1.5x above 50-day average
+ *   close > sma(close, 200)           →  Above 200 DMA (long-term uptrend)
+ *   rsi(14) > 55 and rsi(14) < 75     →  RSI in strong-but-not-exhausted zone
+ *   ema(close, 20) > ema(close, 50)   →  EMA stack bullish (short-term trending)
+ *   close > 1 week ago close * 1.02   →  2%+ weekly gain (momentum confirmed)
+ *   market cap > 1000, close > 100    →  Mid-cap+ liquid stocks
  *
- * Strategy: Simple momentum continuation
- * - Entry: Above Friday high (confirms continuation)
- * - Stop: Below EMA20 (momentum support)
- * - Target: R:R based (2:1 minimum), not price-level based
+ * Key insight: These stocks just made NEW 52-WEEK HIGHS.
+ * There is NO overhead resistance — the 52W high IS today's price.
+ * The standard structural ladder (Weekly R1 → R2 → 52W High) may fail because
+ * high_52w ≈ fridayHigh, so entry > high_52w always.
+ * Level 0 in findStructuralTarget handles this with ATR extension targets.
+ *
+ * Strategy: Buy the breakout continuation
+ * - Entry: Above Friday high (confirms breakout holds on Monday)
+ * - Stop: Below EMA20 (momentum support, capped at 1.5 ATR)
+ * - Target: STRUCTURAL LADDER with 52W breakout extension fallback
+ *   Weekly R1/R2 may still work if they're above the new high.
+ *   If not → ATR extension target (2.5 ATR from entry) since there's no overhead structure.
  */
 function calculateAPlusMomentumLevels(data) {
-  const { ema20, fridayHigh, fridayClose, atr } = data;
+  const { ema20, fridayHigh, fridayClose, atr, weeklyR1, weeklyR2, high52W, dailyR1 } = data;
 
   if (!isNum(fridayHigh) || fridayHigh <= 0) {
     return { valid: false, reason: 'Friday high required for A+ momentum entry' };
@@ -536,11 +920,29 @@ function calculateAPlusMomentumLevels(data) {
   // RISK calculation
   const risk = entry - stop;
 
-  // TARGET: R:R based (2:1 minimum) - momentum stocks can run
-  // Use higher of: 2x risk OR 2.5 ATR
-  const rrTarget = entry + (risk * 2.0);      // 2:1 R:R
-  const atrTarget = entry + (2.5 * atr);      // ATR-based
-  const target = Math.max(rrTarget, atrTarget);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TARGET: STRUCTURAL LADDER with 52W breakout extension fallback
+  // For stocks at new 52W highs, Level 0 provides ATR extension targets
+  // since there is no overhead resistance to anchor to.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const targetResult = findStructuralTarget({
+    entry,
+    risk,
+    weeklyR1,
+    weeklyR2,
+    high52W,
+    atr,
+    minRR: 1.5
+  });
+
+  // If no structural target gives adequate R:R → REJECT this setup
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      reason: `A+ Momentum REJECTED: ${targetResult.reason}`
+    };
+  }
 
   // Calculate distance from EMA20 for context
   const distanceFromEMA = ((fridayClose - ema20) / ema20) * 100;
@@ -548,14 +950,18 @@ function calculateAPlusMomentumLevels(data) {
   return {
     valid: true,
     mode: 'A_PLUS_MOMENTUM',
-    archetype: 'trend-follow',
+    archetype: '52w_breakout',
     entry,
     entryRange,
     stop,
-    target,
+    target: targetResult.target,         // T1 (primary — from structural ladder or ATR extension)
+    target2: targetResult.target2,        // T2 (extension — for trailing)
+    targetBasis: targetResult.targetBasis, // 'weekly_r1', 'weekly_r2', '52w_high', or 'atr_extension_52w_breakout'
+    dailyR1Check: isNum(dailyR1) ? dailyR1 : null,  // Momentum checkpoint (not a target)
     entryType: 'buy_above',
-    reason: `A+ Momentum: Stock ${round2(distanceFromEMA)}% above EMA20 with 3%+ weekly gains. ` +
-            `Entry above ${round2(fridayHigh)} confirms continuation. Target based on 2:1 R:R.`
+    reason: `A+ Momentum (52W Breakout): Stock ${round2(distanceFromEMA)}% above EMA20, ` +
+            `broke 252-day high with 1.5x+ volume. ` +
+            `Entry above ${round2(fridayHigh)} confirms breakout holds. ${targetResult.reason}`
   };
 }
 
@@ -617,7 +1023,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   // ─────────────────────────────────────────────────────────────────────────
   const risk = entry - stop;
   const riskPercent = (risk / entry) * 100;
-  const MAX_RISK_PERCENT = 5.0;
+  const MAX_RISK_PERCENT = 7.0;
 
   if (riskPercent > MAX_RISK_PERCENT) {
     return {
@@ -669,7 +1075,10 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
 
   if (rewardPercent > MAX_TARGET_PERCENT) {
     adjustedTarget = entry * (1 + MAX_TARGET_PERCENT / 100);
-    adjustments.push(`Target capped from ${round2(rewardPercent)}% to ${MAX_TARGET_PERCENT}% (realistic for swing)`);
+    adjustments.push(
+      `Target capped from ${round2(rewardPercent)}% to ${MAX_TARGET_PERCENT}% ` +
+      `(original structural target: ${round2(target)})`
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────
