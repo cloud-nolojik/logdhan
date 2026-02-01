@@ -31,7 +31,7 @@ import priceCacheService from './services/priceCache.service.js'; // In-memory p
 import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM IST)
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
 import dailyNewsStocksJob from './services/jobs/dailyNewsStocksJob.js'; // daily-news-scrape (8:30 AM Mon-Fri)
-import weeklyTrackAnalysisJob from './services/jobs/weeklyTrackAnalysisJob.js'; // weekly-track-analysis (4:00 PM Mon-Fri, position management for weekly_track)
+import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -287,14 +287,14 @@ async function initializeDailyNewsStocksJob() {
   }
 }
 
-// Initialize weekly track analysis job (4:00 PM Mon-Fri IST - position management AI analysis for weekly_track stocks)
-async function initializeWeeklyTrackAnalysisJob() {
+// Initialize daily tracking job (4:00 PM Mon-Fri IST - Phase 1 status updates + Phase 2 AI for changes)
+async function initializeDailyTrackingJob() {
   try {
 
-    await weeklyTrackAnalysisJob.initialize();
+    await dailyTrackingJob.initialize();
 
   } catch (error) {
-    console.error('❌ Failed to initialize weekly track analysis job:', error);
+    console.error('❌ Failed to initialize daily tracking job:', error);
   }
 }
 
@@ -317,7 +317,7 @@ app.listen(PORT, async () => {
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST)
   await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
   await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
-  await initializeWeeklyTrackAnalysisJob(); // weekly-track-analysis (4:00 PM Mon-Fri, position management for weekly_track)
+  await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
 
 });
 
@@ -334,7 +334,7 @@ process.on('SIGINT', async () => {
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
       dailyNewsStocksJob.shutdown(),
-      weeklyTrackAnalysisJob.shutdown()
+      dailyTrackingJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -357,7 +357,7 @@ process.on('SIGTERM', async () => {
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
       dailyNewsStocksJob.shutdown(),
-      weeklyTrackAnalysisJob.shutdown()
+      dailyTrackingJob.shutdown()
     ]);
 
     // Close MongoDB connection

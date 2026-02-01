@@ -460,10 +460,11 @@ router.get('/:instrument_key/position-analysis', auth, async (req, res) => {
   try {
     const { instrument_key } = req.params;
 
-    // Get latest position management analysis
+    // Get latest position/daily tracking analysis
+    // Check for daily_track first (new system), fallback to position_management (legacy)
     const analysis = await StockAnalysis.findOne({
       instrument_key,
-      analysis_type: 'position_management',
+      analysis_type: { $in: ['daily_track', 'position_management'] },
       status: 'completed'
     }).sort({ created_at: -1 }).lean();
 
@@ -479,19 +480,28 @@ router.get('/:instrument_key/position-analysis', auth, async (req, res) => {
     const now = new Date();
     const isExpired = analysis.valid_until && now > new Date(analysis.valid_until);
 
-    // Extract position management data
-    const positionData = analysis.analysis_data?.position_management || null;
+    // Extract data based on analysis type
+    // daily_track uses analysis_data.daily_track, position_management uses analysis_data.position_management
+    const positionData = analysis.analysis_data?.daily_track
+      || analysis.analysis_data?.position_management
+      || null;
 
     res.json({
       success: true,
       has_analysis: true,
       is_expired: isExpired,
+      analysis_type: analysis.analysis_type,  // Let client know which type
       analysis: positionData,
       original_levels: analysis.analysis_data?.original_levels || null,
       analyzed_at: analysis.created_at,
       valid_until: analysis.valid_until,
       current_price: analysis.current_price,
-      original_swing_analysis_id: analysis.analysis_data?.original_swing_analysis_id || null
+      original_swing_analysis_id: analysis.analysis_data?.original_swing_analysis_id
+        || analysis.analysis_data?.weekend_analysis_id
+        || null,
+      // Include trigger info for daily_track
+      trigger: analysis.analysis_data?.trigger || null,
+      daily_snapshot: analysis.analysis_data?.daily_snapshot || null
     });
   } catch (error) {
     console.error('Error fetching position analysis:', error);

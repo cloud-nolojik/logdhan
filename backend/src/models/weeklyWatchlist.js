@@ -76,6 +76,56 @@ const watchlistStockSchema = new mongoose.Schema({
   has_ai_analysis: { type: Boolean, default: false },  // True when Claude analysis generated
   ai_notes: String,
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DAILY TRACKING (updated by 4 PM daily job)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Granular tracking status (more detailed than 'status' field)
+  tracking_status: {
+    type: String,
+    enum: [
+      'WATCHING',       // Default — waiting for entry
+      'APPROACHING',    // Within 2% above entry
+      'ENTRY_ZONE',     // Price in entry range
+      'ABOVE_ENTRY',    // Triggered and running (above entry, below target)
+      'RETEST_ZONE',    // 52W breakout retesting old high (between stop+2% and entry)
+      'TARGET1_HIT',    // T1 reached
+      'TARGET2_HIT',    // T2 reached
+      'STOPPED_OUT'     // Stop loss hit
+    ],
+    default: 'WATCHING'
+  },
+
+  // Additive flags (can have multiple)
+  tracking_flags: {
+    type: [String],  // ['RSI_DANGER', 'RSI_EXIT', 'VOLUME_SPIKE', 'GAP_DOWN', 'APPROACHING_ENTRY']
+    default: []
+  },
+
+  // Status change tracking
+  status_changed_at: Date,
+  previous_status: String,
+
+  // Daily snapshots (one per trading day, up to 5 per week)
+  daily_snapshots: [{
+    date: { type: Date, required: true },
+    open: Number,
+    high: Number,
+    low: Number,
+    close: Number,
+    volume: Number,
+    volume_vs_avg: Number,          // 1.5 = 50% above 50-day average
+    rsi: Number,                    // Daily RSI-14
+    distance_from_entry_pct: Number,  // +2.3% = 2.3% above entry
+    distance_from_stop_pct: Number,   // +8.1% = 8.1% above stop (positive = safe)
+    distance_from_target_pct: Number, // -5.2% = 5.2% below target
+    tracking_status: String,
+    tracking_flags: [String],
+    nifty_change_pct: Number,
+    phase2_triggered: { type: Boolean, default: false },
+    phase2_analysis_id: { type: mongoose.Schema.Types.ObjectId, ref: 'StockAnalysis' }
+  }],
+
   added_at: { type: Date, default: Date.now }
 }, { _id: true });
 

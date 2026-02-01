@@ -326,7 +326,7 @@ const stockAnalysisSchema = new mongoose.Schema({
   },
   analysis_type: {
     type: String,
-    enum: ['swing', 'intraday', 'position_management'],
+    enum: ['swing', 'intraday', 'position_management', 'daily_track'],
     required: true,
     default: 'swing'
   },
