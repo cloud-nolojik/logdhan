@@ -479,18 +479,18 @@ function extractAnnualResults($) {
       }
     });
 
-    // Get most recent values (last columns)
+    // Get most recent values (first columns — Screener.in shows newest year on left)
     if (revenue.length >= 1 && profit.length >= 1) {
       results.latestYear = {
-        revenue: revenue[revenue.length - 1],
-        profit: profit[profit.length - 1]
+        revenue: revenue[0],
+        profit: profit[0]
       };
     }
 
     if (revenue.length >= 2 && profit.length >= 2) {
       results.previousYear = {
-        revenue: revenue[revenue.length - 2],
-        profit: profit[profit.length - 2]
+        revenue: revenue[1],
+        profit: profit[1]
       };
 
       // Calculate YoY growth
@@ -700,7 +700,7 @@ function formatForPrompt(data) {
     const change = data.promoterPledge.pledgeChange !== null && data.promoterPledge.pledgeChange !== 0
       ? ` (${data.promoterPledge.pledgeChange > 0 ? '+' : ''}${data.promoterPledge.pledgeChange}%)`
       : '';
-    lines.push(`⚠️ Promoter Pledge: ${data.promoterPledge.pledgePercent}%${change}`);
+    lines.push(`⚠️ Promoter Pledge (% of promoter shares pledged as collateral): ${data.promoterPledge.pledgePercent}%${change}`);
   }
 
   // Quarterly results

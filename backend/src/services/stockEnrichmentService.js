@@ -427,13 +427,14 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
       stop: levels.stop,
       target: levels.target,                           // T1 (primary target from structural ladder)
       target2: levels.target2 || null,                 // T2 (extension target, trail only)
-      targetBasis: levels.targetBasis,                 // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', or '52w_high'
+      targetBasis: levels.targetBasis,                 // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', '52w_high', 'atr_extension_52w_breakout'
       dailyR1Check: levels.dailyR1Check || null,       // Momentum checkpoint (not a target)
       riskReward: levels.riskReward,
       riskPercent: levels.riskPercent,
       rewardPercent: levels.rewardPercent,
       entryType: levels.entryType,
       mode: levels.mode,
+      archetype: levels.archetype || null,             // '52w_breakout', 'trend-follow', 'breakout', 'pullback'
       reason: levels.reason
     } : {
       valid: false,

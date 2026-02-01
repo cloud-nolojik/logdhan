@@ -344,7 +344,8 @@ This determines which strategy is PRIMARY and which is ALTERNATIVE in the strate
 - If archetype is "52w_breakout": Primary = breakout continuation entry above Friday high. Stock just broke 52W high — no overhead resistance. Alternative = retest of old 52W high level (now support) if Monday opens weak.
 - If archetype is "trend-follow" or "breakout": Primary = momentum/breakout entry at the pre-calculated buy_above level. Alternative = pullback entry if stock dips to EMA20/pivot.
 - If archetype is "pullback": Primary = dip-buy at the pre-calculated limit/support level. Alternative = confirmation entry if pullback deepens.
-${levels.targetBasis === 'atr_extension_52w_breakout' ? '\n⚠️ TARGET NOTE: Target is ATR-based extension (2.5x ATR), not a structural level. This stock is at new 52W highs with no overhead resistance. Include ATH_NO_RESISTANCE warning.' : ''}
+${levels.archetype === '52w_breakout' ? `\n⚠️ 52W BREAKOUT RETEST ZONE: For alternative/pullback entries on 52W breakout stocks, use the OLD 52W high level (₹${ind.high_52w || 'N/A'} ±2%) as the retest support zone, NOT the weekly pivot. The broken 52W resistance becomes new support.` : ''}
+${levels.targetBasis === 'atr_extension_52w_breakout' ? '⚠️ TARGET NOTE: Target is ATR-based extension (2.5x ATR), not a structural level. This stock is at new 52W highs with no overhead resistance. Include ATH_NO_RESISTANCE warning.' : ''}
 
 === TECHNICAL INDICATORS ===
 Daily RSI (14): ${ind.rsi || 'N/A'}
@@ -367,6 +368,7 @@ Pivot Levels:
 
 === FUNDAMENTAL DATA (Screener.in) ===
 ${fundamentalText || 'Fundamental data unavailable — skip fundamental scoring adjustments.'}
+⚠️ IMPORTANT: If no "Promoter Pledge" line appears above, assume pledge is 0%. Do NOT infer pledge from promoter holding percentage — they are different metrics. Promoter holding is ownership %; pledge is collateral %.
 
 === MARKET CONTEXT ===
 Trading Week: ${marketCtx.weekLabel}
@@ -405,8 +407,8 @@ ${marketCtx.events.map(e => `  • ${e}`).join('\n') || '  • None identified'}
   },
 
   "setup_score": {
-    "total": 85,
-    "grade": "A",
+    "total": ${stock.setup_score || 'null'},
+    "grade": "${stock.grade || 'N/A'}",
     "factors": [
       {
         "name": "Volume Conviction",
@@ -551,6 +553,8 @@ IMPORTANT REMINDERS:
 - Fill aggressive_entry.price with a realistic price near current price (₹${stock.current_price}).
 - Fill target1 with a partial profit-booking level between entry and target (e.g., daily R1, previous high, or round number).
 - Calculate max_loss in beginner_guide based on entry minus stop × 100 shares.
+- GRADE: The engine grade (${stock.grade}) is the official grade. Use it exactly in setup_score.grade. You may add commentary in factors if you disagree, but do NOT override the grade value.
+- BEGINNER GUIDE: Use the engine's entry/stop/target levels (₹${levels.entry}/${levels.stop}/${levels.target}) in beginner steps. If mentioning a pullback alternative, label it clearly as "IF you wait for pullback" with separate numbers.
 - Keep total JSON under 4000 tokens.
 - Return ONLY the JSON object. No other text.`;
 }
@@ -732,7 +736,9 @@ function buildAnalysisMeta(stock, fundamentals, response, startTime) {
       target: levels.target,
       target1: null,    // Set by Claude in trading_plan
       target2: levels.target2,
-      riskReward: levels.riskReward
+      riskReward: levels.riskReward,
+      targetBasis: levels.targetBasis || null,     // Which ladder level was used
+      archetype: levels.archetype || null          // '52w_breakout', 'trend-follow', etc.
     },
     research_sources: [
       `ChartInk ${stock.scan_type} scanner`,
