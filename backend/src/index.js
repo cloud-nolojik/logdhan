@@ -63,6 +63,7 @@ import journalRoutes from './routes/journal.js';
 import dailyNewsStocksRoutes from './routes/dailyNewsStocks.js';
 import apiUsageRoutes from './routes/apiUsage.js';
 import adminRoutes from './routes/admin.js';
+import weeklySetupsRoutes from './routes/weeklySetups.js';
 
 const app = express();
 
@@ -189,6 +190,7 @@ app.use('/api/v1/consent', consentRoutes);
 app.use('/api/v1/positions', positionsRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/weekly-watchlist', weeklyWatchlistRoutes);
+app.use('/api/v1/weeklysetups', weeklySetupsRoutes);
 app.use('/api/v1/screener', screenerRoutes);
 app.use('/api/v1/journal', journalRoutes);
 app.use('/api/v1/daily-news-stocks', dailyNewsStocksRoutes);

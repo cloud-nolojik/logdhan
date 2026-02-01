@@ -9,7 +9,7 @@ const bulkAlertLogSchema = new mongoose.Schema({
   },
   alertType: {
     type: String,
-    enum: ['weekly', 'daily'],
+    enum: ['weekly', 'daily', 'weekly_push', 'daily_push'],
     required: true
   },
   totalUsers: {

@@ -14,7 +14,7 @@ const preFetchedDataSchema = new mongoose.Schema({
   timeframe: {
     type: String,
     required: true,
-    enum: ['15m', '1h', '1d'] // Standardized to lowercase only
+    enum: ['15m', '1h', '1d', '1w'] // Standardized to lowercase only
   },
   trading_date: {
     type: Date,
