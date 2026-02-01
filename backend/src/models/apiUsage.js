@@ -22,7 +22,7 @@ const apiUsageSchema = new mongoose.Schema({
   // Feature/service that made the call
   feature: {
     type: String,
-    enum: ['DAILY_NEWS_STOCKS', 'MARKET_SENTIMENT', 'HEADLINE_SENTIMENT', 'AI_ANALYSIS', 'OTHER'],
+    enum: ['DAILY_NEWS_STOCKS', 'MARKET_SENTIMENT', 'HEADLINE_SENTIMENT', 'AI_ANALYSIS', 'WEEKLY_ANALYSIS', 'OTHER'],
     required: true
   },
 
@@ -80,9 +80,9 @@ apiUsageSchema.statics.getISTDateAsUTC = function(date = new Date()) {
 };
 
 /**
- * GPT-4o pricing (as of Jan 2025)
- * Input: $2.50 / 1M tokens
- * Output: $10.00 / 1M tokens
+ * API Pricing (as of Jan 2025)
+ * OpenAI GPT-4o: Input $2.50/1M, Output $10.00/1M
+ * Anthropic Claude Sonnet: Input $3.00/1M, Output $15.00/1M
  */
 const PRICING = {
   'gpt-4o': {
@@ -96,6 +96,19 @@ const PRICING = {
   'gpt-4-turbo': {
     input: 10.00 / 1000000,
     output: 30.00 / 1000000
+  },
+  // Anthropic Claude models
+  'claude-sonnet-4-20250514': {
+    input: 3.00 / 1000000,   // $3.00 per 1M tokens
+    output: 15.00 / 1000000  // $15.00 per 1M tokens
+  },
+  'claude-3-5-sonnet-20241022': {
+    input: 3.00 / 1000000,
+    output: 15.00 / 1000000
+  },
+  'claude-3-haiku-20240307': {
+    input: 0.25 / 1000000,
+    output: 1.25 / 1000000
   },
   'default': {
     input: 5.00 / 1000000,

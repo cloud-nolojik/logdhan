@@ -93,6 +93,32 @@ async function runTest() {
 
     console.log(`[TEST] ✅ Scan returned ${scanResults.length} stocks`);
 
+    // Fallback: If no stocks found, use GESHIP and APLAPOLLO for testing
+    if (scanResults.length === 0) {
+      console.log('[TEST] ⚠️ No stocks from ChartInk. Using fallback stocks for testing...');
+      scanResults = [
+        {
+          nsecode: 'GESHIP',
+          name: 'Great Eastern Shipping Co Ltd',
+          bsecode: '500620',
+          close: 0, // Will be fetched during enrichment
+          per_chg: 0,
+          volume: 0,
+          scan_type: 'a_plus_momentum'
+        },
+        {
+          nsecode: 'APLAPOLLO',
+          name: 'APL Apollo Tubes Ltd',
+          bsecode: '533758',
+          close: 0, // Will be fetched during enrichment
+          per_chg: 0,
+          volume: 0,
+          scan_type: 'a_plus_momentum'
+        }
+      ];
+      console.log(`[TEST] Using fallback stocks: ${scanResults.map(s => s.nsecode).join(', ')}`);
+    }
+
     if (scanResults.length > 0) {
       console.log('[TEST] Sample results:');
       scanResults.slice(0, 5).forEach((s, i) => {
@@ -100,11 +126,6 @@ async function runTest() {
       });
     }
     console.log('');
-
-    if (scanResults.length === 0) {
-      console.log('[TEST] ⚠️ No stocks found in scan. Exiting.');
-      return;
-    }
 
     // Tag with scan type
     const taggedResults = scanResults.map(s => ({ ...s, scan_type: 'a_plus_momentum' }));
@@ -250,8 +271,16 @@ async function runTest() {
       const addResult = await WeeklyWatchlist.addStocks(stocksToAdd);
       console.log(`[TEST] ✅ Added ${addResult.added} new stocks, updated ${addResult.updated} existing`);
 
-      // Verify persisted data
+      // Mark screening as completed so the watchlist appears in the app on weekends
       const watchlist = await WeeklyWatchlist.getOrCreateCurrentWeek();
+      watchlist.screening_completed = true;
+      watchlist.screening_run_at = new Date();
+      watchlist.scan_types_used = ['a_plus_momentum'];
+      watchlist.total_screener_results = scanResults.length;
+      watchlist.grade_a_count = qualifiedStocks.filter(s => s.grade === 'A').length;
+      watchlist.grade_a_plus_count = qualifiedStocks.filter(s => s.grade === 'A+').length;
+      await watchlist.save();
+      console.log(`[TEST] ✅ Marked screening_completed = true`);
       console.log(`[TEST] Watchlist now has ${watchlist.stocks.length} stocks`);
 
       // Check a sample stock's persisted data

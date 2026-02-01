@@ -386,10 +386,12 @@ ${marketCtx.events.map(e => `  • ${e}`).join('\n') || '  • None identified'}
   },
 
   "confidence_breakdown": {
+    "base_score": 0.70,
     "adjustments": [
-      "+15% for [specific positive reason with number]",
-      "-10% for [specific negative reason with number]"
-    ]
+      { "code": "VOLUME_SURGE", "reason": "7.6x average volume confirms institutional buying", "delta": 0.10 },
+      { "code": "RSI_EXTENDED", "reason": "RSI 70 approaching overbought", "delta": -0.05 }
+    ],
+    "final": 0.75
   },
 
   "performance_hints": {

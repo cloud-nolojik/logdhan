@@ -257,7 +257,10 @@ const analysisDataV14Schema = new mongoose.Schema(
       }],
       final: Number
     },
-    strategies: { type: [strategyV14Schema], default: [] },
+    // strategies: Use Mixed to support both v1.4 swing format AND simpler weekly discovery format
+    // Weekly discovery uses: [{ name: String, description: String }]
+    // Swing analysis uses: full strategyV14Schema
+    strategies: { type: [mongoose.Schema.Types.Mixed], default: [] },
     performance_hints: {
       confidence_drivers: [String],
       uncertainty_factors: [String],
