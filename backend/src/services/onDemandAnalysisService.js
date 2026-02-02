@@ -513,18 +513,81 @@ export async function analyze(instrumentKey, userId, options = {}) {
     if (blockCheck.blocked) {
       console.log(`[ON-DEMAND] [${requestId}] ⏳ Full analysis blocked: ${blockCheck.message}`);
 
-      // Return classification info + blocking message
+      // Save a "pending" record so the app has something to display
+      const validUntil = await getValidUntil(true); // Use quick reject validity (today 4 PM)
+
+      const analysis = await StockAnalysis.findOneAndUpdate(
+        {
+          instrument_key: instrumentKey,
+          analysis_type: 'swing'
+        },
+        {
+          instrument_key: instrumentKey,
+          stock_name: stockInfo.stock_name,
+          stock_symbol: stockInfo.trading_symbol,
+          analysis_type: 'swing',
+          current_price: indicators.price,
+          status: 'completed', // Mark as completed so app shows it
+          analysis_data: {
+            schema_version: '1.5',
+            symbol: stockInfo.trading_symbol,
+            analysis_type: 'swing',
+            // Classification info for the app to display
+            classification: {
+              isSetup: true,
+              scanType: classification.scanType,
+              message: classification.message
+            },
+            // Verdict tells the app this is a valid setup but blocked
+            verdict: {
+              action: 'PENDING_FULL_ANALYSIS',
+              confidence: 0.8,
+              one_liner: `${classification.message} Full analysis available after 4 PM IST.`
+            },
+            setup_score: {
+              total: null, // Score will be calculated in full analysis
+              grade: 'TBD',
+              breakdown: []
+            },
+            // Indicator snapshot
+            indicators_snapshot: {
+              price: round2(indicators.price),
+              rsi: indicators.rsi ? round2(indicators.rsi) : null,
+              weekly_rsi: indicators.weeklyRsi ? round2(indicators.weeklyRsi) : null,
+              ema20: indicators.ema20 ? round2(indicators.ema20) : null,
+              high_52w: indicators.high52W ? round2(indicators.high52W) : null
+            },
+            // Flag indicating full analysis is pending
+            pending_full_analysis: true,
+            blocked_reason: blockCheck.message,
+            strategies: [] // No strategies yet
+          },
+          valid_until: validUntil,
+          last_validated_at: new Date(),
+          progress: {
+            percentage: 50,
+            current_step: 'Bullish setup detected - full analysis available after market hours',
+            steps_completed: 2,
+            total_steps: 4,
+            estimated_time_remaining: 0,
+            last_updated: new Date()
+          }
+        },
+        { upsert: true, new: true, runValidators: false }
+      );
+
+      const duration = Date.now() - startTime;
+      console.log(`[ON-DEMAND] [${requestId}] ✅ Saved pending analysis in ${duration}ms`);
+
       return {
         success: true,
+        data: analysis,
+        cached: false,
         blocked: true,
         message: blockCheck.message,
         classification,
-        stockInfo,
-        indicators: {
-          price: indicators.price,
-          rsi: indicators.rsi,
-          weeklyRsi: indicators.weeklyRsi
-        }
+        fromQuickReject: false,
+        pendingFullAnalysis: true
       };
     }
 

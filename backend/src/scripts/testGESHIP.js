@@ -135,9 +135,29 @@ async function testGESHIP() {
     if (!result.success) {
       console.log(`❌ Analysis failed: ${result.error}`);
     } else if (result.blocked) {
-      console.log('⏳ Analysis blocked (market hours restriction)');
+      console.log('⏳ PENDING FULL ANALYSIS (Bullish setup during market hours)');
       console.log(`   Message: ${result.message}`);
-      console.log(`   Classification: ${JSON.stringify(result.classification, null, 2)}`);
+      console.log(`   Classification: ${result.classification?.scanType || 'N/A'}`);
+      console.log('');
+
+      // Show saved data
+      if (result.data) {
+        const data = result.data.analysis_data;
+        console.log('   📦 SAVED TO DATABASE:');
+        console.log(`      Status: ${result.data.status}`);
+        console.log(`      Valid Until: ${result.data.valid_until}`);
+        if (data?.verdict) {
+          console.log(`      Verdict: ${data.verdict.action}`);
+          console.log(`      One-liner: ${data.verdict.one_liner}`);
+        }
+        if (data?.indicators_snapshot) {
+          console.log('      Indicators Snapshot:');
+          console.log(`         Price: ₹${data.indicators_snapshot.price}`);
+          console.log(`         RSI: ${data.indicators_snapshot.rsi}`);
+          console.log(`         Weekly RSI: ${data.indicators_snapshot.weekly_rsi}`);
+          console.log(`         52W High: ₹${data.indicators_snapshot.high_52w}`);
+        }
+      }
     } else if (result.fromQuickReject) {
       console.log('⚡ QUICK REJECT (No AI call, instant response)');
       console.log('');

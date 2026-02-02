@@ -274,14 +274,28 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
     });
 
     // Handle blocked analysis (bullish stock during market hours)
-    if (result.blocked) {
+    // Now saves a pending record so the app can display it
+    if (result.blocked && result.data) {
+      const analysis = result.data;
       return res.status(200).json({
         success: true,
-        status: 'blocked',
+        status: 'pending_full_analysis',
         message: result.message,
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: analysis.analysis_type,
+          current_price: analysis.current_price,
+          analysis_data: analysis.analysis_data,
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          created_at: analysis.created_at
+        },
         classification: result.classification,
-        stock_info: result.stockInfo,
-        indicators: result.indicators
+        pending_full_analysis: true,
+        from_cache: false
       });
     }
 
