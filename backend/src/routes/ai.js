@@ -1,6 +1,7 @@
 import express from 'express';
 import aiReviewService from '../services/aiAnalyze.service.js';
 import intradayAnalyzeService from '../services/intradayAnalyze.service.js';
+import onDemandAnalysisService from '../services/onDemandAnalysisService.js';
 import candleFetcherService from '../services/candleFetcher.service.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
@@ -258,31 +259,76 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
       });
     }
 
-    // For swing analysis - return immediate response, analysis will happen in background
-    // Start analysis in background (don't await)
-    aiReviewService.analyzeStock({
-      instrument_key,
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SWING ANALYSIS - Use on-demand analysis service
+    // Quick reject (non-setups) returns instantly, full analysis runs in background
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log(`[AI ROUTE] Routing to onDemandAnalysisService for ${stock_symbol}`);
+
+    // Run analysis (may be quick reject or full analysis)
+    const result = await onDemandAnalysisService.analyze(instrument_key, userId, {
       stock_name,
       stock_symbol,
-      current_price,
-      analysis_type,
-      userId,
-      forceFresh: forceFresh,
-      sendNotification: true // Send notification when complete
-    }).catch((error) => {
-      console.error(`❌ [BACKGROUND ANALYSIS] Failed for ${stock_symbol}:`, error.message);
+      forceFresh,
+      sendNotification: true
     });
 
-    // Return immediate response
+    // Handle blocked analysis (bullish stock during market hours)
+    if (result.blocked) {
+      return res.status(200).json({
+        success: true,
+        status: 'blocked',
+        message: result.message,
+        classification: result.classification,
+        stock_info: result.stockInfo,
+        indicators: result.indicators
+      });
+    }
+
+    // Handle errors
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error || 'analysis_failed',
+        message: result.error || 'Failed to analyze stock'
+      });
+    }
+
+    // Handle eliminated stocks
+    if (result.eliminated) {
+      return res.status(200).json({
+        success: true,
+        status: 'eliminated',
+        message: result.reason,
+        stock_info: result.stockInfo
+      });
+    }
+
+    // Return analysis result (quick reject or full analysis)
+    const analysis = result.data;
+    const isQuickReject = result.fromQuickReject;
+
     return res.status(200).json({
       success: true,
-      status: 'background_processing',
-      message: 'Analysis is happening in the background. We will notify you once it\'s complete.',
-      instrument_key,
-      stock_symbol,
-      stock_name,
-      estimated_time: '5-10 minutes',
-      notification_enabled: true
+      status: 'completed',
+      message: isQuickReject
+        ? 'Quick classification complete - not a swing buy setup'
+        : (result.cached ? 'Analysis retrieved from cache' : 'Analysis generated successfully'),
+      data: {
+        _id: analysis._id,
+        instrument_key: analysis.instrument_key,
+        stock_name: analysis.stock_name,
+        stock_symbol: analysis.stock_symbol,
+        analysis_type: analysis.analysis_type,
+        current_price: analysis.current_price,
+        analysis_data: analysis.analysis_data,
+        status: analysis.status,
+        valid_until: analysis.valid_until,
+        created_at: analysis.created_at
+      },
+      from_cache: result.cached || false,
+      quick_reject: isQuickReject,
+      classification: result.classification
     });
 
   } catch (error) {

@@ -3,6 +3,7 @@ import { auth } from '../middleware/auth.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import AnalysisSession from '../models/analysisSession.js';
 import aiAnalyzeService from '../services/aiAnalyze.service.js';
+import onDemandAnalysisService from '../services/onDemandAnalysisService.js';
 import { User } from '../models/user.js';
 import { Subscription } from '../models/subscription.js';
 import { getCurrentPrice } from '../utils/stockDb.js';
@@ -1084,22 +1085,19 @@ async function processSessionBasedBulkAnalysis(session) {
         continue; // Skip to next stock
       }
 
-      // Start analysis (single attempt, no retries)
+      // Start analysis using on-demand service (handles quick reject + full analysis)
       try {
-        //console.log(`🤖 [SESSION ANALYSIS] Calling aiAnalyzeService.analyzeStock for ${stock.trading_symbol}...`);
-        const analysisPromise = aiAnalyzeService.analyzeStock({
-          instrument_key: stock.instrument_key,
-          stock_name: stock.stock_name,
-          stock_symbol: stock.trading_symbol,
-
-          current_price: null,
-          analysis_type: session.analysis_type,
-          user_id: session.user_id,
-          // user_id: removed for bulk analysis to make results shareable across users
-          forceFresh: false,
-          scheduled_release_time: MarketHoursUtil.getScheduledReleaseTime(),
-          skipNotification: true // Skip per-stock notifications in bulk analysis
-        });
+        //console.log(`🤖 [SESSION ANALYSIS] Calling onDemandAnalysisService.analyze for ${stock.trading_symbol}...`);
+        const analysisPromise = onDemandAnalysisService.analyze(
+          stock.instrument_key,
+          session.user_id,
+          {
+            stock_name: stock.stock_name,
+            stock_symbol: stock.trading_symbol,
+            forceFresh: false,
+            skipNotification: true // Skip per-stock notifications in bulk analysis
+          }
+        );
 
         // 10-minute timeout per stock
         const timeoutPromise = new Promise((_, reject) =>
@@ -1107,12 +1105,18 @@ async function processSessionBasedBulkAnalysis(session) {
         );
 
         const analysisResult = await Promise.race([analysisPromise, timeoutPromise]);
-        //console.log(`🎯 [SESSION ANALYSIS] AI analysis completed for ${stock.trading_symbol}, result:`, analysisResult?.success ? 'SUCCESS' : 'FAILED');
+        //console.log(`🎯 [SESSION ANALYSIS] Analysis completed for ${stock.trading_symbol}, result:`, analysisResult?.success ? 'SUCCESS' : 'FAILED');
 
         if (analysisResult && analysisResult.success) {
-          // Mark stock as successfully processed
+          // Mark stock as successfully processed (includes quick reject as success)
           await markStockAsSuccessful(session, stock);
-          //console.log(`✅ [SESSION ANALYSIS] Successfully completed ${stock.trading_symbol}`);
+          //console.log(`✅ [SESSION ANALYSIS] Successfully completed ${stock.trading_symbol} (quickReject: ${analysisResult.fromQuickReject || false})`);
+        } else if (analysisResult && analysisResult.eliminated) {
+          // Stock was eliminated during enrichment - mark as failed with reason
+          await markStockAsFailed(session, stock, analysisResult.reason || 'Eliminated during analysis');
+        } else if (analysisResult && analysisResult.blocked) {
+          // Analysis blocked during market hours - mark as failed
+          await markStockAsFailed(session, stock, 'Blocked: ' + (analysisResult.message || 'Market hours restriction'));
         } else {
           // Analysis failed - mark as failed
           const errorMsg = analysisResult?.message || analysisResult?.error || 'Analysis returned failure status';

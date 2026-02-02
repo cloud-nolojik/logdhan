@@ -989,9 +989,58 @@ export async function getDailyAnalysisData(symbols) {
   };
 }
 
+/**
+ * Get classification data for on-demand analysis
+ * Returns simplified indicator object for quick setup classification
+ *
+ * @param {string} symbol - Trading symbol
+ * @param {string} instrumentKey - Instrument key
+ * @returns {Object} Classification-ready data
+ */
+export async function getClassificationData(symbol, instrumentKey) {
+  try {
+    const techData = await calculateStockData(symbol, instrumentKey);
+
+    if (techData.error) {
+      return { error: techData.error, symbol };
+    }
+
+    const volumeVsAvg = techData.avg_volume_50d > 0
+      ? round2(techData.todays_volume / techData.avg_volume_50d)
+      : null;
+
+    return {
+      symbol,
+      price: techData.cmp,
+      ema20: techData.ema_20,
+      ema50: techData.ema_50,
+      sma200: techData.sma_200,
+      rsi: techData.daily_rsi,
+      weeklyRsi: techData.weekly_rsi,
+      high52W: techData.high_52w,
+      high20D: techData.high_20d,
+      atr: techData.atr_14,
+      atrPct: techData.atr_pct,
+      weeklyChange: techData.weekly_change_pct,
+      volumeVsAvg,
+      // Additional fields for quick reject messages
+      todaysHigh: techData.todays_high,
+      todaysLow: techData.todays_low,
+      weeklyR1: techData.weekly_r1,
+      weeklyS1: techData.weekly_s1,
+      dailyR1: techData.daily_r1,
+      dailyS1: techData.daily_s1
+    };
+  } catch (error) {
+    console.error(`[ClassificationData] Error for ${symbol}:`, error.message);
+    return { error: error.message, symbol };
+  }
+}
+
 export default {
   getTechnicalData,
   getDailyAnalysisData,
   getNiftyContext,
-  calculateStockData
+  calculateStockData,
+  getClassificationData
 };
