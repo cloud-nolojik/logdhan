@@ -5,6 +5,7 @@ import { User } from '../models/user.js';
 import { auth } from '../middleware/auth.js';
 import LatestPrice from '../models/latestPrice.js';
 import WeeklyWatchlist from '../models/weeklyWatchlist.js';
+import priceCacheService from '../services/priceCache.service.js';
 
 const router = express.Router();
 
@@ -58,57 +59,44 @@ router.get('/:instrument_key', auth, async (req, res) => {
       return res.status(404).json({ error: 'Stock not found' });
     }
 
-    // Get current price of the stock
-    let currentPrice;
+    // Get current price using the same price cache service as watchlist (DB → Memory → API fallback)
+    // This ensures consistent pricing across watchlist and AI analysis screens
+    let currentPrice = null;
+    let netChange = 0;
+    let percentChange = 0;
     try {
-      currentPrice = await getCurrentPrice(instrument_key);
-
+      const priceDataMap = await priceCacheService.getLatestPricesWithChange([instrument_key]);
+      const priceData = priceDataMap[instrument_key];
+      if (priceData) {
+        currentPrice = priceData.price;
+        netChange = priceData.change || 0;
+        percentChange = priceData.change_percent || 0;
+        console.log(`[STOCK-DETAILS] Using price cache for ${stock.tradingsymbol || stock.trading_symbol}: ₹${currentPrice}`);
+      }
     } catch (priceError) {
-      console.warn('Error getting current price:', priceError);
-      currentPrice = null; // Set to null if price fetch fails
+      console.warn('Error getting price from cache service:', priceError.message);
     }
 
-    // Fallback: Try to get cached price from LatestPrice collection
+    // Fallback: Try direct API call if cache service fails
+    if (!currentPrice) {
+      try {
+        currentPrice = await getCurrentPrice(instrument_key);
+        console.log(`[STOCK-DETAILS] Using direct API price for ${stock.tradingsymbol || stock.trading_symbol}: ₹${currentPrice}`);
+      } catch (apiError) {
+        console.warn('Direct API price fetch also failed:', apiError.message);
+      }
+    }
+
+    // Final fallback: Try LatestPrice collection
     if (!currentPrice) {
       try {
         const priceDoc = await LatestPrice.findOne({ instrument_key });
         currentPrice = priceDoc?.last_traded_price || priceDoc?.close || null;
         if (currentPrice) {
-          console.log(`Using cached price for ${stock.tradingsymbol || stock.trading_symbol}: ₹${currentPrice}`);
+          console.log(`[STOCK-DETAILS] Using LatestPrice collection for ${stock.tradingsymbol || stock.trading_symbol}: ₹${currentPrice}`);
         }
       } catch (fallbackError) {
-        console.warn('Fallback price fetch also failed:', fallbackError.message);
-      }
-    }
-
-    // Check if API price is stale by comparing against WeeklyWatchlist's daily_snapshots
-    // This handles the case where 1-min candles API returns old data before market opens
-    if (currentPrice) {
-      try {
-        // Find current week's watchlist
-        const now = new Date();
-        const watchlist = await WeeklyWatchlist.findOne({
-          week_start: { $lte: now },
-          week_end: { $gte: now }
-        });
-
-        if (watchlist) {
-          const stockInWatchlist = watchlist.stocks.find(s => s.instrument_key === instrument_key);
-          if (stockInWatchlist?.daily_snapshots?.length > 0) {
-            const lastSnapshot = stockInWatchlist.daily_snapshots[stockInWatchlist.daily_snapshots.length - 1];
-            const lastSnapshotClose = lastSnapshot.close;
-
-            // If API price differs >5% from last snapshot, use snapshot price
-            const priceDiffPct = Math.abs((currentPrice - lastSnapshotClose) / lastSnapshotClose) * 100;
-            if (priceDiffPct > 5) {
-              console.log(`[STOCK-PRICE-FIX] ${stock.tradingsymbol || stock.trading_symbol}: API price ₹${currentPrice} differs ${priceDiffPct.toFixed(1)}% from last snapshot close ₹${lastSnapshotClose}`);
-              console.log(`[STOCK-PRICE-FIX] Using snapshot close as current price`);
-              currentPrice = lastSnapshotClose;
-            }
-          }
-        }
-      } catch (snapshotError) {
-        console.warn('Error checking snapshot price:', snapshotError.message);
+        console.warn('LatestPrice fallback also failed:', fallbackError.message);
       }
     }
 
@@ -131,6 +119,8 @@ router.get('/:instrument_key', auth, async (req, res) => {
         name: stock.name,
         exchange: stock.exchange,
         currentPrice: currentPrice,
+        net_change: netChange,
+        percent_change: percentChange,
         tradingViewLink: `https://www.tradingview.com/chart?symbol=${stock.exchange}:${stock.tradingsymbol || stock.trading_symbol}`,
         is_in_watchlist: isInWatchlist
       }
