@@ -44,6 +44,9 @@ async function fetchMarketDataFromCache() {
     const bulkPrices = priceCacheService.getPrices(instrumentKeys);
     const ltpTime = Date.now() - startTime;
 
+    // Store change data from DB (keyed by instrument_key)
+    const changeData = {};
+
     // ⚡ Step 2: Get candles from memory cache (pre-fetched for indices)
     const candleStartTime = Date.now();
     const candleResults = Object.entries(MARKET_INDICES).map(([key, indexInfo]) => {
@@ -62,9 +65,17 @@ async function fetchMarketDataFromCache() {
       const dbPrices = await LatestPrice.getPricesForInstruments(missingIndices);
       const dbTime = Date.now() - dbStartTime;
 
-      // Merge DB prices into bulkPrices
+      // Merge DB prices into bulkPrices and store change data
       dbPrices.forEach((priceDoc) => {
         bulkPrices[priceDoc.instrument_key] = priceDoc.last_traded_price;
+
+        // Store change data from DB (this is correctly calculated from previous close)
+        if (priceDoc.change !== undefined && priceDoc.change_percent !== undefined) {
+          changeData[priceDoc.instrument_key] = {
+            change: priceDoc.change,
+            changePercent: priceDoc.change_percent
+          };
+        }
 
         // Also update candles if available
         if (priceDoc.recent_candles && priceDoc.recent_candles.length > 0) {
@@ -130,22 +141,34 @@ async function fetchMarketDataFromCache() {
         // Get current price from bulk fetch (fastest!)
         const currentPrice = bulkPrices[indexInfo.upstoxKey];
 
+        // Get stored change data from DB (correctly calculated from previous close)
+        const storedChange = changeData[indexInfo.upstoxKey];
+
         if (candles && candles.length > 0) {
           // Get the latest candle data (first element is most recent)
           const latestCandle = candles[0];
           const [timestamp, open, high, low, close, volume] = latestCandle;
 
-          // Calculate change from first candle of the day (prev close) if available
+          // Use stored change data from DB if available (calculated from previous day's close)
+          // Otherwise, calculate from previous candle in the array
           let change = 0;
           let changePercent = 0;
 
-          // candles are newest-first from cache; find earliest candle in the set
-          const lastCandle = candles[candles.length - 1];
-          const dayOpen = lastCandle ? lastCandle[1] : open; // candle[1] = open
-          const reference = dayOpen || open;
-
-          change = close - reference;
-          changePercent = reference !== 0 ? (change / reference) * 100 : 0;
+          if (storedChange) {
+            // Use pre-calculated change from database (correct: based on previous close)
+            change = storedChange.change;
+            changePercent = storedChange.changePercent;
+          } else if (candles.length > 1) {
+            // Calculate from previous candle's close
+            const previousCandle = candles[1];
+            const previousClose = previousCandle[4]; // candle[4] = close
+            change = close - previousClose;
+            changePercent = previousClose !== 0 ? (change / previousClose) * 100 : 0;
+          } else {
+            // Fallback: calculate from today's open (less accurate but better than nothing)
+            change = close - open;
+            changePercent = open !== 0 ? (change / open) * 100 : 0;
+          }
 
           return {
             name: indexInfo.name,
@@ -163,15 +186,17 @@ async function fetchMarketDataFromCache() {
             totalCandles: candles.length
           };
         } else if (currentPrice) {
-          // Use LTP data with minimal calculation
+          // Use LTP data with stored change if available
+          const change = storedChange?.change || 0;
+          const changePercent = storedChange?.changePercent || 0;
 
           return {
             name: indexInfo.name,
             symbol: indexInfo.symbol,
             instrumentKey: indexInfo.upstoxKey,
             currentPrice: Math.round(currentPrice * 100) / 100,
-            change: 0,
-            changePercent: 0,
+            change: Math.round(change * 100) / 100,
+            changePercent: Math.round(changePercent * 100) / 100,
             high: Math.round(currentPrice * 100) / 100,
             low: Math.round(currentPrice * 100) / 100,
             open: Math.round(currentPrice * 100) / 100,

@@ -165,7 +165,7 @@ latestPriceSchema.statics.getPricesForInstruments = async function (instrumentKe
   return this.find({
     instrument_key: { $in: instrumentKeys }
   }).
-  select('instrument_key stock_symbol last_traded_price change change_percent updated_at candle_timestamp').
+  select('instrument_key stock_symbol last_traded_price change change_percent updated_at candle_timestamp recent_candles').
   lean();
 };
 
