@@ -531,15 +531,47 @@ class PriceCacheService {
         priceData.close = latestCandle[4] || price;
         priceData.volume = latestCandle[5] || 0;
 
-        // Calculate change from previous candle
-        if (candles.length > 1) {
-          const previousCandle = candles[1];
-          const previousClose = previousCandle[4];
-          priceData.change = price - previousClose;
-          priceData.change_percent = previousClose !== 0 ? priceData.change / previousClose * 100 : 0;
+        // Calculate DAILY change from previous day's close
+        // For intraday candles: find candles from previous trading day if available
+        let previousDayClose = null;
+
+        // Check if candles span multiple days by looking at timestamps
+        const latestTimestamp = new Date(latestCandle[0]);
+        const latestDateStr = latestTimestamp.toISOString().split('T')[0];
+
+        // Find a candle from a previous day to get previous day's close
+        for (let i = candles.length - 1; i >= 0; i--) {
+          const candleTimestamp = new Date(candles[i][0]);
+          const candleDateStr = candleTimestamp.toISOString().split('T')[0];
+          if (candleDateStr < latestDateStr) {
+            // This candle is from a previous day - use its close as previous day's close
+            previousDayClose = candles[i][4];
+            break;
+          }
+        }
+
+        // If no previous day candle found, use the first candle of today (earliest) as day open reference
+        if (previousDayClose === null && candles.length > 1) {
+          // Find the first candle of the current day (last in array = earliest due to reverse order)
+          const todaysCandles = candles.filter((c) => {
+            const cDate = new Date(c[0]).toISOString().split('T')[0];
+            return cDate === latestDateStr;
+          });
+          if (todaysCandles.length > 0) {
+            // Use the open price of the first candle of today as reference
+            const firstTodayCandle = todaysCandles[todaysCandles.length - 1];
+            previousDayClose = firstTodayCandle[1]; // Open price of first candle
+          }
+        }
+
+        // Calculate change
+        if (previousDayClose !== null && previousDayClose !== 0) {
+          priceData.change = price - previousDayClose;
+          priceData.change_percent = (priceData.change / previousDayClose) * 100;
         } else {
+          // Fallback: use today's open
           priceData.change = price - priceData.open;
-          priceData.change_percent = priceData.open !== 0 ? priceData.change / priceData.open * 100 : 0;
+          priceData.change_percent = priceData.open !== 0 ? (priceData.change / priceData.open) * 100 : 0;
         }
 
         // Store recent candles (last 5 for mini-chart)
