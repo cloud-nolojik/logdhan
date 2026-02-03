@@ -185,11 +185,18 @@ export async function validateStock(instrumentKey) {
 // @param {string} instrumentKey - The instrument key to fetch price for
 // @returns {Object|null} { previousClose, todayOpen, todayHigh, todayLow, todayClose } or null
 export async function getDailyCandles(instrumentKey) {
-  const currentDate = new Date();
-  const previousDay = new Date(currentDate);
-  previousDay.setDate(currentDate.getDate() - 10); // Look back 10 days to cover weekends/holidays
-  const currentDayFormattedDate = getFormattedDate(currentDate);
-  const previousDayFormattedDate = getFormattedDate(previousDay);
+  // Use IST date for API call (Upstox uses IST dates)
+  const now = new Date();
+  const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+  const istNow = new Date(now.getTime() + istOffset);
+
+  // Format IST date as YYYY-MM-DD
+  const currentDayFormattedDate = istNow.toISOString().split('T')[0];
+
+  // Look back 10 days from IST date
+  const previousDay = new Date(istNow);
+  previousDay.setDate(istNow.getDate() - 10);
+  const previousDayFormattedDate = previousDay.toISOString().split('T')[0];
 
   // URL-encode the instrument key (| needs to be encoded as %7C)
   const encodedInstrumentKey = encodeURIComponent(instrumentKey);
