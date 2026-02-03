@@ -768,6 +768,33 @@ class PriceCacheService {
       console.warn(`⚠️ [PRICES] Could not check market hours: ${error.message}`);
     }
 
+    // Determine which API to use based on time and day:
+    // - Trading day, 9:15 AM - 12:00 AM: Use Intraday API (1-min candles)
+    // - Trading day, 12:00 AM - 9:15 AM: Use Historical Daily API (daily candles)
+    // - Weekend/Holiday (any time): Use Historical Daily API (daily candles)
+    const now = new Date();
+    const istNow = MarketHoursUtil.toIST(now);
+    const currentHour = istNow.getHours();
+    const currentMinute = istNow.getMinutes();
+    const timeInMinutes = currentHour * 60 + currentMinute;
+    const marketOpenTime = 9 * 60 + 15; // 9:15 AM = 555 minutes
+
+    // Check if today is a trading day (not weekend/holiday)
+    let isTradingDay = true;
+    try {
+      isTradingDay = await MarketHoursUtil.isTradingDay(istNow);
+    } catch (error) {
+      console.warn(`⚠️ [PRICES] Could not check trading day: ${error.message}`);
+    }
+
+    // Use Historical API if:
+    // 1. It's night time (12 AM - 9:15 AM) on a trading day, OR
+    // 2. It's a weekend/holiday (any time)
+    const isNightTime = timeInMinutes < marketOpenTime;
+    const useHistoricalAPI = !isTradingDay || isNightTime;
+
+    console.log(`[PRICES] Time check: IST ${currentHour}:${currentMinute.toString().padStart(2, '0')}, isTradingDay=${isTradingDay}, isNightTime=${isNightTime}, useHistoricalAPI=${useHistoricalAPI}, isMarketOpen=${isMarketOpen}`);
+
     if (isMarketOpen) {
       // MARKET HOURS: Try BULK LTP first (much faster!)
       const apiStart = Date.now();
@@ -898,18 +925,37 @@ class PriceCacheService {
           });
         }
 
-        // For still missing prices OR stale prices, fetch from Upstox API (historical data)
+        // For still missing prices OR stale prices, fetch from Upstox API
         const stillMissingKeys = instrumentKeys.filter((key) => priceMap[key] === undefined);
         const keysToRefresh = [...new Set([...stillMissingKeys, ...staleKeys])]; // Combine missing + stale, dedupe
         if (keysToRefresh.length > 0) {
           const missingCount = stillMissingKeys.length;
           const staleCount = staleKeys.length;
-          console.log(`📡 [API FALLBACK] Fetching ${keysToRefresh.length} prices from Upstox API (market closed) - ${missingCount} missing, ${staleCount} stale`);
+
+          // Use different API based on time/day:
+          // - useHistoricalAPI=true (night time OR weekend/holiday): Use Historical Daily API
+          // - useHistoricalAPI=false (trading day after 9:15 AM): Use Intraday API
+          const apiType = useHistoricalAPI ? 'HISTORICAL DAILY' : 'INTRADAY';
+          console.log(`📡 [API FALLBACK] Fetching ${keysToRefresh.length} prices from ${apiType} API (market closed) - ${missingCount} missing, ${staleCount} stale`);
 
           const apiPromises = keysToRefresh.map(async (instrumentKey) => {
             try {
-              const price = await getCurrentPrice(instrumentKey, false);
-              console.log(`📡 [API FALLBACK] ${instrumentKey} -> price: ${price}`);
+              let price = null;
+
+              if (useHistoricalAPI) {
+                // Night time OR weekend/holiday: Use Historical Daily API (previous day close)
+                const dailyData = await getDailyCandles(instrumentKey);
+                if (dailyData) {
+                  // Use todayClose if available (market traded today), else previousClose
+                  price = dailyData.todayClose || dailyData.previousClose;
+                  console.log(`📡 [HISTORICAL] ${instrumentKey} -> close: ${price}`);
+                }
+              } else {
+                // Trading day after 9:15 AM: Use Intraday API
+                price = await getCurrentPrice(instrumentKey, false);
+                console.log(`📡 [INTRADAY] ${instrumentKey} -> price: ${price}`);
+              }
+
               return { instrumentKey, price };
             } catch (error) {
               console.warn(`⚠️ [API] Failed to fetch ${instrumentKey}: ${error.message}`);
@@ -947,7 +993,7 @@ class PriceCacheService {
           }
 
           const apiFetchedCount = apiResults.filter(r => r.price !== null).length;
-          console.log(`✅ [API FALLBACK] Fetched ${apiFetchedCount}/${keysToRefresh.length} prices from Upstox API`);
+          console.log(`✅ [API FALLBACK] Fetched ${apiFetchedCount}/${keysToRefresh.length} prices from ${apiType} API`);
         }
 
         const dbTime = Date.now() - dbStart;
