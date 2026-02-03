@@ -26,6 +26,7 @@ import priceCacheService from '../priceCache.service.js';
 import modelSelectorService from '../ai/modelSelector.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import pLimit from 'p-limit';
+import { firebaseService } from '../firebase/firebase.service.js';
 
 class WeeklyTrackAnalysisJob {
   constructor() {
@@ -296,6 +297,20 @@ class WeeklyTrackAnalysisJob {
       console.log(`${'='.repeat(60)}\n`);
 
       this.stats.stocksAnalyzed += result.stocksAnalyzed;
+
+      // Send push notification to all users if any stocks were analyzed
+      if (result.successful > 0) {
+        try {
+          await firebaseService.sendAnalysisCompleteToAllUsers(
+            'Position Analysis Ready',
+            `${result.successful} stock${result.successful > 1 ? 's' : ''} analyzed for position management`,
+            { type: 'weekly_analysis', route: '/watchlist' }
+          );
+          console.log(`${runLabel} 📱 Push notifications sent to all users`);
+        } catch (notifError) {
+          console.error(`${runLabel} ⚠️ Failed to send notifications:`, notifError.message);
+        }
+      }
 
       return result;
 

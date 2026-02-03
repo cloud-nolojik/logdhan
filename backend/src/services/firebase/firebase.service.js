@@ -216,6 +216,44 @@ class FirebaseService {
 
     return this.sendToUser(userId, title, body, data);
   }
+
+  /**
+   * Send notification to all users with FCM tokens
+   * Used for broadcast notifications when analysis jobs complete
+   */
+  async sendAnalysisCompleteToAllUsers(title, body, data = {}) {
+    try {
+      const users = await User.find({ fcmTokens: { $exists: true, $ne: [] } }).lean();
+
+      if (users.length === 0) {
+        console.log('[Firebase] No users with FCM tokens found');
+        return { success: true, successCount: 0, failureCount: 0 };
+      }
+
+      let successCount = 0;
+      let failureCount = 0;
+
+      for (const user of users) {
+        try {
+          const result = await this.sendToUser(user._id, title, body, data);
+          if (result.success) {
+            successCount++;
+          } else {
+            failureCount++;
+          }
+        } catch (err) {
+          console.error(`[Firebase] Failed to send to user ${user._id}:`, err.message);
+          failureCount++;
+        }
+      }
+
+      console.log(`[Firebase] Broadcast complete: ${successCount} success, ${failureCount} failed`);
+      return { success: true, successCount, failureCount };
+    } catch (error) {
+      console.error('[Firebase] Error in sendAnalysisCompleteToAllUsers:', error);
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 // Create and export a singleton instance

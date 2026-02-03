@@ -19,6 +19,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
 import StockAnalysis from '../models/stockAnalysis.js';
+import DailyNewsStock from '../models/dailyNewsStock.js';
 import ApiUsage from '../models/apiUsage.js';
 import fundamentalDataService from './fundamentalDataService.js';
 import MarketHoursUtil from '../utils/marketHours.js';
@@ -161,8 +162,12 @@ async function generateWeeklyAnalysis(stock, options = {}) {
     console.log(`[WEEKLY ANALYSIS] [${requestId}] Fetching fundamentals from Screener.in...`);
     const fundamentals = await fundamentalDataService.fetchFundamentalData(stock.symbol);
 
+    // Step 1.5: Fetch recent news (last 3 days) for this stock
+    console.log(`[WEEKLY ANALYSIS] [${requestId}] Fetching recent news...`);
+    const recentNews = await fetchRecentNews(stock.symbol, stock.instrument_key);
+
     // Step 2: Build prompt
-    const userMessage = buildUserMessage(stock, fundamentals, options);
+    const userMessage = buildUserMessage(stock, fundamentals, { ...options, recentNews });
 
     // Step 3: Call Claude
     console.log(`[WEEKLY ANALYSIS] [${requestId}] Calling Claude (${CLAUDE_MODEL})...`);
@@ -172,7 +177,7 @@ async function generateWeeklyAnalysis(stock, options = {}) {
     const analysisData = parseClaudeResponse(response.content, stock);
 
     // Step 5: Build analysis_meta (server-side metadata)
-    const analysisMeta = buildAnalysisMeta(stock, fundamentals, response, startTime);
+    const analysisMeta = buildAnalysisMeta(stock, fundamentals, response, startTime, recentNews);
 
     // Step 6: Calculate valid_until (end of trading week)
     const validUntil = await getWeeklyValidUntil();
@@ -305,6 +310,7 @@ function buildUserMessage(stock, fundamentals, options = {}) {
   const levels = stock.levels || {};
   const ind = stock.indicators || {};
   const marketCtx = options.marketContext || generateMarketContext();
+  const newsContext = options.recentNews ? formatNewsForPrompt(options.recentNews) : null;
 
   const fundamentalText = fundamentalDataService.formatForPrompt(fundamentals);
   const scoreBreakdown = formatScoreBreakdown(stock.score_breakdown);
@@ -375,6 +381,8 @@ Trading Week: ${marketCtx.weekLabel}
 ${marketCtx.niftyInfo}
 Key Events This Week:
 ${marketCtx.events.map(e => `  • ${e}`).join('\n') || '  • None identified'}
+
+${newsContext ? newsContext : '=== RECENT NEWS ===\nNo recent news found for this stock.'}
 
 === OUTPUT: Return ONLY this JSON (no markdown, no extra text) ===
 
@@ -696,8 +704,21 @@ function parseClaudeResponse(content, stock) {
 /**
  * Build analysis_meta from server-side data
  */
-function buildAnalysisMeta(stock, fundamentals, response, startTime) {
+function buildAnalysisMeta(stock, fundamentals, response, startTime, recentNews = null) {
   const levels = stock.levels || {};
+
+  // Format news context for storage (if news exists)
+  const newsContext = recentNews ? {
+    scrape_date: recentNews.scrape_date,
+    aggregate_sentiment: recentNews.aggregate_sentiment,
+    aggregate_impact: recentNews.aggregate_impact,
+    confidence_score: recentNews.confidence_score,
+    headlines: recentNews.news_items?.map(item => ({
+      text: item.headline,
+      sentiment: item.sentiment,
+      impact: item.impact
+    })) || []
+  } : null;
 
   return {
     candle_info: {
@@ -747,7 +768,9 @@ function buildAnalysisMeta(stock, fundamentals, response, startTime) {
       `Engine score: ${stock.setup_score}/100 (${stock.grade})`
     ],
     source: 'weekend_screening',
-    scan_type: stock.scan_type
+    scan_type: stock.scan_type,
+    // News context - null if no recent news found for this stock
+    news_context: newsContext
   };
 }
 
@@ -755,6 +778,73 @@ function buildAnalysisMeta(stock, fundamentals, response, startTime) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fetch recent news for a stock from DailyNewsStock collection
+ * Returns news from the last 3 days (useful for weekend analysis covering Friday news)
+ * @param {string} symbol - Stock trading symbol
+ * @param {string} instrumentKey - Stock instrument key
+ * @returns {Promise<Object|null>} Recent news data or null if none found
+ */
+async function fetchRecentNews(symbol, instrumentKey) {
+  try {
+    // Look for news in the last 3 days
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+    // Query by instrument_key first (more reliable), fallback to symbol
+    const news = await DailyNewsStock.findOne({
+      $or: [
+        { instrument_key: instrumentKey },
+        { symbol: symbol.toUpperCase() }
+      ],
+      scrape_date: { $gte: threeDaysAgo }
+    }).sort({ scrape_date: -1 }).lean();
+
+    if (!news || !news.news_items || news.news_items.length === 0) {
+      console.log(`[WEEKLY ANALYSIS] No recent news found for ${symbol}`);
+      return null;
+    }
+
+    console.log(`[WEEKLY ANALYSIS] Found ${news.news_items.length} recent news items for ${symbol}`);
+    return news;
+  } catch (error) {
+    console.error(`[WEEKLY ANALYSIS] Error fetching news for ${symbol}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Format recent news for the prompt
+ * @param {Object} newsData - News data from DailyNewsStock
+ * @returns {string} Formatted news context for the prompt
+ */
+function formatNewsForPrompt(newsData) {
+  if (!newsData || !newsData.news_items || newsData.news_items.length === 0) {
+    return null;
+  }
+
+  const scrapeDate = new Date(newsData.scrape_date);
+  const dateStr = scrapeDate.toISOString().split('T')[0];
+
+  const headlines = newsData.news_items.map(item => {
+    const sentiment = item.sentiment ? `[${item.sentiment}]` : '';
+    const impact = item.impact ? `[${item.impact} IMPACT]` : '';
+    return `- ${item.headline} ${sentiment} ${impact}`.trim();
+  }).join('\n');
+
+  return `
+=== RECENT NEWS (from ${dateStr}) ===
+Aggregate Sentiment: ${newsData.aggregate_sentiment || 'N/A'}
+Aggregate Impact: ${newsData.aggregate_impact || 'N/A'}
+Confidence Score: ${newsData.confidence_score ? (newsData.confidence_score * 100).toFixed(0) + '%' : 'N/A'}
+
+Headlines:
+${headlines}
+
+⚠️ Factor this news into your analysis. Positive earnings, major deals, or SEBI actions should influence your verdict and confidence. Negative news may warrant SKIP or reduced confidence.
+`.trim();
+}
 
 /**
  * Auto-generate market context from system clock

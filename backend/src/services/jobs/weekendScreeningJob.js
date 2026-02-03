@@ -15,6 +15,7 @@ import WeeklyWatchlist from '../../models/weeklyWatchlist.js';
 import { getCurrentPrice } from '../../utils/stockDb.js';
 import priceCacheService from '../priceCache.service.js';
 import weeklyAnalysisService from '../weeklyAnalysisService.js';
+import { firebaseService } from '../firebase/firebase.service.js';
 
 class WeekendScreeningJob {
   constructor() {
@@ -595,6 +596,20 @@ class WeekendScreeningJob {
       console.log('[SCREENING JOB] └─────────────────────────────────────────────────────────────┘');
       console.log(`[SCREENING JOB] 📊 Final Result: ${JSON.stringify(result)}`);
       console.log('');
+
+      // Send push notification to all users about new weekly setups
+      if (result.totalStocksAdded > 0) {
+        try {
+          await firebaseService.sendAnalysisCompleteToAllUsers(
+            'Weekend Screening Complete',
+            `${result.totalStocksAdded} new setup${result.totalStocksAdded > 1 ? 's' : ''} found for the week`,
+            { type: 'weekend_screening', route: '/weekly-watchlist' }
+          );
+          console.log('[SCREENING JOB] 📱 Push notifications sent to all users');
+        } catch (notifError) {
+          console.error('[SCREENING JOB] ⚠️ Failed to send notifications:', notifError.message);
+        }
+      }
 
       return result;
 

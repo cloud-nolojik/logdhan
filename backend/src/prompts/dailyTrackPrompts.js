@@ -6,6 +6,35 @@
  */
 
 /**
+ * Format news context for inclusion in the prompt
+ * @param {Object|null} newsData - News data from DailyNewsStock
+ * @returns {string|null} Formatted news context or null
+ */
+function formatNewsContext(newsData) {
+  if (!newsData || !newsData.news_items || newsData.news_items.length === 0) {
+    return null;
+  }
+
+  const headlines = newsData.news_items.map(item => {
+    const sentiment = item.sentiment ? `[${item.sentiment}]` : '';
+    const impact = item.impact ? `[${item.impact}]` : '';
+    return `  • ${item.headline} ${sentiment} ${impact}`.trim();
+  }).join('\n');
+
+  return `
+TODAY'S NEWS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Aggregate Sentiment: ${newsData.aggregate_sentiment || 'N/A'}
+Impact: ${newsData.aggregate_impact || 'N/A'}
+
+Headlines:
+${headlines}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ Factor this news into your assessment. Positive earnings or deals may strengthen the setup; negative news may warrant caution or SKIP.
+`.trim();
+}
+
+/**
  * Build the daily track prompt for Claude
  * @param {Object} params
  * @param {Object} params.stock - Stock from WeeklyWatchlist
@@ -13,11 +42,15 @@
  * @param {Object} params.dailyData - Today's market data from getDailyAnalysisData
  * @param {string} params.triggerReason - Why Phase 2 was triggered
  * @param {Object} params.snapshot - Today's daily snapshot
+ * @param {Object|null} params.recentNews - Today's news for this stock (if any)
  * @returns {{ system: string, user: string }}
  */
-function buildDailyTrackPrompt({ stock, weekendAnalysis, dailyData, triggerReason, snapshot }) {
+function buildDailyTrackPrompt({ stock, weekendAnalysis, dailyData, triggerReason, snapshot, recentNews }) {
   const levels = stock.levels || {};
   const screeningData = stock.screening_data || {};
+
+  // Format news context if available
+  const newsContext = formatNewsContext(recentNews);
 
   // Extract weekend verdict if available
   const weekendVerdict = weekendAnalysis?.analysis_data?.verdict
@@ -79,6 +112,7 @@ FLAGS: ${snapshot.tracking_flags?.length > 0 ? snapshot.tracking_flags.join(', '
 
 TRIGGER REASON: ${triggerReason}
 
+${newsContext || ''}
 INSTRUCTIONS:
 1. Assess today's price action in context of the weekend setup
 2. Provide specific guidance for BOTH holders AND watchers

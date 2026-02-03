@@ -18,10 +18,12 @@
 
 import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 import StockAnalysis from '../models/stockAnalysis.js';
+import DailyNewsStock from '../models/dailyNewsStock.js';
 import { getDailyAnalysisData } from './technicalData.service.js';
 import { buildDailyTrackPrompt } from '../prompts/dailyTrackPrompts.js';
 import Anthropic from '@anthropic-ai/sdk';
 import ApiUsage from '../models/apiUsage.js';
+import { firebaseService } from './firebase/firebase.service.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 2 TRIGGERS - When to call AI
@@ -435,13 +437,17 @@ async function runPhase2(phase2Queue) {
         status: 'completed'
       }).sort({ created_at: -1 }).lean();
 
+      // Fetch today's news for this stock (if any)
+      const recentNews = await fetchRecentNewsForStock(stock.symbol, stock.instrument_key);
+
       // Build prompt
       const { system, user } = buildDailyTrackPrompt({
         stock,
         weekendAnalysis,
         dailyData,
         triggerReason,
-        snapshot
+        snapshot,
+        recentNews
       });
 
       // Call Claude
@@ -624,6 +630,20 @@ async function runDailyTracking(options = {}) {
     console.log(`${runLabel} Total time: ${totalDuration}ms`);
     console.log(`${'═'.repeat(60)}\n`);
 
+    // Send push notification to all users if there were status changes or AI analysis
+    if (summary.phase2.successful > 0) {
+      try {
+        await firebaseService.sendAnalysisCompleteToAllUsers(
+          'Daily Analysis Complete',
+          `${summary.phase2.successful} stock${summary.phase2.successful > 1 ? 's' : ''} analyzed with status updates`,
+          { type: 'daily_analysis', route: '/weekly-watchlist' }
+        );
+        console.log(`${runLabel} 📱 Push notifications sent to all users`);
+      } catch (notifError) {
+        console.error(`${runLabel} ⚠️ Failed to send notifications:`, notifError.message);
+      }
+    }
+
     return summary;
 
   } catch (error) {
@@ -639,6 +659,38 @@ async function runDailyTracking(options = {}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fetch today's news for a stock from DailyNewsStock collection
+ * @param {string} symbol - Stock trading symbol
+ * @param {string} instrumentKey - Stock instrument key
+ * @returns {Promise<Object|null>} News data or null if none found
+ */
+async function fetchRecentNewsForStock(symbol, instrumentKey) {
+  try {
+    // Look for today's news (daily tracking runs same day as news scrape)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const news = await DailyNewsStock.findOne({
+      $or: [
+        { instrument_key: instrumentKey },
+        { symbol: symbol.toUpperCase() }
+      ],
+      scrape_date: { $gte: today }
+    }).sort({ scrape_date: -1 }).lean();
+
+    if (!news || !news.news_items || news.news_items.length === 0) {
+      return null;
+    }
+
+    console.log(`[DAILY-TRACK-P2] Found ${news.news_items.length} news items for ${symbol}`);
+    return news;
+  } catch (error) {
+    console.error(`[DAILY-TRACK-P2] Error fetching news for ${symbol}:`, error.message);
+    return null;
+  }
+}
 
 /**
  * Get today at midnight IST (returns UTC Date for MongoDB queries)

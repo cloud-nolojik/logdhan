@@ -32,6 +32,7 @@ import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // wee
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
 import dailyNewsStocksJob from './services/jobs/dailyNewsStocksJob.js'; // daily-news-scrape (8:30 AM Mon-Fri)
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
+import pendingAnalysisReminderJob from './services/jobs/pendingAnalysisReminderJob.js'; // pending-analysis-reminder (4:00 PM Mon-Fri, notify users about pending stocks)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -298,6 +299,17 @@ async function initializeDailyTrackingJob() {
   }
 }
 
+// Initialize pending analysis reminder job (4:00 PM Mon-Fri IST - notify users about pending stocks)
+async function initializePendingAnalysisReminderJob() {
+  try {
+
+    await pendingAnalysisReminderJob.initialize();
+
+  } catch (error) {
+    console.error('❌ Failed to initialize pending analysis reminder job:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -318,6 +330,7 @@ app.listen(PORT, async () => {
   await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
   await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
+  await initializePendingAnalysisReminderJob(); // pending-analysis-reminder (4:00 PM Mon-Fri, notify users)
 
 });
 
@@ -334,7 +347,8 @@ process.on('SIGINT', async () => {
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
       dailyNewsStocksJob.shutdown(),
-      dailyTrackingJob.shutdown()
+      dailyTrackingJob.shutdown(),
+      pendingAnalysisReminderJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -357,7 +371,8 @@ process.on('SIGTERM', async () => {
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
       dailyNewsStocksJob.shutdown(),
-      dailyTrackingJob.shutdown()
+      dailyTrackingJob.shutdown(),
+      pendingAnalysisReminderJob.shutdown()
     ]);
 
     // Close MongoDB connection
