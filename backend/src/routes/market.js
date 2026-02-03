@@ -69,8 +69,17 @@ async function fetchMarketDataFromCache() {
       dbPrices.forEach((priceDoc) => {
         bulkPrices[priceDoc.instrument_key] = priceDoc.last_traded_price;
 
-        // Store change data from DB (this is correctly calculated from previous close)
-        if (priceDoc.change !== undefined && priceDoc.change_percent !== undefined) {
+        // Store change data from DB (calculated from previous day's close via daily API)
+        if (priceDoc.previous_day_close && priceDoc.last_traded_price) {
+          // Recalculate change using previous day's close for accuracy
+          const change = priceDoc.last_traded_price - priceDoc.previous_day_close;
+          const changePercent = (change / priceDoc.previous_day_close) * 100;
+          changeData[priceDoc.instrument_key] = {
+            change: change,
+            changePercent: changePercent
+          };
+        } else if (priceDoc.change !== undefined && priceDoc.change_percent !== undefined) {
+          // Fallback to stored change if previous_day_close not available
           changeData[priceDoc.instrument_key] = {
             change: priceDoc.change,
             changePercent: priceDoc.change_percent

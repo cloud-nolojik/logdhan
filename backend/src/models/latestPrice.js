@@ -69,6 +69,11 @@ const latestPriceSchema = new mongoose.Schema({
     default: 0
   },
 
+  // Previous day's close price (for accurate daily change calculation)
+  previous_day_close: {
+    type: Number
+  },
+
   // Metadata
   candle_timestamp: {
     type: Date,
@@ -124,32 +129,38 @@ latestPriceSchema.statics.upsertPrice = async function (priceData) {
     volume = 0,
     change = 0,
     change_percent = 0,
+    previous_day_close,
     candle_timestamp,
     data_source = 'intraday_api',
     recent_candles = []
   } = priceData;
 
+  const updateData = {
+    stock_symbol,
+    stock_name,
+    exchange,
+    last_traded_price: ltp,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    change,
+    change_percent,
+    candle_timestamp: new Date(candle_timestamp),
+    updated_at: new Date(),
+    data_source,
+    recent_candles
+  };
+
+  // Only update previous_day_close if provided (don't overwrite with undefined)
+  if (previous_day_close !== undefined) {
+    updateData.previous_day_close = previous_day_close;
+  }
+
   return this.findOneAndUpdate(
     { instrument_key },
-    {
-      $set: {
-        stock_symbol,
-        stock_name,
-        exchange,
-        last_traded_price: ltp,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        change,
-        change_percent,
-        candle_timestamp: new Date(candle_timestamp),
-        updated_at: new Date(),
-        data_source,
-        recent_candles
-      }
-    },
+    { $set: updateData },
     {
       upsert: true,
       new: true,
@@ -165,7 +176,7 @@ latestPriceSchema.statics.getPricesForInstruments = async function (instrumentKe
   return this.find({
     instrument_key: { $in: instrumentKeys }
   }).
-  select('instrument_key stock_symbol last_traded_price change change_percent updated_at candle_timestamp recent_candles').
+  select('instrument_key stock_symbol last_traded_price change change_percent previous_day_close updated_at candle_timestamp recent_candles').
   lean();
 };
 

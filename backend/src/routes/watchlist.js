@@ -197,16 +197,19 @@ router.get('/', auth, async (req, res) => {
     const isInScheduledWindow = false;
     
 
-    // ⚡ OPTIMIZATION: Fetch prices using triple-fallback pattern (DB → Memory → API)
+    // ⚡ OPTIMIZATION: Fetch prices with change data using triple-fallback pattern (DB → Memory → API)
     const instrumentKeys = watchlist.map((item) => item.instrument_key);
-    const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
+    const priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
 
     // Process watchlist items in parallel (for analysis and monitoring data)
     const watchlistWithPrices = await Promise.all(
       watchlist.map(async (item) => {
         try {
-          // Get price from database
-          const current_price = priceMap[item.instrument_key] || null;
+          // Get price and change data from database
+          const priceData = priceDataMap[item.instrument_key] || null;
+          const current_price = priceData?.price || null;
+          const net_change = priceData?.change || 0;
+          const percent_change = priceData?.change_percent || 0;
 
           // Fetch analysis status for this stock (hide if in scheduled window)
           let analysis = null;
@@ -275,6 +278,8 @@ router.get('/', auth, async (req, res) => {
             addedAt: item.addedAt,
             added_source: item.added_source || 'manual', // Default to manual if missing
             current_price,
+            net_change,
+            percent_change,
             // Analysis status fields
             has_analysis: !!analysis,
             analysis_status: analysis?.status || null,
@@ -292,6 +297,8 @@ router.get('/', auth, async (req, res) => {
             addedAt: item.addedAt,
             added_source: item.added_source || 'screener',
             current_price: null,
+            net_change: 0,
+            percent_change: 0,
             has_analysis: false,
             analysis_status: null,
             ai_confidence: null,
@@ -327,16 +334,19 @@ router.get('/', auth, async (req, res) => {
     try {
       const weeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
       if (weeklyWatchlist && weeklyWatchlist.stocks?.length > 0) {
-        // Get prices for weekly watchlist stocks
+        // Get prices with change data for weekly watchlist stocks
         const weeklyInstrumentKeys = weeklyWatchlist.stocks.map(s => s.instrument_key);
-        const weeklyPriceMap = await priceCacheService.getLatestPrices(weeklyInstrumentKeys);
+        const weeklyPriceDataMap = await priceCacheService.getLatestPricesWithChange(weeklyInstrumentKeys);
 
         // Enrich weekly watchlist stocks
         const enrichedWeeklyStocks = await Promise.all(
           weeklyWatchlist.stocks
             .filter(stock => ['WATCHING', 'APPROACHING', 'TRIGGERED'].includes(stock.status))
             .map(async (stock) => {
-              const currentPrice = weeklyPriceMap[stock.instrument_key] || null;
+              const weeklyPriceData = weeklyPriceDataMap[stock.instrument_key] || null;
+              const currentPrice = weeklyPriceData?.price || null;
+              const net_change = weeklyPriceData?.change || 0;
+              const percent_change = weeklyPriceData?.change_percent || 0;
 
               // Check entry zone proximity
               let zoneStatus = null;
@@ -404,6 +414,8 @@ router.get('/', auth, async (req, res) => {
                 entry_zone: stock.entry_zone,
                 zone_status: zoneStatus,
                 current_price: currentPrice,
+                net_change,
+                percent_change,
                 status: stock.status,
                 // Analysis fields
                 has_analysis: !!analysis,

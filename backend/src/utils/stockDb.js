@@ -180,6 +180,73 @@ export async function validateStock(instrumentKey) {
   }
 }
 
+// Fetch daily candles to get previous day's close price
+// This is specifically for calculating accurate daily change
+// @param {string} instrumentKey - The instrument key to fetch price for
+// @returns {Object|null} { previousClose, todayOpen, todayHigh, todayLow, todayClose } or null
+export async function getDailyCandles(instrumentKey) {
+  const currentDate = new Date();
+  const previousDay = new Date(currentDate);
+  previousDay.setDate(currentDate.getDate() - 10); // Look back 10 days to cover weekends/holidays
+  const currentDayFormattedDate = getFormattedDate(currentDate);
+  const previousDayFormattedDate = getFormattedDate(previousDay);
+
+  // URL-encode the instrument key (| needs to be encoded as %7C)
+  const encodedInstrumentKey = encodeURIComponent(instrumentKey);
+
+  const axiosConfig = {
+    headers: {
+      'Accept': 'application/json',
+      'x-api-key': API_KEY
+    },
+    timeout: 15000
+  };
+
+  try {
+    // Use daily candles API - this gives us one candle per trading day
+    const url = `https://api.upstox.com/v3/historical-candle/${encodedInstrumentKey}/day/1/${currentDayFormattedDate}/${previousDayFormattedDate}`;
+
+    const response = await axios.get(url, axiosConfig);
+    const candles = response.data?.data?.candles || [];
+
+    if (candles.length >= 2) {
+      // Candles are in reverse chronological order: [today, yesterday, day before, ...]
+      // Candle format: [timestamp, open, high, low, close, volume, ...]
+      const todayCandle = candles[0];
+      const previousDayCandle = candles[1];
+
+      return {
+        previousClose: previousDayCandle[4], // Close price of previous trading day
+        todayOpen: todayCandle[1],
+        todayHigh: todayCandle[2],
+        todayLow: todayCandle[3],
+        todayClose: todayCandle[4],
+        todayVolume: todayCandle[5],
+        candleDate: todayCandle[0],
+        previousCandleDate: previousDayCandle[0]
+      };
+    } else if (candles.length === 1) {
+      // Only today's candle available (market just opened or first trading day)
+      const todayCandle = candles[0];
+      return {
+        previousClose: todayCandle[1], // Use today's open as fallback
+        todayOpen: todayCandle[1],
+        todayHigh: todayCandle[2],
+        todayLow: todayCandle[3],
+        todayClose: todayCandle[4],
+        todayVolume: todayCandle[5],
+        candleDate: todayCandle[0],
+        previousCandleDate: null
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`Error fetching daily candles for ${instrumentKey}:`, error.message);
+    return null;
+  }
+}
+
 // Get current price from Upstox API
 // @param {string} instrumentKey - The instrument key to fetch price for
 // @param {boolean} sendCandles - If true, returns full candle array; if false, returns only price
@@ -342,6 +409,7 @@ export default {
   getExactStock,
   validateStock,
   getCurrentPrice,
+  getDailyCandles,
   getStockExchange,
   getStocksByExchange,
   getIndexStocks,
