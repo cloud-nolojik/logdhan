@@ -188,9 +188,12 @@ function calculateFlags(dailyData, levels, symbol = 'UNKNOWN') {
  * @param {string} oldStatus - Previous tracking status
  * @param {string[]} newFlags - Current flags
  * @param {string[]} oldFlags - Previous flags
+ * @param {Object} dailyData - Today's OHLC data { high, low, ... }
+ * @param {Object} levels - Stock levels { entry, entryRange, ... }
+ * @param {string} symbol - Stock symbol for logging
  * @returns {{ trigger: boolean, reason: string|null }}
  */
-function shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags) {
+function shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags, dailyData = null, levels = null, symbol = 'UNKNOWN') {
   // Status change
   if (newStatus !== oldStatus) {
     const specificKey = `${oldStatus} → ${newStatus}`;
@@ -204,6 +207,39 @@ function shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags) {
     }
   }
 
+  // CHECK: Entry crossed intraday (stock gapped through entry zone)
+  // This catches cases where close is ABOVE_ENTRY but entry was triggered today
+  if (dailyData && levels) {
+    const entry = levels.entry;
+    const entryHigh = levels.entryRange?.[1] || entry * 1.01;
+    const todayHigh = dailyData.high;
+    const todayLow = dailyData.low;
+
+    // Statuses that indicate we were BELOW entry before
+    const belowEntryStatuses = ['WATCHING', 'RETEST_ZONE', 'APPROACHING'];
+
+    // If old status was below entry AND today's range crossed through entry zone
+    if (belowEntryStatuses.includes(oldStatus)) {
+      // Check if price crossed UP through entry today (low was below entry, high was above)
+      if (todayLow < entry && todayHigh >= entry) {
+        console.log(`[PHASE2-TRIGGER] ${symbol}: Entry crossed intraday! Low=${todayLow} < Entry=${entry} <= High=${todayHigh}`);
+        return {
+          trigger: true,
+          reason: `Entry triggered intraday. Stock crossed entry zone (${entry.toFixed(2)}) - Low: ${todayLow.toFixed(2)}, High: ${todayHigh.toFixed(2)}. Confirm position.`
+        };
+      }
+
+      // Also check if price gapped above entry (opened above entry when previous close was below)
+      if (dailyData.open >= entry && newStatus === 'ABOVE_ENTRY') {
+        console.log(`[PHASE2-TRIGGER] ${symbol}: Gapped above entry! Open=${dailyData.open} >= Entry=${entry}`);
+        return {
+          trigger: true,
+          reason: `Stock gapped above entry zone (${entry.toFixed(2)}). Opened at ${dailyData.open.toFixed(2)}. Confirm if chase is warranted.`
+        };
+      }
+    }
+  }
+
   // New flags (only flags that weren't present before)
   const brandNewFlags = newFlags.filter(f => !oldFlags.includes(f));
   for (const flag of brandNewFlags) {
@@ -214,6 +250,317 @@ function shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags) {
   }
 
   return { trigger: false, reason: null };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TRADE SIMULATION v2 (Pure Math, No AI)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// v2 Changes:
+// - Close-based entry confirmation (for buy_above) — intraday touch not enough
+// - Touch-based entry for limit orders (pullback)
+// - Entry window expiry (if entry not triggered within N days)
+// - Week-end rules (exit/hold/trail depending on archetype)
+// - Max hold period
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Trade Simulation Engine v2
+ *
+ * Replays daily snapshots to simulate a ₹1,00,000 trade with:
+ * - Close-based entry confirmation (for buy_above) or touch (for limit)
+ * - Entry window expiry (if entry not triggered within N days)
+ * - 50% booking at T1, stop moved to entry
+ * - Full exit at T2 (or trailing stop)
+ * - Week-end rules (exit/hold/trail)
+ * - Max hold period
+ *
+ * @param {Object} stock - Stock from WeeklyWatchlist with levels
+ * @param {Array} snapshots - Daily snapshots [{date, open, high, low, close}]
+ * @param {number} currentPrice - Latest price for unrealized P&L
+ * @returns {Object} trade_simulation object for DB
+ */
+function simulateTrade(stock, snapshots, currentPrice) {
+  const levels = stock.levels;
+  const entry = levels.entry;
+  const stop = levels.stop;
+  const t1 = levels.target1 || levels.target;   // Partial booking (50%)
+  const t2 = levels.target;                      // Full exit (remaining)
+
+  // Time rules from levels (with defaults for backward compat)
+  const entryConfirmation = levels.entryConfirmation || 'close_above';
+  const entryWindowDays = levels.entryWindowDays || 3;
+  const maxHoldDays = levels.maxHoldDays || 5;
+  const weekEndRule = levels.weekEndRule || 'exit_if_no_t1';
+
+  const capital = 100000;
+  const qty = Math.floor(capital / entry);
+
+  const sim = {
+    status: 'WAITING',
+    entry_price: null,
+    entry_date: null,
+    capital,
+    qty_total: qty,
+    qty_remaining: qty,
+    qty_exited: 0,
+    trailing_stop: stop,
+    realized_pnl: 0,
+    unrealized_pnl: 0,
+    total_pnl: 0,
+    total_return_pct: 0,
+    peak_price: 0,
+    peak_gain_pct: 0,
+    events: []
+  };
+
+  let dayCount = 0;
+
+  for (const day of snapshots) {
+    const { date, high, low, close } = day;
+    dayCount++;
+
+    // ══════════════════════════════════════════════
+    // WAITING: Check if entry triggered
+    // ══════════════════════════════════════════════
+    if (sim.status === 'WAITING') {
+
+      // Entry window expired?
+      if (dayCount > entryWindowDays) {
+        sim.status = 'EXPIRED';
+        sim.events.push({
+          date,
+          type: 'EXPIRED',
+          price: close,
+          qty: 0,
+          pnl: 0,
+          detail: `Entry window expired — no ${entryConfirmation === 'close_above' ? 'close above' : 'touch at'} ₹${entry.toFixed(2)} within ${entryWindowDays} days`
+        });
+        break;
+      }
+
+      // Check entry based on confirmation type
+      let entryTriggered = false;
+
+      if (entryConfirmation === 'close_above') {
+        // buy_above: Daily close must be at or above entry
+        entryTriggered = close >= entry;
+      } else if (entryConfirmation === 'touch') {
+        // limit: Price touches the entry level (low goes down to it)
+        entryTriggered = low <= entry;
+      }
+
+      if (entryTriggered) {
+        // Entry price:
+        // - close_above: limit order at entry was filled during the day (price was at/above entry)
+        // - touch: limit order at entry filled when price dipped to it
+        sim.entry_price = entry;
+        sim.entry_date = date instanceof Date ? date : new Date(date);
+        sim.trailing_stop = stop;
+        sim.status = 'ENTERED';
+        sim.events.push({
+          date: sim.entry_date,
+          type: 'ENTRY',
+          price: entry,
+          qty: qty,
+          pnl: 0,
+          detail: entryConfirmation === 'close_above'
+            ? `Entry confirmed — closed ₹${close.toFixed(2)} above ₹${entry.toFixed(2)}. Bought ${qty} shares.`
+            : `Pullback entry — limit filled at ₹${entry.toFixed(2)}. Bought ${qty} shares.`
+        });
+
+        // After entry, continue to check same day for stop/targets
+      } else {
+        continue; // Not entered yet, next day
+      }
+    }
+
+    // ══════════════════════════════════════════════
+    // TERMINAL: Skip if trade already done
+    // ══════════════════════════════════════════════
+    if (sim.status === 'STOPPED_OUT' || sim.status === 'FULL_EXIT') {
+      continue;
+    }
+
+    // Track peak price since entry
+    if (high > sim.peak_price) {
+      sim.peak_price = high;
+      sim.peak_gain_pct = ((high - sim.entry_price) / sim.entry_price) * 100;
+    }
+
+    // ══════════════════════════════════════════════
+    // CHECK STOP LOSS (always check first — worst case)
+    // ══════════════════════════════════════════════
+    if (low <= sim.trailing_stop) {
+      const exitPrice = sim.trailing_stop;
+      const pnl = (exitPrice - sim.entry_price) * sim.qty_remaining;
+      sim.realized_pnl += pnl;
+      const isTrailing = sim.trailing_stop > stop;
+      sim.events.push({
+        date,
+        type: isTrailing ? 'TRAILING_STOP' : 'STOPPED_OUT',
+        price: exitPrice,
+        qty: sim.qty_remaining,
+        pnl: Math.round(pnl),
+        detail: isTrailing
+          ? `Trailing stop hit at ₹${exitPrice.toFixed(2)} — exited ${sim.qty_remaining} shares (profit locked from T1)`
+          : `Stop loss hit at ₹${exitPrice.toFixed(2)} — exited ${sim.qty_remaining} shares`
+      });
+      sim.qty_exited += sim.qty_remaining;
+      sim.qty_remaining = 0;
+      sim.status = 'STOPPED_OUT';
+      continue;
+    }
+
+    // ══════════════════════════════════════════════
+    // CHECK T1 — 50% booking
+    // ══════════════════════════════════════════════
+    if (sim.status === 'ENTERED' && high >= t1) {
+      const exitQty = Math.floor(sim.qty_total / 2);
+      const pnl = (t1 - sim.entry_price) * exitQty;
+      sim.realized_pnl += pnl;
+      sim.qty_remaining -= exitQty;
+      sim.qty_exited += exitQty;
+      sim.trailing_stop = sim.entry_price;  // Move stop to breakeven
+      sim.status = 'PARTIAL_EXIT';
+      sim.events.push({
+        date,
+        type: 'T1_HIT',
+        price: t1,
+        qty: exitQty,
+        pnl: Math.round(pnl),
+        detail: `T1 hit! Booked 50% (${exitQty} shares) at ₹${t1.toFixed(2)} | +₹${Math.round(pnl).toLocaleString('en-IN')} locked | Stop → entry ₹${sim.entry_price.toFixed(2)} (risk-free)`
+      });
+
+      // Same day: also check T2
+      if (high >= t2) {
+        const pnl2 = (t2 - sim.entry_price) * sim.qty_remaining;
+        sim.realized_pnl += pnl2;
+        sim.events.push({
+          date,
+          type: 'T2_HIT',
+          price: t2,
+          qty: sim.qty_remaining,
+          pnl: Math.round(pnl2),
+          detail: `T2 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t2.toFixed(2)} — FULL TARGET 🏆`
+        });
+        sim.qty_exited += sim.qty_remaining;
+        sim.qty_remaining = 0;
+        sim.status = 'FULL_EXIT';
+      }
+      continue;
+    }
+
+    // ══════════════════════════════════════════════
+    // CHECK T2 — remaining 50% (only after PARTIAL_EXIT)
+    // ══════════════════════════════════════════════
+    if (sim.status === 'PARTIAL_EXIT' && high >= t2) {
+      const pnl = (t2 - sim.entry_price) * sim.qty_remaining;
+      sim.realized_pnl += pnl;
+      sim.events.push({
+        date,
+        type: 'T2_HIT',
+        price: t2,
+        qty: sim.qty_remaining,
+        pnl: Math.round(pnl),
+        detail: `T2 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t2.toFixed(2)} — FULL TARGET 🏆`
+      });
+      sim.qty_exited += sim.qty_remaining;
+      sim.qty_remaining = 0;
+      sim.status = 'FULL_EXIT';
+      continue;
+    }
+
+    // ══════════════════════════════════════════════
+    // WEEK-END RULES (on last trading day)
+    // ══════════════════════════════════════════════
+    if (dayCount >= maxHoldDays && sim.qty_remaining > 0) {
+
+      // Rule: exit_if_no_t1 — T1 never hit, close position at market
+      if (weekEndRule === 'exit_if_no_t1' && sim.status === 'ENTERED') {
+        const pnl = (close - sim.entry_price) * sim.qty_remaining;
+        sim.realized_pnl += pnl;
+        sim.events.push({
+          date,
+          type: 'WEEK_END_EXIT',
+          price: close,
+          qty: sim.qty_remaining,
+          pnl: Math.round(pnl),
+          detail: `Week ended — T1 not reached. Exited ${sim.qty_remaining} shares at ₹${close.toFixed(2)} (${pnl >= 0 ? 'profit' : 'loss'})`
+        });
+        sim.qty_exited += sim.qty_remaining;
+        sim.qty_remaining = 0;
+        sim.status = 'FULL_EXIT';
+        continue;
+      }
+
+      // Rule: hold_if_above_entry — pullback setups can carry over
+      if (weekEndRule === 'hold_if_above_entry') {
+        if (close >= sim.entry_price) {
+          sim.events.push({
+            date,
+            type: 'WEEK_END_HOLD',
+            price: close,
+            qty: 0,
+            pnl: 0,
+            detail: `Week ended — above entry ₹${sim.entry_price.toFixed(2)}, position held`
+          });
+        } else {
+          // Below entry on Friday — exit
+          const pnl = (close - sim.entry_price) * sim.qty_remaining;
+          sim.realized_pnl += pnl;
+          sim.events.push({
+            date,
+            type: 'WEEK_END_EXIT',
+            price: close,
+            qty: sim.qty_remaining,
+            pnl: Math.round(pnl),
+            detail: `Week ended — below entry. Exited ${sim.qty_remaining} shares at ₹${close.toFixed(2)}`
+          });
+          sim.qty_exited += sim.qty_remaining;
+          sim.qty_remaining = 0;
+          sim.status = 'FULL_EXIT';
+        }
+        continue;
+      }
+
+      // Rule: trail_or_exit — 52W breakout, tighten stop
+      if (weekEndRule === 'trail_or_exit') {
+        const prevDay = dayCount >= 2 ? snapshots[dayCount - 2] : null;
+        if (prevDay) {
+          const newTrail = Math.max(sim.trailing_stop, prevDay.low);
+          if (newTrail > sim.trailing_stop) {
+            sim.trailing_stop = newTrail;
+            sim.events.push({
+              date,
+              type: 'TRAIL_TIGHTENED',
+              price: newTrail,
+              qty: 0,
+              pnl: 0,
+              detail: `Week ending — trailing stop tightened to ₹${newTrail.toFixed(2)} (previous day's low)`
+            });
+          }
+        }
+        // Don't force exit — let trail handle it next week
+        continue;
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════════
+  // FINAL P&L CALCULATION
+  // ══════════════════════════════════════════════
+  if (sim.qty_remaining > 0 && sim.entry_price) {
+    sim.unrealized_pnl = (currentPrice - sim.entry_price) * sim.qty_remaining;
+  }
+  sim.total_pnl = Math.round(sim.realized_pnl + sim.unrealized_pnl);
+  sim.realized_pnl = Math.round(sim.realized_pnl);
+  sim.unrealized_pnl = Math.round(sim.unrealized_pnl);
+  sim.total_return_pct = parseFloat(((sim.total_pnl / capital) * 100).toFixed(2));
+  sim.peak_gain_pct = parseFloat((sim.peak_gain_pct || 0).toFixed(2));
+
+  return sim;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -315,8 +662,8 @@ async function runPhase1() {
     console.log(`[DAILY-TRACK-P1] ${stock.symbol}: NEW status=${newStatus}, NEW flags=[${newFlags.join(', ')}]`);
     console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Status changed? ${newStatus !== oldStatus ? 'YES' : 'NO'}`);
 
-    // Check if Phase 2 should trigger
-    const { trigger, reason } = shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags);
+    // Check if Phase 2 should trigger (now also checks intraday entry crossing)
+    const { trigger, reason } = shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags, dailyData, stock.levels, stock.symbol);
 
     // Calculate distance percentages
     const distFromEntry = ((dailyData.ltp - stock.levels.entry) / stock.levels.entry) * 100;
@@ -366,6 +713,22 @@ async function runPhase1() {
       stock.daily_snapshots.push(snapshot);
     }
 
+    // ── RUN TRADE SIMULATION ──
+    // Replay ALL snapshots to calculate entry, exits, and P&L
+    const allSnapshots = stock.daily_snapshots.map(s => ({
+      date: s.date,
+      open: s.open,
+      high: s.high,
+      low: s.low,
+      close: s.close
+    }));
+    stock.trade_simulation = simulateTrade(stock, allSnapshots, dailyData.ltp);
+
+    // Log simulation result
+    const simStatus = stock.trade_simulation.status;
+    const pnl = stock.trade_simulation.total_pnl;
+    const pnlStr = pnl >= 0 ? `+₹${pnl.toLocaleString('en-IN')}` : `-₹${Math.abs(pnl).toLocaleString('en-IN')}`;
+
     const result = {
       symbol: stock.symbol,
       instrument_key: stock.instrument_key,
@@ -376,7 +739,12 @@ async function runPhase1() {
       ltp: dailyData.ltp,
       statusChanged: newStatus !== oldStatus,
       phase2Triggered: trigger,
-      phase2Reason: reason
+      phase2Reason: reason,
+      simulation: {
+        status: simStatus,
+        total_pnl: pnl,
+        total_return_pct: stock.trade_simulation.total_return_pct
+      }
     };
 
     phase1Results.push(result);
@@ -388,11 +756,11 @@ async function runPhase1() {
         triggerReason: reason,
         snapshot
       });
-      console.log(`${runLabel} 🎯 ${stock.symbol}: ${oldStatus} → ${newStatus} [PHASE 2 QUEUED: ${reason}]`);
+      console.log(`${runLabel} 🎯 ${stock.symbol}: ${oldStatus} → ${newStatus} | Sim: ${simStatus} (${pnlStr}) [PHASE 2 QUEUED: ${reason}]`);
     } else if (newStatus !== oldStatus) {
-      console.log(`${runLabel} 📊 ${stock.symbol}: ${oldStatus} → ${newStatus}`);
+      console.log(`${runLabel} 📊 ${stock.symbol}: ${oldStatus} → ${newStatus} | Sim: ${simStatus} (${pnlStr})`);
     } else {
-      console.log(`${runLabel} ✓ ${stock.symbol}: ${newStatus} (no change)`);
+      console.log(`${runLabel} ✓ ${stock.symbol}: ${newStatus} | Sim: ${simStatus} (${pnlStr})`);
     }
   }
 
@@ -732,11 +1100,13 @@ export {
   runPhase2,
   calculateStatus,
   calculateFlags,
-  shouldTriggerPhase2
+  shouldTriggerPhase2,
+  simulateTrade
 };
 
 export default {
   runDailyTracking,
   runPhase1,
-  runPhase2
+  runPhase2,
+  simulateTrade
 };

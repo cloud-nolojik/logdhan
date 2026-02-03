@@ -351,12 +351,12 @@ class MarketHoursUtil {
       const month = validUntilDateIST.getMonth();
       const day = validUntilDateIST.getDate();
 
-      // Create UTC date for 3:59:59 PM IST (10:29:59 AM UTC)
+      // Create UTC date for 9:00:00 AM IST (3:30:00 AM UTC) - next market open
       const validUntilUTC = this.getUtcForIstTime({
         baseDate: validUntilDateIST,
-        hour: 15,
-        minute: 59,
-        second: 59,
+        hour: 9,
+        minute: 0,
+        second: 0,
         millisecond: 0
       });
 

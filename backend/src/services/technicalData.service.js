@@ -47,6 +47,24 @@ function isDataStale(updatedAt) {
 }
 
 /**
+ * Filter candles to only include data up to a reference date
+ * @param {Array} candles - Array of candles [timestamp, open, high, low, close, volume]
+ * @param {string} maxDate - Max date in YYYY-MM-DD format
+ * @returns {Array} Filtered candles
+ */
+function filterCandlesToDate(candles, maxDate) {
+  if (!candles || candles.length === 0 || !maxDate) return candles;
+
+  return candles.filter(candle => {
+    const timestamp = candle[0] || candle.timestamp;
+    if (!timestamp) return false;
+    // Extract just the date part (YYYY-MM-DD) from the timestamp
+    const candleDateStr = timestamp.split('T')[0];
+    return candleDateStr <= maxDate;
+  });
+}
+
+/**
  * Check if candle data is missing the previous day's data
  * Compares latest candle date with (current IST date - 1 day)
  *
@@ -304,27 +322,55 @@ function getWeekStart(date) {
 
 /**
  * Calculate technical data for a single stock
+ * @param {string} symbol - Stock symbol
+ * @param {string} instrumentKey - Instrument key
+ * @param {string|null} referenceDate - Optional date to filter candles (YYYY-MM-DD)
  */
-async function calculateStockData(symbol, instrumentKey) {
+async function calculateStockData(symbol, instrumentKey, referenceDate = null) {
   try {
     // Get daily candles from DB or API
-    const dailyCandles = await getCandleData(instrumentKey, symbol, '1d');
+    let dailyCandles = await getCandleData(instrumentKey, symbol, '1d');
+
+    // Filter candles to reference date if provided
+    if (referenceDate && dailyCandles.length > 0) {
+      const beforeCount = dailyCandles.length;
+      dailyCandles = filterCandlesToDate(dailyCandles, referenceDate);
+      console.log(`[TechnicalData] ${symbol} - Filtered daily candles to ${referenceDate}: ${beforeCount} → ${dailyCandles.length}`);
+    }
 
     if (dailyCandles.length === 0) {
+      console.warn(`[TechnicalData] ${symbol} - NO DAILY CANDLES available (instrumentKey: ${instrumentKey})`);
       return { symbol, error: 'No daily candle data available' };
     }
+
+    console.log(`[TechnicalData] ${symbol} - Daily candles: ${dailyCandles.length}`);
 
     // Get weekly candles - try DB/API first, fallback to aggregation
     let weeklyCandles = await getCandleData(instrumentKey, symbol, '1w');
 
+    // Filter weekly candles to reference date if provided
+    if (referenceDate && weeklyCandles.length > 0) {
+      weeklyCandles = filterCandlesToDate(weeklyCandles, referenceDate);
+    }
+
     if (weeklyCandles.length === 0) {
       console.log(`[TechnicalData] No weekly data for ${symbol}, aggregating from daily...`);
       weeklyCandles = aggregateToWeekly(dailyCandles);
+      console.log(`[TechnicalData] ${symbol} - Aggregated weekly candles: ${weeklyCandles.length}`);
+    } else {
+      console.log(`[TechnicalData] ${symbol} - Weekly candles from DB/API: ${weeklyCandles.length}`);
     }
 
     // Calculate indicators
     const dailyIndicators = indicatorsEngine.calculate(dailyCandles);
     const weeklyIndicators = weeklyCandles.length > 0 ? indicatorsEngine.calculate(weeklyCandles) : {};
+
+    // Log weekly indicator issues
+    if (weeklyCandles.length === 0) {
+      console.warn(`[TechnicalData] ${symbol} - weekly_rsi NULL: no weekly candles available (even after aggregation)`);
+    } else if (!weeklyIndicators.rsi14) {
+      console.warn(`[TechnicalData] ${symbol} - weekly_rsi NULL: weeklyCandles=${weeklyCandles.length}, but RSI calc failed`);
+    }
 
     // Get latest candle data
     const latestCandle = dailyCandles[dailyCandles.length - 1];
@@ -409,7 +455,11 @@ async function calculateStockData(symbol, instrumentKey) {
       const weekAgoClose = dailyCandles[dailyCandles.length - 5][4];
       if (currentClose && weekAgoClose) {
         weeklyChangePct = round2(((currentClose - weekAgoClose) / weekAgoClose) * 100);
+      } else {
+        console.warn(`[TechnicalData] ${symbol} - weekly_change_pct NULL: currentClose=${currentClose}, weekAgoClose=${weekAgoClose}`);
       }
+    } else {
+      console.warn(`[TechnicalData] ${symbol} - weekly_change_pct NULL: not enough candles (need 5, have ${dailyCandles.length})`);
     }
 
     // Calculate distance from 20 DMA

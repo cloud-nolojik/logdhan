@@ -486,8 +486,41 @@ class PriceCacheService {
   }
 
   /**
+   * Check if previous_day_close needs refresh
+   * Returns true if:
+   * - No previous_day_close exists in DB
+   * - The previous_day_close_date is not today (IST)
+   * @param {Object} existingDoc - Existing LatestPrice document
+   * @returns {boolean}
+   */
+  needsPreviousDayCloseRefresh(existingDoc) {
+    if (!existingDoc || !existingDoc.previous_day_close) {
+      console.log(`[PRICE CACHE] needsRefresh: true (no previous_day_close)`);
+      return true; // No data, needs refresh
+    }
+
+    // Check if previous_day_close was fetched today using the date field
+    const now = new Date();
+    const istNow = MarketHoursUtil.toIST(now);
+    const todayDateStr = istNow.toISOString().split('T')[0]; // "YYYY-MM-DD"
+
+    const storedDate = existingDoc.previous_day_close_date;
+
+    if (!storedDate || storedDate !== todayDateStr) {
+      console.log(`[PRICE CACHE] needsRefresh: true for ${existingDoc.instrument_key} (stored: ${storedDate}, today: ${todayDateStr})`);
+      return true; // previous_day_close was not fetched today
+    }
+
+    console.log(`[PRICE CACHE] needsRefresh: false for ${existingDoc.instrument_key} (already fetched today: ${storedDate})`);
+    return false; // previous_day_close was fetched today, no refresh needed
+  }
+
+  /**
    * Store price in database (Latest Price collection)
-   * For market indices, fetches daily candles to get accurate previous day's close
+   * SMART LOGIC:
+   * - Only fetches daily candles if previous_day_close is missing or stale
+   * - During trading hours: Updates LTP frequently, previous_day_close once per day
+   * - After trading hours: Uses cached data
    * @param {string} instrumentKey - The instrument key
    * @param {number} price - Last traded price
    * @param {Array} candles - Candle data (if available)
@@ -512,6 +545,41 @@ class PriceCacheService {
         // Ignore error, use symbol as name
       }
 
+      // Check existing record to see if we need to refresh previous_day_close
+      let existingDoc = null;
+      let previousDayClose = null;
+
+      try {
+        existingDoc = await LatestPrice.findOne({ instrument_key: instrumentKey }).lean();
+      } catch (error) {
+        // Ignore, will create new record
+      }
+
+      // SMART: Only fetch daily candles if previous_day_close is missing or stale
+      const needsRefresh = this.needsPreviousDayCloseRefresh(existingDoc);
+      let previousDayCloseDate = existingDoc?.previous_day_close_date || null;
+
+      if (needsRefresh) {
+        console.log(`[PRICE CACHE] Fetching daily candles for ${instrumentKey} (previous_day_close refresh needed)`);
+        try {
+          const dailyData = await getDailyCandles(instrumentKey);
+          if (dailyData && dailyData.previousClose) {
+            previousDayClose = dailyData.previousClose;
+            // Set today's date as the fetch date
+            const now = new Date();
+            const istNow = MarketHoursUtil.toIST(now);
+            previousDayCloseDate = istNow.toISOString().split('T')[0]; // "YYYY-MM-DD"
+            console.log(`[PRICE CACHE] Got previous_day_close for ${instrumentKey}: ${previousDayClose} (date: ${previousDayCloseDate})`);
+          }
+        } catch (error) {
+          console.warn(`⚠️ [DB STORE] Failed to fetch daily candles for ${instrumentKey}: ${error.message}`);
+        }
+      } else {
+        // Use existing previous_day_close from DB
+        previousDayClose = existingDoc.previous_day_close;
+        console.log(`[PRICE CACHE] Using cached previous_day_close for ${instrumentKey}: ${previousDayClose}`);
+      }
+
       // Prepare price data
       let priceData = {
         instrument_key: instrumentKey,
@@ -523,26 +591,10 @@ class PriceCacheService {
         data_source: 'intraday_api'
       };
 
-      // Fetch daily candles to get accurate previous day's close for ALL stocks
-      let previousDayClose = null;
-
-      try {
-        const dailyData = await getDailyCandles(instrumentKey);
-        if (dailyData && dailyData.previousClose) {
-          previousDayClose = dailyData.previousClose;
-          priceData.previous_day_close = previousDayClose;
-
-          // Use daily candle data for OHLC if intraday candles not available
-          if (!candles || candles.length === 0) {
-            priceData.open = dailyData.todayOpen || price;
-            priceData.high = dailyData.todayHigh || price;
-            priceData.low = dailyData.todayLow || price;
-            priceData.close = dailyData.todayClose || price;
-            priceData.volume = dailyData.todayVolume || 0;
-          }
-        }
-      } catch (error) {
-        console.warn(`⚠️ [DB STORE] Failed to fetch daily candles for ${instrumentKey}: ${error.message}`);
+      // Set previous_day_close if available
+      if (previousDayClose !== null) {
+        priceData.previous_day_close = previousDayClose;
+        priceData.previous_day_close_date = previousDayCloseDate;
       }
 
       // If we have intraday candle data, extract OHLCV
@@ -563,16 +615,16 @@ class PriceCacheService {
           close: candle[4],
           volume: candle[5]
         }));
-      } else if (!priceData.open) {
-        // No candle data at all, just use price
-        priceData.open = price;
-        priceData.high = price;
-        priceData.low = price;
+      } else {
+        // No intraday candle data, just use price
+        priceData.open = existingDoc?.open || price;
+        priceData.high = Math.max(existingDoc?.high || price, price);
+        priceData.low = Math.min(existingDoc?.low || price, price);
         priceData.close = price;
-        priceData.volume = 0;
+        priceData.volume = existingDoc?.volume || 0;
       }
 
-      // Calculate change using previous day's close (from daily API)
+      // Calculate change using previous day's close
       if (previousDayClose !== null && previousDayClose !== 0) {
         priceData.change = price - previousDayClose;
         priceData.change_percent = (priceData.change / previousDayClose) * 100;
@@ -586,7 +638,7 @@ class PriceCacheService {
       // Upsert to database
       await LatestPrice.upsertPrice(priceData);
 
-      return { success: true, instrumentKey };
+      return { success: true, instrumentKey, previousDayClose };
 
     } catch (error) {
       console.error(`❌ [DB STORE] Failed to store price for ${instrumentKey}: ${error.message}`);
@@ -915,15 +967,13 @@ class PriceCacheService {
 
   /**
    * Get latest prices with change data for multiple instruments
-   * Returns price, change, and change_percent for each instrument
+   * SMART LOGIC:
+   * - Checks if previous_day_close exists and is from today's trading session
+   * - If stale/missing, fetches from daily API (once per day)
+   * - Returns price + change calculated from previous_day_close
    *
    * @param {Array<string>} instrumentKeys - Array of instrument keys to fetch prices for
    * @returns {Promise<Object>} Map of instrument_key → { price, change, change_percent, previous_day_close }
-   *
-   * @example
-   * const priceData = await priceCacheService.getLatestPricesWithChange(['NSE_EQ|INE123']);
-   * console.log(priceData['NSE_EQ|INE123']);
-   * // { price: 150.50, change: 2.30, change_percent: 1.55, previous_day_close: 148.20 }
    */
   async getLatestPricesWithChange(instrumentKeys) {
     if (!instrumentKeys || instrumentKeys.length === 0) {
@@ -931,34 +981,102 @@ class PriceCacheService {
     }
 
     const priceDataMap = {};
+    const keysNeedingPreviousDayClose = [];
 
-    // First, try to get from database (which has previous_day_close)
+    // First, try to get from database
     try {
       const latestPrices = await LatestPrice.getPricesForInstruments(instrumentKeys);
 
-      latestPrices.forEach((priceDoc) => {
+      for (const priceDoc of latestPrices) {
         const currentPrice = priceDoc.last_traded_price;
-        let change = priceDoc.change || 0;
-        let changePercent = priceDoc.change_percent || 0;
 
-        // Recalculate change using previous_day_close if available (more accurate)
-        if (priceDoc.previous_day_close && currentPrice) {
-          change = currentPrice - priceDoc.previous_day_close;
-          changePercent = (change / priceDoc.previous_day_close) * 100;
+        // Check if previous_day_close needs refresh (stale or missing)
+        const needsRefresh = this.needsPreviousDayCloseRefresh(priceDoc);
+
+        if (needsRefresh) {
+          keysNeedingPreviousDayClose.push(priceDoc.instrument_key);
+          // Still add to map with current data, will update after refresh
+          priceDataMap[priceDoc.instrument_key] = {
+            price: currentPrice,
+            change: priceDoc.change || 0,
+            change_percent: priceDoc.change_percent || 0,
+            previous_day_close: priceDoc.previous_day_close || null,
+            needsRefresh: true
+          };
+        } else {
+          // previous_day_close is valid, calculate change
+          let change = priceDoc.change || 0;
+          let changePercent = priceDoc.change_percent || 0;
+
+          if (priceDoc.previous_day_close && currentPrice) {
+            change = currentPrice - priceDoc.previous_day_close;
+            changePercent = (change / priceDoc.previous_day_close) * 100;
+          }
+
+          priceDataMap[priceDoc.instrument_key] = {
+            price: currentPrice,
+            change: Math.round(change * 100) / 100,
+            change_percent: Math.round(changePercent * 100) / 100,
+            previous_day_close: priceDoc.previous_day_close || null
+          };
         }
-
-        priceDataMap[priceDoc.instrument_key] = {
-          price: currentPrice,
-          change: Math.round(change * 100) / 100,
-          change_percent: Math.round(changePercent * 100) / 100,
-          previous_day_close: priceDoc.previous_day_close || null
-        };
-      });
+      }
     } catch (error) {
       console.error(`❌ [PRICES WITH CHANGE] Database fetch failed: ${error.message}`);
     }
 
-    // For missing instruments, fetch fresh data
+    // Refresh previous_day_close for stale entries
+    if (keysNeedingPreviousDayClose.length > 0) {
+      console.log(`[PRICES WITH CHANGE] Refreshing previous_day_close for ${keysNeedingPreviousDayClose.length} instruments`);
+
+      await Promise.all(keysNeedingPreviousDayClose.map(async (instrumentKey) => {
+        try {
+          // Fetch daily candles to get previous_day_close
+          const dailyData = await getDailyCandles(instrumentKey);
+          if (dailyData && dailyData.previousClose) {
+            const currentPrice = priceDataMap[instrumentKey]?.price;
+            const previousClose = dailyData.previousClose;
+
+            // Calculate change
+            const change = currentPrice ? currentPrice - previousClose : 0;
+            const changePercent = previousClose !== 0 ? (change / previousClose) * 100 : 0;
+
+            // Update map
+            priceDataMap[instrumentKey] = {
+              price: currentPrice,
+              change: Math.round(change * 100) / 100,
+              change_percent: Math.round(changePercent * 100) / 100,
+              previous_day_close: previousClose
+            };
+
+            // Get today's date in IST for tracking
+            const now = new Date();
+            const istNow = MarketHoursUtil.toIST(now);
+            const todayDateStr = istNow.toISOString().split('T')[0]; // "YYYY-MM-DD"
+
+            // Store updated previous_day_close in DB (non-blocking)
+            LatestPrice.findOneAndUpdate(
+              { instrument_key: instrumentKey },
+              {
+                $set: {
+                  previous_day_close: previousClose,
+                  previous_day_close_date: todayDateStr,
+                  change: change,
+                  change_percent: changePercent,
+                  updated_at: new Date()
+                }
+              }
+            ).catch(err => console.warn(`Failed to update previous_day_close for ${instrumentKey}: ${err.message}`));
+
+            console.log(`[PRICES WITH CHANGE] Updated ${instrumentKey}: previous_day_close=${previousClose}, change=${change.toFixed(2)} (${changePercent.toFixed(2)}%)`);
+          }
+        } catch (error) {
+          console.warn(`[PRICES WITH CHANGE] Failed to refresh ${instrumentKey}: ${error.message}`);
+        }
+      }));
+    }
+
+    // For completely missing instruments, fetch fresh data
     const missingKeys = instrumentKeys.filter((key) => !priceDataMap[key]);
     if (missingKeys.length > 0) {
       // Fetch prices (this will also store to DB with previous_day_close)

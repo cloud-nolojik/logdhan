@@ -282,7 +282,7 @@ function calculateLevelsForStock(stockData, scanType) {
  * @param {boolean} [debug=false] - Enable debug logging
  * @returns {Promise<Object | null>}
  */
-export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = false) {
+export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = false, referenceDate = null) {
   const { nsecode, name, per_change, close, volume, scan_type } = chartinkStock;
 
   // Map to instrument_key
@@ -297,7 +297,8 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
   // ═══════════════════════════════════════════════════════════════════════════
   const techData = await technicalDataService.calculateStockData(
     mapping.trading_symbol,
-    mapping.instrument_key
+    mapping.instrument_key,
+    referenceDate  // Pass reference date to filter candles
   );
 
   if (debug) {
@@ -425,17 +426,29 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
       entry: levels.entry,
       entryRange: levels.entryRange,
       stop: levels.stop,
-      target: levels.target,                           // T1 (primary target from structural ladder)
-      target2: levels.target2 || null,                 // T2 (extension target, trail only)
+      // ── Targets ──
+      target1: levels.target1,                         // T1 partial profit booking (50%) — v2
+      target1Basis: levels.target1Basis,               // 'weekly_r1', 'daily_r1', or 'midpoint' — v2
+      target: levels.target,                           // T2 (full exit target from structural ladder)
+      target2: levels.target2 || null,                 // T3 (extension target, trail only)
       targetBasis: levels.targetBasis,                 // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', '52w_high', 'atr_extension_52w_breakout'
       dailyR1Check: levels.dailyR1Check || null,       // Momentum checkpoint (not a target)
+      // ── Risk/Reward ──
       riskReward: levels.riskReward,
       riskPercent: levels.riskPercent,
       rewardPercent: levels.rewardPercent,
+      // ── Entry/Exit Rules ──
       entryType: levels.entryType,
       mode: levels.mode,
       archetype: levels.archetype || null,             // '52w_breakout', 'trend-follow', 'breakout', 'pullback'
-      reason: levels.reason
+      reason: levels.reason,
+      // ── Time Rules (v2) ──
+      entryConfirmation: levels.entryConfirmation || 'close_above',
+      entryWindowDays: levels.entryWindowDays || 3,
+      maxHoldDays: levels.maxHoldDays || 5,
+      weekEndRule: levels.weekEndRule || 'exit_if_no_t1',
+      t1BookingPct: levels.t1BookingPct || 50,
+      postT1Stop: levels.postT1Stop || 'move_to_entry'
     } : {
       valid: false,
       reason: levels.reason,
@@ -513,6 +526,9 @@ function buildStockDataFromTechService(techData, chartinkClose, chartinkVolume) 
 
     // Weekly change (now available from techData)
     weekly_change_pct: techData.weekly_change_pct,
+    // Log if weekly data is missing (helps debug AI "missing weekly momentum" messages)
+    ...(techData.weekly_change_pct == null && console.warn(`[ENRICH] ${techData.symbol} - weekly_change_pct is NULL from techData`), {}),
+    ...(techData.weekly_rsi == null && console.warn(`[ENRICH] ${techData.symbol} - weekly_rsi is NULL from techData`), {}),
 
     // Pivot levels for target anchoring (NEW)
     // Weekly pivots
@@ -588,8 +604,13 @@ export async function enrichStocks(chartinkResults, options = {}) {
     minScore = 0,
     maxResults = 20,
     debug = false,
-    debugCount = 3
+    debugCount = 3,
+    referenceDate = null  // Filter candles up to this date (YYYY-MM-DD)
   } = options;
+
+  if (referenceDate) {
+    console.log(`[ENRICH] Using reference date: ${referenceDate} (candles will be filtered)`);
+  }
 
   const enrichedResults = [];
   const eliminatedResults = [];
@@ -604,7 +625,7 @@ export async function enrichStocks(chartinkResults, options = {}) {
         debuggedCount++;
       }
 
-      const enriched = await enrichStock(stock, niftyReturn1M, shouldDebug);
+      const enriched = await enrichStock(stock, niftyReturn1M, shouldDebug, referenceDate);
 
       if (!enriched) {
         continue;

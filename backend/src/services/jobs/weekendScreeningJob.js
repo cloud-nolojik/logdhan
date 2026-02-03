@@ -251,72 +251,128 @@ class WeekendScreeningJob {
     const {
       userId = null,
       scanTypes = ['a_plus_momentum'],
-      maxStocksPerUser = 10
+      maxStocksPerUser = 10,
+      filterSymbols = null,      // NEW: Array of symbols to filter (e.g., ['MTARTECH'])
+      referenceDate = null,      // NEW: Date string 'YYYY-MM-DD' to filter candle data
+      skipArchive = false,       // NEW: Skip archiving previous week (for testing)
+      skipChartink = false       // NEW: Skip ChartInk scan, use filterSymbols directly
     } = options;
 
     console.log(`[SCREENING JOB] 📋 Parsed options:`);
     console.log(`[SCREENING JOB]    - userId: ${userId}`);
     console.log(`[SCREENING JOB]    - scanTypes: ${JSON.stringify(scanTypes)}`);
     console.log(`[SCREENING JOB]    - maxStocksPerUser: ${maxStocksPerUser}`);
+    if (filterSymbols) {
+      console.log(`[SCREENING JOB]    - filterSymbols: ${JSON.stringify(filterSymbols)} (TEST MODE)`);
+    }
+    if (referenceDate) {
+      console.log(`[SCREENING JOB]    - referenceDate: ${referenceDate} (HISTORICAL MODE)`);
+    }
 
     const result = {
       usersProcessed: 0,
       totalStocksAdded: 0,
       totalStocksEliminated: 0,  // NEW: Track eliminated stocks
+      previousWeekArchived: false,
       errors: [],
       scanResults: {}
     };
 
     try {
-      // Step 1: Run ChartInk scans
+      // Step 0: Archive previous active week before creating new one
+      console.log('');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
+      console.log('[SCREENING JOB] 📌 STEP 0/5: Archiving previous week...');
+      console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
+
+      if (skipArchive) {
+        console.log('[SCREENING JOB] ⏭️ Skipping archive (skipArchive=true)');
+      } else {
+        try {
+          const { getWeekBoundaries } = await import('../../models/weeklyWatchlist.js');
+          const { weekStart: newWeekStart } = getWeekBoundaries(new Date(), true);
+
+          const previousWeek = await WeeklyWatchlist.findOne({
+            status: 'ACTIVE',
+            week_start: { $lt: newWeekStart }
+          });
+
+          if (previousWeek) {
+            console.log(`[SCREENING JOB] Found previous active week: ${previousWeek.week_label}`);
+            console.log(`[SCREENING JOB] Stocks in previous week: ${previousWeek.stocks.length}`);
+
+            // Call completeWeek which handles trade_simulation.status = EXPIRED for WAITING stocks
+            await previousWeek.completeWeek();
+
+            result.previousWeekArchived = true;
+            console.log(`[SCREENING JOB] ✅ Archived previous week: ${previousWeek.week_label}`);
+          } else {
+            console.log(`[SCREENING JOB] No previous active week to archive`);
+          }
+        } catch (archiveError) {
+          console.error('[SCREENING JOB] ⚠️ Failed to archive previous week:', archiveError.message);
+          result.errors.push({ step: 'archive', error: archiveError.message });
+          // Don't block new screening if archive fails
+        }
+      }
+
+      console.log(`[SCREENING JOB] ✅ STEP 0 COMPLETE`);
+
+      // Step 1: Run ChartInk scans (or use filterSymbols directly)
       console.log('');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
       console.log('[SCREENING JOB] 📌 STEP 1/5: Running ChartInk scans...');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
 
-      const allResults = [];
+      let allResults = [];
 
-      for (const scanType of scanTypes) {
-        try {
-          let scanResults = [];
+      // If skipChartink and filterSymbols provided, create mock results directly
+      if (skipChartink && filterSymbols?.length > 0) {
+        console.log(`[SCREENING JOB] ⏭️ Skipping ChartInk, using filterSymbols directly: ${filterSymbols.join(', ')}`);
+        allResults = filterSymbols.map(symbol => ({
+          nsecode: symbol,
+          scan_type: scanTypes[0] || 'a_plus_momentum'
+        }));
+      } else {
+        // Normal flow: run ChartInk scans
+        for (const scanType of scanTypes) {
+          try {
+            let scanResults = [];
 
-          switch (scanType) {
-            case 'a_plus_momentum':
-              scanResults = await chartinkService.runAPlusNextWeekScan();
-              break;
-            // Legacy scans - commented out
-            // case 'breakout':
-            //   scanResults = await chartinkService.runBreakoutScan();
-            //   break;
-            // case 'pullback':
-            //   scanResults = await chartinkService.runPullbackScan();
-            //   break;
-            // case 'momentum':
-            //   scanResults = await chartinkService.runMomentumScan();
-            //   break;
-            // case 'consolidation_breakout':
-            //   scanResults = await chartinkService.runConsolidationScan();
-            //   break;
-            default:
-              console.warn(`[SCREENING JOB] Unknown scan type: ${scanType}`);
+            switch (scanType) {
+              case 'a_plus_momentum':
+                scanResults = await chartinkService.runAPlusNextWeekScan();
+                break;
+              default:
+                console.warn(`[SCREENING JOB] Unknown scan type: ${scanType}`);
+            }
+
+            console.log(`[SCREENING JOB] ${scanType} scan: ${scanResults.length} results`);
+            result.scanResults[scanType] = scanResults.length;
+
+            // Tag with scan type
+            allResults.push(...scanResults.map(s => ({ ...s, scan_type: scanType })));
+
+            // Delay between scans
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+          } catch (error) {
+            console.error(`[SCREENING JOB] ${scanType} scan failed:`, error.message);
+            result.errors.push({ scanType, error: error.message });
           }
+        }
 
-          console.log(`[SCREENING JOB] ${scanType} scan: ${scanResults.length} results`);
-          result.scanResults[scanType] = scanResults.length;
-
-          // Tag with scan type
-          allResults.push(...scanResults.map(s => ({ ...s, scan_type: scanType })));
-
-          // Delay between scans
-          await new Promise(resolve => setTimeout(resolve, 2000));
-
-        } catch (error) {
-          console.error(`[SCREENING JOB] ${scanType} scan failed:`, error.message);
-          result.errors.push({ scanType, error: error.message });
+        // Apply filterSymbols if provided (filter ChartInk results)
+        if (filterSymbols?.length > 0) {
+          const beforeCount = allResults.length;
+          allResults = allResults.filter(s =>
+            filterSymbols.includes(s.nsecode?.toUpperCase())
+          );
+          console.log(`[SCREENING JOB] 🔍 Filtered to ${filterSymbols.join(', ')}: ${beforeCount} → ${allResults.length} results`);
         }
       }
 
-      console.log(`[SCREENING JOB] ✅ STEP 1 COMPLETE: Total ${allResults.length} results from all scans`);
+      console.log(`[SCREENING JOB] ✅ STEP 1 COMPLETE: Total ${allResults.length} results`);
 
       if (allResults.length === 0) {
         console.log('[SCREENING JOB] ⚠️ No results from any scan - EXITING EARLY');
@@ -396,7 +452,8 @@ class WeekendScreeningJob {
           minScore: 0,   // Get all for filtering (including eliminated)
           maxResults: 100,
           debug: true,   // Enable debug for first few stocks
-          debugCount: 3
+          debugCount: 3,
+          referenceDate   // Pass through for historical testing (null = use live data)
         }
       );
 
@@ -509,17 +566,29 @@ class WeekendScreeningJob {
           entry: stock.levels.entry,
           entryRange: stock.levels.entryRange,
           stop: stock.levels.stop,
-          target: stock.levels.target,
-          target2: stock.levels.target2 || null,           // T2 extension target (trail only)
+          // ── Targets ──
+          target1: stock.levels.target1 || null,           // T1 partial profit booking (50%)
+          target1Basis: stock.levels.target1Basis || null, // 'weekly_r1', 'daily_r1', or 'midpoint'
+          target: stock.levels.target,                     // T2 full exit target
+          target2: stock.levels.target2 || null,           // T3 extension target (trail only)
           targetBasis: stock.levels.targetBasis,           // 'weekly_r1', 'weekly_r2', 'atr_extension_52w_breakout', etc.
-          dailyR1Check: stock.levels.dailyR1Check || null, // Momentum confirmation checkpoint
+          dailyR1Check: stock.levels.dailyR1Check || null, // Backward compat
+          // ── Risk/Reward ──
           riskReward: stock.levels.riskReward,
           riskPercent: stock.levels.riskPercent,
           rewardPercent: stock.levels.rewardPercent,
+          // ── Entry/Exit Rules ──
           entryType: stock.levels.entryType,
           mode: stock.levels.mode,
           archetype: stock.levels.archetype || null,       // '52w_breakout', 'pullback', 'trend-follow', etc.
-          reason: stock.levels.reason
+          reason: stock.levels.reason,
+          // ── Time Rules (v2) ──
+          entryConfirmation: stock.levels.entryConfirmation || 'close_above',
+          entryWindowDays: stock.levels.entryWindowDays || 3,
+          maxHoldDays: stock.levels.maxHoldDays || 5,
+          weekEndRule: stock.levels.weekEndRule || 'exit_if_no_t1',
+          t1BookingPct: stock.levels.t1BookingPct || 50,
+          postT1Stop: stock.levels.postT1Stop || 'move_to_entry'
         } : null,
         status: 'WATCHING'
       }));
@@ -565,17 +634,26 @@ class WeekendScreeningJob {
 
           console.log(`[SCREENING JOB] ✅ STEP 5 COMPLETE: Generated ${successCount}/${stocksForAI.length} AI analyses`);
 
-          // Update watchlist with analysis links
+          // Update watchlist with analysis links and handle SKIP verdicts
           if (successCount > 0) {
+            let skipCount = 0;
             for (const analysis of analysisResults.filter(a => a?.status === 'completed')) {
               const stockEntry = watchlist.stocks.find(s => s.instrument_key === analysis.instrument_key);
               if (stockEntry) {
                 stockEntry.analysis_id = analysis._id;
                 stockEntry.has_ai_analysis = true;
+
+                // If AI verdict is SKIP, mark the stock as SKIPPED (no trade simulation)
+                const verdict = analysis.analysis_data?.verdict?.action;
+                if (verdict === 'SKIP') {
+                  stockEntry.tracking_status = 'SKIPPED';
+                  skipCount++;
+                  console.log(`[SCREENING JOB] ⏭️ ${stockEntry.symbol} marked SKIPPED (AI verdict: ${verdict})`);
+                }
               }
             }
             await watchlist.save();
-            console.log(`[SCREENING JOB] 📎 Linked ${successCount} analyses to watchlist entries`);
+            console.log(`[SCREENING JOB] 📎 Linked ${successCount} analyses to watchlist entries${skipCount > 0 ? ` (${skipCount} SKIPPED)` : ''}`);
           }
 
         } catch (aiError) {

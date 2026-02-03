@@ -3,6 +3,8 @@ import express from 'express';
 import { searchStocks, getExactStock, getCurrentPrice } from '../utils/stockDb.js';
 import { User } from '../models/user.js';
 import { auth } from '../middleware/auth.js';
+import LatestPrice from '../models/latestPrice.js';
+import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 
 const router = express.Router();
 
@@ -76,6 +78,37 @@ router.get('/:instrument_key', auth, async (req, res) => {
         }
       } catch (fallbackError) {
         console.warn('Fallback price fetch also failed:', fallbackError.message);
+      }
+    }
+
+    // Check if API price is stale by comparing against WeeklyWatchlist's daily_snapshots
+    // This handles the case where 1-min candles API returns old data before market opens
+    if (currentPrice) {
+      try {
+        // Find current week's watchlist
+        const now = new Date();
+        const watchlist = await WeeklyWatchlist.findOne({
+          week_start: { $lte: now },
+          week_end: { $gte: now }
+        });
+
+        if (watchlist) {
+          const stockInWatchlist = watchlist.stocks.find(s => s.instrument_key === instrument_key);
+          if (stockInWatchlist?.daily_snapshots?.length > 0) {
+            const lastSnapshot = stockInWatchlist.daily_snapshots[stockInWatchlist.daily_snapshots.length - 1];
+            const lastSnapshotClose = lastSnapshot.close;
+
+            // If API price differs >5% from last snapshot, use snapshot price
+            const priceDiffPct = Math.abs((currentPrice - lastSnapshotClose) / lastSnapshotClose) * 100;
+            if (priceDiffPct > 5) {
+              console.log(`[STOCK-PRICE-FIX] ${stock.tradingsymbol || stock.trading_symbol}: API price ₹${currentPrice} differs ${priceDiffPct.toFixed(1)}% from last snapshot close ₹${lastSnapshotClose}`);
+              console.log(`[STOCK-PRICE-FIX] Using snapshot close as current price`);
+              currentPrice = lastSnapshotClose;
+            }
+          }
+        }
+      } catch (snapshotError) {
+        console.warn('Error checking snapshot price:', snapshotError.message);
       }
     }
 

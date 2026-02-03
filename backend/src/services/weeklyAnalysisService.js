@@ -31,9 +31,20 @@ import MarketHoursUtil from '../utils/marketHours.js';
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const MAX_OUTPUT_TOKENS = 5000;
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY
-});
+// Lazy initialization - API key may not be available at module load time
+let anthropic = null;
+
+function getAnthropicClient() {
+  if (!anthropic) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY not configured in environment');
+    }
+    anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY
+    });
+  }
+  return anthropic;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SYSTEM PROMPT — Encodes the trading framework, scoring rubric, and quality
@@ -75,7 +86,15 @@ This is a scan-type-matched swing trading system. The ChartInk scanner finds sto
 
    Key principle: Don't fight the scan type. A 52W breakout stock should NOT be told to "wait for a pullback to EMA20" as the primary action — that pullback may never come, and you miss the trade. Present it as an alternative only.
 
-2. HOLDING PERIOD: 1 week (Monday to Friday). Trades are entered Mon-Wed and exited by Friday.
+   ENTRY CONFIRMATION RULES (CRITICAL):
+   - For buy_above entries (breakout, momentum, 52W): Entry is confirmed ONLY when the stock CLOSES
+     above the entry level on a daily candle. An intraday touch that reverses is NOT a valid entry.
+     Example: If entry is ₹3,099 and stock touches ₹3,188 intraday but closes at ₹3,035 — NO ENTRY.
+     The next day if it closes at ₹3,234 above ₹3,099 — ENTRY CONFIRMED.
+   - For limit entries (pullback): Entry is confirmed when price touches the entry level (limit fill).
+   - Always communicate this rule clearly in the beginner_guide steps.
+
+2. HOLDING PERIOD: 1 week (Monday to Friday). Trades are entered within the entry window and exited by Friday.
 
 3. RISK MANAGEMENT:
    - Minimum Risk:Reward of 1:2 (prefer 1:2.5+)
@@ -126,18 +145,21 @@ Grades: A+ (90+), A (80-89), B+ (70-79), B (60-69), C (50-59), D (<50)
 4. The verdict one_liner must be actionable in a single sentence.
 5. Chart observations must include RSI value and status for BOTH weekly and daily timeframes.
 6. If promoter pledge > 0%, it MUST appear in warnings with appropriate severity.
-7. Aggressive entry should be near current price with a note about smaller position size and when it is/isn't recommended.
-8. target1 = partial profit booking level (closer to entry, e.g. previous high or daily R1).
-   target2 = full target from the structural ladder (the pre-calculated target).
+7. Do NOT fill aggressive_entry. This field is deprecated. If an alternative entry exists,
+   describe it in strategies[] as the "Alternative" strategy with a text description.
+8. target1, target (T2), and target2 (T3) are PRE-CALCULATED by the engine.
+   Do NOT generate a trading_plan object. Use these levels in your text as:
+   - T1 (₹target1): 50% partial booking level
+   - T2 (₹target): Full exit for remaining position
+   - T3 (₹target2): Extension target for trailing (if exists)
 9. Confidence adjustments must sum to a reasonable final confidence (0.5-0.95 range).
 10. Key factors should start with emoji indicators: ✅ for positives, ⚠️ for cautions, 🔴 for red flags.
 
 ## CRITICAL CONSTRAINTS
 
-- Use the PRE-CALCULATED trading levels (entry, stop, target) EXACTLY as provided. Do NOT recalculate them.
+- Use the PRE-CALCULATED trading levels (entry, stop, target1, target, target2) EXACTLY as provided. Do NOT recalculate them.
 - The levels come from a structural ladder algorithm anchored to pivot levels. Trust them.
-- You MAY suggest an aggressive_entry near current price (for traders who can't wait).
-- You MAY suggest a target1 (partial booking) that is closer than the full target.
+- Do NOT output a trading_plan object — levels are 100% engine-calculated.
 - Return ONLY valid JSON. No markdown code fences, no explanation text outside the JSON object.`;
 
 
@@ -179,8 +201,10 @@ async function generateWeeklyAnalysis(stock, options = {}) {
     // Step 5: Build analysis_meta (server-side metadata)
     const analysisMeta = buildAnalysisMeta(stock, fundamentals, response, startTime, recentNews);
 
-    // Step 6: Calculate valid_until (end of trading week)
-    const validUntil = await getWeeklyValidUntil();
+    // Step 6: Calculate valid_until
+    // - Weekend screening: Friday 3:59 PM IST (default)
+    // - On-demand/manual: Next market open 9:00 AM IST (passed via options.validUntil)
+    const validUntil = options.validUntil || await getWeeklyValidUntil();
 
     // Step 7: Save to StockAnalysis
     // Use create() + TTL cleanup instead of findOneAndUpdate
@@ -315,6 +339,14 @@ function buildUserMessage(stock, fundamentals, options = {}) {
   const fundamentalText = fundamentalDataService.formatForPrompt(fundamentals);
   const scoreBreakdown = formatScoreBreakdown(stock.score_breakdown);
 
+  // Log missing weekly data to help debug "Missing weekly momentum data" AI messages
+  if (ind.weekly_change_pct == null) {
+    console.warn(`[WEEKLY ANALYSIS] ${stock.symbol} - MISSING weekly_change_pct in indicators`);
+  }
+  if (ind.weekly_rsi == null) {
+    console.warn(`[WEEKLY ANALYSIS] ${stock.symbol} - MISSING weekly_rsi in indicators`);
+  }
+
   return `
 === WEEKLY DISCOVERY ANALYSIS ===
 Analyze this stock for swing trading next week. Return the JSON structure specified below.
@@ -331,19 +363,23 @@ ${scoreBreakdown}
 
 === PRE-CALCULATED TRADING LEVELS (Structural Ladder) ===
 Mode: ${levels.mode || 'N/A'}
-Entry: ₹${levels.entry || 'N/A'}
+Entry: ₹${levels.entry || 'N/A'} (confirmation: ${levels.entryConfirmation === 'touch' ? 'limit order fills on touch' : 'daily CLOSE must be above this level'})
 Entry Range: [₹${levels.entryRange?.[0] || 'N/A'} - ₹${levels.entryRange?.[1] || 'N/A'}]
 Entry Type: ${levels.entryType || 'N/A'}
+Entry Window: ${levels.entryWindowDays || 3} trading days (${levels.entryWindowDays === 2 ? 'Mon-Tue' : levels.entryWindowDays === 3 ? 'Mon-Wed' : 'Mon-Thu'})
 Stop Loss: ₹${levels.stop || 'N/A'}
-Target (T2): ₹${levels.target || 'N/A'}
-Target 2 (Trail): ₹${levels.target2 || 'N/A'}
-Target Basis: ${levels.targetBasis || 'N/A'}
-Daily R1 Checkpoint: ₹${levels.dailyR1Check || 'N/A'}
+Target 1 (50% Booking): ₹${levels.target1 || 'N/A'} [${levels.target1Basis || 'N/A'}]
+Target 2 (Full Exit): ₹${levels.target || 'N/A'} [${levels.targetBasis || 'N/A'}]
+Target 3 (Trail Extension): ₹${levels.target2 || 'N/A'}
 Risk:Reward: 1:${levels.riskReward || 'N/A'}
 Risk %: ${levels.riskPercent || 'N/A'}%
 Reward %: ${levels.rewardPercent || 'N/A'}%
+Max Hold: ${levels.maxHoldDays || 5} trading days
+Week-End Rule: ${levels.weekEndRule === 'trail_or_exit' ? 'Tighten trailing stop on Friday' : levels.weekEndRule === 'hold_if_above_entry' ? 'Hold if above entry on Friday' : 'Exit if T1 not hit by Friday'}
 
-⚠️ Use these exact entry, stop, and target levels. They are pre-calculated using the ${levels.mode || 'unknown'} formula anchored to ${levels.targetBasis || 'pivot levels'}.
+⚠️ THESE LEVELS ARE FINAL. Do NOT recalculate or override any prices.
+⚠️ ENTRY RULE: For buy_above entries, stock must CLOSE above entry level — intraday touch that reverses is NOT a valid entry.
+⚠️ Use these exact prices in your beginner_guide steps and what_to_watch text.
 
 SCAN ARCHETYPE: ${levels.archetype || (levels.entryType === 'limit' ? 'pullback' : 'trend-follow')}
 This determines which strategy is PRIMARY and which is ALTERNATIVE in the strategies[] array.
@@ -472,22 +508,8 @@ ${newsContext ? newsContext : '=== RECENT NEWS ===\nNo recent news found for thi
     "watch_factors": ["Top 2-3 concerns as strings"]
   },
 
-  "trading_plan": {
-    "entry": ${levels.entry || 'null'},
-    "entry_range": [${levels.entryRange?.[0] || 'null'}, ${levels.entryRange?.[1] || 'null'}],
-    "aggressive_entry": {
-      "price": null,
-      "range": [null, null],
-      "note": "Whether aggressive entry is recommended and why/why not"
-    },
-    "stop_loss": ${levels.stop || 'null'},
-    "target": ${levels.target || 'null'},
-    "target1": null,
-    "target2": ${levels.target2 || levels.target || 'null'},
-    "risk_reward": ${levels.riskReward || 'null'},
-    "risk_percent": ${levels.riskPercent || 'null'},
-    "reward_percent": ${levels.rewardPercent || 'null'}
-  },
+  // NOTE: trading_plan is NOT generated by Claude — it comes from the engine.
+  // The code will merge engine levels into the final analysis_data after parsing.
 
   "risk_factors": [
     "Plain text risk factor 1 — be specific with numbers",
@@ -558,12 +580,17 @@ ${newsContext ? newsContext : '=== RECENT NEWS ===\nNo recent news found for thi
 }
 
 IMPORTANT REMINDERS:
-- Fill aggressive_entry.price with a realistic price near current price (₹${stock.current_price}).
-- Fill target1 with a partial profit-booking level between entry and target (e.g., daily R1, previous high, or round number).
-- Calculate max_loss in beginner_guide based on entry minus stop × 100 shares.
-- GRADE: The engine grade (${stock.grade}) is the official grade. Use it exactly in setup_score.grade. You may add commentary in factors if you disagree, but do NOT override the grade value.
-- BEGINNER GUIDE: Use the engine's entry/stop/target levels (₹${levels.entry}/${levels.stop}/${levels.target}) in beginner steps. If mentioning a pullback alternative, label it clearly as "IF you wait for pullback" with separate numbers.
-- Keep total JSON under 4000 tokens.
+- DO NOT output a trading_plan object. Levels are handled by the engine.
+- Use the pre-calculated levels EXACTLY in your beginner_guide steps and what_to_watch text.
+- In beginner_guide steps:
+  - For buy_above entries: "Buy only if the stock CLOSES above ₹${levels.entry} on a daily candle"
+  - For limit entries: "Place limit buy order at ₹${levels.entry}"
+  - Always mention: "If entry doesn't trigger by ${levels.entryWindowDays === 2 ? 'Tuesday' : levels.entryWindowDays === 3 ? 'Wednesday' : 'Thursday'} close, skip this trade"
+  - Use T1 ₹${levels.target1} for 50% booking step
+  - Use T2 ₹${levels.target} for remaining exit step
+- Calculate max_loss in beginner_guide based on: (entry - stop) × Math.floor(100000 / entry)
+- GRADE: Use the engine grade (${stock.grade}) exactly. Do NOT override.
+- Keep total JSON under 3500 tokens.
 - Return ONLY the JSON object. No other text.`;
 }
 
@@ -576,11 +603,9 @@ IMPORTANT REMINDERS:
  * Call Claude API with system prompt + user message
  */
 async function callClaude(userMessage, requestId) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY not configured');
-  }
+  const client = getAnthropicClient();
 
-  const response = await anthropic.messages.create({
+  const response = await client.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
     system: SYSTEM_PROMPT,
@@ -647,6 +672,31 @@ function parseClaudeResponse(content, stock) {
 
   // Build analysis_data — merge Claude's output with server-side fields
   const ind = stock.indicators || {};
+  const levels = stock.levels || {};
+
+  // Engine provides trading_plan — NOT Claude (v2)
+  const trading_plan = {
+    entry: levels.entry,
+    entry_range: levels.entryRange,
+    entry_type: levels.entryType,
+    entry_confirmation: levels.entryConfirmation || 'close_above',
+    entry_window_days: levels.entryWindowDays || 3,
+    stop_loss: levels.stop,
+    target1: levels.target1,
+    target1_basis: levels.target1Basis,
+    target: levels.target,
+    target2: levels.target2,
+    target_basis: levels.targetBasis,
+    risk_reward: levels.riskReward,
+    risk_percent: levels.riskPercent,
+    reward_percent: levels.rewardPercent,
+    archetype: levels.archetype,
+    mode: levels.mode,
+    max_hold_days: levels.maxHoldDays || 5,
+    week_end_rule: levels.weekEndRule || 'exit_if_no_t1',
+    t1_booking_pct: levels.t1BookingPct || 50,
+    post_t1_stop: levels.postT1Stop || 'move_to_entry'
+  };
 
   return {
     // Server-side metadata
@@ -678,11 +728,8 @@ function parseClaudeResponse(content, stock) {
     disclaimer: 'Educational analysis only. Not investment advice.',
 
     what_to_watch: parsed.what_to_watch || null,
-    setup_score: parsed.setup_score || {
-      total: stock.setup_score,
-      grade: stock.grade
-    },
-    trading_plan: parsed.trading_plan || null,
+    setup_score: calculateSetupScoreTotal(parsed.setup_score, stock),
+    trading_plan,  // Engine-calculated levels (v2)
     risk_factors: parsed.risk_factors || [],
     verdict: parsed.verdict || null,
     beginner_guide: parsed.beginner_guide || null,
@@ -754,12 +801,18 @@ function buildAnalysisMeta(stock, fundamentals, response, startTime, recentNews 
       entry: levels.entry,
       entry_range: levels.entryRange,
       stop: levels.stop,
+      target1: levels.target1,                       // Partial booking (50%) — from engine (v2)
+      target1Basis: levels.target1Basis || null,     // 'weekly_r1', 'daily_r1', 'midpoint'
       target: levels.target,
-      target1: null,    // Set by Claude in trading_plan
       target2: levels.target2,
       riskReward: levels.riskReward,
-      targetBasis: levels.targetBasis || null,     // Which ladder level was used
-      archetype: levels.archetype || null          // '52w_breakout', 'trend-follow', etc.
+      targetBasis: levels.targetBasis || null,       // Which ladder level was used for main target
+      archetype: levels.archetype || null,           // '52w_breakout', 'trend-follow', etc.
+      // Time rules (v2)
+      entryConfirmation: levels.entryConfirmation || 'close_above',
+      entryWindowDays: levels.entryWindowDays || 3,
+      maxHoldDays: levels.maxHoldDays || 5,
+      weekEndRule: levels.weekEndRule || 'exit_if_no_t1'
     },
     research_sources: [
       `ChartInk ${stock.scan_type} scanner`,
@@ -882,6 +935,54 @@ function generateMarketContext() {
     weekLabel,
     niftyInfo: 'Nifty level: Check current market data',
     events
+  };
+}
+
+/**
+ * Calculate setup_score total from individual factor scores
+ * Parses scores like "19/20" and sums them up
+ */
+function calculateSetupScoreTotal(parsedSetupScore, stock) {
+  // If no setup_score from AI, return stock defaults
+  if (!parsedSetupScore) {
+    return {
+      total: stock.setup_score || null,
+      grade: stock.grade || 'N/A'
+    };
+  }
+
+  // If factors exist, calculate total from them
+  if (parsedSetupScore.factors && Array.isArray(parsedSetupScore.factors)) {
+    let calculatedTotal = 0;
+
+    for (const factor of parsedSetupScore.factors) {
+      if (factor.score && typeof factor.score === 'string') {
+        // Parse "19/20" format
+        const match = factor.score.match(/^(\d+)\/\d+$/);
+        if (match) {
+          calculatedTotal += parseInt(match[1], 10);
+        }
+      }
+    }
+
+    // Calculate grade based on total
+    let calculatedGrade = 'D';
+    if (calculatedTotal >= 80) calculatedGrade = 'A';
+    else if (calculatedTotal >= 65) calculatedGrade = 'B';
+    else if (calculatedTotal >= 50) calculatedGrade = 'C';
+
+    return {
+      ...parsedSetupScore,
+      total: calculatedTotal,
+      grade: calculatedGrade
+    };
+  }
+
+  // Fallback: use parsed total or stock default
+  return {
+    ...parsedSetupScore,
+    total: parsedSetupScore.total ?? stock.setup_score ?? null,
+    grade: parsedSetupScore.grade || stock.grade || 'N/A'
   };
 }
 

@@ -3,6 +3,7 @@ import aiReviewService from '../services/aiAnalyze.service.js';
 import intradayAnalyzeService from '../services/intradayAnalyze.service.js';
 import onDemandAnalysisService from '../services/onDemandAnalysisService.js';
 import candleFetcherService from '../services/candleFetcher.service.js';
+import priceCacheService from '../services/priceCache.service.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
 import { Subscription } from '../models/subscription.js';
@@ -12,6 +13,12 @@ import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js
 import { User } from '../models/user.js';
 
 const router = express.Router();
+
+// Helper to get latest price - tries cache first, falls back to DB value, then 0
+const getLatestPrice = (instrumentKey, fallbackPrice) => {
+  const cachedPrice = priceCacheService.getPrice(instrumentKey);
+  return cachedPrice || fallbackPrice || 0;
+};
 
 // Initialize cached AI analysis service
 
@@ -197,7 +204,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
             stock_name: analysis.stock_name,
             stock_symbol: analysis.stock_symbol,
             analysis_type: 'position_management',
-            current_price: analysis.current_price,
+            current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
             analysis_data: analysis.analysis_data,
             status: analysis.status,
             valid_until: analysis.valid_until,
@@ -249,7 +256,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
           stock_name: analysis.stock_name,
           stock_symbol: analysis.stock_symbol,
           analysis_type: 'intraday',
-          current_price: analysis.current_price,
+          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
           analysis_data: analysis.analysis_data,
           status: analysis.status,
           valid_until: analysis.valid_until,
@@ -287,7 +294,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
           stock_name: analysis.stock_name,
           stock_symbol: analysis.stock_symbol,
           analysis_type: analysis.analysis_type,
-          current_price: analysis.current_price,
+          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
           analysis_data: analysis.analysis_data,
           status: analysis.status,
           valid_until: analysis.valid_until,
@@ -334,7 +341,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
         stock_name: analysis.stock_name,
         stock_symbol: analysis.stock_symbol,
         analysis_type: analysis.analysis_type,
-        current_price: analysis.current_price,
+        current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
         analysis_data: analysis.analysis_data,
         status: analysis.status,
         valid_until: analysis.valid_until,
@@ -406,9 +413,13 @@ router.get('/analysis/:analysisId', authenticateToken, async (req, res) => {
       });
     }
 
+    // Use latest price from cache instead of stale DB value
     res.json({
       success: true,
-      data: analysis
+      data: {
+        ...analysis,
+        current_price: getLatestPrice(analysis.instrument_key, analysis.current_price)
+      }
     });
 
   } catch (error) {
@@ -611,7 +622,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
           stock_name: analysis.stock_name,
           stock_symbol: analysis.stock_symbol,
           analysis_type: 'intraday',
-          current_price: analysis.current_price,
+          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
           analysis_data: analysisData,
           status: analysis.status,
           valid_until: analysis.valid_until,
@@ -743,7 +754,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         ...anyAnalysis.analysis_data,
         generated_at_ist: new Date().toISOString(), // Required field
         market_summary: {
-          last: anyAnalysis.current_price || 0,
+          last: getLatestPrice(anyAnalysis.instrument_key, anyAnalysis.current_price),
           trend: "NEUTRAL",
           volatility: "MEDIUM",
           volume: "AVERAGE"
@@ -761,7 +772,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
           stock_name: anyAnalysis.stock_name,
           stock_symbol: anyAnalysis.stock_symbol,
           analysis_type: anyAnalysis.analysis_type,
-          current_price: anyAnalysis.current_price || 0,
+          current_price: getLatestPrice(anyAnalysis.instrument_key, anyAnalysis.current_price),
           analysis_data: defaultAnalysisData,
           status: 'in_progress', // Treat incomplete as in_progress
           progress: anyAnalysis.progress,
@@ -794,7 +805,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
       stock_name: analysis.stock_name,
       stock_symbol: analysis.stock_symbol,
       analysis_type: analysis.analysis_type,
-      current_price: analysis.current_price,
+      current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
       analysis_data: analysis.analysis_data,
       status: analysis.status,
       created_at: analysis.created_at,
@@ -1107,7 +1118,7 @@ router.get('/cache/info/:instrument_key', authenticateToken, async (req, res) =>
           time_to_expiry_hours: Math.round(timeToExpiry / (1000 * 60 * 60) * 10) / 10,
           stock_symbol: analysis.stock_symbol,
           analysis_type: analysis.analysis_type,
-          current_price: analysis.current_price,
+          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
           has_orders: analysis.hasActiveOrders(),
           total_strategies: analysis.analysis_data?.strategies?.length || 0
         }

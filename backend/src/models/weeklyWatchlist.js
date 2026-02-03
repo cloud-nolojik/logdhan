@@ -46,17 +46,50 @@ const watchlistStockSchema = new mongoose.Schema({
     entry: Number,           // Single entry price
     entryRange: [Number],    // [low, high] entry range
     stop: Number,            // Stop loss price
-    target: Number,          // T1 (primary target from structural ladder)
-    target2: Number,         // T2 extension target (trail only, null if not applicable)
+    // ── Targets ──
+    target1: Number,         // Partial booking level (50%) — from weekly R1, daily R1, or midpoint
+    target1Basis: String,    // 'weekly_r1', 'daily_r1', or 'midpoint'
+    target: Number,          // Full exit target (T2) from structural ladder
+    target2: Number,         // Extension target (T3, trail only, null if not applicable)
     targetBasis: String,     // 'weekly_r1', 'weekly_r2', 'atr_extension_52w_breakout', etc.
-    dailyR1Check: Number,    // Momentum confirmation checkpoint (not a target)
+    dailyR1Check: Number,    // Momentum confirmation checkpoint (backward compat)
+    // ── Risk/Reward ──
     riskReward: Number,      // Risk:Reward ratio (e.g., 2.0 = 1:2)
     riskPercent: Number,     // Risk as % of entry
     rewardPercent: Number,   // Reward as % of entry
-    entryType: String,       // 'buy_above', 'buy_at', 'buy_below'
+    // ── Entry/Exit Rules ──
+    entryType: String,       // 'buy_above' or 'limit'
     mode: String,            // 'BREAKOUT', 'PULLBACK', 'A_PLUS_MOMENTUM', etc.
     archetype: String,       // '52w_breakout', 'pullback', 'trend-follow', 'breakout', etc.
-    reason: String           // Human-readable explanation
+    reason: String,          // Human-readable explanation
+    // ── Time Rules (v2) ──
+    entryConfirmation: {     // 'close_above' (daily close) or 'touch' (limit fill)
+      type: String,
+      enum: ['close_above', 'touch'],
+      default: 'close_above'
+    },
+    entryWindowDays: {       // Days to trigger entry (2=Mon-Tue, 3=Mon-Wed, 4=Mon-Thu)
+      type: Number,
+      default: 3
+    },
+    maxHoldDays: {           // Max trading days to hold
+      type: Number,
+      default: 5
+    },
+    weekEndRule: {           // What to do on Friday if still holding
+      type: String,
+      enum: ['exit_if_no_t1', 'hold_if_above_entry', 'trail_or_exit'],
+      default: 'exit_if_no_t1'
+    },
+    t1BookingPct: {          // Percentage to book at T1 (always 50)
+      type: Number,
+      default: 50
+    },
+    postT1Stop: {            // Where to move stop after T1 hit
+      type: String,
+      enum: ['move_to_entry', 'trail_atr'],
+      default: 'move_to_entry'
+    }
   },
 
   // Status tracking (global status, not per-user)
@@ -85,13 +118,16 @@ const watchlistStockSchema = new mongoose.Schema({
     type: String,
     enum: [
       'WATCHING',       // Default — waiting for entry
+      'SKIPPED',        // AI verdict was SKIP — don't track/simulate
       'APPROACHING',    // Within 2% above entry
       'ENTRY_ZONE',     // Price in entry range
       'ABOVE_ENTRY',    // Triggered and running (above entry, below target)
       'RETEST_ZONE',    // 52W breakout retesting old high (between stop+2% and entry)
       'TARGET1_HIT',    // T1 reached
       'TARGET2_HIT',    // T2 reached
-      'STOPPED_OUT'     // Stop loss hit
+      'STOPPED_OUT',    // Stop loss hit
+      'FULL_EXIT',      // Trade fully closed (T1+T2 or T1+trailing stop)
+      'EXPIRED'         // Week ended
     ],
     default: 'WATCHING'
   },
@@ -125,6 +161,52 @@ const watchlistStockSchema = new mongoose.Schema({
     phase2_triggered: { type: Boolean, default: false },
     phase2_analysis_id: { type: mongoose.Schema.Types.ObjectId, ref: 'StockAnalysis' }
   }],
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TRADE SIMULATION (recalculated after each daily snapshot)
+  // Simulates ₹1,00,000 investment with 50% T1 booking + trailing stop strategy
+  // ═══════════════════════════════════════════════════════════════════════════
+  trade_simulation: {
+    status: {
+      type: String,
+      enum: ['WAITING', 'ENTERED', 'PARTIAL_EXIT', 'FULL_EXIT', 'STOPPED_OUT', 'EXPIRED'],
+      default: 'WAITING'
+    },
+    entry_price: Number,
+    entry_date: Date,
+    capital: { type: Number, default: 100000 },  // ₹1,00,000
+    qty_total: Number,          // Math.floor(100000 / entry)
+    qty_remaining: Number,
+    qty_exited: Number,
+    trailing_stop: Number,      // Starts at stop_loss, moves to entry after T1
+    realized_pnl: Number,       // Locked profit/loss from closed portions
+    unrealized_pnl: Number,     // Open position P&L (at last close)
+    total_pnl: Number,          // realized + unrealized
+    total_return_pct: Number,   // total_pnl / capital * 100
+    peak_price: Number,         // Highest price since entry
+    peak_gain_pct: Number,      // Peak gain %
+    events: [{
+      date: Date,
+      type: {
+        type: String,
+        enum: [
+          'ENTRY',
+          'T1_HIT',
+          'T2_HIT',
+          'STOPPED_OUT',
+          'TRAILING_STOP',
+          'EXPIRED',
+          'WEEK_END_EXIT',    // Exited because T1 not hit by Friday
+          'WEEK_END_HOLD',    // Held through weekend (pullback setups)
+          'TRAIL_TIGHTENED'   // Trailing stop tightened on Friday
+        ]
+      },
+      price: Number,
+      qty: Number,
+      pnl: Number,
+      detail: String
+    }]
+  },
 
   added_at: { type: Date, default: Date.now }
 }, { _id: true });
@@ -520,6 +602,25 @@ weeklyWatchlistSchema.methods.completeWeek = async function() {
   stocks.forEach(s => {
     if (s.status === "WATCHING" || s.status === "APPROACHING") {
       s.status = "EXPIRED";
+    }
+
+    // Update trade simulation status for stocks that never triggered
+    if (s.trade_simulation?.status === 'WAITING') {
+      s.trade_simulation.status = 'EXPIRED';
+      if (!s.trade_simulation.events) s.trade_simulation.events = [];
+      s.trade_simulation.events.push({
+        date: new Date(),
+        type: 'EXPIRED',
+        price: null,
+        qty: 0,
+        pnl: 0,
+        detail: 'Week ended — entry never triggered'
+      });
+    }
+
+    // Update tracking_status for terminal states
+    if (s.tracking_status === 'WATCHING' || s.tracking_status === 'APPROACHING' || s.tracking_status === 'ENTRY_ZONE') {
+      s.tracking_status = 'EXPIRED';
     }
   });
 

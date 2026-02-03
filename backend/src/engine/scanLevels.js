@@ -26,6 +26,100 @@ export function roundToTick(price, tick = 0.05) {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
+ * PARTIAL BOOKING LEVEL (target1) - 50% profit booking
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Calculate partial profit booking level (target1)
+ * Priority: weekly R1 → daily R1 → midpoint
+ * Must be between entry (+ 2% buffer) and target (- 5% buffer)
+ *
+ * @param {number} entry - Entry price
+ * @param {number} target - Main target price
+ * @param {object} data - Contains weeklyR1, dailyR1 from enrichment
+ * @returns {{ target1: number, target1Basis: string }}
+ */
+function calculatePartialBookingLevel(entry, target, data) {
+  const { weeklyR1, dailyR1 } = data;
+  const minLevel = entry * 1.02;   // At least 2% above entry
+  const maxLevel = target * 0.95;  // At least 5% below main target
+
+  // Weekly R1 — most common for momentum/breakout scans
+  if (isNum(weeklyR1) && weeklyR1 > minLevel && weeklyR1 < maxLevel) {
+    return { target1: roundToTick(weeklyR1), target1Basis: 'weekly_r1' };
+  }
+
+  // Daily R1 — fallback
+  if (isNum(dailyR1) && dailyR1 > minLevel && dailyR1 < maxLevel) {
+    return { target1: roundToTick(dailyR1), target1Basis: 'daily_r1' };
+  }
+
+  // Midpoint — always works
+  const mid = entry + (target - entry) * 0.5;
+  return { target1: roundToTick(mid), target1Basis: 'midpoint' };
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TIME RULES - Entry confirmation and timing rules by scan type
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Get time-based trading rules for a scan type.
+ * These control how the trade simulation processes entries and exits.
+ *
+ * @param {string} archetype - '52w_breakout', 'trend-follow', 'pullback', etc.
+ * @param {string} entryType - 'buy_above' or 'limit'
+ * @returns {object} Time rules for simulation
+ */
+function getTimeRules(archetype, entryType) {
+  // 52W Breakout — needs close confirmation, patient entry
+  if (archetype === '52w_breakout') {
+    return {
+      entryConfirmation: 'close_above',  // Daily close must be >= entry
+      entryWindowDays: 3,                // Mon-Wed to trigger entry
+      maxHoldDays: 5,                    // Full trading week
+      weekEndRule: 'trail_or_exit',      // Tighten stop on Friday if still holding
+      t1BookingPct: 50,                  // Always book 50% at T1
+      postT1Stop: 'move_to_entry'        // Stop moves to entry after T1 hit
+    };
+  }
+
+  // Momentum / Breakout — close confirmation, shorter entry window
+  if (entryType === 'buy_above') {
+    return {
+      entryConfirmation: 'close_above',
+      entryWindowDays: 2,                // Mon-Tue only (momentum fades fast)
+      maxHoldDays: 5,
+      weekEndRule: 'exit_if_no_t1',      // If T1 not hit by Friday, exit at close
+      t1BookingPct: 50,
+      postT1Stop: 'move_to_entry'
+    };
+  }
+
+  // Pullback — limit order fills on touch, more patient
+  if (entryType === 'limit') {
+    return {
+      entryConfirmation: 'touch',        // Low touching entry = limit fill
+      entryWindowDays: 4,                // Mon-Thu (pullbacks need patience)
+      maxHoldDays: 5,
+      weekEndRule: 'hold_if_above_entry', // Keep if above entry, exit if below
+      t1BookingPct: 50,
+      postT1Stop: 'move_to_entry'
+    };
+  }
+
+  // Default fallback
+  return {
+    entryConfirmation: 'close_above',
+    entryWindowDays: 3,
+    maxHoldDays: 5,
+    weekEndRule: 'exit_if_no_t1',
+    t1BookingPct: 50,
+    postT1Stop: 'move_to_entry'
+  };
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
  * STRUCTURAL LADDER - Target Selection
  * ═══════════════════════════════════════════════════════════════════════════
  *
@@ -391,6 +485,20 @@ export function calculateTradingLevels(scanType, data) {
     };
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // CALCULATE TARGET1 (partial booking level)
+  // ─────────────────────────────────────────────────────────────────────────
+  const { target1, target1Basis } = calculatePartialBookingLevel(
+    roundToTick(guarded.entry),
+    roundToTick(guarded.target),
+    data
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET TIME RULES (entry confirmation, windows, week-end rules)
+  // ─────────────────────────────────────────────────────────────────────────
+  const timeRules = getTimeRules(result.archetype, result.entryType);
+
   return {
     valid: true,
     scanType,
@@ -398,17 +506,29 @@ export function calculateTradingLevels(scanType, data) {
     entry: roundToTick(guarded.entry),
     entryRange: result.entryRange ? [roundToTick(result.entryRange[0]), roundToTick(result.entryRange[1])] : null,
     stop: roundToTick(guarded.stop),
-    target: roundToTick(guarded.target),
+    // ── Targets ──
+    target1,                                                                // Partial booking level (50%)
+    target1Basis,                                                           // 'weekly_r1', 'daily_r1', or 'midpoint'
+    target: roundToTick(guarded.target),                                    // Full exit target
     target2: result.target2 ? roundToTick(result.target2) : null,           // Extension target (trail only)
     targetBasis: result.targetBasis,                                        // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', or '52w_high'
-    dailyR1Check: result.dailyR1Check ? roundToTick(result.dailyR1Check) : null,  // Momentum checkpoint
+    dailyR1Check: result.dailyR1Check ? roundToTick(result.dailyR1Check) : null,  // Momentum checkpoint (backward compat)
+    // ── Entry/Exit Rules ──
     entryType: result.entryType,
     archetype: result.archetype,
     reason: result.reason,
+    // ── Risk/Reward ──
     riskReward: parseFloat(guarded.riskReward),
     riskPercent: parseFloat(guarded.riskPercent),
     rewardPercent: parseFloat(guarded.rewardPercent),
-    adjustments: guarded.adjustments
+    adjustments: guarded.adjustments,
+    // ── Time Rules ──
+    entryConfirmation: timeRules.entryConfirmation,
+    entryWindowDays: timeRules.entryWindowDays,
+    maxHoldDays: timeRules.maxHoldDays,
+    weekEndRule: timeRules.weekEndRule,
+    t1BookingPct: timeRules.t1BookingPct,
+    postT1Stop: timeRules.postT1Stop
   };
 }
 
@@ -1023,7 +1143,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   // ─────────────────────────────────────────────────────────────────────────
   const risk = entry - stop;
   const riskPercent = (risk / entry) * 100;
-  const MAX_RISK_PERCENT = 7.0;
+  const MAX_RISK_PERCENT = 8.0;
 
   if (riskPercent > MAX_RISK_PERCENT) {
     return {

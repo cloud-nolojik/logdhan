@@ -3,7 +3,7 @@ import axios from 'axios';
 import { auth } from '../middleware/auth.js';
 import priceCacheService from '../services/priceCache.service.js';
 import LatestPrice from '../models/latestPrice.js';
-import { getCurrentPrice } from '../utils/stockDb.js';
+import { getCurrentPrice, getDailyCandles } from '../utils/stockDb.js';
 
 const router = express.Router();
 
@@ -32,7 +32,9 @@ const MARKET_INDICES = {
 
 };
 
-// ⚡ OPTIMIZED: Function to fetch market data with triple fallback (memory → DB → API)
+// ⚡ OPTIMIZED: Function to fetch market data with SMART previous_day_close handling
+// - First call of the day: Fetches previous_day_close from daily API, stores in DB
+// - Subsequent calls: Uses cached previous_day_close, only fetches real-time price
 async function fetchMarketDataFromCache() {
   try {
     const startTime = Date.now();
@@ -40,111 +42,91 @@ async function fetchMarketDataFromCache() {
     // Extract all instrument keys
     const instrumentKeys = Object.values(MARKET_INDICES).map((info) => info.upstoxKey);
 
-    // ⚡ Step 1: Get bulk LTP data from memory cache - instant!
-    const bulkPrices = priceCacheService.getPrices(instrumentKeys);
-    const ltpTime = Date.now() - startTime;
+    // ⚡ SMART: Use getLatestPricesWithChange which handles previous_day_close intelligently
+    // - Checks if previous_day_close exists and is from today
+    // - If stale/missing, fetches from daily API (once per day)
+    // - Returns price + change data
+    const priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
 
-    // Store change data from DB (keyed by instrument_key)
+    // Store change data (keyed by instrument_key)
     const changeData = {};
+    const bulkPrices = {};
 
-    // ⚡ Step 2: Get candles from memory cache (pre-fetched for indices)
-    const candleStartTime = Date.now();
+    // Extract prices and change data from the smart fetch
+    Object.entries(priceDataMap).forEach(([instrumentKey, data]) => {
+      bulkPrices[instrumentKey] = data.price;
+      if (data.change !== undefined && data.change_percent !== undefined) {
+        changeData[instrumentKey] = {
+          change: data.change,
+          changePercent: data.change_percent
+        };
+      }
+    });
+
+    // ⚡ Get candles from memory cache (for OHLC display)
     const candleResults = Object.entries(MARKET_INDICES).map(([key, indexInfo]) => {
       const candles = priceCacheService.getCandles(indexInfo.upstoxKey);
       return { key, indexInfo, candles };
     });
-    const candleTime = Date.now() - candleStartTime;
 
-    // ⚡ Step 3: Check for missing indices (not in memory cache)
-    const missingIndices = instrumentKeys.filter((key) => !bulkPrices[key] || !priceCacheService.getCandles(key));
-
-    if (missingIndices.length > 0) {
-
-      // Fetch from database
-      const dbStartTime = Date.now();
-      const dbPrices = await LatestPrice.getPricesForInstruments(missingIndices);
-      const dbTime = Date.now() - dbStartTime;
-
-      // Merge DB prices into bulkPrices and store change data
+    // For indices without candles in memory, try to get from DB
+    const missingCandleIndices = candleResults.filter(r => !r.candles).map(r => r.indexInfo.upstoxKey);
+    if (missingCandleIndices.length > 0) {
+      const dbPrices = await LatestPrice.getPricesForInstruments(missingCandleIndices);
       dbPrices.forEach((priceDoc) => {
-        bulkPrices[priceDoc.instrument_key] = priceDoc.last_traded_price;
-
-        // Store change data from DB (calculated from previous day's close via daily API)
-        if (priceDoc.previous_day_close && priceDoc.last_traded_price) {
-          // Recalculate change using previous day's close for accuracy
-          const change = priceDoc.last_traded_price - priceDoc.previous_day_close;
-          const changePercent = (change / priceDoc.previous_day_close) * 100;
-          changeData[priceDoc.instrument_key] = {
-            change: change,
-            changePercent: changePercent
-          };
-        } else if (priceDoc.change !== undefined && priceDoc.change_percent !== undefined) {
-          // Fallback to stored change if previous_day_close not available
-          changeData[priceDoc.instrument_key] = {
-            change: priceDoc.change,
-            changePercent: priceDoc.change_percent
-          };
-        }
-
-        // Also update candles if available
         if (priceDoc.recent_candles && priceDoc.recent_candles.length > 0) {
           const matchingIndex = candleResults.find((r) => r.indexInfo.upstoxKey === priceDoc.instrument_key);
           if (matchingIndex && !matchingIndex.candles) {
             matchingIndex.candles = priceDoc.recent_candles.map((c) => [
-            new Date(c.timestamp).getTime(),
-            c.open,
-            c.high,
-            c.low,
-            c.close,
-            c.volume]
-            );
+              new Date(c.timestamp).getTime(),
+              c.open,
+              c.high,
+              c.low,
+              c.close,
+              c.volume
+            ]);
           }
         }
       });
-
-      // ⚡ Step 4: For still missing indices, fetch from API
-      const stillMissing = missingIndices.filter((key) => !bulkPrices[key]);
-
-      if (stillMissing.length > 0) {
-
-        const apiStartTime = Date.now();
-        const apiPromises = stillMissing.map(async (instrumentKey) => {
-          try {
-            const candles = await getCurrentPrice(instrumentKey, true); // true = fetch candles for indices
-            if (candles && candles.length > 0) {
-              const latestCandle = candles[0];
-              const price = latestCandle[4]; // Close price
-              return { instrumentKey, price, candles };
-            }
-            return { instrumentKey, price: null, candles: null };
-          } catch (error) {
-            console.warn(`⚠️ [MARKET] API fetch failed for ${instrumentKey}:`, error.message);
-            return { instrumentKey, price: null, candles: null };
-          }
-        });
-
-        const apiResults = await Promise.all(apiPromises);
-        const apiTime = Date.now() - apiStartTime;
-
-        let apiSuccessCount = 0;
-        apiResults.forEach(({ instrumentKey, price, candles }) => {
-          if (price !== null) {
-            bulkPrices[instrumentKey] = price;
-
-            // Update candles for this index
-            const matchingIndex = candleResults.find((r) => r.indexInfo.upstoxKey === instrumentKey);
-            if (matchingIndex) {
-              matchingIndex.candles = candles;
-            }
-
-            apiSuccessCount++;
-          }
-        });
-
-      }
     }
 
-    // ⚡ Step 3: Process results combining LTP + candle data
+    // ⚡ For indices still missing prices, fetch from API directly
+    const stillMissing = instrumentKeys.filter((key) => !bulkPrices[key]);
+
+    if (stillMissing.length > 0) {
+      console.log(`[MARKET] Fetching ${stillMissing.length} missing indices from API`);
+
+      const apiPromises = stillMissing.map(async (instrumentKey) => {
+        try {
+          const candles = await getCurrentPrice(instrumentKey, true); // true = fetch candles for indices
+          if (candles && candles.length > 0) {
+            const latestCandle = candles[0];
+            const price = latestCandle[4]; // Close price
+            return { instrumentKey, price, candles };
+          }
+          return { instrumentKey, price: null, candles: null };
+        } catch (error) {
+          console.warn(`⚠️ [MARKET] API fetch failed for ${instrumentKey}:`, error.message);
+          return { instrumentKey, price: null, candles: null };
+        }
+      });
+
+      const apiResults = await Promise.all(apiPromises);
+
+      apiResults.forEach(({ instrumentKey, price, candles }) => {
+        if (price !== null) {
+          bulkPrices[instrumentKey] = price;
+
+          // Update candles for this index
+          const matchingIndex = candleResults.find((r) => r.indexInfo.upstoxKey === instrumentKey);
+          if (matchingIndex) {
+            matchingIndex.candles = candles;
+          }
+        }
+      });
+    }
+
+    // ⚡ Process results combining LTP + candle data
     const indices = candleResults.map(({ key, indexInfo, candles }) => {
       try {
         // Get current price from bulk fetch (fastest!)
@@ -326,6 +308,30 @@ router.get('/refresh-indices', async (req, res) => {
     });
   } catch (error) {
     console.error('Error refreshing market indices:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Debug endpoint to test daily candles API directly
+router.get('/debug-daily-candles', async (req, res) => {
+  try {
+    const instrumentKeys = Object.values(MARKET_INDICES).map((info) => info.upstoxKey);
+
+    const results = await Promise.all(instrumentKeys.map(async (key) => {
+      const dailyData = await getDailyCandles(key);
+      return {
+        instrument_key: key,
+        dailyData: dailyData
+      };
+    }));
+
+    res.json({
+      success: true,
+      message: 'Debug daily candles response',
+      data: results
+    });
+  } catch (error) {
+    console.error('Error in debug endpoint:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
