@@ -296,6 +296,40 @@ router.get('/indices', auth, async (req, res) => {
   }
 });
 
+// Route to force refresh market indices (fetches fresh data with previous_day_close)
+// No auth required - used for system maintenance
+router.post('/refresh-indices', async (req, res) => {
+  try {
+    const instrumentKeys = Object.values(MARKET_INDICES).map((info) => info.upstoxKey);
+
+    // Clear existing records to force fresh fetch
+    await LatestPrice.deleteMany({ instrument_key: { $in: instrumentKeys } });
+
+    // Fetch fresh prices - this will call getDailyCandles and store previous_day_close
+    const freshPrices = await priceCacheService.getLatestPrices(instrumentKeys);
+
+    // Now get the updated data from DB
+    const updatedPrices = await LatestPrice.getPricesForInstruments(instrumentKeys);
+
+    const result = updatedPrices.map((priceDoc) => ({
+      instrument_key: priceDoc.instrument_key,
+      last_traded_price: priceDoc.last_traded_price,
+      previous_day_close: priceDoc.previous_day_close,
+      change: priceDoc.change,
+      change_percent: priceDoc.change_percent
+    }));
+
+    res.json({
+      success: true,
+      message: 'Market indices refreshed with previous day close data',
+      data: result
+    });
+  } catch (error) {
+    console.error('Error refreshing market indices:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Route to get specific index data
 router.get('/index/:symbol', auth, async (req, res) => {
   try {
