@@ -4,7 +4,6 @@ import { searchStocks, getExactStock, getCurrentPrice } from '../utils/stockDb.j
 import { User } from '../models/user.js';
 import { auth } from '../middleware/auth.js';
 import LatestPrice from '../models/latestPrice.js';
-import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 import priceCacheService from '../services/priceCache.service.js';
 
 const router = express.Router();

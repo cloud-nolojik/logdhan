@@ -636,37 +636,16 @@ router.get("/", auth, async (req, res) => {
     // Track if any stock needs DB update (intraday trigger detected)
     let needsSave = false;
 
-    // ⚡ OPTIMIZATION: Fetch all prices at once using price cache service (same as watchlist)
+    // ⚡ OPTIMIZATION: Fetch all prices at once using price cache service (same as watchlist & AI analysis)
     // This ensures consistent pricing across Weekly Watchlist, AI Analysis, and Watchlist screens
     const instrumentKeys = watchlist.stocks.map(stock => stock.instrument_key);
     const priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
 
     // Enrich with current prices
     const enrichedStocks = await Promise.all(watchlist.stocks.map(async (stock) => {
-      // Get price from cache service (DB → Memory → API fallback)
-      let currentPrice = priceDataMap[stock.instrument_key]?.price || null;
-
-      // If price cache service didn't return a price, check daily_snapshots as final fallback
-      // This handles cases where the stock is new and not yet in LatestPrice collection
-      if (!currentPrice && stock.daily_snapshots?.length > 0) {
-        const lastSnapshot = stock.daily_snapshots[stock.daily_snapshots.length - 1];
-        currentPrice = lastSnapshot.close;
-        console.log(`[PRICE-FIX] ${stock.symbol}: Using last snapshot close as fallback: ₹${currentPrice}`);
-      }
-
-      // Validate price against daily_snapshots to catch stale API data
-      // If price differs >5% from last snapshot, prefer snapshot (more recent)
-      if (currentPrice && stock.daily_snapshots?.length > 0) {
-        const lastSnapshot = stock.daily_snapshots[stock.daily_snapshots.length - 1];
-        const lastSnapshotClose = lastSnapshot.close;
-        const priceDiffPct = Math.abs((currentPrice - lastSnapshotClose) / lastSnapshotClose) * 100;
-
-        if (priceDiffPct > 5) {
-          console.log(`[PRICE-FIX] ${stock.symbol}: Cache price ₹${currentPrice} differs ${priceDiffPct.toFixed(1)}% from snapshot ₹${lastSnapshotClose}, using snapshot`);
-          currentPrice = lastSnapshotClose;
-        }
-      }
-      console.log(`[WEEKLY-WATCHLIST] ${stock.symbol}: Final currentPrice=${currentPrice}`);
+      // Get price from cache service only (DB → Memory → API fallback)
+      const currentPrice = priceDataMap[stock.instrument_key]?.price || null;
+      console.log(`[WEEKLY-WATCHLIST] ${stock.symbol}: currentPrice=${currentPrice} (from price cache)`);
 
       // Check for intraday triggers (entry/stop/target hit today before 4PM job)
       // This updates stock.trade_simulation and stock.daily_snapshots in place
