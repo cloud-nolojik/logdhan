@@ -298,7 +298,7 @@ router.get('/indices', auth, async (req, res) => {
 
 // Route to force refresh market indices (fetches fresh data with previous_day_close)
 // No auth required - used for system maintenance
-router.post('/refresh-indices', async (req, res) => {
+router.get('/refresh-indices', async (req, res) => {
   try {
     const instrumentKeys = Object.values(MARKET_INDICES).map((info) => info.upstoxKey);
 
