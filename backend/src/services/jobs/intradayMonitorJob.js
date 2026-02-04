@@ -5,17 +5,23 @@
  * Monitors for stop loss, T1, and T2 hits for stocks with active positions.
  *
  * Purpose:
+ * - Execute entries for ENTRY_SIGNALED stocks at market open (first run of the day)
  * - Detect stop/T1/T2 hits DURING market hours (not just at EOD)
  * - Create intraday alerts that persist to the stock
- * - DO NOT modify snapshots or run simulation (that's the 4PM job's responsibility)
  *
  * The GET endpoint is now a pure read — this job handles intraday monitoring.
  */
 
 import Agenda from 'agenda';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import WeeklyWatchlist from '../../models/weeklyWatchlist.js';
 import priceCacheService from '../priceCache.service.js';
 import { firebaseService } from '../firebase/firebase.service.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class IntradayMonitorJob {
   constructor() {
@@ -183,10 +189,129 @@ class IntradayMonitorJob {
   }
 
   /**
-   * Run the monitoring logic
+   * Load price from JSON file (15-min candle format for testing)
+   * Format: { status, data: { candles: [[ts, o, h, l, c, v], ...] } }
+   * Uses latest candle (index 0) for testing
    */
-  async runMonitoring() {
+  loadPriceFromFile(filePath) {
     const runLabel = '[INTRADAY-MONITOR]';
+    try {
+      const rawData = fs.readFileSync(filePath, 'utf-8');
+      const jsonData = JSON.parse(rawData);
+
+      if (jsonData.status !== 'success' || !jsonData.data?.candles) {
+        throw new Error('Invalid candle data format in file');
+      }
+
+      const candles = jsonData.data.candles;
+      const latestCandle = candles[0];
+      const [timestamp, open, high, low, close, volume] = latestCandle;
+      console.log(`${runLabel} Loaded 15-min candle: H:₹${high} L:₹${low} C:₹${close} @ ${timestamp}`);
+      return { type: 'candle', close, high, low, open, timestamp, volume };
+    } catch (error) {
+      console.error(`${runLabel} Failed to load price from file:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute entry for ENTRY_SIGNALED stock
+   * Uses qty from ENTRY_SIGNAL event (already adjusted for entry quality)
+   * @param {Object} stock - The stock object from watchlist
+   * @param {Object} options - { dryRun, runLabel }
+   * @returns {Object} { executed: boolean, alert: Object|null }
+   */
+  async executeEntry(stock, options = {}) {
+    const { dryRun = false, runLabel = '[INTRADAY-MONITOR]' } = options;
+    const sim = stock.trade_simulation;
+    const levels = stock.levels;
+    const stop = levels.stop;
+
+    // Get entry price and qty from ENTRY_SIGNAL event
+    // The signal price (close on signal day) is the realistic entry price
+    const signalEvent = sim.events?.find(e => e.type === 'ENTRY_SIGNAL');
+    const entryPrice = signalEvent?.price || sim.signal_close || levels.entry;
+    const qty = signalEvent?.qty || sim.qty_total || Math.floor((sim.capital || 100000) / entryPrice);
+    const entryDate = new Date();
+
+    // Execute the entry at planned entry price
+    sim.entry_price = entryPrice;
+    sim.entry_date = entryDate;
+    sim.trailing_stop = stop;
+    sim.status = 'ENTERED';
+    sim.qty_total = qty;
+    sim.qty_remaining = qty;
+    sim.realized_pnl = 0;
+    sim.unrealized_pnl = 0;
+    sim.peak_price = entryPrice;
+    sim.peak_gain_pct = 0;
+
+    const signalDateStr = sim.signal_date
+      ? (sim.signal_date instanceof Date
+          ? sim.signal_date.toISOString().split('T')[0]
+          : new Date(sim.signal_date).toISOString().split('T')[0])
+      : 'N/A';
+
+    if (!sim.events) sim.events = [];
+    sim.events.push({
+      date: entryDate,
+      type: 'ENTRY',
+      price: entryPrice,
+      qty: qty,
+      pnl: 0,
+      detail: `Bought ${qty} shares at ₹${entryPrice.toFixed(2)}. Signal confirmed on ${signalDateStr}.`
+    });
+
+    // Clear signal fields
+    sim.signal_date = null;
+    sim.signal_close = null;
+
+    // Sync tracking_status (ABOVE_ENTRY = triggered and running)
+    stock.tracking_status = 'ABOVE_ENTRY';
+
+    console.log(`${runLabel} ✅ ${stock.symbol}: ENTERED at ₹${entryPrice.toFixed(2)} — ${qty} shares`);
+
+    // Send push notification for entry
+    if (!dryRun) {
+      try {
+        await firebaseService.sendAnalysisCompleteToAllUsers(
+          `🚀 Entry Executed: ${stock.symbol}`,
+          `Bought ${qty} shares at ₹${entryPrice.toFixed(2)}`,
+          { type: 'entry_executed', symbol: stock.symbol, route: '/weekly-watchlist' }
+        );
+      } catch (notifError) {
+        console.error(`${runLabel} Failed to send entry notification:`, notifError.message);
+      }
+    } else {
+      console.log(`${runLabel} [DRY-RUN] Would send entry notification (skipped)`);
+    }
+
+    // Create alert for tracking
+    const alert = {
+      symbol: stock.symbol,
+      date: entryDate,
+      type: 'ENTRY_EXECUTED',
+      price: entryPrice,
+      message: `Entry executed at ₹${entryPrice.toFixed(2)} (${qty} shares)`
+    };
+
+    return { executed: true, alert };
+  }
+
+  /**
+   * Run the monitoring logic
+   * @param {Object} options - Optional settings
+   * @param {boolean} options.dryRun - If true, don't save to DB or send notifications
+   * @param {string} options.priceFile - Path to JSON file for price data (instead of price cache)
+   * @param {string} options.symbol - Filter to specific symbol
+   */
+  async runMonitoring(options = {}) {
+    const { dryRun = false, priceFile = null, symbol = null } = options;
+    const runLabel = '[INTRADAY-MONITOR]';
+
+    if (dryRun) console.log(`${runLabel} DRY-RUN MODE - no DB writes or notifications`);
+    if (priceFile) console.log(`${runLabel} Using price from file: ${priceFile}`);
+    if (symbol) console.log(`${runLabel} Filtering to symbol: ${symbol}`);
 
     // Get current week's watchlist
     const watchlist = await WeeklyWatchlist.getCurrentWeek();
@@ -195,42 +320,129 @@ class IntradayMonitorJob {
       return { stocksChecked: 0, alerts: [] };
     }
 
-    // Filter to stocks with active positions (ENTERED or PARTIAL_EXIT)
-    const activeStocks = watchlist.stocks.filter(s => {
+    // ══════════════════════════════════════════════
+    // PHASE 1: Execute entries for ENTRY_SIGNALED stocks
+    // ══════════════════════════════════════════════
+    let signaledStocks = watchlist.stocks.filter(s => {
       const simStatus = s.trade_simulation?.status;
-      return simStatus === 'ENTERED' || simStatus === 'PARTIAL_EXIT';
+      return simStatus === 'ENTRY_SIGNALED';
     });
 
-    if (activeStocks.length === 0) {
-      console.log(`${runLabel} No stocks with active positions. Skipping.`);
-      return { stocksChecked: 0, alerts: [] };
+    // Apply symbol filter if specified
+    if (symbol) {
+      signaledStocks = signaledStocks.filter(s => s.symbol.toUpperCase() === symbol.toUpperCase());
     }
-
-    console.log(`${runLabel} Checking ${activeStocks.length} stocks with active positions`);
-
-    // Fetch live prices
-    const instrumentKeys = activeStocks.map(s => s.instrument_key);
-    const priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
 
     const alerts = [];
     let needsSave = false;
 
+    if (signaledStocks.length > 0) {
+      console.log(`${runLabel} Found ${signaledStocks.length} ENTRY_SIGNALED stocks - executing entries at today's open`);
+
+      for (const stock of signaledStocks) {
+        const entryResult = await this.executeEntry(stock, { dryRun, runLabel });
+        if (entryResult.executed) {
+          needsSave = true;
+          if (entryResult.alert) {
+            alerts.push(entryResult.alert);
+          }
+        }
+      }
+    }
+
+    // ══════════════════════════════════════════════
+    // PHASE 2: Monitor active positions (ENTERED, PARTIAL_EXIT)
+    // Skip stocks that were just entered in Phase 1 (same run)
+    // ══════════════════════════════════════════════
+    const justEnteredSymbols = signaledStocks.map(s => s.symbol);
+    let activeStocks = watchlist.stocks.filter(s => {
+      const simStatus = s.trade_simulation?.status;
+      const isActive = simStatus === 'ENTERED' || simStatus === 'PARTIAL_EXIT';
+      const wasJustEntered = justEnteredSymbols.includes(s.symbol);
+      return isActive && !wasJustEntered;
+    });
+
+    // Apply symbol filter if specified
+    if (symbol) {
+      activeStocks = activeStocks.filter(s => s.symbol.toUpperCase() === symbol.toUpperCase());
+    }
+
+    if (activeStocks.length === 0 && signaledStocks.length === 0) {
+      console.log(`${runLabel} No stocks to process. Skipping.`);
+      return { stocksChecked: 0, alerts: [] };
+    }
+
+    if (activeStocks.length > 0) {
+      console.log(`${runLabel} Checking ${activeStocks.length} stocks with active positions`);
+    }
+
+    // Fetch prices - from test file (candle format) or real-time API
+    let priceDataMap = {};
+    if (activeStocks.length > 0) {
+      if (priceFile) {
+        // Test mode: load 15-min candle from file (same candle for all stocks)
+        const fileData = this.loadPriceFromFile(priceFile);
+        activeStocks.forEach(s => {
+          priceDataMap[s.instrument_key] = {
+            price: fileData.close,
+            high: fileData.high,
+            low: fileData.low,
+            open: fileData.open,
+            timestamp: fileData.timestamp
+          };
+        });
+      } else {
+        // Production: fetch real-time 15-min candles from Upstox API
+        // TODO: Replace priceCacheService with direct Upstox intraday candle API call
+        const instrumentKeys = activeStocks.map(s => s.instrument_key);
+        priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
+      }
+    }
+
     for (const stock of activeStocks) {
-      const livePrice = priceDataMap[stock.instrument_key]?.price;
+      const priceData = priceDataMap[stock.instrument_key];
+      const livePrice = priceData?.price;
+      const priceTimestamp = priceData?.timestamp || priceData?.last_trade_time || null;
+
+      // For candle data: use high for T1/T2, low for stop, close for current price
+      // For LTP data: high/low will be undefined, fall back to livePrice
+      const candleHigh = priceData?.high || livePrice;
+      const candleLow = priceData?.low || livePrice;
+
       if (!livePrice) {
         console.log(`${runLabel} ${stock.symbol}: No price data, skipping`);
         continue;
       }
 
+      // Log candle data if available, otherwise just LTP
+      if (priceData?.high && priceData?.low) {
+        console.log(`${runLabel} ${stock.symbol}: Candle H:₹${candleHigh} L:₹${candleLow} C:₹${livePrice} @ ${priceTimestamp || 'N/A'}`);
+      } else {
+        console.log(`${runLabel} ${stock.symbol}: LTP ₹${livePrice} @ ${priceTimestamp || 'N/A'}`);
+      }
+
       const sim = stock.trade_simulation;
       const levels = stock.levels;
-      const t1 = levels.target1 || levels.target;
-      const t2 = levels.target2 || (levels.target1 ? levels.target : null);
+      // 3-stage targets: T1 (target1) → Target (main) → T2 (target2)
+      const t1 = levels.target1;
+      const mainTarget = levels.target;
+      const t2 = levels.target2;
       const trailingStop = sim.trailing_stop || levels.stop;
+
+      // Debug: show current status and levels
+      console.log(`${runLabel} ${stock.symbol}: Status=${sim.status}, T1=₹${t1?.toFixed(2)}, Target=₹${mainTarget?.toFixed(2)}, T2=₹${t2?.toFixed(2)}, Stop=₹${trailingStop?.toFixed(2)}`);
 
       // Initialize intraday_alerts if needed
       if (!stock.intraday_alerts) {
         stock.intraday_alerts = [];
+      }
+
+      // Update peak price if candle high is higher than current peak
+      const currentPeak = sim.peak_price || sim.entry_price;
+      if (candleHigh > currentPeak) {
+        sim.peak_price = candleHigh;
+        sim.peak_gain_pct = parseFloat((((candleHigh - sim.entry_price) / sim.entry_price) * 100).toFixed(2));
+        needsSave = true;
       }
 
       // Check for alerts (only if not already alerted today for this type)
@@ -240,9 +452,9 @@ class IntradayMonitorJob {
       );
 
       // ══════════════════════════════════════════════
-      // CHECK STOP LOSS
+      // CHECK STOP LOSS (use candle low to catch intraday hits)
       // ══════════════════════════════════════════════
-      if (livePrice <= trailingStop) {
+      if (candleLow <= trailingStop) {
         const hasStopAlert = todaysAlerts.some(a => a.type === 'STOP_HIT' || a.type === 'TRAILING_STOP_HIT');
         if (!hasStopAlert) {
           const isTrailing = trailingStop > levels.stop;
@@ -278,6 +490,7 @@ class IntradayMonitorJob {
             type: alertType,
             price: livePrice,
             level: trailingStop,
+            price_timestamp: priceTimestamp,
             message: isTrailing
               ? `Trailing stop hit at ₹${livePrice.toFixed(2)} (stop: ₹${trailingStop.toFixed(2)})`
               : `Stop loss hit at ₹${livePrice.toFixed(2)} (stop: ₹${trailingStop.toFixed(2)})`
@@ -287,26 +500,30 @@ class IntradayMonitorJob {
           alerts.push({ symbol: stock.symbol, ...alert });
           needsSave = true;
 
-          console.log(`${runLabel} 🔴 ${stock.symbol}: ${alertType} at ₹${livePrice.toFixed(2)} — sim updated to STOPPED_OUT`);
+          console.log(`${runLabel} 🔴 ${stock.symbol}: ${alertType} at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — sim updated to STOPPED_OUT`);
 
           // Send push notification
-          try {
-            await firebaseService.sendAnalysisCompleteToAllUsers(
-              `⚠️ Stop Hit: ${stock.symbol}`,
-              alert.message,
-              { type: 'stop_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
-            );
-          } catch (notifError) {
-            console.error(`${runLabel} Failed to send notification:`, notifError.message);
+          if (!dryRun) {
+            try {
+              await firebaseService.sendAnalysisCompleteToAllUsers(
+                `⚠️ Stop Hit: ${stock.symbol}`,
+                alert.message,
+                { type: 'stop_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
+              );
+            } catch (notifError) {
+              console.error(`${runLabel} Failed to send notification:`, notifError.message);
+            }
+          } else {
+            console.log(`${runLabel} [DRY-RUN] Would send stop notification (skipped)`);
           }
         }
         continue; // Stop hit takes priority, skip other checks
       }
 
       // ══════════════════════════════════════════════
-      // CHECK T1 (only for ENTERED status)
+      // CHECK T1 (only for ENTERED status, use candle high to catch intraday hits)
       // ══════════════════════════════════════════════
-      if (sim.status === 'ENTERED' && livePrice >= t1) {
+      if (sim.status === 'ENTERED' && t1 && candleHigh >= t1) {
         const hasT1Alert = todaysAlerts.some(a => a.type === 'T1_HIT');
         if (!hasT1Alert) {
           // Calculate P&L for 50% booking
@@ -342,6 +559,7 @@ class IntradayMonitorJob {
             type: 'T1_HIT',
             price: livePrice,
             level: t1,
+            price_timestamp: priceTimestamp,
             message: `T1 hit at ₹${livePrice.toFixed(2)} (target: ₹${t1.toFixed(2)}) — Book 50% profits!`
           };
 
@@ -349,25 +567,89 @@ class IntradayMonitorJob {
           alerts.push({ symbol: stock.symbol, ...alert });
           needsSave = true;
 
-          console.log(`${runLabel} 🎯 ${stock.symbol}: T1_HIT at ₹${livePrice.toFixed(2)} — sim updated to PARTIAL_EXIT`);
+          console.log(`${runLabel} 🎯 ${stock.symbol}: T1_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — sim updated to PARTIAL_EXIT`);
 
           // Send push notification
-          try {
-            await firebaseService.sendAnalysisCompleteToAllUsers(
-              `🎯 T1 Hit: ${stock.symbol}`,
-              alert.message,
-              { type: 't1_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
-            );
-          } catch (notifError) {
-            console.error(`${runLabel} Failed to send notification:`, notifError.message);
+          if (!dryRun) {
+            try {
+              await firebaseService.sendAnalysisCompleteToAllUsers(
+                `🎯 T1 Hit: ${stock.symbol}`,
+                alert.message,
+                { type: 't1_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
+              );
+            } catch (notifError) {
+              console.error(`${runLabel} Failed to send notification:`, notifError.message);
+            }
+          } else {
+            console.log(`${runLabel} [DRY-RUN] Would send T1 notification (skipped)`);
           }
         }
       }
 
       // ══════════════════════════════════════════════
-      // CHECK T2 (only for PARTIAL_EXIT status)
+      // CHECK TARGET (main swing target - user can fully exit here or hold for T2)
+      // Only for PARTIAL_EXIT status, use candle high to catch intraday hits
       // ══════════════════════════════════════════════
-      if (sim.status === 'PARTIAL_EXIT' && t2 && livePrice >= t2) {
+      if (sim.status === 'PARTIAL_EXIT' && mainTarget && candleHigh >= mainTarget) {
+        const hasTargetAlert = todaysAlerts.some(a => a.type === 'TARGET_HIT');
+        if (!hasTargetAlert) {
+          // Don't auto-exit - just notify user they can exit here or hold for T2
+          // Update P&L for display
+          sim.unrealized_pnl = (livePrice - sim.entry_price) * sim.qty_remaining;
+          sim.total_pnl = Math.round(sim.realized_pnl + sim.unrealized_pnl);
+          sim.total_return_pct = parseFloat(((sim.total_pnl / sim.capital) * 100).toFixed(2));
+
+          // Add event to simulation (informational - not an exit)
+          if (!sim.events) sim.events = [];
+          sim.events.push({
+            date: new Date(),
+            type: 'TARGET_HIT',
+            price: mainTarget,
+            qty: 0,  // No exit, just notification
+            pnl: 0,
+            detail: `Main target hit at ₹${mainTarget.toFixed(2)}! You can exit now or hold for T2 (₹${t2?.toFixed(2) || 'N/A'})`
+          });
+
+          // Sync tracking_status
+          stock.tracking_status = 'TARGET_HIT';
+
+          const alert = {
+            date: new Date(),
+            type: 'TARGET_HIT',
+            price: livePrice,
+            level: mainTarget,
+            price_timestamp: priceTimestamp,
+            message: `Target hit at ₹${livePrice.toFixed(2)} (₹${mainTarget.toFixed(2)}) — Exit now or hold for T2?`
+          };
+
+          stock.intraday_alerts.push(alert);
+          alerts.push({ symbol: stock.symbol, ...alert });
+          needsSave = true;
+
+          console.log(`${runLabel} 🎯 ${stock.symbol}: TARGET_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — user can exit or hold for T2`);
+
+          // Send push notification
+          if (!dryRun) {
+            try {
+              await firebaseService.sendAnalysisCompleteToAllUsers(
+                `🎯 Target Hit: ${stock.symbol}`,
+                alert.message,
+                { type: 'target_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
+              );
+            } catch (notifError) {
+              console.error(`${runLabel} Failed to send notification:`, notifError.message);
+            }
+          } else {
+            console.log(`${runLabel} [DRY-RUN] Would send Target notification (skipped)`);
+          }
+        }
+      }
+
+      // ══════════════════════════════════════════════
+      // CHECK T2 (only for PARTIAL_EXIT status, use candle high to catch intraday hits)
+      // Full exit - maximum profit target
+      // ══════════════════════════════════════════════
+      if (sim.status === 'PARTIAL_EXIT' && t2 && candleHigh >= t2) {
         const hasT2Alert = todaysAlerts.some(a => a.type === 'T2_HIT');
         if (!hasT2Alert) {
           // Calculate P&L for remaining position
@@ -399,6 +681,7 @@ class IntradayMonitorJob {
             type: 'T2_HIT',
             price: livePrice,
             level: t2,
+            price_timestamp: priceTimestamp,
             message: `T2 hit at ₹${livePrice.toFixed(2)} (target: ₹${t2.toFixed(2)}) — Full target achieved! 🏆`
           };
 
@@ -406,17 +689,21 @@ class IntradayMonitorJob {
           alerts.push({ symbol: stock.symbol, ...alert });
           needsSave = true;
 
-          console.log(`${runLabel} 🏆 ${stock.symbol}: T2_HIT at ₹${livePrice.toFixed(2)} — sim updated to FULL_EXIT`);
+          console.log(`${runLabel} 🏆 ${stock.symbol}: T2_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — sim updated to FULL_EXIT`);
 
           // Send push notification
-          try {
-            await firebaseService.sendAnalysisCompleteToAllUsers(
-              `🏆 T2 Hit: ${stock.symbol}`,
-              alert.message,
-              { type: 't2_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
-            );
-          } catch (notifError) {
-            console.error(`${runLabel} Failed to send notification:`, notifError.message);
+          if (!dryRun) {
+            try {
+              await firebaseService.sendAnalysisCompleteToAllUsers(
+                `🏆 T2 Hit: ${stock.symbol}`,
+                alert.message,
+                { type: 't2_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
+              );
+            } catch (notifError) {
+              console.error(`${runLabel} Failed to send notification:`, notifError.message);
+            }
+          } else {
+            console.log(`${runLabel} [DRY-RUN] Would send T2 notification (skipped)`);
           }
         }
       }
@@ -424,13 +711,18 @@ class IntradayMonitorJob {
 
     // Save watchlist if any alerts were created
     if (needsSave) {
-      await watchlist.save();
-      console.log(`${runLabel} Saved ${alerts.length} intraday alerts`);
+      if (dryRun) {
+        console.log(`${runLabel} [DRY-RUN] Would save ${alerts.length} intraday alerts (skipped)`);
+      } else {
+        await watchlist.save();
+        console.log(`${runLabel} Saved ${alerts.length} intraday alerts`);
+      }
     }
 
     return {
       stocksChecked: activeStocks.length,
-      alerts
+      alerts,
+      dryRun
     };
   }
 

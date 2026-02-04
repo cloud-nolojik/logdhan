@@ -61,122 +61,209 @@ const SCORE_EXPLANATIONS = {
  * Returns message, icon, and colors for the banner - frontend just renders
  */
 function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, _levels, latestSnapshot) {
-  // Priority 1: Check journey_status (trade simulation status)
-  // ENTRY_SIGNALED takes precedence - user needs to act on signal
+  const entry = _levels?.entry;
+  const stop = _levels?.stop;
+  const target1 = _levels?.target1;
+  const target = _levels?.target;
+  const target2 = _levels?.target2;
+  const close = latestSnapshot?.close;
+
+  // Priority 1: Trade simulation states that override tracking_status
+
+  // ENTRY_SIGNALED — signal confirmed, user needs to buy tomorrow
   if (journeyStatus === 'ENTRY_SIGNALED') {
-    const signalClose = latestSnapshot?.close;
+    const premiumPct = (entry && close) ? (((close - entry) / entry) * 100).toFixed(1) : null;
     return {
       icon: 'signal',  // 📡
       message: 'Entry signal confirmed',
-      subtext: `Close ₹${signalClose?.toFixed(2)} above entry. Buy at tomorrow's open.`,
-      background_color: '#7C3AED20',  // Purple with alpha
-      text_color: '#7C3AED',  // Purple
-      value_color: '#5B21B6',  // Darker purple for values for better contrast
-      show_metrics: false  // Don't show distance metrics for signals
+      subtext: premiumPct
+        ? `Close ₹${close.toFixed(2)} — ${premiumPct}% above entry ₹${entry.toFixed(2)}`
+        : `Close ₹${close?.toFixed(2)} confirmed above entry`,
+      background_color: '#7C3AED',  // Solid purple
+      text_color: '#FFFFFF',
+      value_color: '#FFFFFF',
+      show_metrics: false
     };
   }
 
-  // Priority 2: Check tracking_status for active trades and other states
+  // FULL_EXIT — trade completed at T2
+  if (journeyStatus === 'FULL_EXIT') {
+    const totalPnl = latestSnapshot?.sim_total_pnl;
+    const isProfit = totalPnl >= 0;
+    return {
+      icon: isProfit ? 'celebration' : 'error',
+      message: isProfit ? 'Trade completed — full target hit' : 'Trade completed',
+      subtext: totalPnl != null ? `Final P&L: ${isProfit ? '+' : ''}₹${totalPnl.toFixed(0)}` : 'All positions closed',
+      background_color: isProfit ? '#1B5E20' : '#C62828',  // Dark green or dark red
+      text_color: '#FFFFFF',
+      value_color: '#FFFFFF',
+      show_metrics: false
+    };
+  }
+
+  // STOPPED_OUT — stop loss hit
+  if (journeyStatus === 'STOPPED_OUT') {
+    return {
+      icon: 'error',  // ❌
+      message: 'Stop loss triggered',
+      subtext: stop ? `Exited at ₹${stop.toFixed(2)}` : 'Position closed at stop',
+      background_color: '#C62828',  // Dark red
+      text_color: '#FFFFFF',
+      value_color: '#FFFFFF',
+      show_metrics: false
+    };
+  }
+
+  // PARTIAL_EXIT — T1 hit, trailing remainder (check if TARGET also hit)
+  if (journeyStatus === 'PARTIAL_EXIT') {
+    // Check if main target was also hit (tracking_status = TARGET_HIT)
+    if (trackingStatus === 'TARGET_HIT') {
+      return {
+        icon: 'star',  // ⭐
+        message: 'Target hit — exit or hold for T2?',
+        subtext: target2 ? `T2: ₹${target2.toFixed(2)}` : 'Full target achieved!',
+        background_color: '#1B5E20',  // Dark green
+        text_color: '#FFFFFF',
+        value_color: '#FFFFFF',
+        show_metrics: true
+      };
+    }
+    let rsiNote = '';
+    if (trackingFlags.includes('RSI_EXIT')) {
+      rsiNote = ' — RSI overbought';
+    }
+    return {
+      icon: 'check_circle',  // ✅
+      message: `T1 booked — trailing remainder${rsiNote}`,
+      subtext: target ? `Next target: ₹${target.toFixed(2)}` : 'Trailing with stop at entry',
+      background_color: '#2E7D32',  // Dark green
+      text_color: '#FFFFFF',
+      value_color: '#FFFFFF',
+      show_metrics: true
+    };
+  }
+
+  // Priority 2: Tracking status for pre-entry and active trade states
   switch (trackingStatus) {
     case 'ENTRY_ZONE':
       return {
-        icon: 'login',
-        message: 'In entry zone',
-        subtext: 'Consider initiating position',
-        background_color: '#4CAF5026',
-        text_color: '#2E7D32',
-        value_color: '#1B5E20',
+        icon: 'login',  // 🎯
+        message: 'Price in entry zone',
+        subtext: entry ? `Near entry level ₹${entry.toFixed(2)}` : 'Approaching entry level',
+        background_color: '#2E7D32',  // Dark green
+        text_color: '#FFFFFF',
+        value_color: '#FFFFFF',
         show_metrics: true
       };
 
     case 'ABOVE_ENTRY':
-      // Check journey_status to see if we're actually in a trade
-      if (['ENTERED', 'PARTIAL_EXIT'].includes(journeyStatus)) {
+      // Active trade — ENTERED status
+      if (journeyStatus === 'ENTERED') {
         let rsiNote = '';
         if (trackingFlags.includes('RSI_EXIT')) {
-          rsiNote = ' - RSI overbought';
+          rsiNote = ' — RSI overbought';
         } else if (trackingFlags.includes('RSI_DANGER')) {
-          rsiNote = ' - RSI high';
+          rsiNote = ' — RSI elevated';
         }
         return {
-          icon: 'trending_up',
+          icon: 'trending_up',  // 📈
           message: `Trade running${rsiNote}`,
-          subtext: null,  // Will show distance metrics
-          background_color: '#2196F31A',
-          text_color: '#1565C0',
-          value_color: '#0D47A1',
+          subtext: null,  // Distance metrics shown separately
+          background_color: '#1565C0',  // Dark blue
+          text_color: '#FFFFFF',
+          value_color: '#FFFFFF',
           show_metrics: true
         };
       }
-      // ABOVE_ENTRY but not ENTERED means we got signal but haven't executed
-      // This shouldn't happen with two-phase entry, but handle it
+      // ABOVE_ENTRY but WAITING — price moved above entry without close confirmation
+      if (journeyStatus === 'WAITING') {
+        return {
+          icon: 'info',  // ℹ️
+          message: 'Price above entry — awaiting close confirmation',
+          subtext: entry ? `Needs daily close above ₹${entry.toFixed(2)}` : 'Watching for close confirmation',
+          background_color: '#E65100',  // Dark orange
+          text_color: '#FFFFFF',
+          value_color: '#FFFFFF',
+          show_metrics: true
+        };
+      }
       return null;
 
     case 'RETEST_ZONE':
       return {
-        icon: 'refresh',
+        icon: 'refresh',  // 🔄
         message: 'Retesting breakout level',
-        subtext: 'Potential re-entry point',
-        background_color: '#9C27B01A',
-        text_color: '#7B1FA2',
-        value_color: '#4A148C',
+        subtext: entry ? `Testing support near ₹${entry.toFixed(2)}` : 'Potential re-entry point',
+        background_color: '#7B1FA2',  // Dark purple
+        text_color: '#FFFFFF',
+        value_color: '#FFFFFF',
         show_metrics: true
+      };
+
+    case 'BELOW_STOP':
+      return {
+        icon: 'warning',  // ⚠️
+        message: 'Below stop loss level',
+        subtext: 'Setup invalidated',
+        background_color: '#C62828',  // Dark red
+        text_color: '#FFFFFF',
+        value_color: '#FFFFFF',
+        show_metrics: false
       };
 
     case 'TARGET1_HIT':
       return {
-        icon: 'check_circle',
-        message: 'Target 1 reached',
-        subtext: 'Book partial profits, trail stop to entry',
-        background_color: '#4CAF5026',
-        text_color: '#2E7D32',
-        value_color: '#1B5E20',
+        icon: 'check_circle',  // ✅
+        message: 'T1 hit — 50% booked',
+        subtext: target ? `Trailing to target ₹${target.toFixed(2)}` : 'Stop moved to entry',
+        background_color: '#2E7D32',  // Dark green
+        text_color: '#FFFFFF',
+        value_color: '#FFFFFF',
+        show_metrics: true
+      };
+
+    case 'TARGET_HIT':
+      return {
+        icon: 'star',  // ⭐
+        message: 'Target hit — exit or hold for T2?',
+        subtext: target2 ? `T2: ₹${target2.toFixed(2)}` : 'Main target achieved!',
+        background_color: '#1B5E20',  // Dark green
+        text_color: '#FFFFFF',
+        value_color: '#FFFFFF',
         show_metrics: true
       };
 
     case 'TARGET2_HIT':
       return {
-        icon: 'check_circle',
-        message: 'Target 2 reached',
-        subtext: 'Consider full exit',
-        background_color: '#4CAF5033',
-        text_color: '#1B5E20',
-        value_color: '#0D3D12',
-        show_metrics: true
-      };
-
-    case 'STOPPED_OUT':
-      return {
-        icon: 'error',
-        message: 'Stop loss triggered',
-        subtext: 'Position closed',
-        background_color: '#F443361A',
-        text_color: '#C62828',
-        value_color: '#B71C1C',
+        icon: 'celebration',  // 🎉
+        message: 'T2 hit — full target achieved!',
+        subtext: 'Trade completed successfully',
+        background_color: '#1B5E20',  // Dark green
+        text_color: '#FFFFFF',
+        value_color: '#FFFFFF',
         show_metrics: false
       };
 
     case 'WATCHING':
-      // Only show for notable flags
       if (trackingFlags.includes('VOLUME_SPIKE')) {
         return {
-          icon: 'bar_chart',
+          icon: 'bar_chart',  // 📊
           message: 'Volume spike detected',
-          subtext: 'Watch for breakout',
-          background_color: '#2196F31A',
-          text_color: '#1565C0',
-          value_color: '#0D47A1',
+          subtext: 'Unusual activity — watch for breakout',
+          background_color: '#1565C0',  // Dark blue
+          text_color: '#FFFFFF',
+          value_color: '#FFFFFF',
           show_metrics: false
         };
       }
       if (trackingFlags.includes('APPROACHING_ENTRY')) {
         return {
-          icon: 'info',
-          message: 'Getting close to entry zone',
-          subtext: 'Keep watching',
-          background_color: '#FFA7261A',
-          text_color: '#E65100',
-          value_color: '#BF360C',
+          icon: 'info',  // ℹ️
+          message: 'Approaching entry zone',
+          subtext: entry ? `Getting close to ₹${entry.toFixed(2)}` : 'Watch for entry trigger',
+          background_color: '#E65100',  // Dark orange
+          text_color: '#FFFFFF',
+          value_color: '#FFFFFF',
           show_metrics: false
         };
       }
@@ -384,9 +471,19 @@ function calculateCardDisplay(stock, livePrice) {
       break;
 
     case 'PARTIAL_EXIT':
-      emoji = '🟡';
-      headline = 'T1 Hit - Trailing Stop';
-      subtext = `50% booked at T1, ${qtyRemaining} shares trailing with SL @ ₹${trailingStop?.toFixed(2)}`;
+      // Check if main target was also hit
+      if (trackingStatus === 'TARGET_HIT') {
+        emoji = '⭐';
+        headline = 'Target Hit - Exit or Hold?';
+        const t2Level = stock.levels?.target2;
+        subtext = t2Level
+          ? `Target reached! Exit now or hold for T2 (₹${t2Level.toFixed(2)})`
+          : `Target reached! ${qtyRemaining} shares remaining`;
+      } else {
+        emoji = '🟡';
+        headline = 'T1 Hit - Trailing Stop';
+        subtext = `50% booked at T1, ${qtyRemaining} shares trailing with SL @ ₹${trailingStop?.toFixed(2)}`;
+      }
       pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${pnlSign}${totalReturnPct.toFixed(1)}%)`;
       break;
 

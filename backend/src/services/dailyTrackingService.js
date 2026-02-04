@@ -37,7 +37,8 @@ const PHASE2_TRIGGERS = {
   'APPROACHING → ENTRY_ZONE':  'Stock moved from approaching to entry zone.',
   'ENTRY_ZONE → ABOVE_ENTRY':  'Entry triggered. Confirm position or caution?',
   'ANY → STOPPED_OUT':         'Stop hit. Confirm exit or false break?',
-  'ANY → TARGET1_HIT':         'T1 reached. Book profits or trail?',
+  'ANY → TARGET1_HIT':         'T1 reached. 50% booked, trailing remainder.',
+  'ANY → TARGET_HIT':          'Main target reached. Exit now or hold for T2?',
   'ANY → TARGET2_HIT':         'T2 reached. Full exit recommended.',
 
   // Flags that need AI guidance (only if flag is NEW today)
@@ -60,14 +61,19 @@ const PHASE2_TRIGGERS = {
  */
 function calculateStatus(dailyData, levels, symbol = 'UNKNOWN') {
   const { ltp } = dailyData;
-  const { entry, entryRange, stop, target, target2, archetype } = levels;
+  const { entry, entryRange, stop, target1, target, target2, archetype } = levels;
 
   // Use entryRange if available, otherwise ±1% of entry
   const entryLow = entryRange?.[0] || entry * 0.99;
   const entryHigh = entryRange?.[1] || entry * 1.01;
 
+  // 3-stage targets: T1 (target1) → Target (main) → T2 (target2)
+  const t1 = target1;
+  const mainTarget = target;
+  const t2 = target2;
+
   console.log(`[STATUS-CALC] ${symbol}: LTP=${ltp}, Entry=${entry}, EntryRange=[${entryLow?.toFixed(2)}-${entryHigh?.toFixed(2)}]`);
-  console.log(`[STATUS-CALC] ${symbol}: Stop=${stop}, Target=${target}, Target2=${target2 || 'N/A'}, Archetype=${archetype || 'standard'}`);
+  console.log(`[STATUS-CALC] ${symbol}: Stop=${stop}, T1=${t1 || 'N/A'}, Target=${mainTarget}, T2=${t2 || 'N/A'}, Archetype=${archetype || 'standard'}`);
 
   // Priority order matters — check terminal states first
 
@@ -77,25 +83,31 @@ function calculateStatus(dailyData, levels, symbol = 'UNKNOWN') {
     return 'STOPPED_OUT';
   }
 
-  // 2. Target2 hit (if exists)
-  if (target2 && ltp >= target2) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= Target2 ${target2} -> TARGET2_HIT`);
+  // 2. T2 hit (if exists) — full target achieved
+  if (t2 && ltp >= t2) {
+    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= T2 ${t2} -> TARGET2_HIT`);
     return 'TARGET2_HIT';
   }
 
-  // 3. Target1 hit
-  if (ltp >= target) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= Target ${target} -> TARGET1_HIT`);
+  // 3. Main target hit — user can exit or hold for T2
+  if (mainTarget && ltp >= mainTarget) {
+    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= Target ${mainTarget} -> TARGET_HIT`);
+    return 'TARGET_HIT';
+  }
+
+  // 4. T1 hit — 50% booked, trailing remainder
+  if (t1 && ltp >= t1) {
+    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= T1 ${t1} -> TARGET1_HIT`);
     return 'TARGET1_HIT';
   }
 
-  // 4. Entry zone (price within entry range)
+  // 5. Entry zone (price within entry range)
   if (ltp >= entryLow && ltp <= entryHigh) {
     console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} in entry range [${entryLow.toFixed(2)}-${entryHigh.toFixed(2)}] -> ENTRY_ZONE`);
     return 'ENTRY_ZONE';
   }
 
-  // 5. 52W breakout retest (archetype-aware)
+  // 6. 52W breakout retest (archetype-aware)
   //    For 52W breakout stocks: if price pulls back to old 52W high area
   //    Retest zone: between stop+2% and entry low
   if (archetype === '52w_breakout') {
@@ -108,9 +120,10 @@ function calculateStatus(dailyData, levels, symbol = 'UNKNOWN') {
     }
   }
 
-  // 6. Above entry but below target (running, no action needed)
-  if (ltp > entryHigh && ltp < target) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} > EntryHigh ${entryHigh.toFixed(2)} and < Target ${target} -> ABOVE_ENTRY`);
+  // 7. Above entry but below T1 (running, no action needed)
+  const upperBound = t1 || mainTarget;
+  if (ltp > entryHigh && upperBound && ltp < upperBound) {
+    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} > EntryHigh ${entryHigh.toFixed(2)} and < ${t1 ? 'T1' : 'Target'} ${upperBound} -> ABOVE_ENTRY`);
     return 'ABOVE_ENTRY';
   }
 
@@ -352,8 +365,10 @@ function simulateTrade(stock, snapshots, currentPrice) {
   const levels = stock.levels;
   const entry = levels.entry;
   const stop = levels.stop;
-  const t1 = levels.target1 || levels.target;   // Partial booking (50%)
-  const t2 = levels.target;                      // Full exit (remaining)
+  // 3-stage targets: T1 → Target → T2
+  const t1 = levels.target1;                     // T1: Partial booking (50%)
+  const mainTarget = levels.target;              // Main target: user can exit or hold for T2
+  const t2 = levels.target2;                     // T2: Full exit (remaining)
 
   // Time rules from levels (with defaults for backward compat)
   const entryConfirmation = levels.entryConfirmation || 'close_above';
@@ -646,7 +661,7 @@ function simulateTrade(stock, snapshots, currentPrice) {
     // ══════════════════════════════════════════════
     // CHECK T1 — 50% booking
     // ══════════════════════════════════════════════
-    if (sim.status === 'ENTERED' && high >= t1) {
+    if (sim.status === 'ENTERED' && t1 && high >= t1) {
       const exitQty = Math.floor(sim.qty_total / 2);
       const pnl = (t1 - sim.entry_price) * exitQty;
       sim.realized_pnl += pnl;
@@ -663,29 +678,79 @@ function simulateTrade(stock, snapshots, currentPrice) {
         detail: `T1 hit! Booked 50% (${exitQty} shares) at ₹${t1.toFixed(2)} | +₹${Math.round(pnl).toLocaleString('en-IN')} locked | Stop → entry ₹${sim.entry_price.toFixed(2)} (risk-free)`
       });
 
-      // Same day: also check T2
-      if (high >= t2) {
-        const pnl2 = (t2 - sim.entry_price) * sim.qty_remaining;
-        sim.realized_pnl += pnl2;
+      // Same day: also check main target and T2
+      if (mainTarget && high >= mainTarget) {
+        // Log TARGET_HIT event (informational - user can exit or hold for T2)
         sim.events.push({
           date,
-          type: 'T2_HIT',
-          price: t2,
-          qty: sim.qty_remaining,
-          pnl: Math.round(pnl2),
-          detail: `T2 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t2.toFixed(2)} — FULL TARGET 🏆`
+          type: 'TARGET_HIT',
+          price: mainTarget,
+          qty: 0,  // No auto-exit, just notification
+          pnl: 0,
+          detail: `Main target hit at ₹${mainTarget.toFixed(2)}! You can exit now or hold for T2 (₹${t2?.toFixed(2) || 'N/A'})`
         });
-        sim.qty_exited += sim.qty_remaining;
-        sim.qty_remaining = 0;
-        sim.status = 'FULL_EXIT';
+
+        // Same day: also check T2
+        if (t2 && high >= t2) {
+          const pnl2 = (t2 - sim.entry_price) * sim.qty_remaining;
+          sim.realized_pnl += pnl2;
+          sim.events.push({
+            date,
+            type: 'T2_HIT',
+            price: t2,
+            qty: sim.qty_remaining,
+            pnl: Math.round(pnl2),
+            detail: `T2 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t2.toFixed(2)} — FULL TARGET 🏆`
+          });
+          sim.qty_exited += sim.qty_remaining;
+          sim.qty_remaining = 0;
+          sim.status = 'FULL_EXIT';
+        }
       }
       continue;
     }
 
     // ══════════════════════════════════════════════
+    // CHECK TARGET (main swing target - only after PARTIAL_EXIT)
+    // User can fully exit here or hold for T2
+    // ══════════════════════════════════════════════
+    if (sim.status === 'PARTIAL_EXIT' && mainTarget && high >= mainTarget) {
+      // Check if we already logged TARGET_HIT today
+      const alreadyHitTarget = sim.events.some(e => e.type === 'TARGET_HIT' && e.date === date);
+      if (!alreadyHitTarget) {
+        sim.events.push({
+          date,
+          type: 'TARGET_HIT',
+          price: mainTarget,
+          qty: 0,  // No auto-exit, just notification
+          pnl: 0,
+          detail: `Main target hit at ₹${mainTarget.toFixed(2)}! You can exit now or hold for T2 (₹${t2?.toFixed(2) || 'N/A'})`
+        });
+      }
+
+      // Same day: also check T2
+      if (t2 && high >= t2) {
+        const pnl = (t2 - sim.entry_price) * sim.qty_remaining;
+        sim.realized_pnl += pnl;
+        sim.events.push({
+          date,
+          type: 'T2_HIT',
+          price: t2,
+          qty: sim.qty_remaining,
+          pnl: Math.round(pnl),
+          detail: `T2 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t2.toFixed(2)} — FULL TARGET 🏆`
+        });
+        sim.qty_exited += sim.qty_remaining;
+        sim.qty_remaining = 0;
+        sim.status = 'FULL_EXIT';
+        continue;
+      }
+    }
+
+    // ══════════════════════════════════════════════
     // CHECK T2 — remaining 50% (only after PARTIAL_EXIT)
     // ══════════════════════════════════════════════
-    if (sim.status === 'PARTIAL_EXIT' && high >= t2) {
+    if (sim.status === 'PARTIAL_EXIT' && t2 && high >= t2) {
       const pnl = (t2 - sim.entry_price) * sim.qty_remaining;
       sim.realized_pnl += pnl;
       sim.events.push({

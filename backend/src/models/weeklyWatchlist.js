@@ -123,8 +123,9 @@ const watchlistStockSchema = new mongoose.Schema({
       'ENTRY_ZONE',     // Price in entry range
       'ABOVE_ENTRY',    // Triggered and running (above entry, below target)
       'RETEST_ZONE',    // 52W breakout retesting old high (between stop+2% and entry)
-      'TARGET1_HIT',    // T1 reached
-      'TARGET2_HIT',    // T2 reached
+      'TARGET1_HIT',    // T1 reached (50% booked)
+      'TARGET_HIT',     // Main target reached (user can exit or hold for T2)
+      'TARGET2_HIT',    // T2 reached (full exit)
       'STOPPED_OUT',    // Stop loss hit
       'FULL_EXIT',      // Trade fully closed (T1+T2 or T1+trailing stop)
       'EXPIRED'         // Week ended
@@ -169,7 +170,7 @@ const watchlistStockSchema = new mongoose.Schema({
     date: { type: Date, required: true },
     type: {
       type: String,
-      enum: ['STOP_HIT', 'TRAILING_STOP_HIT', 'T1_HIT', 'T2_HIT', 'ENTRY_APPROACHING'],
+      enum: ['STOP_HIT', 'TRAILING_STOP_HIT', 'T1_HIT', 'TARGET_HIT', 'T2_HIT', 'ENTRY_APPROACHING'],
       required: true
     },
     price: Number,      // Price at time of alert
@@ -212,8 +213,9 @@ const watchlistStockSchema = new mongoose.Schema({
           'ENTRY_SIGNAL',     // Two-phase entry: signal confirmed (close >= entry)
           'ENTRY',            // Two-phase entry: executed at next day's open
           'ENTRY_SKIPPED',    // Entry skipped (OVEREXTENDED at signal or execution)
-          'T1_HIT',
-          'T2_HIT',
+          'T1_HIT',           // T1 reached (50% booked)
+          'TARGET_HIT',       // Main target reached (user can exit or hold for T2)
+          'T2_HIT',           // T2 reached (full exit)
           'STOPPED_OUT',
           'TRAILING_STOP',
           'EXPIRED',

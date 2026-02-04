@@ -717,11 +717,16 @@ class PriceCacheService {
       const batchResults = await Promise.all(batchPromises);
 
       // Aggregate results from all batches
+      // Returns full data object including last_price, last_trade_time, etc.
       batchResults.forEach((result) => {
         if (result.success && result.data) {
           Object.entries(result.data).forEach(([key, data]) => {
             if (data?.last_price !== undefined) {
-              priceMap[key] = data.last_price;
+              priceMap[key] = {
+                last_price: data.last_price,
+                last_trade_time: data.last_trade_time || null,
+                instrument_token: data.instrument_token || key
+              };
             }
           });
         }
@@ -1073,8 +1078,11 @@ class PriceCacheService {
         // Now get previous_day_close from daily API for change calculation
         await Promise.all(instrumentKeys.map(async (instrumentKey) => {
           try {
-            const currentPrice = bulkResult[instrumentKey];
-            if (currentPrice === undefined) return;
+            const bulkData = bulkResult[instrumentKey];
+            if (!bulkData) return;
+
+            const currentPrice = bulkData.last_price;
+            const lastTradeTime = bulkData.last_trade_time || null;
 
             // Fetch daily candles for previous_day_close
             const dailyData = await getDailyCandles(instrumentKey);
@@ -1092,19 +1100,22 @@ class PriceCacheService {
               price: currentPrice,
               change: Math.round(change * 100) / 100,
               change_percent: Math.round(changePercent * 100) / 100,
-              previous_day_close: previousClose
+              previous_day_close: previousClose,
+              timestamp: lastTradeTime
             };
 
-            console.log(`[PRICES WITH CHANGE] ${instrumentKey}: price=${currentPrice}, prevClose=${previousClose}, change=${change.toFixed(2)} (${changePercent.toFixed(2)}%)`);
+            console.log(`[PRICES WITH CHANGE] ${instrumentKey}: price=${currentPrice}, prevClose=${previousClose}, change=${change.toFixed(2)} (${changePercent.toFixed(2)}%) @ ${lastTradeTime}`);
           } catch (error) {
             console.warn(`⚠️ [PRICES WITH CHANGE] Failed to get change data for ${instrumentKey}: ${error.message}`);
             // Still add price without change
-            if (bulkResult[instrumentKey] !== undefined) {
+            const bulkData = bulkResult[instrumentKey];
+            if (bulkData) {
               priceDataMap[instrumentKey] = {
-                price: bulkResult[instrumentKey],
+                price: bulkData.last_price,
                 change: 0,
                 change_percent: 0,
-                previous_day_close: null
+                previous_day_close: null,
+                timestamp: bulkData.last_trade_time || null
               };
             }
           }
