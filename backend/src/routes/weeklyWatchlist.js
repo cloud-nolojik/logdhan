@@ -464,13 +464,14 @@ function calculateCardDisplay(stock, livePrice) {
   // Generate emoji, headline, subtext based on status
   let emoji, headline, subtext, pnlLine;
   const pnlSign = totalPnl >= 0 ? '+' : '';
+  const stockGainSign = stockGainPct >= 0 ? '+' : '';
 
   switch (sim.status) {
     case 'ENTERED':
       emoji = '🟢';
       headline = 'Entry Triggered';
       subtext = `If you bought ${qtyTotal} shares @ ₹${entryPrice?.toFixed(2)}`;
-      pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${pnlSign}${totalReturnPct.toFixed(1)}%)`;
+      pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${stockGainSign}${stockGainPct.toFixed(1)}%)`;
       break;
 
     case 'PARTIAL_EXIT':
@@ -487,14 +488,14 @@ function calculateCardDisplay(stock, livePrice) {
         headline = 'T1 Hit - Trailing Stop';
         subtext = `50% booked at T1, ${qtyRemaining} shares trailing with SL @ ₹${trailingStop?.toFixed(2)}`;
       }
-      pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${pnlSign}${totalReturnPct.toFixed(1)}%)`;
+      pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${stockGainSign}${stockGainPct.toFixed(1)}%)`;
       break;
 
     case 'FULL_EXIT':
       emoji = '🎯';
       headline = 'Full Target Hit';
       subtext = 'Both T1 & T2 achieved';
-      pnlLine = `${pnlSign}₹${realizedPnl.toFixed(0)} (${pnlSign}${totalReturnPct.toFixed(1)}%)`;
+      pnlLine = `${pnlSign}₹${realizedPnl.toFixed(0)} (${stockGainSign}${stockGainPct.toFixed(1)}%)`;
       break;
 
     case 'STOPPED_OUT':
@@ -502,7 +503,7 @@ function calculateCardDisplay(stock, livePrice) {
       headline = 'Stop Loss Hit';
       const lastEvent = sim.events?.[sim.events.length - 1];
       subtext = lastEvent?.detail || 'Stop loss triggered';
-      pnlLine = `${pnlSign}₹${realizedPnl.toFixed(0)} (${pnlSign}${totalReturnPct.toFixed(1)}%)`;
+      pnlLine = `${pnlSign}₹${realizedPnl.toFixed(0)} (${stockGainSign}${stockGainPct.toFixed(1)}%)`;
       break;
 
     case 'EXPIRED':
@@ -515,11 +516,11 @@ function calculateCardDisplay(stock, livePrice) {
       } else if (qtyRemaining > 0) {
         headline = 'Week Ended';
         subtext = `Position closed at week end`;
-        pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${pnlSign}${totalReturnPct.toFixed(1)}%)`;
+        pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${stockGainSign}${stockGainPct.toFixed(1)}%)`;
       } else {
         headline = 'Trade Completed';
         subtext = 'Trade completed before expiry';
-        pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${pnlSign}${totalReturnPct.toFixed(1)}%)`;
+        pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${stockGainSign}${stockGainPct.toFixed(1)}%)`;
       }
       break;
 
