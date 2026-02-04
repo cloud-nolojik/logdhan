@@ -32,6 +32,7 @@ import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // wee
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
 import dailyNewsStocksJob from './services/jobs/dailyNewsStocksJob.js'; // daily-news-scrape (8:30 AM Mon-Fri)
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
+import intradayMonitorJob from './services/jobs/intradayMonitorJob.js'; // intraday-monitor (every 15 min during market hours)
 import pendingAnalysisReminderJob from './services/jobs/pendingAnalysisReminderJob.js'; // pending-analysis-reminder (4:00 PM Mon-Fri, notify users about pending stocks)
 
 import authRoutes from './routes/auth.js';
@@ -299,6 +300,17 @@ async function initializeDailyTrackingJob() {
   }
 }
 
+// Initialize intraday monitor job (every 15 min during market hours 9:15 AM - 3:30 PM IST)
+async function initializeIntradayMonitorJob() {
+  try {
+
+    await intradayMonitorJob.initialize();
+
+  } catch (error) {
+    console.error('❌ Failed to initialize intraday monitor job:', error);
+  }
+}
+
 // Initialize pending analysis reminder job (4:00 PM Mon-Fri IST - notify users about pending stocks)
 async function initializePendingAnalysisReminderJob() {
   try {
@@ -330,6 +342,7 @@ app.listen(PORT, async () => {
   await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
   await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
+  await initializeIntradayMonitorJob(); // intraday-monitor (every 15 min during market hours)
   await initializePendingAnalysisReminderJob(); // pending-analysis-reminder (4:00 PM Mon-Fri, notify users)
 
 });
@@ -348,6 +361,7 @@ process.on('SIGINT', async () => {
       agendaDataPrefetchService.stop(),
       dailyNewsStocksJob.shutdown(),
       dailyTrackingJob.shutdown(),
+      intradayMonitorJob.shutdown(),
       pendingAnalysisReminderJob.shutdown()
     ]);
 
@@ -372,6 +386,7 @@ process.on('SIGTERM', async () => {
       agendaDataPrefetchService.stop(),
       dailyNewsStocksJob.shutdown(),
       dailyTrackingJob.shutdown(),
+      intradayMonitorJob.shutdown(),
       pendingAnalysisReminderJob.shutdown()
     ]);
 

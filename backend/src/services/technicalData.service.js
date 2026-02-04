@@ -681,25 +681,18 @@ export async function getTechnicalData(symbols) {
 /**
  * Fetch live intraday data for a stock
  * Returns today's OHLC and current LTP from intraday candles
- * Returns NULL if market is closed - caller should use daily candles instead
+ * Returns NULL if intraday data is not from today - caller should use daily candles instead
  *
- * Market Hours (IST):
- *   - Open: 9:15 AM to 3:30 PM (regular trading)
- *   - After Hours: 4:00 PM to 9:00 AM next day
+ * Intraday API Availability (IST):
+ *   - Available: Until 11:59 PM IST on the same trading day
+ *   - After midnight (12:01 AM IST), intraday API returns yesterday's data
+ *   - In that case, this function returns null and caller should use historical daily candles
  *
  * Uses existing priceCacheService for consistent behavior
  */
 async function fetchLiveIntradayData(instrumentKey) {
   try {
-    // Check if market is open using MarketHoursUtil
-    const isMarketOpen = await MarketHoursUtil.isMarketOpen();
-
-    if (!isMarketOpen) {
-      console.log(`[LiveIntraday] ${instrumentKey}: Market CLOSED - returning null (use daily candles)`);
-      return null;
-    }
-
-    // Market is open - fetch live intraday data
+    // Fetch intraday data - API is available until 11:59 PM IST same day
     const candles = await getCurrentPrice(instrumentKey, true);
 
     console.log(`[LiveIntraday] ${instrumentKey}: Got ${candles?.length || 0} intraday candles`);

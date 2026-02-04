@@ -2,8 +2,6 @@ import express from "express";
 import WeeklyWatchlist from "../models/weeklyWatchlist.js";
 import { auth } from "../middleware/auth.js";
 import { calculateSetupScore, getEntryZone, checkEntryZoneProximity } from "../engine/index.js";
-import { findLevelCrossTime, getDailyCandlesForRange } from "../utils/stockDb.js";
-import { simulateTrade } from "../services/dailyTrackingService.js";
 import priceCacheService from "../services/priceCache.service.js";
 
 const router = express.Router();
@@ -59,334 +57,133 @@ const SCORE_EXPLANATIONS = {
 };
 
 /**
- * Check if we need to run intraday simulation for a stock
- * This handles the case where price crosses entry/stop/target during market hours
- * before the 4 PM daily tracking job runs
- *
- * @param {Object} stock - Stock from WeeklyWatchlist
- * @param {number} livePrice - Current live price
- * @param {Date} weekStart - The week_start date from watchlist (Monday of trading week)
- * @returns {Promise<boolean>} - Whether simulation was updated and needs saving
+ * Calculate Daily Update card display based on journey_status and tracking_status
+ * Returns message, icon, and colors for the banner - frontend just renders
  */
-async function checkIntradayTriggers(stock, livePrice, weekStart) {
-  if (!livePrice || !stock.levels) return false;
-
-  const sim = stock.trade_simulation;
-  const levels = stock.levels;
-  // Use entry zone LOW as the trigger point (not entry which might be mid-point)
-  // Entry is triggered when price rises ABOVE the low of entry zone
-  const entryRange = levels.entryRange || [];
-  const entryZoneLow = entryRange[0] || levels.entry;
-  const entry = entryZoneLow;  // Use zone low for entry trigger
-  const stop = levels.stop;
-  // T1 = target1 (partial booking at 50%), fallback to target if not set
-  const t1 = levels.target1 || levels.target;
-  const t2 = levels.target2 || (levels.target1 ? levels.target : null);  // T2 = target if target1 exists
-
-  console.log(`[INTRADAY-CHECK] ${stock.symbol}: livePrice=${livePrice}, entryZoneLow=${entryZoneLow}, levels.entry=${levels.entry}, t1=${t1}, t2=${t2}`);
-
-  // Get today's date in IST
-  const now = new Date();
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istNow = new Date(now.getTime() + istOffset);
-  const todayStr = istNow.toISOString().split('T')[0];
-
-  // Check if we already have today's snapshot
-  const hasToday = stock.daily_snapshots?.some(s => {
-    const snapDate = new Date(s.date);
-    const snapIst = new Date(snapDate.getTime() + istOffset);
-    return snapIst.toISOString().split('T')[0] === todayStr;
-  });
-
-  console.log(`[INTRADAY-CHECK] ${stock.symbol}: todayStr=${todayStr}, hasToday=${hasToday}, sim.status=${sim?.status || 'null'}`);
-  console.log(`[INTRADAY-CHECK] ${stock.symbol}: snapshots count=${stock.daily_snapshots?.length || 0}`);
-  if (stock.daily_snapshots?.length > 0) {
-    const lastSnap = stock.daily_snapshots[stock.daily_snapshots.length - 1];
-    console.log(`[INTRADAY-CHECK] ${stock.symbol}: lastSnapshot date=${lastSnap.date}, is_intraday=${lastSnap.is_intraday}`);
+function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, _levels, latestSnapshot) {
+  // Priority 1: Check journey_status (trade simulation status)
+  // ENTRY_SIGNALED takes precedence - user needs to act on signal
+  if (journeyStatus === 'ENTRY_SIGNALED') {
+    const signalClose = latestSnapshot?.close;
+    return {
+      icon: 'signal',  // 📡
+      message: 'Entry signal confirmed',
+      subtext: `Close ₹${signalClose?.toFixed(2)} above entry. Buy at tomorrow's open.`,
+      background_color: '#7C3AED20',  // Purple with alpha
+      text_color: '#7C3AED',  // Purple
+      value_color: '#5B21B6',  // Darker purple for values for better contrast
+      show_metrics: false  // Don't show distance metrics for signals
+    };
   }
 
-  // If we have today's snapshot AND trade_simulation exists, we still need to check
-  // for T1/T2/stop hits because the live price may have moved since the snapshot was created
-  // Only skip the entry logic (CASE 1), but continue to CASE 2 and CASE 3
-  if (hasToday && sim && sim.status !== 'WAITING') {
-    console.log(`[INTRADAY-CHECK] ${stock.symbol}: Today's snapshot exists with sim.status=${sim.status}, checking for T1/T2/stop...`);
-    // Don't return early - fall through to check T1/T2/stop (CASE 2 and CASE 3)
-  }
-
-  // RECOVERY: If trade_simulation is missing or WAITING, but previous snapshots show entry was triggered
-  // This can happen if 4PM job ran before simulateTrade code was deployed
-  if ((!sim || sim.status === 'WAITING') && stock.daily_snapshots?.length > 0) {
-    const anySnapshotTriggeredEntry = stock.daily_snapshots.some(s => s.high >= entry);
-    if (anySnapshotTriggeredEntry) {
-      console.log(`[INTRADAY-CHECK] ${stock.symbol}: RECOVERY - Previous snapshot shows entry was triggered, re-running simulation`);
-      const allSnapshots = stock.daily_snapshots.map(s => ({
-        date: s.date,
-        open: s.open,
-        high: s.high,
-        low: s.low,
-        close: s.close
-      }));
-      stock.trade_simulation = simulateTrade(stock, allSnapshots, livePrice);
-      console.log(`[INTRADAY-CHECK] ${stock.symbol}: RECOVERY complete - sim.status=${stock.trade_simulation.status}`);
-      return true; // Mark as changed so it gets saved
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  // BACKFILL: If no snapshots exist, fetch historical 1-min candles from week start
-  // This catches cases where 4PM job hasn't run yet but entry may have triggered earlier
-  // ══════════════════════════════════════════════════════════════════
-  if ((!sim || sim.status === 'WAITING') && (!stock.daily_snapshots || stock.daily_snapshots.length === 0)) {
-    console.log(`[INTRADAY-CHECK] ${stock.symbol}: No snapshots - attempting historical backfill from week start`);
-
-    try {
-      // week_start is stored as Sunday 18:30 UTC = Monday 00:00 IST
-      // We need to convert to IST to get the correct Monday date
-      const weekStartUtc = new Date(weekStart);
-      const istOffsetMs = 5.5 * 60 * 60 * 1000; // IST = UTC + 5:30
-      const weekStartIst = new Date(weekStartUtc.getTime() + istOffsetMs);
-
-      // Extract the IST date (this will be Monday)
-      const weekStartDateStr = weekStartIst.toISOString().split('T')[0]; // "2026-02-02" (Monday)
-
-      const todayUtc = new Date();
-      const todayIst = new Date(todayUtc.getTime() + istOffsetMs);
-      const todayDateStr = todayIst.toISOString().split('T')[0];
-
-      console.log(`[INTRADAY-CHECK] ${stock.symbol}: week_start UTC=${weekStartUtc.toISOString()}, IST date=${weekStartDateStr}`);
-      console.log(`[INTRADAY-CHECK] ${stock.symbol}: Fetching 1-min candles from ${weekStartDateStr} to ${todayDateStr}`);
-
-      const historicalCandles = await getDailyCandlesForRange(stock.instrument_key, weekStartDateStr, todayDateStr);
-
-      if (historicalCandles && historicalCandles.length > 0) {
-        console.log(`[INTRADAY-CHECK] ${stock.symbol}: Got ${historicalCandles.length} daily candles from historical data`);
-
-        // Check if any day's high crossed entry
-        const entryTriggeredDay = historicalCandles.find(c => c.high >= entry);
-
-        if (entryTriggeredDay) {
-          console.log(`[INTRADAY-CHECK] ${stock.symbol}: BACKFILL - Entry was triggered on ${entryTriggeredDay.date.toISOString().split('T')[0]} (high=${entryTriggeredDay.high} >= entry=${entry})`);
-
-          // Add all historical candles as snapshots
-          stock.daily_snapshots = historicalCandles.map(c => ({
-            date: c.date,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close,
-            volume: c.volume,
-            is_backfill: true  // Flag to indicate this came from historical backfill
-          }));
-
-          // Run simulation with all snapshots
-          const allSnapshots = stock.daily_snapshots.map(s => ({
-            date: s.date,
-            open: s.open,
-            high: s.high,
-            low: s.low,
-            close: s.close
-          }));
-
-          stock.trade_simulation = simulateTrade(stock, allSnapshots, livePrice);
-          console.log(`[INTRADAY-CHECK] ${stock.symbol}: BACKFILL complete - sim.status=${stock.trade_simulation.status}, entry_date=${stock.trade_simulation.entry_date}`);
-          return true; // Mark as changed so it gets saved
-        } else {
-          console.log(`[INTRADAY-CHECK] ${stock.symbol}: BACKFILL - No entry trigger found in historical data (highest=${Math.max(...historicalCandles.map(c => c.high))} < entry=${entry})`);
-        }
-      } else {
-        console.log(`[INTRADAY-CHECK] ${stock.symbol}: BACKFILL - No historical candles found`);
-      }
-    } catch (backfillError) {
-      console.error(`[INTRADAY-CHECK] ${stock.symbol}: BACKFILL error:`, backfillError.message);
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  // CASE 1: WAITING → check if entry triggered (using live price)
-  // ══════════════════════════════════════════════════════════════════
-  if (!sim || sim.status === 'WAITING') {
-    console.log(`[INTRADAY-CHECK] ${stock.symbol}: WAITING check - livePrice=${livePrice} >= entry=${entry}? ${livePrice >= entry}`);
-    if (livePrice >= entry) {
-      // Entry triggered! Find the EXACT time it crossed using intraday candles
-      console.log(`[INTRADAY] ${stock.symbol}: Entry triggered at ₹${livePrice} (entry: ₹${entry})`);
-      console.log(`[INTRADAY] ${stock.symbol}: Finding exact crossing time from intraday candles...`);
-
-      // Try to find exact crossing time from intraday candle data
-      let crossTime = now;
-      let crossPrice = livePrice;
-
-      try {
-        const crossResult = await findLevelCrossTime(stock.instrument_key, entry, 'above');
-        if (crossResult) {
-          crossTime = crossResult.crossTime;
-          crossPrice = crossResult.crossPrice;
-          console.log(`[INTRADAY] ${stock.symbol}: Found exact crossing at ${crossTime.toISOString()} @ ₹${crossPrice}`);
-        } else {
-          console.log(`[INTRADAY] ${stock.symbol}: Could not find exact crossing time, using current time`);
-        }
-      } catch (err) {
-        console.error(`[INTRADAY] ${stock.symbol}: Error finding cross time:`, err.message);
-      }
-
-      console.log(`[INTRADAY] ${stock.symbol}: Creating snapshot with date=${crossTime.toISOString()}`);
-      console.log(`[INTRADAY] ${stock.symbol}: Existing snapshots count=${stock.daily_snapshots?.length || 0}`);
-
-      // Create intraday snapshot with the crossing time and price
-      const intradaySnapshot = {
-        date: crossTime,
-        open: crossPrice,
-        high: livePrice,  // Current price might be higher
-        low: Math.min(crossPrice, livePrice),
-        close: livePrice,
-        volume: 0,
-        is_intraday: true  // Flag to indicate this is not from EOD
+  // Priority 2: Check tracking_status for active trades and other states
+  switch (trackingStatus) {
+    case 'ENTRY_ZONE':
+      return {
+        icon: 'login',
+        message: 'In entry zone',
+        subtext: 'Consider initiating position',
+        background_color: '#4CAF5026',
+        text_color: '#2E7D32',
+        value_color: '#1B5E20',
+        show_metrics: true
       };
 
-      if (!stock.daily_snapshots) stock.daily_snapshots = [];
-      stock.daily_snapshots.push(intradaySnapshot);
-
-      // Run simulation with all snapshots
-      const allSnapshots = stock.daily_snapshots.map(s => ({
-        date: s.date,
-        open: s.open,
-        high: s.high,
-        low: s.low,
-        close: s.close
-      }));
-
-      stock.trade_simulation = simulateTrade(stock, allSnapshots, livePrice);
-      console.log(`[INTRADAY] ${stock.symbol}: After simulation - entry_date=${stock.trade_simulation.entry_date?.toISOString?.() || stock.trade_simulation.entry_date}`);
-      console.log(`[INTRADAY] ${stock.symbol}: Events=${JSON.stringify(stock.trade_simulation.events?.map(e => ({ type: e.type, date: e.date })))}`);
-      return true;
-    }
-    return false;
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  // CASE 2: ENTERED → check if stop or T1 hit
-  // ══════════════════════════════════════════════════════════════════
-  if (sim.status === 'ENTERED') {
-    const trailingStop = sim.trailing_stop || stop;
-
-    // Check stop loss first (worst case)
-    if (livePrice <= trailingStop) {
-      console.log(`[INTRADAY] ${stock.symbol}: Stop hit at ₹${livePrice} (stop: ₹${trailingStop})`);
-      await updateIntradaySimulation(stock, livePrice, now, trailingStop, 'below');
-      return true;
-    }
-
-    // Check T1
-    if (livePrice >= t1) {
-      console.log(`[INTRADAY] ${stock.symbol}: T1 hit at ₹${livePrice} (T1: ₹${t1})`);
-      await updateIntradaySimulation(stock, livePrice, now, t1, 'above');
-      return true;
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  // CASE 3: PARTIAL_EXIT → check if trailing stop or T2 hit
-  // ══════════════════════════════════════════════════════════════════
-  if (sim.status === 'PARTIAL_EXIT') {
-    const trailingStop = sim.trailing_stop || sim.entry_price;
-
-    // Check trailing stop (now at entry)
-    if (livePrice <= trailingStop) {
-      console.log(`[INTRADAY] ${stock.symbol}: Trailing stop hit at ₹${livePrice} (stop: ₹${trailingStop})`);
-      await updateIntradaySimulation(stock, livePrice, now, trailingStop, 'below');
-      return true;
-    }
-
-    // Check T2
-    if (t2 && livePrice >= t2) {
-      console.log(`[INTRADAY] ${stock.symbol}: T2 hit at ₹${livePrice} (T2: ₹${t2})`);
-      await updateIntradaySimulation(stock, livePrice, now, t2, 'above');
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Update today's intraday snapshot with new high/low and re-run simulation
- * @param {Object} stock - Stock from WeeklyWatchlist
- * @param {number} livePrice - Current live price
- * @param {Date} now - Current timestamp
- * @param {number} level - The price level that was crossed (for finding exact time)
- * @param {string} direction - 'above' or 'below' for crossing direction
- */
-async function updateIntradaySimulation(stock, livePrice, now, level = null, direction = 'above') {
-  // Get or create today's snapshot
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istNow = new Date(now.getTime() + istOffset);
-  const todayStr = istNow.toISOString().split('T')[0];
-
-  // Try to find exact crossing time if level is provided
-  let crossTime = now;
-  if (level) {
-    try {
-      const crossResult = await findLevelCrossTime(stock.instrument_key, level, direction);
-      if (crossResult) {
-        crossTime = crossResult.crossTime;
-        console.log(`[INTRADAY] ${stock.symbol}: Found exact ${direction} crossing at ${crossTime.toISOString()}`);
+    case 'ABOVE_ENTRY':
+      // Check journey_status to see if we're actually in a trade
+      if (['ENTERED', 'PARTIAL_EXIT'].includes(journeyStatus)) {
+        let rsiNote = '';
+        if (trackingFlags.includes('RSI_EXIT')) {
+          rsiNote = ' - RSI overbought';
+        } else if (trackingFlags.includes('RSI_DANGER')) {
+          rsiNote = ' - RSI high';
+        }
+        return {
+          icon: 'trending_up',
+          message: `Trade running${rsiNote}`,
+          subtext: null,  // Will show distance metrics
+          background_color: '#2196F31A',
+          text_color: '#1565C0',
+          value_color: '#0D47A1',
+          show_metrics: true
+        };
       }
-    } catch (err) {
-      console.error(`[INTRADAY] ${stock.symbol}: Error finding cross time:`, err.message);
-    }
-  }
+      // ABOVE_ENTRY but not ENTERED means we got signal but haven't executed
+      // This shouldn't happen with two-phase entry, but handle it
+      return null;
 
-  let todayIndex = stock.daily_snapshots?.findIndex(s => {
-    const snapDate = new Date(s.date);
-    const snapIst = new Date(snapDate.getTime() + istOffset);
-    return snapIst.toISOString().split('T')[0] === todayStr && s.is_intraday;
-  });
+    case 'RETEST_ZONE':
+      return {
+        icon: 'refresh',
+        message: 'Retesting breakout level',
+        subtext: 'Potential re-entry point',
+        background_color: '#9C27B01A',
+        text_color: '#7B1FA2',
+        value_color: '#4A148C',
+        show_metrics: true
+      };
 
-  if (todayIndex === -1 || todayIndex === undefined) {
-    // Create new intraday snapshot
-    if (!stock.daily_snapshots) stock.daily_snapshots = [];
-    stock.daily_snapshots.push({
-      date: crossTime,
-      open: livePrice,
-      high: livePrice,
-      low: livePrice,
-      close: livePrice,
-      volume: 0,
-      is_intraday: true
-    });
-  } else {
-    // Update existing intraday snapshot
-    const snap = stock.daily_snapshots[todayIndex];
-    snap.high = Math.max(snap.high, livePrice);
-    snap.low = Math.min(snap.low, livePrice);
-    snap.close = livePrice;
-    // Update date to crossing time if we found it and it's earlier
-    if (crossTime < snap.date) {
-      snap.date = crossTime;
-    }
-  }
+    case 'TARGET1_HIT':
+      return {
+        icon: 'check_circle',
+        message: 'Target 1 reached',
+        subtext: 'Book partial profits, trail stop to entry',
+        background_color: '#4CAF5026',
+        text_color: '#2E7D32',
+        value_color: '#1B5E20',
+        show_metrics: true
+      };
 
-  // Re-run simulation with all snapshots
-  const allSnapshots = stock.daily_snapshots.map(s => ({
-    date: s.date,
-    open: s.open,
-    high: s.high,
-    low: s.low,
-    close: s.close
-  }));
+    case 'TARGET2_HIT':
+      return {
+        icon: 'check_circle',
+        message: 'Target 2 reached',
+        subtext: 'Consider full exit',
+        background_color: '#4CAF5033',
+        text_color: '#1B5E20',
+        value_color: '#0D3D12',
+        show_metrics: true
+      };
 
-  stock.trade_simulation = simulateTrade(stock, allSnapshots, livePrice);
+    case 'STOPPED_OUT':
+      return {
+        icon: 'error',
+        message: 'Stop loss triggered',
+        subtext: 'Position closed',
+        background_color: '#F443361A',
+        text_color: '#C62828',
+        value_color: '#B71C1C',
+        show_metrics: false
+      };
 
-  // Fix event timestamps: use the exact crossing time we found for the most recent event
-  // (The simulation uses snapshot dates, but we found the actual crossing time)
-  if (crossTime && stock.trade_simulation?.events?.length > 0) {
-    const lastEvent = stock.trade_simulation.events[stock.trade_simulation.events.length - 1];
-    // Only update if this event happened on the same day as our crossing
-    const eventDate = new Date(lastEvent.date);
-    const crossDate = new Date(crossTime);
-    if (eventDate.toISOString().split('T')[0] === crossDate.toISOString().split('T')[0]) {
-      lastEvent.date = crossTime;
-      console.log(`[INTRADAY] ${stock.symbol}: Updated ${lastEvent.type} event time to ${crossTime.toISOString()}`);
-    }
+    case 'WATCHING':
+      // Only show for notable flags
+      if (trackingFlags.includes('VOLUME_SPIKE')) {
+        return {
+          icon: 'bar_chart',
+          message: 'Volume spike detected',
+          subtext: 'Watch for breakout',
+          background_color: '#2196F31A',
+          text_color: '#1565C0',
+          value_color: '#0D47A1',
+          show_metrics: false
+        };
+      }
+      if (trackingFlags.includes('APPROACHING_ENTRY')) {
+        return {
+          icon: 'info',
+          message: 'Getting close to entry zone',
+          subtext: 'Keep watching',
+          background_color: '#FFA7261A',
+          text_color: '#E65100',
+          value_color: '#BF360C',
+          show_metrics: false
+        };
+      }
+      return null;  // No banner for plain WATCHING
+
+    default:
+      return null;
   }
 }
 
@@ -397,6 +194,11 @@ async function updateIntradaySimulation(stock, livePrice, now, level = null, dir
 function calculateCardDisplay(stock, livePrice) {
   const sim = stock.trade_simulation;
   const levels = stock.levels || {};
+
+  // Get the last snapshot date for the Daily Update card
+  const snapshots = stock.daily_snapshots || [];
+  const lastSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+  const lastSnapshotDate = lastSnapshot?.date || null;
 
   // Build levels_summary for the card (new v2 fields)
   const levelsSummary = {
@@ -413,7 +215,58 @@ function calculateCardDisplay(stock, livePrice) {
     week_end_rule: levels.weekEndRule || 'exit_if_no_t1'
   };
 
-  // Default response for stocks without simulation or not yet entered
+  // Get tracking status and flags for daily update card
+  const trackingStatus = stock.tracking_status || 'WATCHING';
+  const trackingFlags = stock.tracking_flags || [];
+  const journeyStatus = sim?.status || 'WAITING';
+
+  // Handle ENTRY_SIGNALED status (two-phase entry: signal confirmed, awaiting execution)
+  if (sim?.status === 'ENTRY_SIGNALED') {
+    const signalClose = sim.signal_close;
+    const stopLoss = levels.stop;
+    const plannedQty = sim.planned_qty;
+
+    // Find the ENTRY_SIGNAL event to get the recommended qty (may be adjusted for EXTENDED)
+    const signalEvent = sim.events?.find(e => e.type === 'ENTRY_SIGNAL');
+    const recommendedQty = signalEvent?.qty || plannedQty;
+
+    // Calculate daily update card for ENTRY_SIGNALED
+    const dailyUpdateCard = calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+
+    return {
+      journey_status: 'ENTRY_SIGNALED',
+      emoji: '📡',
+      headline: 'Entry Signal!',
+      subtext: `Buy ${recommendedQty} shares at tomorrow's open. Stop: ₹${stopLoss?.toFixed(2)}`,
+      entry_window_hint: null,
+      pnl_line: null,
+      live_price: livePrice,
+      entry_price: null,
+      entry_date: null,
+      total_pnl: null,
+      total_return_pct: null,
+      investment_value: null,
+      realized_pnl: 0,
+      unrealized_pnl: 0,
+      trailing_stop: null,
+      peak_price: null,
+      peak_gain_pct: null,
+      qty_total: null,
+      qty_remaining: null,
+      events: sim.events || [],
+      dist_from_entry_pct: null,
+      dist_from_stop_pct: null,
+      dist_from_target_pct: null,
+      dist_from_target2_pct: null,
+      levels_summary: levelsSummary,
+      last_snapshot_date: lastSnapshotDate,
+      signal_close: signalClose,
+      signal_date: sim.signal_date,
+      daily_update_card: dailyUpdateCard
+    };
+  }
+
+  // Default response for stocks without simulation or still waiting for entry
   if (!sim || sim.status === 'WAITING') {
     // Get entry zone from levels.entryRange array or entry_zone object
     const entryRange = levels.entryRange;
@@ -435,6 +288,9 @@ function calculateCardDisplay(stock, livePrice) {
         ? `Entry zone: ₹${entryZoneLow.toFixed(2)} - ₹${entryZoneHigh.toFixed(2)}`
         : 'No entry zone set';
     }
+
+    // Calculate daily update card for WAITING status
+    const dailyUpdateCard = calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
 
     return {
       journey_status: 'WAITING',
@@ -461,7 +317,9 @@ function calculateCardDisplay(stock, livePrice) {
       dist_from_stop_pct: null,
       dist_from_target_pct: null,
       dist_from_target2_pct: null,
-      levels_summary: levelsSummary
+      levels_summary: levelsSummary,
+      last_snapshot_date: lastSnapshotDate,
+      daily_update_card: dailyUpdateCard
     };
   }
 
@@ -572,6 +430,9 @@ function calculateCardDisplay(stock, livePrice) {
       pnlLine = null;
   }
 
+  // Calculate daily update card for active trade statuses
+  const dailyUpdateCard = calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+
   return {
     journey_status: sim.status,
     emoji,
@@ -601,24 +462,25 @@ function calculateCardDisplay(stock, livePrice) {
     t1_level: t1,
     t2_level: t2,
     // v2: levels summary with new fields
-    levels_summary: levelsSummary
+    levels_summary: levelsSummary,
+    last_snapshot_date: lastSnapshotDate,
+    daily_update_card: dailyUpdateCard
   };
 }
 
 /**
  * GET /api/v1/weekly-watchlist
- * Get current week's watchlist
+ * Get current week's watchlist (pure read, no simulation updates)
+ *
+ * Simulation updates are handled by:
+ * - 4 PM Daily Tracking Job (EOD data, close-based entry)
+ * - 15-min Intraday Monitor Job (stop/T1/T2 alerts during market hours)
  */
 router.get("/", auth, async (req, res) => {
   try {
-    const now = new Date();
-    console.log(`[WEEKLY-WATCHLIST] GET request at ${now.toISOString()}`);
-    console.log(`[WEEKLY-WATCHLIST] Day of week: ${now.getDay()} (0=Sun, 5=Fri, 6=Sat)`);
-
     const watchlist = await WeeklyWatchlist.getCurrentWeek();
 
     if (!watchlist) {
-      console.log(`[WEEKLY-WATCHLIST] No watchlist found for current week`);
       return res.json({
         success: true,
         watchlist: null,
@@ -626,36 +488,13 @@ router.get("/", auth, async (req, res) => {
       });
     }
 
-    console.log(`[WEEKLY-WATCHLIST] Found watchlist: ${watchlist.week_label}`);
-    console.log(`[WEEKLY-WATCHLIST] week_start: ${watchlist.week_start?.toISOString()}`);
-    console.log(`[WEEKLY-WATCHLIST] week_end: ${watchlist.week_end?.toISOString()}`);
-    console.log(`[WEEKLY-WATCHLIST] stocks count: ${watchlist.stocks?.length || 0}`);
-    console.log(`[WEEKLY-WATCHLIST] Is now (${now.toISOString()}) between week_start and week_end?`);
-    console.log(`[WEEKLY-WATCHLIST] now >= week_start: ${now >= watchlist.week_start}`);
-    console.log(`[WEEKLY-WATCHLIST] now <= week_end: ${now <= watchlist.week_end}`);
-    console.log(`[WEEKLY-WATCHLIST] week_end already passed: ${now > watchlist.week_end}`)
-
-    // Track if any stock needs DB update (intraday trigger detected)
-    let needsSave = false;
-
-    // ⚡ OPTIMIZATION: Fetch all prices at once using price cache service (same as watchlist & AI analysis)
-    // This ensures consistent pricing across Weekly Watchlist, AI Analysis, and Watchlist screens
+    // Fetch all prices at once using price cache service
     const instrumentKeys = watchlist.stocks.map(stock => stock.instrument_key);
     const priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
 
-    // Enrich with current prices
-    const enrichedStocks = await Promise.all(watchlist.stocks.map(async (stock) => {
-      // Get price from cache service only (DB → Memory → API fallback)
+    // Enrich stocks with current prices and card_display (no DB writes)
+    const enrichedStocks = watchlist.stocks.map((stock) => {
       const currentPrice = priceDataMap[stock.instrument_key]?.price || null;
-      console.log(`[WEEKLY-WATCHLIST] ${stock.symbol}: currentPrice=${currentPrice} (from price cache)`);
-
-      // Check for intraday triggers (entry/stop/target hit today before 4PM job)
-      // This updates stock.trade_simulation and stock.daily_snapshots in place
-      // Pass week_start for historical backfill (Monday of current trading week)
-      const triggered = await checkIntradayTriggers(stock, currentPrice, watchlist.week_start);
-      if (triggered) {
-        needsSave = true;
-      }
 
       let zoneStatus = null;
       if (currentPrice && stock.entry_zone) {
@@ -671,13 +510,7 @@ router.get("/", auth, async (req, res) => {
         zone_status: zoneStatus,
         card_display: cardDisplay
       };
-    }));
-
-    // Save watchlist if any intraday triggers were detected
-    if (needsSave) {
-      await watchlist.save();
-      console.log(`[WEEKLY-WATCHLIST] Saved intraday simulation updates`);
-    }
+    });
 
     res.json({
       success: true,

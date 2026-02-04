@@ -20,6 +20,7 @@ import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import DailyNewsStock from '../models/dailyNewsStock.js';
 import { getDailyAnalysisData } from './technicalData.service.js';
+import { getDailyCandlesForRange } from '../utils/stockDb.js';
 import { buildDailyTrackPrompt } from '../prompts/dailyTrackPrompts.js';
 import Anthropic from '@anthropic-ai/sdk';
 import ApiUsage from '../models/apiUsage.js';
@@ -207,34 +208,48 @@ function shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags, dailyData
     }
   }
 
-  // CHECK: Entry crossed intraday (stock gapped through entry zone)
-  // This catches cases where close is ABOVE_ENTRY but entry was triggered today
+  // CHECK: Close-based entry signal (Two-Phase Entry)
+  // Signal is confirmed when daily CLOSE >= entry level
+  // Actual entry happens at NEXT day's open (user buys after seeing notification)
   if (dailyData && levels) {
     const entry = levels.entry;
-    const entryHigh = levels.entryRange?.[1] || entry * 1.01;
-    const todayHigh = dailyData.high;
-    const todayLow = dailyData.low;
+    const close = dailyData.ltp || dailyData.close;  // ltp for live, close for historical
+    const stop = levels.stop;
+    const capital = 100000;  // Standard simulation capital
+    const plannedQty = Math.floor(capital / entry);
 
     // Statuses that indicate we were BELOW entry before
     const belowEntryStatuses = ['WATCHING', 'RETEST_ZONE', 'APPROACHING'];
 
-    // If old status was below entry AND today's range crossed through entry zone
-    if (belowEntryStatuses.includes(oldStatus)) {
-      // Check if price crossed UP through entry today (low was below entry, high was above)
-      if (todayLow < entry && todayHigh >= entry) {
-        console.log(`[PHASE2-TRIGGER] ${symbol}: Entry crossed intraday! Low=${todayLow} < Entry=${entry} <= High=${todayHigh}`);
-        return {
-          trigger: true,
-          reason: `Entry triggered intraday. Stock crossed entry zone (${entry.toFixed(2)}) - Low: ${todayLow.toFixed(2)}, High: ${todayHigh.toFixed(2)}. Confirm position.`
-        };
-      }
+    // If old status was below entry AND today's close confirmed entry
+    if (belowEntryStatuses.includes(oldStatus) && close >= entry) {
+      // Check entry quality to include in the trigger reason
+      const entryQuality = checkEntryQuality(close, entry, stop);
+      const premiumPct = entryQuality.premium_pct;
+      const quality = entryQuality.quality;
 
-      // Also check if price gapped above entry (opened above entry when previous close was below)
-      if (dailyData.open >= entry && newStatus === 'ABOVE_ENTRY') {
-        console.log(`[PHASE2-TRIGGER] ${symbol}: Gapped above entry! Open=${dailyData.open} >= Entry=${entry}`);
+      console.log(`[PHASE2-TRIGGER] ${symbol}: Entry SIGNAL confirmed on close! Close ₹${close.toFixed(2)} >= Entry ₹${entry.toFixed(2)} (${quality}: +${premiumPct}%)`);
+
+      // Different trigger reasons based on entry quality
+      // Note: This is a SIGNAL, not actual entry. User should buy at tomorrow's open.
+      if (quality === 'OVEREXTENDED') {
         return {
           trigger: true,
-          reason: `Stock gapped above entry zone (${entry.toFixed(2)}). Opened at ${dailyData.open.toFixed(2)}. Confirm if chase is warranted.`
+          reason: `Entry signal skipped — close ₹${close.toFixed(2)} is +${premiumPct}% above entry ₹${entry.toFixed(2)}. Too extended. Wait for pullback.`
+        };
+      } else if (quality === 'EXTENDED') {
+        // Calculate adjusted qty for extended entry
+        const originalRiskPerShare = entry - stop;
+        const newRiskPerShare = close - stop;
+        const adjustedQty = Math.floor(plannedQty * originalRiskPerShare / newRiskPerShare);
+        return {
+          trigger: true,
+          reason: `Entry signal confirmed (EXTENDED +${premiumPct}%). Close ₹${close.toFixed(2)} above entry ₹${entry.toFixed(2)}. Buy ${adjustedQty} shares (reduced from ${plannedQty}) at tomorrow's open. Stop: ₹${stop.toFixed(2)}.`
+        };
+      } else {
+        return {
+          trigger: true,
+          reason: `Entry signal confirmed (GOOD +${premiumPct}%). Close ₹${close.toFixed(2)} at entry ₹${entry.toFixed(2)}. Buy ${plannedQty} shares at tomorrow's open. Stop: ₹${stop.toFixed(2)}.`
         };
       }
     }
@@ -250,6 +265,58 @@ function shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags, dailyData
   }
 
   return { trigger: false, reason: null };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY QUALITY CHECK
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// For close-based entry confirmation, we need to check if the close is:
+// - GOOD: Close is within 2% above entry (ideal for momentum breakouts)
+// - EXTENDED: Close is 2-5% above entry (acceptable but note the premium)
+// - OVEREXTENDED: Close is >5% above entry (too far, skip or wait for pullback)
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Check entry quality for close-based confirmation
+ *
+ * @param {number} close - Today's closing price
+ * @param {number} entry - Entry level from weekend analysis
+ * @param {number} stop - Stop loss level
+ * @returns {{ quality: string, premium_pct: number, adjusted_rr: number|null, recommendation: string }}
+ */
+function checkEntryQuality(close, entry, stop) {
+  const premiumPct = ((close - entry) / entry) * 100;
+  const originalRisk = entry - stop;
+  const adjustedRisk = close - stop;
+  const adjustedRR = originalRisk > 0 ? adjustedRisk / originalRisk : null;
+
+  // Quality thresholds (matching spec: ≤2% GOOD, 2-5% EXTENDED, >5% OVEREXTENDED)
+  if (premiumPct <= 2.0) {
+    return {
+      quality: 'GOOD',
+      premium_pct: parseFloat(premiumPct.toFixed(2)),
+      adjusted_rr: adjustedRR ? parseFloat(adjustedRR.toFixed(2)) : null,
+      recommendation: 'Entry confirmed. Close near entry level — ideal fill.'
+    };
+  }
+
+  if (premiumPct <= 5.0) {
+    return {
+      quality: 'EXTENDED',
+      premium_pct: parseFloat(premiumPct.toFixed(2)),
+      adjusted_rr: adjustedRR ? parseFloat(adjustedRR.toFixed(2)) : null,
+      recommendation: 'Entry confirmed but extended. Consider smaller position or wait for pullback.'
+    };
+  }
+
+  return {
+    quality: 'OVEREXTENDED',
+    premium_pct: parseFloat(premiumPct.toFixed(2)),
+    adjusted_rr: adjustedRR ? parseFloat(adjustedRR.toFixed(2)) : null,
+    recommendation: 'Close too far above entry. Skip this entry — wait for pullback or next setup.'
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -318,11 +385,118 @@ function simulateTrade(stock, snapshots, currentPrice) {
   let dayCount = 0;
 
   for (const day of snapshots) {
-    const { date, high, low, close } = day;
+    const { date, open, high, low, close } = day;
     dayCount++;
 
     // ══════════════════════════════════════════════
-    // WAITING: Check if entry triggered
+    // ENTRY_SIGNALED: Execute at this day's open (Phase 2 of two-phase entry)
+    // ══════════════════════════════════════════════
+    if (sim.status === 'ENTRY_SIGNALED') {
+      const actualEntryPrice = open;  // This day's open = user's realistic entry
+
+      // Run entry quality check against OPEN price (not signal day's close)
+      const premium_pct = ((actualEntryPrice - entry) / entry) * 100;
+      const originalQty = sim.qty_total;  // Qty was pre-calculated at signal time
+      const originalRiskPerShare = entry - stop;
+      const newRiskPerShare = actualEntryPrice - stop;
+
+      let entryQuality, actualQty;
+
+      // Check if open is below stop — don't enter a losing position
+      if (actualEntryPrice < stop) {
+        entryQuality = 'BELOW_STOP';
+        actualQty = 0;
+        sim.status = 'WAITING';  // Reset back to waiting
+        sim.signal_date = null;
+        sim.signal_close = null;
+        sim.qty_total = null;
+        sim.events.push({
+          date: date instanceof Date ? date : new Date(date),
+          type: 'ENTRY_SKIPPED',
+          price: actualEntryPrice,
+          qty: 0,
+          pnl: 0,
+          detail: `Entry skipped — next day open ₹${actualEntryPrice.toFixed(2)} is BELOW stop ₹${stop.toFixed(2)}. Wait for better setup.`
+        });
+
+        console.log(`[ENTRY-EXECUTE] ${stock.symbol}: Open ₹${actualEntryPrice.toFixed(2)} < stop ₹${stop.toFixed(2)} — entry skipped`);
+        continue;
+      } else if (premium_pct > 5) {
+        // OVEREXTENDED at open — skip entry entirely
+        entryQuality = 'OVEREXTENDED';
+        actualQty = 0;
+        sim.status = 'WAITING';  // Reset back to waiting
+        sim.signal_date = null;
+        sim.signal_close = null;
+        sim.qty_total = null;
+        sim.events.push({
+          date: date instanceof Date ? date : new Date(date),
+          type: 'ENTRY_SKIPPED',
+          price: actualEntryPrice,
+          qty: 0,
+          pnl: 0,
+          detail: `Entry skipped — next day open ₹${actualEntryPrice.toFixed(2)} is OVEREXTENDED (+${premium_pct.toFixed(1)}% above entry ₹${entry.toFixed(2)}). Wait for pullback.`
+        });
+
+        console.log(`[ENTRY-EXECUTE] ${stock.symbol}: OVEREXTENDED at open ₹${actualEntryPrice.toFixed(2)} (+${premium_pct.toFixed(1)}%) — entry skipped`);
+        continue;
+      } else if (premium_pct > 2) {
+        // EXTENDED — same rupee risk sizing
+        entryQuality = 'EXTENDED';
+        actualQty = Math.floor(originalQty * originalRiskPerShare / newRiskPerShare);
+        console.log(`[ENTRY-EXECUTE] ${stock.symbol}: EXTENDED entry at open ₹${actualEntryPrice.toFixed(2)} (+${premium_pct.toFixed(1)}%)`);
+        console.log(`[ENTRY-EXECUTE] ${stock.symbol}:   Original: ${originalQty} shares × ₹${originalRiskPerShare.toFixed(2)} risk = ₹${(originalQty * originalRiskPerShare).toFixed(0)} max loss`);
+        console.log(`[ENTRY-EXECUTE] ${stock.symbol}:   Adjusted: ${actualQty} shares × ₹${newRiskPerShare.toFixed(2)} risk = ₹${(actualQty * newRiskPerShare).toFixed(0)} max loss`);
+      } else if (premium_pct >= 0) {
+        // GOOD — full position
+        entryQuality = 'GOOD';
+        actualQty = originalQty;
+        console.log(`[ENTRY-EXECUTE] ${stock.symbol}: GOOD entry at open ₹${actualEntryPrice.toFixed(2)} (+${premium_pct.toFixed(1)}%)`);
+      } else {
+        // Negative premium — open gapped below entry level
+        // Still enter since signal was confirmed, but note the gap down
+        entryQuality = 'GAP_DOWN';
+        actualQty = originalQty;
+        console.log(`[ENTRY-EXECUTE] ${stock.symbol}: GAP_DOWN entry at open ₹${actualEntryPrice.toFixed(2)} (${premium_pct.toFixed(1)}% below entry) — signal was confirmed yesterday`);
+      }
+
+      // Execute the entry
+      sim.entry_price = actualEntryPrice;
+      sim.entry_date = date instanceof Date ? date : new Date(date);
+      sim.trailing_stop = stop;
+      sim.status = 'ENTERED';
+      sim.qty_total = actualQty;
+      sim.qty_remaining = actualQty;
+
+      const qualityNote = entryQuality === 'GOOD'
+        ? ''
+        : entryQuality === 'GAP_DOWN'
+          ? ` (GAP_DOWN: opened ${premium_pct.toFixed(1)}% below entry)`
+          : ` (${entryQuality}: +${premium_pct.toFixed(1)}% premium, R:R adjusted)`;
+
+      const signalDateStr = sim.signal_date instanceof Date
+        ? sim.signal_date.toISOString().split('T')[0]
+        : new Date(sim.signal_date).toISOString().split('T')[0];
+
+      sim.events.push({
+        date: sim.entry_date,
+        type: 'ENTRY',
+        price: actualEntryPrice,
+        qty: actualQty,
+        pnl: 0,
+        detail: `Bought ${actualQty} shares at open ₹${actualEntryPrice.toFixed(2)}${qualityNote}. Signal was ₹${sim.signal_close.toFixed(2)} close on ${signalDateStr}.`,
+        entry_quality: { quality: entryQuality, premium_pct: parseFloat(premium_pct.toFixed(2)) }
+      });
+
+      // Clear signal fields
+      sim.signal_date = null;
+      sim.signal_close = null;
+
+      // DON'T continue — fall through to check stop/T1/T2 on this same day
+    }
+
+    // ══════════════════════════════════════════════
+    // WAITING: Check if entry signal triggers (Phase 1 of two-phase entry)
     // ══════════════════════════════════════════════
     if (sim.status === 'WAITING') {
 
@@ -330,7 +504,7 @@ function simulateTrade(stock, snapshots, currentPrice) {
       if (dayCount > entryWindowDays) {
         sim.status = 'EXPIRED';
         sim.events.push({
-          date,
+          date: date instanceof Date ? date : new Date(date),
           type: 'EXPIRED',
           price: close,
           qty: 0,
@@ -340,39 +514,95 @@ function simulateTrade(stock, snapshots, currentPrice) {
         break;
       }
 
-      // Check entry based on confirmation type
-      let entryTriggered = false;
+      // Check entry signal based on confirmation type
+      let signalTriggered = false;
 
       if (entryConfirmation === 'close_above') {
         // buy_above: Daily close must be at or above entry
-        entryTriggered = close >= entry;
+        signalTriggered = close >= entry;
       } else if (entryConfirmation === 'touch') {
-        // limit: Price touches the entry level (low goes down to it)
-        entryTriggered = low <= entry;
+        // touch-based: signal when price touches entry (for limit order fills)
+        // For touch, we could enter same day at the limit price
+        signalTriggered = low <= entry && high >= entry;
       }
 
-      if (entryTriggered) {
-        // Entry price:
-        // - close_above: limit order at entry was filled during the day (price was at/above entry)
-        // - touch: limit order at entry filled when price dipped to it
-        sim.entry_price = entry;
-        sim.entry_date = date instanceof Date ? date : new Date(date);
-        sim.trailing_stop = stop;
-        sim.status = 'ENTERED';
-        sim.events.push({
-          date: sim.entry_date,
-          type: 'ENTRY',
-          price: entry,
-          qty: qty,
-          pnl: 0,
-          detail: entryConfirmation === 'close_above'
-            ? `Entry confirmed — closed ₹${close.toFixed(2)} above ₹${entry.toFixed(2)}. Bought ${qty} shares.`
-            : `Pullback entry — limit filled at ₹${entry.toFixed(2)}. Bought ${qty} shares.`
-        });
+      if (signalTriggered) {
+        const premium_pct = ((close - entry) / entry) * 100;
 
-        // After entry, continue to check same day for stop/targets
+        // For touch-based entries, execute immediately at the limit level
+        if (entryConfirmation === 'touch') {
+          const actualEntryPrice = entry;  // Limit order fills at planned level
+          const actualQty = Math.floor(capital / actualEntryPrice);
+
+          sim.entry_price = actualEntryPrice;
+          sim.entry_date = date instanceof Date ? date : new Date(date);
+          sim.trailing_stop = stop;
+          sim.status = 'ENTERED';
+          sim.qty_total = actualQty;
+          sim.qty_remaining = actualQty;
+
+          sim.events.push({
+            date: sim.entry_date,
+            type: 'ENTRY',
+            price: actualEntryPrice,
+            qty: actualQty,
+            pnl: 0,
+            detail: `Pullback entry — limit filled at ₹${entry.toFixed(2)}. Bought ${actualQty} shares.`
+          });
+
+          console.log(`[ENTRY-TOUCH] ${stock.symbol}: Limit filled at ₹${actualEntryPrice.toFixed(2)}, ${actualQty} shares`);
+          // Fall through to check stop/targets on this same day
+        } else {
+          // close_above: Signal only — actual entry happens at NEXT day's open
+          // Check if signal is OVEREXTENDED — skip it entirely, wait for pullback
+          if (premium_pct > 5) {
+            console.log(`[ENTRY-SIGNAL] ${stock.symbol}: Close ₹${close.toFixed(2)} is OVEREXTENDED (+${premium_pct.toFixed(1)}%) — signal skipped, waiting for pullback`);
+            sim.events.push({
+              date: date instanceof Date ? date : new Date(date),
+              type: 'ENTRY_SKIPPED',
+              price: close,
+              qty: 0,
+              pnl: 0,
+              detail: `Entry signal skipped — close ₹${close.toFixed(2)} is OVEREXTENDED (+${premium_pct.toFixed(1)}% above entry ₹${entry.toFixed(2)}). Wait for pullback.`
+            });
+            continue;  // Wait for another opportunity
+          }
+
+          // Pre-calculate qty at signal time (will be adjusted at execution based on open price)
+          const plannedQty = Math.floor(capital / entry);
+
+          // For EXTENDED entries (2-5%), pre-calculate adjusted qty using same-rupee-risk formula
+          // This matches what Phase 2 trigger shows to user
+          let displayQty = plannedQty;
+          let qtyNote = '';
+          if (premium_pct > 2) {
+            const originalRiskPerShare = entry - stop;
+            const newRiskPerShare = close - stop;
+            const adjustedQty = Math.floor(plannedQty * originalRiskPerShare / newRiskPerShare);
+            displayQty = adjustedQty;
+            qtyNote = ` (EXTENDED: reduced from ${plannedQty})`;
+          }
+
+          sim.status = 'ENTRY_SIGNALED';
+          sim.signal_date = date instanceof Date ? date : new Date(date);
+          sim.signal_close = close;
+          sim.qty_total = plannedQty;  // Store original planned qty for execution phase
+
+          sim.events.push({
+            date: sim.signal_date,
+            type: 'ENTRY_SIGNAL',
+            price: close,
+            qty: displayQty,
+            pnl: 0,
+            detail: `Entry signal confirmed — close ₹${close.toFixed(2)} ${premium_pct >= 0 ? 'above' : 'at'} entry ₹${entry.toFixed(2)} (+${premium_pct.toFixed(1)}%). Buy ${displayQty} shares${qtyNote} at next day's open.`
+          });
+
+          console.log(`[ENTRY-SIGNAL] ${stock.symbol}: Close ₹${close.toFixed(2)} confirmed entry signal (+${premium_pct.toFixed(1)}%). Buy ${displayQty} shares${qtyNote} at next day's open.`);
+
+          continue;  // Don't check stop/targets — not in trade yet
+        }
       } else {
-        continue; // Not entered yet, next day
+        continue; // No signal yet, next day
       }
     }
 
@@ -569,11 +799,15 @@ function simulateTrade(stock, snapshots, currentPrice) {
 
 /**
  * Run Phase 1: Status update for all stocks
+ * @param {Object} options - { targetDate: string (YYYY-MM-DD), dryRun: boolean }
  * @returns {{ phase1Results: Object[], phase2Queue: Object[] }}
  */
-async function runPhase1() {
-  const runLabel = '[DAILY-TRACK-P1]';
+async function runPhase1(options = {}) {
+  const { targetDate, dryRun } = options;
+  const runLabel = dryRun ? '[DAILY-TRACK-P1-DRYRUN]' : '[DAILY-TRACK-P1]';
   console.log(`${runLabel} Starting Phase 1: Status Update...`);
+  if (targetDate) console.log(`${runLabel} Target date: ${targetDate}`);
+  if (dryRun) console.log(`${runLabel} DRY RUN MODE - no changes will be saved`);
 
   // Get current week's watchlist
   const watchlist = await WeeklyWatchlist.getCurrentWeek();
@@ -593,20 +827,78 @@ async function runPhase1() {
     return { phase1Results: [], phase2Queue: [] };
   }
 
+  // Get IST date components
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const weekStartUtc = new Date(watchlist.week_start);
+  const weekStartIst = new Date(weekStartUtc.getTime() + IST_OFFSET_MS);
+  const weekStartDateStr = weekStartIst.toISOString().split('T')[0];
+
+  // Determine processing date (targetDate or today)
+  let processingDateStr;
+  let processingDate;
+  if (targetDate) {
+    processingDateStr = targetDate;
+    processingDate = new Date(targetDate + 'T10:30:00.000Z'); // 4 PM IST
+  } else {
+    const todayIst = new Date(Date.now() + IST_OFFSET_MS);
+    processingDateStr = todayIst.toISOString().split('T')[0];
+    processingDate = new Date();
+  }
+
+  console.log(`${runLabel} Week start: ${weekStartDateStr}, Processing date: ${processingDateStr}`);
+
   // Extract symbols for batch fetch
   const symbols = validStocks.map(s => s.symbol);
   console.log(`${runLabel} Fetching daily data for: ${symbols.join(', ')}`);
 
-  // Batch fetch daily data using existing service
-  const dailyDataResponse = await getDailyAnalysisData(symbols);
-  const { stocks: dailyDataArray, nifty_change_pct, date } = dailyDataResponse;
+  let dailyDataMap;
+  let nifty_change_pct = 0;
 
-  // Create lookup map
-  const dailyDataMap = new Map(dailyDataArray.map(d => [d.symbol, d]));
+  if (targetDate) {
+    // ══════════════════════════════════════════════════════════════════
+    // HISTORICAL MODE: Fetch candles from stockDb for the target date
+    // ══════════════════════════════════════════════════════════════════
+    console.log(`${runLabel} HISTORICAL MODE: Fetching candles for ${targetDate}`);
+    dailyDataMap = new Map();
+
+    for (const stock of validStocks) {
+      try {
+        const candles = await getDailyCandlesForRange(stock.instrument_key, weekStartDateStr, targetDate);
+        const targetCandle = candles?.find(c => c.date.toISOString().split('T')[0] === targetDate);
+
+        if (targetCandle) {
+          // Build dailyData structure matching what getDailyAnalysisData returns
+          dailyDataMap.set(stock.symbol, {
+            symbol: stock.symbol,
+            ltp: targetCandle.close,
+            open: targetCandle.open,
+            high: targetCandle.high,
+            low: targetCandle.low,
+            todays_volume: targetCandle.volume,
+            avg_volume_50d: 0,  // Not available from historical data
+            daily_rsi: null,    // Not available from historical data
+            _candles: candles   // Store all candles for simulation
+          });
+          console.log(`${runLabel} ${stock.symbol}: Got candle for ${targetDate} — Close: ₹${targetCandle.close.toFixed(2)}`);
+        } else {
+          console.log(`${runLabel} ${stock.symbol}: No candle for ${targetDate}`);
+        }
+      } catch (err) {
+        console.error(`${runLabel} ${stock.symbol}: Error fetching candles:`, err.message);
+      }
+    }
+  } else {
+    // ══════════════════════════════════════════════════════════════════
+    // LIVE MODE: Use getDailyAnalysisData for real-time prices
+    // ══════════════════════════════════════════════════════════════════
+    const dailyDataResponse = await getDailyAnalysisData(symbols);
+    const { stocks: dailyDataArray, nifty_change_pct: niftyPct } = dailyDataResponse;
+    nifty_change_pct = niftyPct;
+    dailyDataMap = new Map(dailyDataArray.map(d => [d.symbol, d]));
+  }
 
   const phase1Results = [];
   const phase2Queue = [];
-  const todayDate = new Date();
 
   // Process each stock
   for (const stock of validStocks) {
@@ -615,6 +907,103 @@ async function runPhase1() {
     if (!dailyData || !dailyData.ltp || dailyData.ltp <= 0) {
       console.log(`${runLabel} ⏭️ ${stock.symbol} - SKIP (no valid price data)`);
       continue;
+    }
+
+    // ── OPTIMIZATION: Skip full processing for terminal simulation states ──
+    // Trade story is complete — just save today's snapshot for historical record
+    const simTerminalStates = ['FULL_EXIT', 'STOPPED_OUT'];
+    if (simTerminalStates.includes(stock.trade_simulation?.status)) {
+      console.log(`${runLabel} ⏭️ ${stock.symbol} — trade ${stock.trade_simulation.status}, saving snapshot only`);
+
+      // Build minimal snapshot for historical record
+      const existingSnapshotIndex = stock.daily_snapshots?.findIndex(
+        s => s.date.toISOString().split('T')[0] === processingDateStr
+      );
+
+      const terminalSnapshot = {
+        date: processingDate,
+        open: dailyData.open,
+        high: dailyData.high,
+        low: dailyData.low,
+        close: dailyData.ltp,
+        volume: dailyData.todays_volume,
+        volume_vs_avg: dailyData.avg_volume_50d > 0
+          ? parseFloat((dailyData.todays_volume / dailyData.avg_volume_50d).toFixed(2))
+          : null,
+        rsi: dailyData.daily_rsi,
+        tracking_status: stock.tracking_status,  // Keep terminal status
+        tracking_flags: [],
+        nifty_change_pct: nifty_change_pct,
+        phase2_triggered: false
+      };
+
+      if (existingSnapshotIndex >= 0) {
+        stock.daily_snapshots[existingSnapshotIndex] = terminalSnapshot;
+      } else {
+        if (!stock.daily_snapshots) stock.daily_snapshots = [];
+        stock.daily_snapshots.push(terminalSnapshot);
+      }
+
+      // Add to results without full processing
+      phase1Results.push({
+        symbol: stock.symbol,
+        instrument_key: stock.instrument_key,
+        oldStatus: stock.tracking_status,
+        newStatus: stock.tracking_status,
+        oldFlags: [],
+        newFlags: [],
+        ltp: dailyData.ltp,
+        statusChanged: false,
+        phase2Triggered: false,
+        phase2Reason: null,
+        simulation: {
+          status: stock.trade_simulation.status,
+          total_pnl: stock.trade_simulation.total_pnl,
+          total_return_pct: stock.trade_simulation.total_return_pct
+        }
+      });
+      continue;  // Skip to next stock
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // BACKFILL: If no snapshots exist, fetch historical daily candles
+    // This catches cases where the stock was added mid-week
+    // ══════════════════════════════════════════════════════════════════
+    if (!stock.daily_snapshots || stock.daily_snapshots.length === 0) {
+      console.log(`${runLabel} ${stock.symbol}: No snapshots — attempting historical backfill from ${weekStartDateStr} to ${processingDateStr}`);
+
+      try {
+        const historicalCandles = await getDailyCandlesForRange(stock.instrument_key, weekStartDateStr, processingDateStr);
+
+        if (historicalCandles && historicalCandles.length > 0) {
+          console.log(`${runLabel} ${stock.symbol}: BACKFILL — got ${historicalCandles.length} historical daily candles`);
+
+          // Add all historical candles as snapshots (excluding today, which we'll add with full data below)
+          const processingDateStrForComparison = processingDateStr;
+          stock.daily_snapshots = historicalCandles
+            .filter(c => {
+              const candleDateStr = c.date.toISOString().split('T')[0];
+              return candleDateStr !== processingDateStrForComparison;
+            })
+            .map(c => ({
+              date: c.date,
+              open: c.open,
+              high: c.high,
+              low: c.low,
+              close: c.close,
+              volume: c.volume,
+              is_backfill: true
+            }));
+
+          console.log(`${runLabel} ${stock.symbol}: BACKFILL — added ${stock.daily_snapshots.length} historical snapshots`);
+        } else {
+          console.log(`${runLabel} ${stock.symbol}: BACKFILL — no historical candles found`);
+          stock.daily_snapshots = [];
+        }
+      } catch (backfillError) {
+        console.error(`${runLabel} ${stock.symbol}: BACKFILL error:`, backfillError.message);
+        stock.daily_snapshots = [];
+      }
     }
 
     // Get previous snapshot (if any)
@@ -639,8 +1028,10 @@ async function runPhase1() {
       entry: stock.levels.entry,
       entryRange: stock.levels.entryRange,
       stop: stock.levels.stop,
-      target: stock.levels.target,
-      target2: stock.levels.target2,
+      target1: stock.levels.target1,       // T1 (50% booking)
+      target1Basis: stock.levels.target1Basis,
+      target: stock.levels.target,          // T2 (full exit)
+      target2: stock.levels.target2,        // T3 (extension)
       archetype: stock.levels.archetype
     });
     console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Previous snapshot:`, prevSnapshot ? {
@@ -656,7 +1047,7 @@ async function runPhase1() {
 
     console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Old status=${oldStatus}, Old flags=[${oldFlags.join(', ')}]`);
 
-    const newStatus = calculateStatus(dailyData, stock.levels, stock.symbol);
+    let newStatus = calculateStatus(dailyData, stock.levels, stock.symbol);
     const newFlags = calculateFlags(dailyData, stock.levels, stock.symbol);
 
     console.log(`[DAILY-TRACK-P1] ${stock.symbol}: NEW status=${newStatus}, NEW flags=[${newFlags.join(', ')}]`);
@@ -672,7 +1063,7 @@ async function runPhase1() {
 
     // Build daily snapshot
     const snapshot = {
-      date: todayDate,
+      date: processingDate,
       open: dailyData.open,
       high: dailyData.high,
       low: dailyData.low,
@@ -697,16 +1088,22 @@ async function runPhase1() {
 
     if (newStatus !== oldStatus) {
       stock.previous_status = oldStatus;
-      stock.status_changed_at = todayDate;
+      stock.status_changed_at = processingDate;
     }
 
-    // Add snapshot (avoid duplicates for same date)
-    const todayDateStr = todayDate.toISOString().split('T')[0];
-    const existingSnapshotIndex = stock.daily_snapshots?.findIndex(
-      s => s.date.toISOString().split('T')[0] === todayDateStr
-    );
+    // Add snapshot (replace any existing snapshot for today, including intraday)
+    // processingDateStr is already defined at the top of the loop
+    const existingSnapshotIndex = stock.daily_snapshots?.findIndex(s => {
+      const snapDateStr = s.date.toISOString().split('T')[0];
+      return snapDateStr === processingDateStr;
+    });
 
     if (existingSnapshotIndex >= 0) {
+      // Replace existing snapshot (could be intraday or from backfill) with full EOD data
+      const wasIntraday = stock.daily_snapshots[existingSnapshotIndex].is_intraday;
+      if (wasIntraday) {
+        console.log(`${runLabel} ${stock.symbol}: Replacing intraday snapshot with EOD data`);
+      }
       stock.daily_snapshots[existingSnapshotIndex] = snapshot;
     } else {
       if (!stock.daily_snapshots) stock.daily_snapshots = [];
@@ -729,6 +1126,36 @@ async function runPhase1() {
     const pnl = stock.trade_simulation.total_pnl;
     const pnlStr = pnl >= 0 ? `+₹${pnl.toLocaleString('en-IN')}` : `-₹${Math.abs(pnl).toLocaleString('en-IN')}`;
 
+    // ── SYNC tracking_status WITH SIMULATION TERMINAL STATES ──
+    // Simulation is the source of truth for trade outcomes
+    if (simStatus === 'FULL_EXIT' && stock.tracking_status !== 'FULL_EXIT') {
+      stock.previous_status = stock.tracking_status;
+      stock.tracking_status = 'FULL_EXIT';
+      stock.status_changed_at = processingDate;
+      newStatus = 'FULL_EXIT';  // Update for logging
+    }
+    else if (simStatus === 'STOPPED_OUT' && stock.tracking_status !== 'STOPPED_OUT') {
+      stock.previous_status = stock.tracking_status;
+      stock.tracking_status = 'STOPPED_OUT';
+      stock.status_changed_at = processingDate;
+      newStatus = 'STOPPED_OUT';
+    }
+    else if (simStatus === 'PARTIAL_EXIT' && stock.tracking_status !== 'TARGET1_HIT') {
+      stock.previous_status = stock.tracking_status;
+      stock.tracking_status = 'TARGET1_HIT';
+      stock.status_changed_at = processingDate;
+      newStatus = 'TARGET1_HIT';
+    }
+    else if (simStatus === 'EXPIRED' && stock.tracking_status !== 'EXPIRED') {
+      stock.previous_status = stock.tracking_status;
+      stock.tracking_status = 'EXPIRED';
+      stock.status_changed_at = processingDate;
+      newStatus = 'EXPIRED';
+    }
+
+    // Check if trade is in terminal state
+    const isTerminal = ['FULL_EXIT', 'STOPPED_OUT', 'EXPIRED'].includes(simStatus);
+
     const result = {
       symbol: stock.symbol,
       instrument_key: stock.instrument_key,
@@ -738,7 +1165,7 @@ async function runPhase1() {
       newFlags,
       ltp: dailyData.ltp,
       statusChanged: newStatus !== oldStatus,
-      phase2Triggered: trigger,
+      phase2Triggered: trigger && !isTerminal,  // Don't trigger Phase 2 for terminal states
       phase2Reason: reason,
       simulation: {
         status: simStatus,
@@ -749,12 +1176,18 @@ async function runPhase1() {
 
     phase1Results.push(result);
 
-    if (trigger) {
+    // Skip Phase 2 for terminal states — trade story is complete
+    if (isTerminal) {
+      console.log(`${runLabel} ⏭️ ${stock.symbol}: ${oldStatus} → ${newStatus} | Sim: ${simStatus} (${pnlStr}) [TRADE COMPLETE - SKIP PHASE 2]`);
+    } else if (trigger) {
+      // Queue for Phase 2 WITH simulation state
       phase2Queue.push({
         stock,
         dailyData,
         triggerReason: reason,
-        snapshot
+        snapshot,
+        tradeSimulation: stock.trade_simulation,  // Pass simulation state to Phase 2
+        processingDate  // Pass the target date for analysis timestamp
       });
       console.log(`${runLabel} 🎯 ${stock.symbol}: ${oldStatus} → ${newStatus} | Sim: ${simStatus} (${pnlStr}) [PHASE 2 QUEUED: ${reason}]`);
     } else if (newStatus !== oldStatus) {
@@ -764,16 +1197,20 @@ async function runPhase1() {
     }
   }
 
-  // Save watchlist with all updates
-  await watchlist.save();
-  console.log(`${runLabel} ✅ Phase 1 complete. ${phase1Results.length} stocks processed, ${phase2Queue.length} queued for Phase 2`);
+  // Save watchlist with all updates (skip if dry run)
+  if (!dryRun) {
+    await watchlist.save();
+    console.log(`${runLabel} ✅ Phase 1 complete. ${phase1Results.length} stocks processed, ${phase2Queue.length} queued for Phase 2`);
+  } else {
+    console.log(`${runLabel} ✅ Phase 1 complete (DRY RUN - not saved). ${phase1Results.length} stocks processed, ${phase2Queue.length} would be queued for Phase 2`);
+  }
 
   return { phase1Results, phase2Queue };
 }
 
 /**
  * Run Phase 2: AI analysis for triggered stocks
- * @param {Object[]} phase2Queue - Array of { stock, dailyData, triggerReason, snapshot }
+ * @param {Object[]} phase2Queue - Array of { stock, dailyData, triggerReason, snapshot, tradeSimulation }
  * @returns {Object[]} - Results array
  */
 async function runPhase2(phase2Queue) {
@@ -793,7 +1230,7 @@ async function runPhase2(phase2Queue) {
   const results = [];
 
   for (const item of phase2Queue) {
-    const { stock, dailyData, triggerReason, snapshot } = item;
+    const { stock, dailyData, triggerReason, snapshot, tradeSimulation, processingDate } = item;
 
     try {
       console.log(`${runLabel} 🤖 Analyzing ${stock.symbol}...`);
@@ -808,14 +1245,15 @@ async function runPhase2(phase2Queue) {
       // Fetch today's news for this stock (if any)
       const recentNews = await fetchRecentNewsForStock(stock.symbol, stock.instrument_key);
 
-      // Build prompt
+      // Build prompt with simulation state
       const { system, user } = buildDailyTrackPrompt({
         stock,
         weekendAnalysis,
         dailyData,
         triggerReason,
         snapshot,
-        recentNews
+        recentNews,
+        tradeSimulation  // Pass simulation state to prompt builder
       });
 
       // Call Claude
@@ -871,12 +1309,18 @@ async function runPhase2(phase2Queue) {
       const validUntil = getNextDay4PM();
 
       // Save to StockAnalysis
-      const todayStart = getTodayStart();
+      // Use processingDate for the analysis timestamp (matches the trading day being analyzed)
+      const analysisDate = processingDate || new Date();
+      const analysisDayStart = new Date(analysisDate);
+      analysisDayStart.setUTCHours(0, 0, 0, 0);
+      const analysisDayEnd = new Date(analysisDate);
+      analysisDayEnd.setUTCHours(23, 59, 59, 999);
+
       const savedAnalysis = await StockAnalysis.findOneAndUpdate(
         {
           instrument_key: stock.instrument_key,
           analysis_type: 'daily_track',
-          created_at: { $gte: todayStart }
+          created_at: { $gte: analysisDayStart, $lte: analysisDayEnd }
         },
         {
           instrument_key: stock.instrument_key,
@@ -913,7 +1357,7 @@ async function runPhase2(phase2Queue) {
           },
           status: 'completed',
           valid_until: validUntil,
-          created_at: new Date()
+          created_at: analysisDate  // Use processing date, not current date
         },
         { upsert: true, new: true }
       );
@@ -955,29 +1399,42 @@ async function runPhase2(phase2Queue) {
 
 /**
  * Run full daily tracking (Phase 1 + Phase 2)
- * @param {Object} options - { forceReanalyze: boolean }
+ * @param {Object} options - { targetDate: string (YYYY-MM-DD), dryRun: boolean, forceReanalyze: boolean }
  * @returns {Object} - Full run results
  */
 async function runDailyTracking(options = {}) {
-  const runLabel = '[DAILY-TRACK]';
+  const { targetDate, dryRun } = options;
+  const runLabel = dryRun ? '[DAILY-TRACK-DRYRUN]' : '[DAILY-TRACK]';
   const startTime = Date.now();
 
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`${runLabel} DAILY TRACKING STARTED`);
   console.log(`${'═'.repeat(60)}`);
   console.log(`${runLabel} Time: ${new Date().toISOString()}`);
+  if (targetDate) console.log(`${runLabel} Target date: ${targetDate}`);
+  if (dryRun) console.log(`${runLabel} DRY RUN MODE - no changes will be saved`);
 
   try {
     // Phase 1: Status updates
-    const { phase1Results, phase2Queue } = await runPhase1();
+    const { phase1Results, phase2Queue } = await runPhase1({ targetDate, dryRun });
 
-    // Phase 2: AI analysis (only for triggered stocks)
-    const phase2Results = await runPhase2(phase2Queue);
+    // Phase 2: AI analysis (only for triggered stocks, skip in dry run)
+    let phase2Results = [];
+    if (!dryRun && phase2Queue.length > 0) {
+      phase2Results = await runPhase2(phase2Queue);
+    } else if (dryRun && phase2Queue.length > 0) {
+      console.log(`${runLabel} SKIP Phase 2 (dry run) — would analyze ${phase2Queue.length} stocks:`);
+      phase2Queue.forEach(item => {
+        console.log(`  - ${item.stock.symbol}: ${item.triggerReason}`);
+      });
+    }
 
     const totalDuration = Date.now() - startTime;
 
     const summary = {
       success: true,
+      dryRun: dryRun || false,
+      targetDate: targetDate || null,
       duration_ms: totalDuration,
       phase1: {
         stocks_processed: phase1Results.length,
@@ -992,14 +1449,14 @@ async function runDailyTracking(options = {}) {
     };
 
     console.log(`\n${runLabel} ${'─'.repeat(40)}`);
-    console.log(`${runLabel} SUMMARY`);
+    console.log(`${runLabel} SUMMARY${dryRun ? ' (DRY RUN)' : ''}`);
     console.log(`${runLabel} Phase 1: ${summary.phase1.stocks_processed} stocks, ${summary.phase1.status_changes} changes`);
-    console.log(`${runLabel} Phase 2: ${summary.phase2.successful}/${summary.phase2.stocks_analyzed} AI calls succeeded`);
+    console.log(`${runLabel} Phase 2: ${dryRun ? `${phase2Queue.length} would be analyzed` : `${summary.phase2.successful}/${summary.phase2.stocks_analyzed} AI calls succeeded`}`);
     console.log(`${runLabel} Total time: ${totalDuration}ms`);
     console.log(`${'═'.repeat(60)}\n`);
 
-    // Send push notification to all users if there were status changes or AI analysis
-    if (summary.phase2.successful > 0) {
+    // Send push notification to all users if there were status changes or AI analysis (skip in dry run)
+    if (!dryRun && summary.phase2.successful > 0) {
       try {
         await firebaseService.sendAnalysisCompleteToAllUsers(
           'Daily Analysis Complete',
@@ -1062,14 +1519,26 @@ async function fetchRecentNewsForStock(symbol, instrumentKey) {
 
 /**
  * Get today at midnight IST (returns UTC Date for MongoDB queries)
+ *
+ * Example: Feb 4, 4:00 PM IST = Feb 4, 10:30 UTC
+ *          getTodayStart() returns Feb 3, 18:30 UTC (= Feb 4, 00:00 IST)
  */
 function getTodayStart() {
-  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
   const now = new Date();
-  const istNow = new Date(now.getTime() + IST_OFFSET_MS);
-  const istMidnight = new Date(istNow);
-  istMidnight.setUTCHours(0, 0, 0, 0);
-  return new Date(istMidnight.getTime() - IST_OFFSET_MS);
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+  // Convert to IST epoch
+  const istEpoch = now.getTime() + IST_OFFSET_MS;
+
+  // Get IST date components
+  const istDate = new Date(istEpoch);
+  const year = istDate.getUTCFullYear();
+  const month = istDate.getUTCMonth();
+  const day = istDate.getUTCDate();
+
+  // IST midnight = that date at 00:00:00 IST = subtract IST offset for UTC
+  const istMidnightUTC = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  return new Date(istMidnightUTC.getTime() - IST_OFFSET_MS);
 }
 
 /**
@@ -1101,12 +1570,14 @@ export {
   calculateStatus,
   calculateFlags,
   shouldTriggerPhase2,
-  simulateTrade
+  simulateTrade,
+  checkEntryQuality
 };
 
 export default {
   runDailyTracking,
   runPhase1,
   runPhase2,
-  simulateTrade
+  simulateTrade,
+  checkEntryQuality
 };

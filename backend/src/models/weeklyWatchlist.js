@@ -163,15 +163,34 @@ const watchlistStockSchema = new mongoose.Schema({
   }],
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // INTRADAY ALERTS (from 15-min monitor job during market hours)
+  // ═══════════════════════════════════════════════════════════════════════════
+  intraday_alerts: [{
+    date: { type: Date, required: true },
+    type: {
+      type: String,
+      enum: ['STOP_HIT', 'TRAILING_STOP_HIT', 'T1_HIT', 'T2_HIT', 'ENTRY_APPROACHING'],
+      required: true
+    },
+    price: Number,      // Price at time of alert
+    level: Number,      // Level that was crossed (stop, t1, t2)
+    message: String     // Human-readable alert message
+  }],
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // TRADE SIMULATION (recalculated after each daily snapshot)
   // Simulates ₹1,00,000 investment with 50% T1 booking + trailing stop strategy
   // ═══════════════════════════════════════════════════════════════════════════
   trade_simulation: {
     status: {
       type: String,
-      enum: ['WAITING', 'ENTERED', 'PARTIAL_EXIT', 'FULL_EXIT', 'STOPPED_OUT', 'EXPIRED'],
+      enum: ['WAITING', 'ENTRY_SIGNALED', 'ENTERED', 'PARTIAL_EXIT', 'FULL_EXIT', 'STOPPED_OUT', 'EXPIRED'],
       default: 'WAITING'
     },
+    // Two-phase entry: signal fields (set when close confirms entry, cleared after execution)
+    signal_date: { type: Date, default: null },   // Date when entry signal was confirmed
+    signal_close: { type: Number, default: null }, // Close price that confirmed the signal
+    // Entry fields (set when actually entering the trade at next day's open)
     entry_price: Number,
     entry_date: Date,
     capital: { type: Number, default: 100000 },  // ₹1,00,000
@@ -190,7 +209,9 @@ const watchlistStockSchema = new mongoose.Schema({
       type: {
         type: String,
         enum: [
-          'ENTRY',
+          'ENTRY_SIGNAL',     // Two-phase entry: signal confirmed (close >= entry)
+          'ENTRY',            // Two-phase entry: executed at next day's open
+          'ENTRY_SKIPPED',    // Entry skipped (OVEREXTENDED at signal or execution)
           'T1_HIT',
           'T2_HIT',
           'STOPPED_OUT',
