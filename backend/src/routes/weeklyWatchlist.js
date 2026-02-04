@@ -83,7 +83,7 @@ async function checkIntradayTriggers(stock, livePrice, weekStart) {
   const t1 = levels.target1 || levels.target;
   const t2 = levels.target2 || (levels.target1 ? levels.target : null);  // T2 = target if target1 exists
 
-  console.log(`[INTRADAY-CHECK] ${stock.symbol}: livePrice=${livePrice}, entryZoneLow=${entryZoneLow}, levels.entry=${levels.entry}`);
+  console.log(`[INTRADAY-CHECK] ${stock.symbol}: livePrice=${livePrice}, entryZoneLow=${entryZoneLow}, levels.entry=${levels.entry}, t1=${t1}, t2=${t2}`);
 
   // Get today's date in IST
   const now = new Date();
@@ -105,10 +105,12 @@ async function checkIntradayTriggers(stock, livePrice, weekStart) {
     console.log(`[INTRADAY-CHECK] ${stock.symbol}: lastSnapshot date=${lastSnap.date}, is_intraday=${lastSnap.is_intraday}`);
   }
 
-  // If we have today's snapshot AND trade_simulation exists, simulation is up to date
+  // If we have today's snapshot AND trade_simulation exists, we still need to check
+  // for T1/T2/stop hits because the live price may have moved since the snapshot was created
+  // Only skip the entry logic (CASE 1), but continue to CASE 2 and CASE 3
   if (hasToday && sim && sim.status !== 'WAITING') {
-    console.log(`[INTRADAY-CHECK] ${stock.symbol}: Skipping - already have today's snapshot with sim.status=${sim.status}`);
-    return false;
+    console.log(`[INTRADAY-CHECK] ${stock.symbol}: Today's snapshot exists with sim.status=${sim.status}, checking for T1/T2/stop...`);
+    // Don't return early - fall through to check T1/T2/stop (CASE 2 and CASE 3)
   }
 
   // RECOVERY: If trade_simulation is missing or WAITING, but previous snapshots show entry was triggered
