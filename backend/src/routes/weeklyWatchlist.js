@@ -426,7 +426,10 @@ function calculateCardDisplay(stock, livePrice) {
   // Total P&L = realized + unrealized
   const totalPnl = realizedPnl + unrealizedPnl;
   const capital = sim.capital || 100000;
-  const totalReturnPct = (totalPnl / capital) * 100;
+  const totalReturnPct = (totalPnl / capital) * 100;  // ROI on capital
+
+  // Stock gain % - price change from entry to current (more intuitive)
+  const stockGainPct = entryPrice > 0 && livePrice ? ((livePrice - entryPrice) / entryPrice) * 100 : 0;
 
   // Current investment value
   const investmentValue = qtyRemaining > 0 && livePrice ? qtyRemaining * livePrice : 0;
@@ -540,7 +543,8 @@ function calculateCardDisplay(stock, livePrice) {
     entry_price: entryPrice,
     entry_date: sim.entry_date,
     total_pnl: totalPnl,
-    total_return_pct: totalReturnPct,
+    total_return_pct: totalReturnPct,      // ROI on ₹1L capital
+    stock_gain_pct: stockGainPct,          // Stock price gain % (entry vs current)
     investment_value: investmentValue,
     realized_pnl: realizedPnl,
     unrealized_pnl: unrealizedPnl,
