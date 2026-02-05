@@ -67,6 +67,9 @@ import apiUsageRoutes from './routes/apiUsage.js';
 import adminRoutes from './routes/admin.js';
 import weeklySetupsRoutes from './routes/weeklySetups.js';
 import appFeedbackRoutes from './routes/appFeedback.js';
+import kiteAuthRoutes from './routes/kiteAuth.js';
+import kiteAdminRoutes from './routes/kiteAdmin.js';
+import { startKiteTokenRefreshJob } from './services/jobs/kiteTokenRefreshJob.js';
 
 const app = express();
 
@@ -200,6 +203,8 @@ app.use('/api/v1/daily-news-stocks', dailyNewsStocksRoutes);
 app.use('/api/v1/usage', apiUsageRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/app-feedback', appFeedbackRoutes);
+app.use('/api/kite/auth', kiteAuthRoutes);
+app.use('/api/admin/kite', kiteAdminRoutes);
 
 // App redirect routes for WhatsApp deep links
 app.use('/app', appRedirectRoutes);
@@ -349,6 +354,10 @@ app.listen(PORT, async () => {
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
   await initializeIntradayMonitorJob(); // intraday-monitor (every 15 min during market hours)
   await initializePendingAnalysisReminderJob(); // pending-analysis-reminder (4:00 PM Mon-Fri, notify users)
+
+  // Kite Connect token refresh job (6:00 AM IST daily)
+  startKiteTokenRefreshJob();
+  console.log('✅ Kite token refresh job scheduled');
 
 });
 

@@ -52,6 +52,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.2.1",
     "openai": "^4.77.0",
+    "otplib": "^13.2.1",
     "p-queue": "^8.1.0",
     "postmark": "^4.0.5",
     "puppeteer": "^23.11.1",
