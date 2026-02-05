@@ -76,25 +76,37 @@ class KiteAutoLoginService {
       // Step 3: Generate TOTP and POST 2FA
       console.log('[KITE AUTO-LOGIN] Step 3: Submitting 2FA TOTP...');
       const totp = authenticator.generate(this.totpSecret);
+      console.log(`[KITE AUTO-LOGIN] Generated TOTP: ${totp} (length: ${totp.length})`);
 
-      const twofaResp = await client.post(
-        `${this.kiteWebUrl}/api/twofa`,
-        new URLSearchParams({
-          user_id: this.userId,
-          request_id: requestId,
-          twofa_value: totp
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
+      try {
+        const twofaResp = await client.post(
+          `${this.kiteWebUrl}/api/twofa`,
+          new URLSearchParams({
+            user_id: this.userId,
+            request_id: requestId,
+            twofa_value: totp
+          }),
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded'
+            }
           }
-        }
-      );
+        );
 
-      if (twofaResp.data?.status !== 'success') {
-        throw new Error(`2FA failed: ${JSON.stringify(twofaResp.data)}`);
+        console.log('[KITE AUTO-LOGIN] 2FA Response:', JSON.stringify(twofaResp.data));
+
+        if (twofaResp.data?.status !== 'success') {
+          throw new Error(`2FA failed: ${JSON.stringify(twofaResp.data)}`);
+        }
+        console.log('[KITE AUTO-LOGIN] Step 3 complete. 2FA successful.');
+      } catch (twofaError) {
+        console.error('[KITE AUTO-LOGIN] 2FA Error:', twofaError.message);
+        if (twofaError.response) {
+          console.error('[KITE AUTO-LOGIN] 2FA Error Response:', JSON.stringify(twofaError.response.data));
+          console.error('[KITE AUTO-LOGIN] 2FA Error Status:', twofaError.response.status);
+        }
+        throw twofaError;
       }
-      console.log('[KITE AUTO-LOGIN] Step 3 complete. 2FA successful.');
 
       // Step 4: Follow redirect to get request_token
       console.log('[KITE AUTO-LOGIN] Step 4: Getting request_token...');
