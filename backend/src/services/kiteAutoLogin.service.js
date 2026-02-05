@@ -106,39 +106,78 @@ class KiteAutoLoginService {
         throw twofaError;
       }
 
-      // Step 4: Follow redirect to get request_token
-      console.log('[KITE AUTO-LOGIN] Step 4: Getting request_token...');
-      const finalResp = await client.get(loginPageUrl, {
+      // Step 4: Get the authorization page to extract sess_id
+      console.log('[KITE AUTO-LOGIN] Step 4: Getting authorization page...');
+      const authPageResp = await client.get(loginPageUrl, {
         maxRedirects: 5,
         validateStatus: () => true
       });
 
-      // Extract request_token from redirect URL
+      // Extract sess_id from the authorization page URL
+      const authPageUrl = authPageResp.request?.res?.responseUrl || authPageResp.headers?.location;
+      console.log('[KITE AUTO-LOGIN] Step 4 - Auth page URL:', authPageUrl);
+
+      let sessId = null;
+      if (authPageUrl) {
+        const authUrl = new URL(authPageUrl);
+        sessId = authUrl.searchParams.get('sess_id');
+      }
+
+      if (!sessId) {
+        console.log('[KITE AUTO-LOGIN] Step 4 - Could not extract sess_id');
+        throw new Error('Failed to get sess_id from authorization page');
+      }
+      console.log('[KITE AUTO-LOGIN] Step 4 complete. Got sess_id.');
+
+      // Step 5: POST to authorize endpoint to grant permission
+      console.log('[KITE AUTO-LOGIN] Step 5: Authorizing app...');
+      const authorizeResp = await client.post(
+        `${this.kiteWebUrl}/connect/authorize`,
+        new URLSearchParams({
+          api_key: this.apiKey,
+          sess_id: sessId
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          maxRedirects: 0,
+          validateStatus: (status) => status < 400 || status === 302 || status === 303
+        }
+      );
+
+      console.log('[KITE AUTO-LOGIN] Step 5 - Authorize response status:', authorizeResp.status);
+      console.log('[KITE AUTO-LOGIN] Step 5 - Location header:', authorizeResp.headers?.location);
+
+      // Extract request_token from the redirect URL
       let requestToken = null;
-      const responseUrl = finalResp.request?.res?.responseUrl || finalResp.headers?.location;
+      const redirectUrl = authorizeResp.headers?.location;
 
-      console.log('[KITE AUTO-LOGIN] Step 4 - Response URL:', responseUrl);
-      console.log('[KITE AUTO-LOGIN] Step 4 - Response status:', finalResp.status);
-      console.log('[KITE AUTO-LOGIN] Step 4 - Location header:', finalResp.headers?.location);
-
-      if (responseUrl && responseUrl.includes('request_token')) {
-        const url = new URL(responseUrl);
+      if (redirectUrl && redirectUrl.includes('request_token')) {
+        const url = new URL(redirectUrl);
         requestToken = url.searchParams.get('request_token');
       }
 
       if (!requestToken) {
-        // Try to get from response data if it's a JSON response
-        if (finalResp.data?.request_token) {
-          requestToken = finalResp.data.request_token;
-        } else {
-          console.log('[KITE AUTO-LOGIN] Step 4 - Full response data:', typeof finalResp.data === 'string' ? finalResp.data.substring(0, 500) : JSON.stringify(finalResp.data));
-          throw new Error('Failed to get request_token from redirect');
+        // If no redirect, try following it
+        if (authorizeResp.status === 200) {
+          const responseUrl = authorizeResp.request?.res?.responseUrl;
+          console.log('[KITE AUTO-LOGIN] Step 5 - Final URL after redirects:', responseUrl);
+          if (responseUrl && responseUrl.includes('request_token')) {
+            const url = new URL(responseUrl);
+            requestToken = url.searchParams.get('request_token');
+          }
         }
       }
-      console.log('[KITE AUTO-LOGIN] Step 4 complete. Got request_token.');
 
-      // Step 5: Exchange request_token for access_token
-      console.log('[KITE AUTO-LOGIN] Step 5: Exchanging for access_token...');
+      if (!requestToken) {
+        console.log('[KITE AUTO-LOGIN] Step 5 - Response data:', typeof authorizeResp.data === 'string' ? authorizeResp.data.substring(0, 500) : JSON.stringify(authorizeResp.data));
+        throw new Error('Failed to get request_token from authorization');
+      }
+      console.log('[KITE AUTO-LOGIN] Step 5 complete. Got request_token.');
+
+      // Step 6: Exchange request_token for access_token
+      console.log('[KITE AUTO-LOGIN] Step 6: Exchanging for access_token...');
       const checksum = crypto.createHash('sha256')
         .update(this.apiKey + requestToken + this.apiSecret)
         .digest('hex');
