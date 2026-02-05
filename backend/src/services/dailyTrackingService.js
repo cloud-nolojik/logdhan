@@ -479,6 +479,7 @@ function simulateTrade(stock, snapshots, currentPrice) {
       sim.entry_price = actualEntryPrice;
       sim.entry_date = date instanceof Date ? date : new Date(date);
       sim.trailing_stop = stop;
+      console.log(`[TRAILING-STOP-INIT] ${stock.symbol}: Set trailing_stop = ${stop} (original stop from levels)`);
       sim.status = 'ENTERED';
       sim.qty_total = actualQty;
       sim.qty_remaining = actualQty;
@@ -637,6 +638,8 @@ function simulateTrade(stock, snapshots, currentPrice) {
     // ══════════════════════════════════════════════
     // CHECK STOP LOSS (always check first — worst case)
     // ══════════════════════════════════════════════
+    console.log(`[STOP-CHECK] ${stock.symbol}: Day ${date} | Low=${low} | trailing_stop=${sim.trailing_stop} | original_stop=${stop} | sim.status=${sim.status}`);
+    console.log(`[STOP-CHECK] ${stock.symbol}: Will trigger STOPPED_OUT? ${low <= sim.trailing_stop} (low ${low} <= trailing_stop ${sim.trailing_stop})`);
     if (low <= sim.trailing_stop) {
       const exitPrice = sim.trailing_stop;
       const pnl = (exitPrice - sim.entry_price) * sim.qty_remaining;
