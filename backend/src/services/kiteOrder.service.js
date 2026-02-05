@@ -200,13 +200,20 @@ class KiteOrderService {
     const startTime = Date.now();
 
     try {
+      const exchange = gttParams.exchange || kiteConfig.DEFAULT_EXCHANGE;
+
+      // Kite API expects 'type' and 'condition' as JSON object
       const params = {
-        trigger_type: gttParams.type || kiteConfig.GTT_TYPES.SINGLE,
-        tradingsymbol: gttParams.tradingsymbol,
-        exchange: gttParams.exchange || kiteConfig.DEFAULT_EXCHANGE,
-        trigger_values: JSON.stringify(gttParams.trigger_values),
-        last_price: gttParams.last_price,
+        type: gttParams.type || kiteConfig.GTT_TYPES.SINGLE,
+        condition: JSON.stringify({
+          exchange: exchange,
+          tradingsymbol: gttParams.tradingsymbol,
+          trigger_values: gttParams.trigger_values,
+          last_price: gttParams.last_price
+        }),
         orders: JSON.stringify(gttParams.orders.map(order => ({
+          exchange: exchange,
+          tradingsymbol: gttParams.tradingsymbol,
           transaction_type: order.transaction_type,
           quantity: order.quantity,
           order_type: order.order_type || kiteConfig.ORDER_TYPES.LIMIT,
@@ -216,11 +223,11 @@ class KiteOrderService {
       };
 
       console.log('[KITE GTT] Placing GTT:', JSON.stringify({
-        type: params.trigger_type,
-        symbol: params.tradingsymbol,
-        exchange: params.exchange,
+        type: params.type,
+        symbol: gttParams.tradingsymbol,
+        exchange: exchange,
         triggers: gttParams.trigger_values,
-        last_price: params.last_price,
+        last_price: gttParams.last_price,
         orders: gttParams.orders
       }, null, 2));
       console.log('[KITE GTT] Full params:', JSON.stringify(params, null, 2));
