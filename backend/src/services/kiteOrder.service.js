@@ -215,11 +215,15 @@ class KiteOrderService {
         })))
       };
 
-      console.log('[KITE GTT] Placing GTT:', {
+      console.log('[KITE GTT] Placing GTT:', JSON.stringify({
         type: params.trigger_type,
         symbol: params.tradingsymbol,
-        triggers: gttParams.trigger_values
-      });
+        exchange: params.exchange,
+        triggers: gttParams.trigger_values,
+        last_price: params.last_price,
+        orders: gttParams.orders
+      }, null, 2));
+      console.log('[KITE GTT] Full params:', JSON.stringify(params, null, 2));
 
       const response = await this.kiteService.makeRequest(
         'POST',
@@ -298,6 +302,10 @@ class KiteOrderService {
       });
 
       console.error('[KITE GTT] GTT placement failed:', error.message);
+      if (error.response) {
+        console.error('[KITE GTT] Error status:', error.response.status);
+        console.error('[KITE GTT] Error data:', JSON.stringify(error.response.data));
+      }
       throw error;
     }
   }
