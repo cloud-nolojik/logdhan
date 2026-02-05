@@ -117,13 +117,23 @@ class KiteAutoLoginService {
       let requestToken = null;
       const responseUrl = finalResp.request?.res?.responseUrl || finalResp.headers?.location;
 
+      console.log('[KITE AUTO-LOGIN] Step 4 - Response URL:', responseUrl);
+      console.log('[KITE AUTO-LOGIN] Step 4 - Response status:', finalResp.status);
+      console.log('[KITE AUTO-LOGIN] Step 4 - Location header:', finalResp.headers?.location);
+
       if (responseUrl && responseUrl.includes('request_token')) {
         const url = new URL(responseUrl);
         requestToken = url.searchParams.get('request_token');
       }
 
       if (!requestToken) {
-        throw new Error('Failed to get request_token from redirect');
+        // Try to get from response data if it's a JSON response
+        if (finalResp.data?.request_token) {
+          requestToken = finalResp.data.request_token;
+        } else {
+          console.log('[KITE AUTO-LOGIN] Step 4 - Full response data:', typeof finalResp.data === 'string' ? finalResp.data.substring(0, 500) : JSON.stringify(finalResp.data));
+          throw new Error('Failed to get request_token from redirect');
+        }
       }
       console.log('[KITE AUTO-LOGIN] Step 4 complete. Got request_token.');
 
