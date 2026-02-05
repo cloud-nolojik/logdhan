@@ -224,8 +224,9 @@ async function getValidUntil(isQuickReject) {
     });
   }
 
-  // Full analysis: use existing getValidUntilTime() (next market close)
-  return await MarketHoursUtil.getValidUntilTime(now);
+  // Full analysis: use weekly expiry (Friday 3:29 PM IST) - same as weekend screening
+  // Swing analysis with entry/stop/targets is valid for the whole trading week
+  return await MarketHoursUtil.getWeeklyValidUntilTime(now);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

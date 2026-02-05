@@ -745,10 +745,13 @@ router.get("/", auth, async (req, res) => {
     });
 
     // Fetch latest daily_track analysis for each stock (batch query)
+    // Only include analyses that haven't expired (valid_until > now)
+    const now = new Date();
     const dailyTrackAnalyses = await StockAnalysis.find({
       instrument_key: { $in: instrumentKeys },
       analysis_type: 'daily_track',
-      status: 'completed'
+      status: 'completed',
+      valid_until: { $gt: now }  // Filter out expired analyses
     }).sort({ created_at: -1 });
 
     // Build a map of instrument_key -> latest daily_track analysis

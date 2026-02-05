@@ -1426,8 +1426,8 @@ async function runPhase2(phase2Queue) {
         }
       });
 
-      // Calculate valid_until (next trading day 4 PM IST)
-      const validUntil = getNextDay4PM();
+      // Calculate valid_until (next day 9 AM IST)
+      const validUntil = getNextDay9AM();
 
       // Save to StockAnalysis
       // Use processingDate for the analysis timestamp (matches the trading day being analyzed)
@@ -1664,23 +1664,24 @@ function getTodayStart() {
 }
 
 /**
- * Get next trading day 4 PM IST (valid_until time)
- * Skips weekends: Fri 4PM → Mon 4PM, Sat/Sun → Mon 4PM
+ * Get next day 9 AM IST (valid_until time)
+ * 9 AM IST = 3:30 AM UTC
+ * Skips weekends: Fri → Sat 9AM, Sat → Mon 9AM, Sun → Mon 9AM
  */
-function getNextDay4PM() {
+function getNextDay9AM() {
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
   const now = new Date();
   const istNow = new Date(now.getTime() + IST_OFFSET_MS);
   const dayOfWeek = istNow.getUTCDay(); // 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
 
   let daysToAdd = 1;
-  if (dayOfWeek === 5) daysToAdd = 3;      // Fri → Mon
-  else if (dayOfWeek === 6) daysToAdd = 2; // Sat → Mon
+  // For weekends, skip to Monday 9 AM
+  if (dayOfWeek === 6) daysToAdd = 2; // Sat → Mon
   else if (dayOfWeek === 0) daysToAdd = 1; // Sun → Mon
 
   const nextDay = new Date(istNow);
   nextDay.setUTCDate(nextDay.getUTCDate() + daysToAdd);
-  nextDay.setUTCHours(16, 0, 0, 0); // 4 PM IST
+  nextDay.setUTCHours(9, 0, 0, 0); // 9 AM IST
 
   return new Date(nextDay.getTime() - IST_OFFSET_MS);
 }

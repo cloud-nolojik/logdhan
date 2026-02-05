@@ -480,17 +480,17 @@ router.get('/:instrument_key/position-analysis', auth, async (req, res) => {
       status: 'completed'
     }).sort({ created_at: -1 }).lean();
 
-    if (!analysis) {
+    // Check if analysis exists and is still valid (not expired)
+    const now = new Date();
+    const isExpired = analysis && analysis.valid_until && now > new Date(analysis.valid_until);
+
+    if (!analysis || isExpired) {
       return res.json({
         success: true,
         has_analysis: false,
         message: 'No position analysis available yet. Analysis runs at 4:00 PM on trading days.'
       });
     }
-
-    // Check if analysis is still valid
-    const now = new Date();
-    const isExpired = analysis.valid_until && now > new Date(analysis.valid_until);
 
     // Extract data based on analysis type
     // daily_track uses analysis_data.daily_track, position_management uses analysis_data.position_management
@@ -501,7 +501,6 @@ router.get('/:instrument_key/position-analysis', auth, async (req, res) => {
     res.json({
       success: true,
       has_analysis: true,
-      is_expired: isExpired,
       analysis_type: analysis.analysis_type,  // Let client know which type
       analysis: positionData,
       original_levels: analysis.analysis_data?.original_levels || null,

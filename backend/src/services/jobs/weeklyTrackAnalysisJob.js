@@ -518,8 +518,8 @@ class WeeklyTrackAnalysisJob {
       };
     }
 
-    // 8. Calculate valid_until (next day 4 PM IST)
-    const validUntil = this.getNextDay4PM();
+    // 8. Calculate valid_until (next day 9 AM IST)
+    const validUntil = this.getNextDay9AM();
     console.log(`[POSITION-MGMT] 📍 A11: Valid until ${validUntil}`);
 
     // 9. Store in StockAnalysis
@@ -714,10 +714,11 @@ class WeeklyTrackAnalysisJob {
   }
 
   /**
-   * Helper: Get next trading day 4 PM IST (valid_until time)
-   * Skips weekends: Fri 4PM → Mon 4PM, Sat/Sun → Mon 4PM
+   * Helper: Get next day 9 AM IST (valid_until time)
+   * 9 AM IST = 3:30 AM UTC
+   * Skips weekends: Fri → Sat 9AM, Sat → Mon 9AM, Sun → Mon 9AM
    */
-  getNextDay4PM() {
+  getNextDay9AM() {
     const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
     const now = new Date();
 
@@ -725,12 +726,10 @@ class WeeklyTrackAnalysisJob {
     const istNow = new Date(now.getTime() + IST_OFFSET_MS);
     const dayOfWeek = istNow.getUTCDay(); // 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
 
-    // Calculate days to add to get next trading day
+    // Calculate days to add
     let daysToAdd = 1;
-    if (dayOfWeek === 5) {
-      // Friday → Monday (add 3 days)
-      daysToAdd = 3;
-    } else if (dayOfWeek === 6) {
+    // For weekends, skip to Monday 9 AM
+    if (dayOfWeek === 6) {
       // Saturday → Monday (add 2 days)
       daysToAdd = 2;
     } else if (dayOfWeek === 0) {
@@ -738,10 +737,10 @@ class WeeklyTrackAnalysisJob {
       daysToAdd = 1;
     }
 
-    // Create next trading day at 4 PM IST
+    // Create next day at 9 AM IST
     const nextDay = new Date(istNow);
     nextDay.setUTCDate(nextDay.getUTCDate() + daysToAdd);
-    nextDay.setUTCHours(16, 0, 0, 0); // 4 PM IST
+    nextDay.setUTCHours(9, 0, 0, 0); // 9 AM IST
 
     // Convert to UTC for storage
     return new Date(nextDay.getTime() - IST_OFFSET_MS);
