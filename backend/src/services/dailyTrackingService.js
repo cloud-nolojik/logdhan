@@ -638,8 +638,9 @@ function simulateTrade(stock, snapshots, currentPrice) {
     // ══════════════════════════════════════════════
     // CHECK STOP LOSS (always check first — worst case)
     // ══════════════════════════════════════════════
-    console.log(`[STOP-CHECK] ${stock.symbol}: Day ${date} | Low=${low} | trailing_stop=${sim.trailing_stop} | original_stop=${stop} | sim.status=${sim.status}`);
+    console.log(`[STOP-CHECK] ${stock.symbol}: Day ${date} | Low=${low} | trailing_stop=${sim.trailing_stop} | original_stop=${stop} | sim.status=${sim.status} | qty_remaining=${sim.qty_remaining}`);
     console.log(`[STOP-CHECK] ${stock.symbol}: Will trigger STOPPED_OUT? ${low <= sim.trailing_stop} (low ${low} <= trailing_stop ${sim.trailing_stop})`);
+    console.log(`[STOP-CHECK] ${stock.symbol}: Events so far:`, sim.events.map(e => e.type).join(', '));
     if (low <= sim.trailing_stop) {
       const exitPrice = sim.trailing_stop;
       const pnl = (exitPrice - sim.entry_price) * sim.qty_remaining;
@@ -1025,6 +1026,13 @@ async function runPhase1(options = {}) {
     const simTerminalStates = ['FULL_EXIT', 'STOPPED_OUT'];
     if (simTerminalStates.includes(stock.trade_simulation?.status)) {
       console.log(`${runLabel} ⏭️ ${stock.symbol} — trade ${stock.trade_simulation.status}, saving snapshot only`);
+      console.log(`${runLabel} [DEBUG] ${stock.symbol} trade_simulation from DB:`, JSON.stringify({
+        status: stock.trade_simulation.status,
+        entry_price: stock.trade_simulation.entry_price,
+        trailing_stop: stock.trade_simulation.trailing_stop,
+        events: stock.trade_simulation.events?.slice(-2) // last 2 events
+      }, null, 2));
+      console.log(`${runLabel} [DEBUG] ${stock.symbol} levels from DB:`, JSON.stringify(stock.levels, null, 2));
 
       // Build minimal snapshot for historical record
       const existingSnapshotIndex = stock.daily_snapshots?.findIndex(

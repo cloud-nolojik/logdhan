@@ -360,8 +360,17 @@ function buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingSta
   }
 
   // Build message and subtext from daily_track data
-  const message = headline || 'Daily Update';
-  const subtext = dailyTrack.step_update || statusAssessment?.substring(0, 100) || null;
+  // Override for terminal states that might have stale AI data
+  let message = headline || 'Daily Update';
+  let subtext = dailyTrack.step_update || statusAssessment?.substring(0, 100) || null;
+
+  if (journeyStatus === 'STOPPED_OUT') {
+    message = 'Trade Stopped Out';
+    subtext = 'Trailing stop hit — position closed. See timeline for P&L details.';
+  } else if (journeyStatus === 'FULL_EXIT') {
+    message = 'Trade Complete';
+    subtext = 'All targets hit — position fully closed. Great trade!';
+  }
 
   return {
     icon,
