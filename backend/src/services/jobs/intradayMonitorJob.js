@@ -19,6 +19,8 @@ import { fileURLToPath } from 'url';
 import WeeklyWatchlist from '../../models/weeklyWatchlist.js';
 import priceCacheService from '../priceCache.service.js';
 import { firebaseService } from '../firebase/firebase.service.js';
+import kiteOrderService from '../kiteOrder.service.js';
+import { isKiteIntegrationEnabled } from '../kiteTradeIntegration.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -294,6 +296,34 @@ class IntradayMonitorJob {
       price: entryPrice,
       message: `Entry executed at ₹${entryPrice.toFixed(2)} (${qty} shares)`
     };
+
+    // Place OCO GTT for SL + Target (Kite integration)
+    if (!dryRun && isKiteIntegrationEnabled()) {
+      try {
+        const t1 = levels.target1 || levels.target2;
+        if (t1 && stop && qty > 0) {
+          console.log(`${runLabel} [KITE] Placing OCO GTT for ${stock.symbol}: SL=₹${stop}, T1=₹${t1}, Qty=${qty}`);
+
+          const ocoResult = await kiteOrderService.placeOCOGTT({
+            tradingSymbol: stock.symbol,
+            currentPrice: entryPrice,
+            stopLoss: stop,
+            target: t1,
+            quantity: qty,
+            stockId: stock._id,
+            simulationId: sim._id || `sim_${stock._id}`,
+            orderType: 'STOP_LOSS'
+          });
+
+          console.log(`${runLabel} [KITE] OCO GTT placed successfully: ${ocoResult.triggerId}`);
+        } else {
+          console.log(`${runLabel} [KITE] Skipping OCO GTT - missing levels: t1=${t1}, stop=${stop}, qty=${qty}`);
+        }
+      } catch (kiteError) {
+        console.error(`${runLabel} [KITE] Failed to place OCO GTT for ${stock.symbol}:`, kiteError.message);
+        // Don't fail the entry execution if GTT placement fails
+      }
+    }
 
     return { executed: true, alert };
   }

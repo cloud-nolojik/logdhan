@@ -130,6 +130,46 @@ async function processSimulationForKiteOrders(phase1Results, stocksMap) {
 
         console.log(`[KITE-INTEGRATION] ${result.symbol}: Entry GTT placed - ID: ${orderResult.triggerId}`);
 
+        // Place OCO GTT for SL + Target immediately after entry GTT
+        const stopLoss = levels.stop;
+        const target = levels.target1 || levels.target2;
+
+        if (stopLoss && target) {
+          console.log(`[KITE-INTEGRATION] ${result.symbol}: Placing OCO GTT - SL: ₹${stopLoss}, T1: ₹${target}, Qty: ${quantity}`);
+
+          try {
+            const ocoResult = await kiteOrderService.placeOCOGTT({
+              tradingSymbol: tradingSymbol,
+              currentPrice: currentPrice,
+              stopLoss: stopLoss,
+              target: target,
+              quantity: quantity,
+              stockId: stock._id,
+              simulationId: stock.trade_simulation?._id || `sim_${stock._id}`,
+              orderType: 'STOP_LOSS'
+            });
+
+            console.log(`[KITE-INTEGRATION] ${result.symbol}: OCO GTT placed - ID: ${ocoResult.triggerId}`);
+            results.orders.push({
+              symbol: result.symbol,
+              triggerId: ocoResult.triggerId,
+              type: 'OCO',
+              stopLoss,
+              target,
+              quantity
+            });
+          } catch (ocoError) {
+            console.error(`[KITE-INTEGRATION] ${result.symbol}: Failed to place OCO GTT:`, ocoError.message);
+            results.errors.push({
+              symbol: result.symbol,
+              type: 'OCO',
+              error: ocoError.message
+            });
+          }
+        } else {
+          console.log(`[KITE-INTEGRATION] ${result.symbol}: Skipping OCO GTT - missing levels: stop=${stopLoss}, target=${target}`);
+        }
+
       } catch (stockError) {
         console.error(`[KITE-INTEGRATION] ${result.symbol}: Error placing order:`, stockError.message);
         results.errors.push({
