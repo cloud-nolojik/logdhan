@@ -220,7 +220,7 @@ class KiteTokenRefreshJob {
 
     } catch (error) {
       const durationMs = Date.now() - startTime;
-      console.error(`[KITE-TOKEN-JOB] Refresh failed (attempt ${retryCount + 1}):`, error.message);
+      console.log(`[KITE-TOKEN-JOB] Refresh failed (attempt ${retryCount + 1}):`, error.message);
 
       // Log failed refresh
       await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.TOKEN_REFRESH, {
@@ -240,7 +240,7 @@ class KiteTokenRefreshJob {
       }
 
       // All retries failed
-      console.error('[KITE-TOKEN-JOB] All retry attempts failed. Manual intervention required.');
+      console.log('[KITE-TOKEN-JOB] All retry attempts failed. Manual intervention required.');
 
       return {
         success: false,

@@ -100,10 +100,10 @@ class KiteAutoLoginService {
         }
         console.log('[KITE AUTO-LOGIN] Step 3 complete. 2FA successful.');
       } catch (twofaError) {
-        console.error('[KITE AUTO-LOGIN] 2FA Error:', twofaError.message);
+        console.log('[KITE AUTO-LOGIN] 2FA Error:', twofaError.message);
         if (twofaError.response) {
-          console.error('[KITE AUTO-LOGIN] 2FA Error Response:', JSON.stringify(twofaError.response.data));
-          console.error('[KITE AUTO-LOGIN] 2FA Error Status:', twofaError.response.status);
+          console.log('[KITE AUTO-LOGIN] 2FA Error Response:', JSON.stringify(twofaError.response.data));
+          console.log('[KITE AUTO-LOGIN] 2FA Error Status:', twofaError.response.status);
         }
         throw twofaError;
       }
