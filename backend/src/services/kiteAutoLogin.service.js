@@ -571,6 +571,70 @@ class KiteAutoLoginService {
     // Perform new login
     return this.performAutoLogin();
   }
+
+  /**
+   * Exchange request_token for access_token (used by OAuth callback)
+   * This is called when the user completes authorization in the browser
+   */
+  async exchangeToken(requestToken) {
+    console.log('[KITE] Exchanging request_token for access_token...');
+
+    try {
+      // Generate checksum
+      const checksum = crypto.createHash('sha256')
+        .update(this.apiKey + requestToken + this.apiSecret)
+        .digest('hex');
+
+      // Exchange for access_token
+      const sessionResp = await axios.post(
+        `${this.baseUrl}/session/token`,
+        new URLSearchParams({
+          api_key: this.apiKey,
+          request_token: requestToken,
+          checksum: checksum
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Kite-Version': '3'
+          }
+        }
+      );
+
+      if (!sessionResp.data?.data?.access_token) {
+        throw new Error(`Token exchange failed: ${JSON.stringify(sessionResp.data)}`);
+      }
+
+      const sessionData = sessionResp.data.data;
+      console.log('[KITE] Token exchange successful. User:', sessionData.user_name);
+
+      // Save session to database
+      const session = await this.saveSession(sessionData);
+
+      // Log successful token exchange
+      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.LOGIN, {
+        kiteUserId: this.userId,
+        status: 'SUCCESS',
+        response: { user_name: sessionData.user_name, email: sessionData.email },
+        source: 'OAUTH'
+      });
+
+      return session;
+
+    } catch (error) {
+      console.error('[KITE] Token exchange failed:', error.message);
+
+      // Log failed exchange
+      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.LOGIN_FAILED, {
+        kiteUserId: this.userId,
+        status: 'FAILED',
+        error: error.message,
+        source: 'OAUTH'
+      });
+
+      throw error;
+    }
+  }
 }
 
 // Export singleton instance

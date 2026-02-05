@@ -236,6 +236,78 @@ router.get('/orders', simpleAdminAuth, async (req, res) => {
 });
 
 /**
+ * GET /api/kite/auth/callback
+ * OAuth callback handler - exchanges request_token for access_token
+ * This handles the redirect from Kite after user authorization
+ */
+router.get('/callback', async (req, res) => {
+  try {
+    const { request_token, status, action } = req.query;
+
+    console.log('[KITE AUTH] Callback received:', { request_token: request_token ? 'present' : 'missing', status, action });
+
+    if (status !== 'success' || !request_token) {
+      return res.status(400).send(`
+        <html>
+          <head><title>Kite Authorization Failed</title></head>
+          <body style="font-family: Arial; padding: 40px; text-align: center;">
+            <h1 style="color: #e74c3c;">❌ Authorization Failed</h1>
+            <p>Status: ${status || 'unknown'}</p>
+            <p>Please try again.</p>
+          </body>
+        </html>
+      `);
+    }
+
+    // Exchange request_token for access_token
+    const session = await kiteAutoLoginService.exchangeToken(request_token);
+
+    // Log successful callback
+    await KiteAuditLog.logAction('OAUTH_CALLBACK', {
+      kiteUserId: kiteConfig.USER_ID,
+      status: 'SUCCESS',
+      response: { user_name: session.user_name, token_expiry: session.token_expiry },
+      source: 'OAUTH'
+    });
+
+    // Return success page
+    res.send(`
+      <html>
+        <head><title>Kite Authorization Successful</title></head>
+        <body style="font-family: Arial; padding: 40px; text-align: center;">
+          <h1 style="color: #27ae60;">✅ Kite Connected Successfully!</h1>
+          <p><strong>User:</strong> ${session.user_name}</p>
+          <p><strong>Email:</strong> ${session.email}</p>
+          <p><strong>Token Expiry:</strong> ${session.token_expiry}</p>
+          <p style="margin-top: 20px; color: #666;">You can close this window now.</p>
+        </body>
+      </html>
+    `);
+
+  } catch (error) {
+    console.error('[KITE AUTH] Callback error:', error);
+
+    await KiteAuditLog.logAction('OAUTH_CALLBACK', {
+      kiteUserId: kiteConfig.USER_ID,
+      status: 'FAILED',
+      error: error.message,
+      source: 'OAUTH'
+    });
+
+    res.status(500).send(`
+      <html>
+        <head><title>Kite Authorization Error</title></head>
+        <body style="font-family: Arial; padding: 40px; text-align: center;">
+          <h1 style="color: #e74c3c;">❌ Error</h1>
+          <p>${error.message}</p>
+          <p style="margin-top: 20px; color: #666;">Please try again or contact support.</p>
+        </body>
+      </html>
+    `);
+  }
+});
+
+/**
  * POST /api/kite/auth/test-login
  * Test the automated login (for debugging)
  */
