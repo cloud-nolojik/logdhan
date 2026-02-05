@@ -120,7 +120,7 @@ function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, 
     if (trackingStatus === 'TARGET_HIT') {
       return {
         icon: 'star',  // ⭐
-        message: 'Target hit — exit or hold for T2?',
+        message: 'Target hit — 70% booked, trailing to T2',
         subtext: target2 ? `T2: ₹${target2.toFixed(2)}` : 'Full target achieved!',
         background_color: '#1B5E20',  // Dark green
         text_color: '#FFFFFF',
@@ -478,10 +478,10 @@ function calculateCardDisplay(stock, livePrice) {
       // Check if main target was also hit
       if (trackingStatus === 'TARGET_HIT') {
         emoji = '⭐';
-        headline = 'Target Hit - Exit or Hold?';
+        headline = 'Target Hit - Trailing to T2';
         const t2Level = stock.levels?.target2;
         subtext = t2Level
-          ? `Target reached! Exit now or hold for T2 (₹${t2Level.toFixed(2)})`
+          ? `70% booked at Target, ${qtyRemaining} shares trailing to T2 (₹${t2Level.toFixed(2)})`
           : `Target reached! ${qtyRemaining} shares remaining`;
       } else {
         emoji = '🟡';

@@ -587,27 +587,35 @@ class IntradayMonitorJob {
       }
 
       // ══════════════════════════════════════════════
-      // CHECK TARGET (main swing target - user can fully exit here or hold for T2)
+      // CHECK TARGET (main swing target - book 70%, keep 30% for T2)
       // Only for PARTIAL_EXIT status, use candle high to catch intraday hits
       // ══════════════════════════════════════════════
       if (sim.status === 'PARTIAL_EXIT' && mainTarget && candleHigh >= mainTarget) {
         const hasTargetAlert = todaysAlerts.some(a => a.type === 'TARGET_HIT');
         if (!hasTargetAlert) {
-          // Don't auto-exit - just notify user they can exit here or hold for T2
-          // Update P&L for display
+          // Book 70% of remaining shares, keep 30% for T2
+          const exitQty = Math.floor(sim.qty_remaining * 0.7);
+          const keepQty = sim.qty_remaining - exitQty;
+          const exitPnl = (mainTarget - sim.entry_price) * exitQty;
+
+          sim.realized_pnl = (sim.realized_pnl || 0) + exitPnl;
+          sim.qty_remaining = keepQty;
+          sim.qty_exited = (sim.qty_exited || 0) + exitQty;
+
+          // Update P&L (unrealized for remaining position heading to T2)
           sim.unrealized_pnl = (livePrice - sim.entry_price) * sim.qty_remaining;
           sim.total_pnl = Math.round(sim.realized_pnl + sim.unrealized_pnl);
           sim.total_return_pct = parseFloat(((sim.total_pnl / sim.capital) * 100).toFixed(2));
 
-          // Add event to simulation (informational - not an exit)
+          // Add event to simulation
           if (!sim.events) sim.events = [];
           sim.events.push({
             date: new Date(),
             type: 'TARGET_HIT',
             price: mainTarget,
-            qty: 0,  // No exit, just notification
-            pnl: 0,
-            detail: `Main target hit at ₹${mainTarget.toFixed(2)}! You can exit now or hold for T2 (₹${t2?.toFixed(2) || 'N/A'})`
+            qty: exitQty,
+            pnl: Math.round(exitPnl),
+            detail: `Target hit! Booked 70% (${exitQty} shares) at ₹${mainTarget.toFixed(2)} | Holding ${keepQty} shares for T2 (₹${t2?.toFixed(2) || 'N/A'})`
           });
 
           // Sync tracking_status
@@ -619,20 +627,20 @@ class IntradayMonitorJob {
             price: livePrice,
             level: mainTarget,
             price_timestamp: priceTimestamp,
-            message: `Target hit at ₹${livePrice.toFixed(2)} (₹${mainTarget.toFixed(2)}) — Exit now or hold for T2?`
+            message: `Target hit! Booked ${exitQty} shares at ₹${mainTarget.toFixed(2)} — Holding ${keepQty} for T2`
           };
 
           stock.intraday_alerts.push(alert);
           alerts.push({ symbol: stock.symbol, ...alert });
           needsSave = true;
 
-          console.log(`${runLabel} 🎯 ${stock.symbol}: TARGET_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — user can exit or hold for T2`);
+          console.log(`${runLabel} ⭐ ${stock.symbol}: TARGET_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — booked ${exitQty}, holding ${keepQty} for T2`);
 
           // Send push notification
           if (!dryRun) {
             try {
               await firebaseService.sendAnalysisCompleteToAllUsers(
-                `🎯 Target Hit: ${stock.symbol}`,
+                `⭐ Target Hit: ${stock.symbol}`,
                 alert.message,
                 { type: 'target_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
               );

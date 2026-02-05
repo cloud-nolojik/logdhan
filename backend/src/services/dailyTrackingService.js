@@ -680,14 +680,21 @@ function simulateTrade(stock, snapshots, currentPrice) {
 
       // Same day: also check main target and T2
       if (mainTarget && high >= mainTarget) {
-        // Log TARGET_HIT event (informational - user can exit or hold for T2)
+        // Book 70% of remaining shares at Target, keep 30% for T2
+        const targetExitQty = Math.floor(sim.qty_remaining * 0.7);
+        const targetKeepQty = sim.qty_remaining - targetExitQty;
+        const targetPnl = (mainTarget - sim.entry_price) * targetExitQty;
+        sim.realized_pnl += targetPnl;
+        sim.qty_remaining = targetKeepQty;
+        sim.qty_exited += targetExitQty;
+
         sim.events.push({
           date,
           type: 'TARGET_HIT',
           price: mainTarget,
-          qty: 0,  // No auto-exit, just notification
-          pnl: 0,
-          detail: `Main target hit at ₹${mainTarget.toFixed(2)}! You can exit now or hold for T2 (₹${t2?.toFixed(2) || 'N/A'})`
+          qty: targetExitQty,
+          pnl: Math.round(targetPnl),
+          detail: `Target hit! Booked 70% (${targetExitQty} shares) at ₹${mainTarget.toFixed(2)} | Holding ${targetKeepQty} for T2 (₹${t2?.toFixed(2) || 'N/A'})`
         });
 
         // Same day: also check T2
@@ -712,19 +719,27 @@ function simulateTrade(stock, snapshots, currentPrice) {
 
     // ══════════════════════════════════════════════
     // CHECK TARGET (main swing target - only after PARTIAL_EXIT)
-    // User can fully exit here or hold for T2
+    // Book 70% at Target, keep 30% for T2
     // ══════════════════════════════════════════════
     if (sim.status === 'PARTIAL_EXIT' && mainTarget && high >= mainTarget) {
-      // Check if we already logged TARGET_HIT today
-      const alreadyHitTarget = sim.events.some(e => e.type === 'TARGET_HIT' && e.date === date);
+      // Check if we already logged TARGET_HIT (don't double-book)
+      const alreadyHitTarget = sim.events.some(e => e.type === 'TARGET_HIT');
       if (!alreadyHitTarget) {
+        // Book 70% of remaining shares at Target, keep 30% for T2
+        const exitQty = Math.floor(sim.qty_remaining * 0.7);
+        const keepQty = sim.qty_remaining - exitQty;
+        const pnl = (mainTarget - sim.entry_price) * exitQty;
+        sim.realized_pnl += pnl;
+        sim.qty_remaining = keepQty;
+        sim.qty_exited += exitQty;
+
         sim.events.push({
           date,
           type: 'TARGET_HIT',
           price: mainTarget,
-          qty: 0,  // No auto-exit, just notification
-          pnl: 0,
-          detail: `Main target hit at ₹${mainTarget.toFixed(2)}! You can exit now or hold for T2 (₹${t2?.toFixed(2) || 'N/A'})`
+          qty: exitQty,
+          pnl: Math.round(pnl),
+          detail: `Target hit! Booked 70% (${exitQty} shares) at ₹${mainTarget.toFixed(2)} | Holding ${keepQty} for T2 (₹${t2?.toFixed(2) || 'N/A'})`
         });
       }
 
