@@ -30,13 +30,26 @@ async function processSimulationForKiteOrders(phase1Results, stocksMap) {
   };
 
   try {
+    console.log('[KITE-INTEGRATION] ════════════════════════════════════════');
     console.log('[KITE-INTEGRATION] Processing simulation results for Kite orders...');
+    console.log(`[KITE-INTEGRATION] phase1Results count: ${phase1Results?.length || 0}`);
+    console.log(`[KITE-INTEGRATION] stocksMap size: ${stocksMap?.size || 0}`);
 
     // Check if we can place more orders today
     const canPlace = await kiteOrderService.canPlaceOrder();
+    console.log(`[KITE-INTEGRATION] Can place orders today: ${canPlace}`);
     if (!canPlace) {
       console.log('[KITE-INTEGRATION] Daily order limit reached, skipping order placement');
       return { ...results, skipped: true, reason: 'daily_limit_reached' };
+    }
+
+    // Log all stocks and their simulation status
+    console.log('[KITE-INTEGRATION] Checking all stocks for ENTRY_SIGNALED status:');
+    for (const result of phase1Results) {
+      const stock = stocksMap.get(result.symbol);
+      const simStatus = stock?.trade_simulation?.status || 'NO_SIM';
+      const latestEvent = stock?.trade_simulation?.events?.[stock?.trade_simulation?.events?.length - 1];
+      console.log(`[KITE-INTEGRATION]   - ${result.symbol}: status=${simStatus}, latestEvent=${latestEvent?.type || 'none'}`);
     }
 
     // Filter stocks that have entry signals today
@@ -52,8 +65,11 @@ async function processSimulationForKiteOrders(phase1Results, stocksMap) {
       return simStatus === 'ENTRY_SIGNALED' && latestEvent?.type === 'ENTRY_SIGNAL';
     });
 
+    console.log(`[KITE-INTEGRATION] Filtered ENTRY_SIGNALED stocks: ${entrySignaledStocks.length}`);
+
     if (entrySignaledStocks.length === 0) {
       console.log('[KITE-INTEGRATION] No entry signals detected today');
+      console.log('[KITE-INTEGRATION] ════════════════════════════════════════');
       return results;
     }
 

@@ -25,6 +25,7 @@ import { buildDailyTrackPrompt } from '../prompts/dailyTrackPrompts.js';
 import Anthropic from '@anthropic-ai/sdk';
 import ApiUsage from '../models/apiUsage.js';
 import { firebaseService } from './firebase/firebase.service.js';
+import { processSimulationForKiteOrders, processPostEntryOrders, isKiteIntegrationEnabled } from './kiteTradeIntegration.service.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 2 TRIGGERS - When to call AI
@@ -925,7 +926,7 @@ async function runPhase1(options = {}) {
   const watchlist = await WeeklyWatchlist.getCurrentWeek();
   if (!watchlist || watchlist.stocks.length === 0) {
     console.log(`${runLabel} No active watchlist or no stocks. Skipping.`);
-    return { phase1Results: [], phase2Queue: [] };
+    return { phase1Results: [], phase2Queue: [], stocksMap: new Map() };
   }
 
   console.log(`${runLabel} Found ${watchlist.stocks.length} stocks in watchlist: ${watchlist.week_label}`);
@@ -936,8 +937,12 @@ async function runPhase1(options = {}) {
 
   if (validStocks.length === 0) {
     console.log(`${runLabel} No stocks with valid levels. Skipping.`);
-    return { phase1Results: [], phase2Queue: [] };
+    return { phase1Results: [], phase2Queue: [], stocksMap: new Map() };
   }
+
+  // Create stocksMap for Kite integration (symbol → stock object)
+  const stocksMap = new Map();
+  validStocks.forEach(s => stocksMap.set(s.symbol, s));
 
   // Get IST date components
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -1337,7 +1342,7 @@ async function runPhase1(options = {}) {
     console.log(`${runLabel} ✅ Phase 1 complete (DRY RUN - not saved). ${phase1Results.length} stocks processed, ${phase2Queue.length} would be queued for Phase 2`);
   }
 
-  return { phase1Results, phase2Queue };
+  return { phase1Results, phase2Queue, stocksMap };
 }
 
 /**
@@ -1549,7 +1554,36 @@ async function runDailyTracking(options = {}) {
 
   try {
     // Phase 1: Status updates
-    const { phase1Results, phase2Queue } = await runPhase1({ targetDate, dryRun });
+    const { phase1Results, phase2Queue, stocksMap } = await runPhase1({ targetDate, dryRun });
+
+    // Kite Order Placement: Place GTT orders for ENTRY_SIGNALED stocks
+    let kiteResults = null;
+    console.log(`${runLabel} 🔄 Checking Kite integration...`);
+    console.log(`${runLabel}    dryRun: ${dryRun}`);
+    console.log(`${runLabel}    isKiteIntegrationEnabled: ${isKiteIntegrationEnabled()}`);
+    console.log(`${runLabel}    phase1Results count: ${phase1Results?.length || 0}`);
+    console.log(`${runLabel}    stocksMap size: ${stocksMap?.size || 0}`);
+
+    if (!dryRun && isKiteIntegrationEnabled()) {
+      try {
+        console.log(`${runLabel} 🔄 Processing Kite orders for entry signals...`);
+        kiteResults = await processSimulationForKiteOrders(phase1Results, stocksMap);
+        console.log(`${runLabel} 📊 Kite results:`, JSON.stringify(kiteResults, null, 2));
+        if (kiteResults.ordersPlaced > 0) {
+          console.log(`${runLabel} ✅ Kite: ${kiteResults.ordersPlaced} GTT orders placed`);
+        } else if (kiteResults.skipped) {
+          console.log(`${runLabel} ⏭️ Kite: Skipped - ${kiteResults.reason}`);
+        } else {
+          console.log(`${runLabel} ℹ️ Kite: No entry signals to process`);
+        }
+      } catch (kiteError) {
+        console.error(`${runLabel} ❌ Kite order placement failed:`, kiteError.message);
+        console.error(`${runLabel} ❌ Kite error stack:`, kiteError.stack);
+        // Don't fail the entire job if Kite fails
+      }
+    } else {
+      console.log(`${runLabel} ⏭️ Skipping Kite integration (dryRun=${dryRun}, enabled=${isKiteIntegrationEnabled()})`);
+    }
 
     // Phase 2: AI analysis (only for triggered stocks, skip in dry run)
     let phase2Results = [];
@@ -1578,13 +1612,21 @@ async function runDailyTracking(options = {}) {
         stocks_analyzed: phase2Results.length,
         successful: phase2Results.filter(r => r.success).length,
         failed: phase2Results.filter(r => !r.success).length
-      }
+      },
+      kite: kiteResults ? {
+        ordersPlaced: kiteResults.ordersPlaced || 0,
+        ordersSkipped: kiteResults.ordersSkipped || 0,
+        errors: kiteResults.errors?.length || 0
+      } : null
     };
 
     console.log(`\n${runLabel} ${'─'.repeat(40)}`);
     console.log(`${runLabel} SUMMARY${dryRun ? ' (DRY RUN)' : ''}`);
     console.log(`${runLabel} Phase 1: ${summary.phase1.stocks_processed} stocks, ${summary.phase1.status_changes} changes`);
     console.log(`${runLabel} Phase 2: ${dryRun ? `${phase2Queue.length} would be analyzed` : `${summary.phase2.successful}/${summary.phase2.stocks_analyzed} AI calls succeeded`}`);
+    if (summary.kite) {
+      console.log(`${runLabel} Kite: ${summary.kite.ordersPlaced} orders placed, ${summary.kite.errors} errors`);
+    }
     console.log(`${runLabel} Total time: ${totalDuration}ms`);
     console.log(`${'═'.repeat(60)}\n`);
 
