@@ -289,7 +289,7 @@ function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, 
 
 /**
  * Build Daily Update card from StockAnalysis daily_track data
- * Falls back to calculateDailyUpdateCard if no daily_track data available
+ * Only returns card if daily_track data exists (no fallback)
  * @param {Object} dailyTrack - daily_track object from StockAnalysis.analysis_data
  * @param {string} journeyStatus - Trade simulation status
  * @param {string} trackingStatus - Stock tracking status
@@ -298,9 +298,10 @@ function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, 
  * @param {Object} lastSnapshot - Latest daily snapshot
  */
 function buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot) {
-  // If no daily_track data, fall back to the legacy calculation
+  // Only show daily update card if there's actual daily_track data from database
+  // No fallback to calculated card - backend controls visibility
   if (!dailyTrack) {
-    return calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+    return null;
   }
 
   // Use the rich data from StockAnalysis daily_track
