@@ -1,5 +1,6 @@
 import express from "express";
 import WeeklyWatchlist from "../models/weeklyWatchlist.js";
+import StockAnalysis from "../models/stockAnalysis.js";
 import { auth } from "../middleware/auth.js";
 import { calculateSetupScore, getEntryZone, checkEntryZoneProximity } from "../engine/index.js";
 import priceCacheService from "../services/priceCache.service.js";
@@ -275,10 +276,107 @@ function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, 
 }
 
 /**
+ * Build Daily Update card from StockAnalysis daily_track data
+ * Falls back to calculateDailyUpdateCard if no daily_track data available
+ * @param {Object} dailyTrack - daily_track object from StockAnalysis.analysis_data
+ * @param {string} journeyStatus - Trade simulation status
+ * @param {string} trackingStatus - Stock tracking status
+ * @param {Array} trackingFlags - Tracking flags
+ * @param {Object} levels - Price levels
+ * @param {Object} lastSnapshot - Latest daily snapshot
+ */
+function buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot) {
+  // If no daily_track data, fall back to the legacy calculation
+  if (!dailyTrack) {
+    return calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+  }
+
+  // Use the rich data from StockAnalysis daily_track
+  const headline = dailyTrack.headline;
+  const statusAssessment = dailyTrack.status_assessment;
+  const confidence = dailyTrack.confidence;
+  const date = dailyTrack.date;
+
+  // Determine icon and colors based on the action/status
+  let icon = 'info';
+  let backgroundColor = '#1565C0';  // Default blue
+  let textColor = '#FFFFFF';
+  let valueColor = '#FFFFFF';
+  let showMetrics = true;
+
+  // Determine icon and color based on if_watching.action or if_holding.action
+  const watchAction = dailyTrack.if_watching?.action;
+  const holdAction = dailyTrack.if_holding?.action;
+
+  if (watchAction === 'ENTER_NOW' || watchAction === 'BUY') {
+    icon = 'signal';
+    backgroundColor = '#7C3AED';  // Purple for entry signal
+  } else if (watchAction === 'WAIT' || watchAction === 'WATCH') {
+    icon = 'visibility';
+    backgroundColor = '#E65100';  // Orange for watching
+  } else if (holdAction === 'HOLD' || holdAction === 'TRAIL') {
+    icon = 'trending_up';
+    backgroundColor = '#1565C0';  // Blue for active trade
+  } else if (holdAction === 'BOOK_PARTIAL' || holdAction === 'BOOK_PROFIT') {
+    icon = 'check_circle';
+    backgroundColor = '#2E7D32';  // Green for profit booking
+  } else if (holdAction === 'EXIT' || holdAction === 'STOP') {
+    icon = 'warning';
+    backgroundColor = '#C62828';  // Red for exit/stop
+  }
+
+  // Override based on journeyStatus for critical states
+  if (journeyStatus === 'FULL_EXIT') {
+    icon = 'celebration';
+    backgroundColor = '#1B5E20';
+    showMetrics = false;
+  } else if (journeyStatus === 'STOPPED_OUT') {
+    icon = 'error';
+    backgroundColor = '#C62828';
+    showMetrics = false;
+  } else if (journeyStatus === 'ENTRY_SIGNALED') {
+    icon = 'signal';
+    backgroundColor = '#7C3AED';
+    showMetrics = false;
+  } else if (trackingStatus === 'TARGET_HIT') {
+    icon = 'star';
+    backgroundColor = '#1B5E20';
+  } else if (trackingStatus === 'TARGET1_HIT') {
+    icon = 'check_circle';
+    backgroundColor = '#2E7D32';
+  }
+
+  // Build message and subtext from daily_track data
+  const message = headline || 'Daily Update';
+  const subtext = dailyTrack.step_update || statusAssessment?.substring(0, 100) || null;
+
+  return {
+    icon,
+    message,
+    subtext,
+    background_color: backgroundColor,
+    text_color: textColor,
+    value_color: valueColor,
+    show_metrics: showMetrics,
+    // Additional fields from daily_track
+    date,
+    confidence,
+    trigger: dailyTrack.trigger,
+    if_watching: dailyTrack.if_watching,
+    if_holding: dailyTrack.if_holding,
+    risk_note: dailyTrack.risk_note,
+    next_check: dailyTrack.next_check
+  };
+}
+
+/**
  * Calculate card_display for a stock with trade simulation
  * Returns all fields needed for Home Screen card + AI Analysis screen
+ * @param {Object} stock - Stock from WeeklyWatchlist
+ * @param {number} livePrice - Current live price
+ * @param {Object} dailyTrackAnalysis - Latest daily_track StockAnalysis (optional)
  */
-function calculateCardDisplay(stock, livePrice) {
+function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
   const sim = stock.trade_simulation;
   const levels = stock.levels || {};
 
@@ -307,6 +405,10 @@ function calculateCardDisplay(stock, livePrice) {
   const trackingFlags = stock.tracking_flags || [];
   const journeyStatus = sim?.status || 'WAITING';
 
+  // Extract daily_track data from StockAnalysis if available
+  const dailyTrack = dailyTrackAnalysis?.analysis_data?.daily_track || null;
+  const dailyTrackDate = dailyTrack?.date || null;
+
   // Handle ENTRY_SIGNALED status (two-phase entry: signal confirmed, awaiting execution)
   if (sim?.status === 'ENTRY_SIGNALED') {
     const signalClose = sim.signal_close;
@@ -317,8 +419,8 @@ function calculateCardDisplay(stock, livePrice) {
     const signalEvent = sim.events?.find(e => e.type === 'ENTRY_SIGNAL');
     const recommendedQty = signalEvent?.qty || plannedQty;
 
-    // Calculate daily update card for ENTRY_SIGNALED
-    const dailyUpdateCard = calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+    // Build daily update card from StockAnalysis daily_track data
+    const dailyUpdateCard = buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
 
     return {
       journey_status: 'ENTRY_SIGNALED',
@@ -349,7 +451,8 @@ function calculateCardDisplay(stock, livePrice) {
       last_snapshot_date: lastSnapshotDate,
       signal_close: signalClose,
       signal_date: sim.signal_date,
-      daily_update_card: dailyUpdateCard
+      daily_update_card: dailyUpdateCard,
+      daily_track_date: dailyTrackDate
     };
   }
 
@@ -376,8 +479,8 @@ function calculateCardDisplay(stock, livePrice) {
         : 'No entry zone set';
     }
 
-    // Calculate daily update card for WAITING status
-    const dailyUpdateCard = calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+    // Build daily update card from StockAnalysis daily_track data
+    const dailyUpdateCard = buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
 
     return {
       journey_status: 'WAITING',
@@ -406,7 +509,8 @@ function calculateCardDisplay(stock, livePrice) {
       dist_from_target2_pct: null,
       levels_summary: levelsSummary,
       last_snapshot_date: lastSnapshotDate,
-      daily_update_card: dailyUpdateCard
+      daily_update_card: dailyUpdateCard,
+      daily_track_date: dailyTrackDate
     };
   }
 
@@ -531,8 +635,8 @@ function calculateCardDisplay(stock, livePrice) {
       pnlLine = null;
   }
 
-  // Calculate daily update card for active trade statuses
-  const dailyUpdateCard = calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+  // Build daily update card from StockAnalysis daily_track data
+  const dailyUpdateCard = buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
 
   return {
     journey_status: sim.status,
@@ -566,7 +670,8 @@ function calculateCardDisplay(stock, livePrice) {
     // v2: levels summary with new fields
     levels_summary: levelsSummary,
     last_snapshot_date: lastSnapshotDate,
-    daily_update_card: dailyUpdateCard
+    daily_update_card: dailyUpdateCard,
+    daily_track_date: dailyTrackDate
   };
 }
 
@@ -594,6 +699,22 @@ router.get("/", auth, async (req, res) => {
     const instrumentKeys = watchlist.stocks.map(stock => stock.instrument_key);
     const priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
 
+    // Fetch latest daily_track analysis for each stock (batch query)
+    const dailyTrackAnalyses = await StockAnalysis.find({
+      instrument_key: { $in: instrumentKeys },
+      analysis_type: 'daily_track',
+      status: 'completed'
+    }).sort({ created_at: -1 });
+
+    // Build a map of instrument_key -> latest daily_track analysis
+    const dailyTrackMap = {};
+    for (const analysis of dailyTrackAnalyses) {
+      // Only keep the first (latest) one for each instrument_key
+      if (!dailyTrackMap[analysis.instrument_key]) {
+        dailyTrackMap[analysis.instrument_key] = analysis;
+      }
+    }
+
     // Enrich stocks with current prices and card_display (no DB writes)
     const enrichedStocks = watchlist.stocks.map((stock) => {
       const currentPrice = priceDataMap[stock.instrument_key]?.price || null;
@@ -603,8 +724,11 @@ router.get("/", auth, async (req, res) => {
         zoneStatus = checkEntryZoneProximity(currentPrice, stock.entry_zone);
       }
 
+      // Get the latest daily_track analysis for this stock
+      const dailyTrackAnalysis = dailyTrackMap[stock.instrument_key];
+
       // Calculate card_display for trade journey visualization
-      const cardDisplay = calculateCardDisplay(stock, currentPrice);
+      const cardDisplay = calculateCardDisplay(stock, currentPrice, dailyTrackAnalysis);
 
       return {
         ...stock.toObject(),
