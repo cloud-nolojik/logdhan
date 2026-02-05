@@ -129,27 +129,24 @@ class KiteAutoLoginService {
       }
       console.log('[KITE AUTO-LOGIN] Step 4 complete. Got sess_id.');
 
-      // Step 5: POST to authorize endpoint to grant permission
-      console.log('[KITE AUTO-LOGIN] Step 5: Authorizing app...');
-      const authorizeResp = await client.post(
-        `${this.kiteWebUrl}/connect/authorize`,
-        new URLSearchParams({
-          api_key: this.apiKey,
-          sess_id: sessId
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
-          },
-          maxRedirects: 0,
-          validateStatus: (status) => status < 400 || status === 302 || status === 303
-        }
-      );
+      // Step 5: GET the finish endpoint to complete authorization
+      // The authorization flow works by visiting the authorize URL with sess_id
+      // Then Kite redirects to the redirect_url with request_token
+      console.log('[KITE AUTO-LOGIN] Step 5: Completing authorization...');
+
+      // Try to get the finish/authorize endpoint which should redirect with request_token
+      const finishUrl = `${this.kiteWebUrl}/connect/finish?api_key=${this.apiKey}&sess_id=${sessId}`;
+      console.log('[KITE AUTO-LOGIN] Step 5 - Finish URL:', finishUrl);
+
+      const authorizeResp = await client.get(finishUrl, {
+        maxRedirects: 0,
+        validateStatus: (status) => status < 400 || status === 302 || status === 303
+      });
 
       console.log('[KITE AUTO-LOGIN] Step 5 - Authorize response status:', authorizeResp.status);
       console.log('[KITE AUTO-LOGIN] Step 5 - Location header:', authorizeResp.headers?.location);
 
-      // Extract request_token from the redirect URL
+      // Extract request_token from the redirect URL (Location header)
       let requestToken = null;
       const redirectUrl = authorizeResp.headers?.location;
 
@@ -158,15 +155,13 @@ class KiteAutoLoginService {
         requestToken = url.searchParams.get('request_token');
       }
 
+      // If not in location header, check if we followed redirects
       if (!requestToken) {
-        // If no redirect, try following it
-        if (authorizeResp.status === 200) {
-          const responseUrl = authorizeResp.request?.res?.responseUrl;
-          console.log('[KITE AUTO-LOGIN] Step 5 - Final URL after redirects:', responseUrl);
-          if (responseUrl && responseUrl.includes('request_token')) {
-            const url = new URL(responseUrl);
-            requestToken = url.searchParams.get('request_token');
-          }
+        const responseUrl = authorizeResp.request?.res?.responseUrl;
+        console.log('[KITE AUTO-LOGIN] Step 5 - Response URL:', responseUrl);
+        if (responseUrl && responseUrl.includes('request_token')) {
+          const url = new URL(responseUrl);
+          requestToken = url.searchParams.get('request_token');
         }
       }
 
