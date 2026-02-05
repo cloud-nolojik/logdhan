@@ -203,9 +203,9 @@ Symbol: ${stock.symbol} | Grade: ${weekendGrade} | Archetype: ${levels.archetype
 LEVELS (engine-calculated, final):
   Entry: ₹${levels.entry?.toFixed(2) || 'N/A'} (confirmation: ${levels.entryConfirmation === 'touch' ? 'limit order touch' : 'daily CLOSE above'})
   Stop: ₹${levels.stop?.toFixed(2) || 'N/A'}
-  T1 (50% booking): ₹${levels.target1?.toFixed(2) || levels.target?.toFixed(2) || 'N/A'} [${levels.target1Basis || 'N/A'}]
-  T2 (full exit): ₹${levels.target?.toFixed(2) || 'N/A'} [${levels.targetBasis || 'N/A'}]
-  ${levels.target2 ? `T3 (trail): ₹${levels.target2.toFixed(2)}` : ''}
+  T1 (50% booking): ₹${levels.target1?.toFixed(2) || 'N/A'} [${levels.target1_basis || 'N/A'}] — book 50%, move stop to entry
+  T2 (main target): ₹${levels.target2?.toFixed(2) || 'N/A'} [${levels.target2_basis || 'N/A'}] — book 70% of remaining, hold 30% for T3
+  ${levels.target3 ? `T3 (extension): ₹${levels.target3.toFixed(2)} — book final 30%` : 'T3: N/A — exit fully at T2'}
   R:R ${levels.riskReward ? `1:${levels.riskReward.toFixed(1)}` : 'N/A'}
   Entry window: ${levels.entryWindowDays || 3} trading days
   Week-end rule: ${levels.weekEndRule || 'exit_if_no_t1'}

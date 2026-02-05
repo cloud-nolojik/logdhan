@@ -146,7 +146,7 @@ function getTimeRules(archetype, entryType) {
  * If none give adequate R:R → the setup is NOT viable for swing trading.
  *
  * @param {Object} params - { entry, risk, weeklyR1, weeklyR2, high52W, atr, minRR }
- * @returns {Object} { target, target2, targetBasis, reason } or { rejected: true, reason }
+ * @returns {Object} { target2, target3, target2_basis, reason } or { rejected: true, reason }
  */
 function findStructuralTarget(params) {
   const { entry, risk, weeklyR1, weeklyR2, high52W, atr, minRR = 1.5 } = params;
@@ -198,10 +198,10 @@ function findStructuralTarget(params) {
         const rrR1 = (weeklyR1 - entry) / risk;
         if (rrR1 >= minRR) {
           return {
-            target: weeklyR1,
-            target2: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 :
+            target2: weeklyR1,
+            target3: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 :
                      roundToTick(entry + (4.0 * atr)),
-            targetBasis: 'weekly_r1',
+            target2_basis: 'weekly_r1',
             reason: `52W breakout but Weekly R1 (${round2(weeklyR1)}) still overhead, R:R ${round2(rrR1)}:1`
           };
         }
@@ -210,9 +210,9 @@ function findStructuralTarget(params) {
         const rrR2 = (weeklyR2 - entry) / risk;
         if (rrR2 >= minRR) {
           return {
-            target: weeklyR2,
-            target2: roundToTick(entry + (4.0 * atr)),
-            targetBasis: 'weekly_r2',
+            target2: weeklyR2,
+            target3: roundToTick(entry + (4.0 * atr)),
+            target2_basis: 'weekly_r2',
             reason: `52W breakout, Weekly R2 (${round2(weeklyR2)}) is the target, R:R ${round2(rrR2)}:1`
           };
         }
@@ -220,11 +220,11 @@ function findStructuralTarget(params) {
 
       // No weekly pivots work — use ATR extension
       return {
-        target: roundToTick(extensionTarget),
-        target2: roundToTick(entry + (4.0 * atr)),
-        targetBasis: 'atr_extension_52w_breakout',
+        target2: roundToTick(extensionTarget),
+        target3: roundToTick(entry + (4.0 * atr)),
+        target2_basis: 'atr_extension_52w_breakout',
         reason: `52W HIGH BREAKOUT: No overhead resistance. ` +
-                `T1 at 2.5 ATR (${round2(extensionTarget)}), R:R ${round2(extensionRR)}:1`
+                `T2 at 2.5 ATR (${round2(extensionTarget)}), R:R ${round2(extensionRR)}:1`
       };
     }
   }
@@ -236,10 +236,10 @@ function findStructuralTarget(params) {
     const rr = (weeklyR1 - entry) / risk;
     if (rr >= minRR) {
       return {
-        target: weeklyR1,
-        target2: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 : null,
-        targetBasis: 'weekly_r1',
-        reason: `T1 at Weekly R1 (${round2(weeklyR1)}), R:R ${round2(rr)}:1`
+        target2: weeklyR1,
+        target3: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 : null,
+        target2_basis: 'weekly_r1',
+        reason: `T2 at Weekly R1 (${round2(weeklyR1)}), R:R ${round2(rr)}:1`
       };
     }
   }
@@ -251,10 +251,10 @@ function findStructuralTarget(params) {
     const rr = (weeklyR2 - entry) / risk;
     if (rr >= minRR) {
       return {
-        target: weeklyR2,
-        target2: null,
-        targetBasis: 'weekly_r2',
-        reason: `Weekly R1 too close, T1 at Weekly R2 (${round2(weeklyR2)}), R:R ${round2(rr)}:1`
+        target2: weeklyR2,
+        target3: null,
+        target2_basis: 'weekly_r2',
+        reason: `Weekly R1 too close, T2 at Weekly R2 (${round2(weeklyR2)}), R:R ${round2(rr)}:1`
       };
     }
   }
@@ -266,10 +266,10 @@ function findStructuralTarget(params) {
     const rr = (high52W - entry) / risk;
     if (rr >= minRR) {
       return {
-        target: high52W,
-        target2: null,
-        targetBasis: '52w_high',
-        reason: `Pivots too close, T1 at 52W High (${round2(high52W)}), R:R ${round2(rr)}:1`
+        target2: high52W,
+        target3: null,
+        target2_basis: '52w_high',
+        reason: `Pivots too close, T2 at 52W High (${round2(high52W)}), R:R ${round2(rr)}:1`
       };
     }
   }
@@ -319,10 +319,10 @@ function findPullbackTarget(params) {
     const rr = (dailyR1 - entry) / risk;
     if (rr >= minRR) {
       return {
-        target: dailyR1,
-        target2: isNum(weeklyR1) && weeklyR1 > dailyR1 ? weeklyR1 : null,
-        targetBasis: 'daily_r1',
-        reason: `T1 at Daily R1 (${round2(dailyR1)}), R:R ${round2(rr)}:1`
+        target2: dailyR1,
+        target3: isNum(weeklyR1) && weeklyR1 > dailyR1 ? weeklyR1 : null,
+        target2_basis: 'daily_r1',
+        reason: `T2 at Daily R1 (${round2(dailyR1)}), R:R ${round2(rr)}:1`
       };
     }
   }
@@ -334,10 +334,10 @@ function findPullbackTarget(params) {
     const rr = (dailyR2 - entry) / risk;
     if (rr >= minRR) {
       return {
-        target: dailyR2,
-        target2: isNum(weeklyR1) && weeklyR1 > dailyR2 ? weeklyR1 : null,
-        targetBasis: 'daily_r2',
-        reason: `Daily R1 too close, T1 at Daily R2 (${round2(dailyR2)}), R:R ${round2(rr)}:1`
+        target2: dailyR2,
+        target3: isNum(weeklyR1) && weeklyR1 > dailyR2 ? weeklyR1 : null,
+        target2_basis: 'daily_r2',
+        reason: `Daily R1 too close, T2 at Daily R2 (${round2(dailyR2)}), R:R ${round2(rr)}:1`
       };
     }
   }
@@ -349,10 +349,10 @@ function findPullbackTarget(params) {
     const rr = (weeklyR1 - entry) / risk;
     if (rr >= minRR) {
       return {
-        target: weeklyR1,
-        target2: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 : null,
-        targetBasis: 'weekly_r1',
-        reason: `Daily pivots too close, T1 at Weekly R1 (${round2(weeklyR1)}), R:R ${round2(rr)}:1`
+        target2: weeklyR1,
+        target3: isNum(weeklyR2) && weeklyR2 > weeklyR1 ? weeklyR2 : null,
+        target2_basis: 'weekly_r1',
+        reason: `Daily pivots too close, T2 at Weekly R1 (${round2(weeklyR1)}), R:R ${round2(rr)}:1`
       };
     }
   }
@@ -364,10 +364,10 @@ function findPullbackTarget(params) {
     const rr = (weeklyR2 - entry) / risk;
     if (rr >= minRR) {
       return {
-        target: weeklyR2,
-        target2: null,
-        targetBasis: 'weekly_r2',
-        reason: `Weekly R1 too close, T1 at Weekly R2 (${round2(weeklyR2)}), R:R ${round2(rr)}:1`
+        target2: weeklyR2,
+        target3: null,
+        target2_basis: 'weekly_r2',
+        reason: `Weekly R1 too close, T2 at Weekly R2 (${round2(weeklyR2)}), R:R ${round2(rr)}:1`
       };
     }
   }
@@ -379,10 +379,10 @@ function findPullbackTarget(params) {
     const rr = (high52W - entry) / risk;
     if (rr >= minRR) {
       return {
-        target: high52W,
-        target2: null,
-        targetBasis: '52w_high',
-        reason: `All pivots too close, T1 at 52W High (${round2(high52W)}), R:R ${round2(rr)}:1`
+        target2: high52W,
+        target3: null,
+        target2_basis: '52w_high',
+        reason: `All pivots too close, T2 at 52W High (${round2(high52W)}), R:R ${round2(rr)}:1`
       };
     }
   }
@@ -506,12 +506,12 @@ export function calculateTradingLevels(scanType, data) {
     entry: roundToTick(guarded.entry),
     entryRange: result.entryRange ? [roundToTick(result.entryRange[0]), roundToTick(result.entryRange[1])] : null,
     stop: roundToTick(guarded.stop),
-    // ── Targets ──
-    target1,                                                                // Partial booking level (50%)
-    target1Basis,                                                           // 'weekly_r1', 'daily_r1', or 'midpoint'
-    target: roundToTick(guarded.target),                                    // Full exit target
-    target2: result.target2 ? roundToTick(result.target2) : null,           // Extension target (trail only)
-    targetBasis: result.targetBasis,                                        // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', or '52w_high'
+    // ── Targets (consistent naming: target1, target2, target3) ──
+    target1,                                                                // T1: Partial booking level (50%)
+    target1_basis: target1Basis,                                            // 'weekly_r1', 'daily_r1', or 'midpoint'
+    target2: roundToTick(guarded.target),                                   // T2: Main target (full exit or trail)
+    target2_basis: result.target2_basis,                                    // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', '52w_high', or 'atr_extension_52w_breakout'
+    target3: result.target3 ? roundToTick(result.target3) : null,           // T3: Extension target (optional, for trailing)
     dailyR1Check: result.dailyR1Check ? roundToTick(result.dailyR1Check) : null,  // Momentum checkpoint (backward compat)
     // ── Entry/Exit Rules ──
     entryType: result.entryType,
@@ -626,9 +626,9 @@ function calculateBreakoutLevels(data) {
     entry,
     entryRange,
     stop,
-    target: targetResult.target,
-    target2: targetResult.target2,
-    targetBasis: targetResult.targetBasis,
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
     reason: `Breakout setup: Price coiled near ${round2(resistanceLevel)} with volume. ` +
@@ -782,9 +782,9 @@ function calculatePullbackLevels(data) {
     entry,
     entryRange,
     stop,
-    target: targetResult.target,
-    target2: targetResult.target2,
-    targetBasis: targetResult.targetBasis,
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType,
     reason: `${reason} ${targetResult.reason}`
@@ -899,9 +899,9 @@ function calculateMomentumLevels(data) {
     entry,
     entryRange,
     stop,
-    target: targetResult.target,
-    target2: targetResult.target2,
-    targetBasis: targetResult.targetBasis,
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
     reason: `Momentum continuation: Stock running ${round2(((fridayClose - ema20) / ema20) * 100)}% above EMA20. ` +
@@ -977,9 +977,9 @@ function calculateConsolidationLevels(data) {
     entry,
     entryRange,
     stop,
-    target: targetResult.target,
-    target2: targetResult.target2,
-    targetBasis: targetResult.targetBasis,
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
     reason: `Consolidation breakout: Tight range (${round2((fridayRange / fridayHigh) * 100)}%) near highs signals energy buildup. ` +
@@ -1074,9 +1074,9 @@ function calculateAPlusMomentumLevels(data) {
     entry,
     entryRange,
     stop,
-    target: targetResult.target,         // T1 (primary — from structural ladder or ATR extension)
-    target2: targetResult.target2,        // T2 (extension — for trailing)
-    targetBasis: targetResult.targetBasis, // 'weekly_r1', 'weekly_r2', '52w_high', or 'atr_extension_52w_breakout'
+    target: targetResult.target2,         // T2 (main target — from structural ladder or ATR extension)
+    target3: targetResult.target3,        // T3 (extension — for trailing, optional)
+    target2_basis: targetResult.target2_basis, // 'weekly_r1', 'weekly_r2', '52w_high', or 'atr_extension_52w_breakout'
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,  // Momentum checkpoint (not a target)
     entryType: 'buy_above',
     reason: `A+ Momentum (52W Breakout): Stock ${round2(distanceFromEMA)}% above EMA20, ` +

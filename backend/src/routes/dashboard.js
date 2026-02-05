@@ -1,8 +1,7 @@
 import express from "express";
-import UserPosition from "../models/userPosition.js";
 import LatestPrice from "../models/latestPrice.js";
 import { auth } from "../middleware/auth.js";
-import { checkExitConditions, round2 } from "../engine/index.js";
+import { round2 } from "../engine/index.js";
 
 const router = express.Router();
 
@@ -18,138 +17,10 @@ function getGreeting() {
 
 /**
  * GET /api/v1/dashboard/morning-glance
- * Quick 30-second status for busy traders
+ * Deprecated - returns success response only
  */
 router.get("/morning-glance", auth, async (req, res) => {
-  try {
-    const user_id = req.user._id;
-    console.log("📊 [MORNING GLANCE] User ID:", user_id);
-
-    // 1. Get open positions
-    const positions = await UserPosition.findAllOpenPositions(user_id);
-
-    // 2. Enrich positions with current price and status
-    const positionSummaries = await Promise.all(positions.map(async (pos) => {
-      const priceDoc = await LatestPrice.findOne({ instrument_key: pos.instrument_key });
-      const current_price = priceDoc?.last_traded_price || priceDoc?.close || pos.actual_entry;
-      const pnl = pos.calculateUnrealizedPnl(current_price);
-      const isExecuted = pos.execution_status === "EXECUTED";
-
-      // Quick status check - only relevant for executed positions
-      const alerts = isExecuted ? checkExitConditions({
-        position: {
-          actual_entry: pos.actual_entry,
-          current_sl: pos.current_sl,
-          current_target: pos.current_target
-        },
-        current_price
-      }) : [];
-
-      // Determine status emoji and message
-      let status_emoji = "✅";
-      let status_text = "Structure intact";
-      let needs_attention = false;
-
-      // Only check alerts for executed positions
-      if (!isExecuted) {
-        status_emoji = "⏳";
-        status_text = "Order pending";
-        needs_attention = false; // Pending orders don't need attention
-      } else if (alerts.some(a => a.type === "STOP_HIT")) {
-        status_emoji = "🔴";
-        status_text = "Stop hit - Exit";
-        needs_attention = true;
-      } else if (alerts.some(a => a.type === "NEAR_STOP")) {
-        status_emoji = "⚠️";
-        status_text = `Watch ₹${pos.current_sl} support`;
-        needs_attention = true;
-      } else if (alerts.some(a => a.type === "NEAR_TARGET" || a.type === "BEYOND_TARGET")) {
-        status_emoji = "🎯";
-        status_text = "Near target - Consider profit";
-        needs_attention = true;
-      } else if (pnl.unrealized_pnl_pct < -2) {
-        status_emoji = "⚠️";
-        status_text = "In drawdown";
-      } else if (pnl.unrealized_pnl_pct > 2) {
-        status_emoji = "📈";
-        status_text = "In profit - Trail stop?";
-      }
-
-      return {
-        symbol: pos.symbol,
-        pnl_pct: isExecuted ? pnl.unrealized_pnl_pct : 0,
-        pnl_inr: isExecuted ? pnl.unrealized_pnl : 0,
-        current_price,
-        status_emoji,
-        status_text,
-        needs_attention,
-        days_held: pos.days_in_trade,
-        execution_status: pos.execution_status || "PENDING"
-      };
-    }));
-
-    // 3. Calculate overall status (only executed positions count towards P&L)
-    const executedPositions = positionSummaries.filter(p => p.execution_status === "EXECUTED");
-    const pendingPositions = positionSummaries.filter(p => p.execution_status === "PENDING");
-    const totalPnl = executedPositions.reduce((sum, p) => sum + p.pnl_inr, 0);
-    const needsAttention = positionSummaries.filter(p => p.needs_attention).length;
-
-    // 4. Generate market vibe (simple heuristic)
-    let marketVibe = "Markets steady, follow your plan";
-    if (needsAttention > 0) {
-      marketVibe = `${needsAttention} position(s) need attention`;
-    } else if (totalPnl > 0) {
-      marketVibe = "Positions looking good, stay patient";
-    } else if (totalPnl < 0) {
-      marketVibe = "Some drawdown, but structure intact";
-    }
-
-    res.json({
-      success: true,
-      glance: {
-        // Header
-        greeting: getGreeting(),
-        date: new Date().toLocaleDateString('en-IN', {
-          weekday: 'long',
-          month: 'short',
-          day: 'numeric'
-        }),
-
-        // Positions summary (only executed positions)
-        positions: {
-          count: executedPositions.length,
-          total_pnl_inr: round2(totalPnl),
-          items: executedPositions
-        },
-
-        // Pending positions (not yet executed with broker)
-        pending_positions: {
-          count: pendingPositions.length,
-          items: pendingPositions
-        },
-
-        // Watchlist alerts - removed, Morning Glance now only shows positions
-        watchlist_alerts: [],
-
-        // Overall
-        action_needed: needsAttention > 0,
-        market_vibe: marketVibe,
-
-        // Quick stats
-        stats: {
-          open_positions: executedPositions.length,
-          pending_positions: pendingPositions.length,
-          positions_in_profit: executedPositions.filter(p => p.pnl_pct > 0).length,
-          watchlist_stocks: 0,
-          alerts_count: 0
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error("Morning glance error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+  res.json({ success: true });
 });
 
 /**

@@ -341,7 +341,9 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
       valid: levels.valid,
       entry: levels.entry,
       stop: levels.stop,
-      target: levels.target,
+      target1: levels.target1,
+      target2: levels.target2,
+      target3: levels.target3,
       riskReward: levels.riskReward,
       reason: levels.reason
     });
@@ -426,12 +428,12 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
       entry: levels.entry,
       entryRange: levels.entryRange,
       stop: levels.stop,
-      // ── Targets ──
-      target1: levels.target1,                         // T1 partial profit booking (50%) — v2
-      target1Basis: levels.target1Basis,               // 'weekly_r1', 'daily_r1', or 'midpoint' — v2
-      target: levels.target,                           // T2 (full exit target from structural ladder)
-      target2: levels.target2 || null,                 // T3 (extension target, trail only)
-      targetBasis: levels.targetBasis,                 // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', '52w_high', 'atr_extension_52w_breakout'
+      // ── Targets (consistent naming: T1, T2, T3) ──
+      target1: levels.target1,                         // T1: Partial profit booking (50%)
+      target1_basis: levels.target1_basis,             // 'weekly_r1', 'daily_r1', or 'midpoint'
+      target2: levels.target2,                         // T2: Main target
+      target2_basis: levels.target2_basis,             // 'weekly_r1', 'weekly_r2', 'daily_r1', 'daily_r2', '52w_high', 'atr_extension_52w_breakout'
+      target3: levels.target3 || null,                 // T3: Extension target (optional, may be null)
       dailyR1Check: levels.dailyR1Check || null,       // Momentum checkpoint (not a target)
       // ── Risk/Reward ──
       riskReward: levels.riskReward,

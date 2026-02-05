@@ -34,8 +34,8 @@ class PriceCacheService {
     this.lastFetchStartTime = null;
     this.lastFetchEndTime = null;
 
-    // Cache duration (120 seconds = 2 minutes)
-    this.CACHE_DURATION = 120 * 1000;
+    // Cache duration (300 seconds = 5 minutes)
+    this.CACHE_DURATION = 300 * 1000;
 
     // Market indices to always track
     this.MARKET_INDICES = [
@@ -1206,6 +1206,29 @@ class PriceCacheService {
     console.log(`✅ [PRICES WITH CHANGE] Fetched ${Object.keys(priceDataMap).length}/${instrumentKeys.length} prices in ${apiTime}ms using ${apiType} API`);
 
     return priceDataMap;
+  }
+
+  /**
+   * Load weekly watchlist stocks into tracking
+   * Called on startup to ensure all active watchlist stocks are tracked
+   */
+  async loadWeeklyWatchlistStocks() {
+    try {
+      // Dynamic import to avoid circular dependency
+      const WeeklyWatchlist = (await import('../models/weeklyWatchlist.js')).default;
+
+      const watchlist = await WeeklyWatchlist.getCurrentWeek();
+      if (!watchlist || !watchlist.stocks || watchlist.stocks.length === 0) {
+        console.log('[PRICE CACHE] No active weekly watchlist stocks to track');
+        return;
+      }
+
+      const instrumentKeys = watchlist.stocks.map(stock => stock.instrument_key);
+      this.addInstruments(instrumentKeys);
+      console.log(`✅ [PRICE CACHE] Added ${instrumentKeys.length} weekly watchlist stocks to tracking`);
+    } catch (error) {
+      console.error('❌ [PRICE CACHE] Failed to load weekly watchlist stocks:', error.message);
+    }
   }
 }
 

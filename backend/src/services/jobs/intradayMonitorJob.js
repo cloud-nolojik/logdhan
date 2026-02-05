@@ -423,14 +423,14 @@ class IntradayMonitorJob {
 
       const sim = stock.trade_simulation;
       const levels = stock.levels;
-      // 3-stage targets: T1 (target1) → Target (main) → T2 (target2)
-      const t1 = levels.target1;
-      const mainTarget = levels.target;
-      const t2 = levels.target2;
+      // 3-stage targets: T1 → T2 → T3 (T3 is optional)
+      const t1 = levels.target1;           // T1: 50% booking
+      const t2 = levels.target2;           // T2: Main target (70% of remaining if T3 exists, else 100%)
+      const t3 = levels.target3;           // T3: Extension target (optional - book final 30%)
       const trailingStop = sim.trailing_stop || levels.stop;
 
       // Debug: show current status and levels
-      console.log(`${runLabel} ${stock.symbol}: Status=${sim.status}, T1=₹${t1?.toFixed(2)}, Target=₹${mainTarget?.toFixed(2)}, T2=₹${t2?.toFixed(2)}, Stop=₹${trailingStop?.toFixed(2)}`);
+      console.log(`${runLabel} ${stock.symbol}: Status=${sim.status}, T1=₹${t1?.toFixed(2)}, T2=₹${t2?.toFixed(2)}, T3=₹${t3?.toFixed(2) || 'N/A'}, Stop=₹${trailingStop?.toFixed(2)}`);
 
       // Initialize intraday_alerts if needed
       if (!stock.intraday_alerts) {
@@ -587,81 +587,102 @@ class IntradayMonitorJob {
       }
 
       // ══════════════════════════════════════════════
-      // CHECK TARGET (main swing target - book 70%, keep 30% for T2)
+      // CHECK T2 (main swing target)
+      // If T3 exists: book 70% of remaining, keep 30% for T3
+      // If T3 does NOT exist: book 100% (full exit)
       // Only for PARTIAL_EXIT status, use candle high to catch intraday hits
       // ══════════════════════════════════════════════
-      if (sim.status === 'PARTIAL_EXIT' && mainTarget && candleHigh >= mainTarget) {
-        const hasTargetAlert = todaysAlerts.some(a => a.type === 'TARGET_HIT');
-        if (!hasTargetAlert) {
-          // Book 70% of remaining shares, keep 30% for T2
-          const exitQty = Math.floor(sim.qty_remaining * 0.7);
+      if (sim.status === 'PARTIAL_EXIT' && t2 && candleHigh >= t2) {
+        const hasT2Alert = todaysAlerts.some(a => a.type === 'T2_HIT');
+        if (!hasT2Alert) {
+          // If T3 exists: book 70%, keep 30% for T3
+          // If T3 does NOT exist: book 100% (full exit at T2)
+          const bookingPct = t3 ? 0.7 : 1.0;
+          const exitQty = t3 ? Math.floor(sim.qty_remaining * bookingPct) : sim.qty_remaining;
           const keepQty = sim.qty_remaining - exitQty;
-          const exitPnl = (mainTarget - sim.entry_price) * exitQty;
+          const exitPnl = (t2 - sim.entry_price) * exitQty;
 
           sim.realized_pnl = (sim.realized_pnl || 0) + exitPnl;
           sim.qty_remaining = keepQty;
           sim.qty_exited = (sim.qty_exited || 0) + exitQty;
 
-          // Update P&L (unrealized for remaining position heading to T2)
-          sim.unrealized_pnl = (livePrice - sim.entry_price) * sim.qty_remaining;
+          // If holding for T3, move trailing stop to T2
+          if (t3) {
+            sim.trailing_stop = t2;
+          }
+
+          // Update P&L
+          sim.unrealized_pnl = keepQty > 0 ? (livePrice - sim.entry_price) * sim.qty_remaining : 0;
           sim.total_pnl = Math.round(sim.realized_pnl + sim.unrealized_pnl);
           sim.total_return_pct = parseFloat(((sim.total_pnl / sim.capital) * 100).toFixed(2));
 
+          // If no T3, this is full exit
+          if (!t3) {
+            sim.status = 'FULL_EXIT';
+          }
+
           // Add event to simulation
           if (!sim.events) sim.events = [];
+          const detailMsg = t3
+            ? `T2 hit! Booked 70% (${exitQty} shares) at ₹${t2.toFixed(2)} | Holding ${keepQty} shares for T3 (₹${t3.toFixed(2)}) | Stop → T2 ₹${t2.toFixed(2)}`
+            : `T2 hit! Booked 100% (${exitQty} shares) at ₹${t2.toFixed(2)} — FULL TARGET (no T3) 🏆`;
           sim.events.push({
             date: new Date(),
-            type: 'TARGET_HIT',
-            price: mainTarget,
+            type: 'T2_HIT',
+            price: t2,
             qty: exitQty,
             pnl: Math.round(exitPnl),
-            detail: `Target hit! Booked 70% (${exitQty} shares) at ₹${mainTarget.toFixed(2)} | Holding ${keepQty} shares for T2 (₹${t2?.toFixed(2) || 'N/A'})`
+            detail: detailMsg
           });
 
           // Sync tracking_status
-          stock.tracking_status = 'TARGET_HIT';
+          stock.tracking_status = t3 ? 'TARGET_HIT' : 'FULL_EXIT';
 
+          const alertMsg = t3
+            ? `T2 hit! Booked ${exitQty} shares at ₹${t2.toFixed(2)} — Holding ${keepQty} for T3 | Stop → T2`
+            : `T2 hit! Booked all ${exitQty} shares at ₹${t2.toFixed(2)} — Full target achieved! 🏆`;
           const alert = {
             date: new Date(),
-            type: 'TARGET_HIT',
+            type: 'T2_HIT',
             price: livePrice,
-            level: mainTarget,
+            level: t2,
             price_timestamp: priceTimestamp,
-            message: `Target hit! Booked ${exitQty} shares at ₹${mainTarget.toFixed(2)} — Holding ${keepQty} for T2`
+            message: alertMsg
           };
 
           stock.intraday_alerts.push(alert);
           alerts.push({ symbol: stock.symbol, ...alert });
           needsSave = true;
 
-          console.log(`${runLabel} ⭐ ${stock.symbol}: TARGET_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — booked ${exitQty}, holding ${keepQty} for T2`);
+          console.log(`${runLabel} ⭐ ${stock.symbol}: T2_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — booked ${exitQty}${t3 ? `, holding ${keepQty} for T3` : ' (FULL EXIT)'}`);
 
           // Send push notification
           if (!dryRun) {
             try {
               await firebaseService.sendAnalysisCompleteToAllUsers(
-                `⭐ Target Hit: ${stock.symbol}`,
+                t3 ? `⭐ T2 Hit: ${stock.symbol}` : `🏆 T2 Hit: ${stock.symbol}`,
                 alert.message,
-                { type: 'target_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
+                { type: 't2_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
               );
             } catch (notifError) {
               console.error(`${runLabel} Failed to send notification:`, notifError.message);
             }
           } else {
-            console.log(`${runLabel} [DRY-RUN] Would send Target notification (skipped)`);
+            console.log(`${runLabel} [DRY-RUN] Would send T2 notification (skipped)`);
           }
         }
       }
 
       // ══════════════════════════════════════════════
-      // CHECK T2 (only for PARTIAL_EXIT status, use candle high to catch intraday hits)
+      // CHECK T3 (extension target - only if T3 exists)
       // Full exit - maximum profit target
+      // Only for PARTIAL_EXIT status (after T2 hit with T3 existing)
       // ══════════════════════════════════════════════
-      if (sim.status === 'PARTIAL_EXIT' && t2 && candleHigh >= t2) {
-        const hasT2Alert = todaysAlerts.some(a => a.type === 'T2_HIT');
-        if (!hasT2Alert) {
-          // Calculate P&L for remaining position
-          const exitPnl = (t2 - sim.entry_price) * sim.qty_remaining;
+      if (sim.status === 'PARTIAL_EXIT' && t3 && candleHigh >= t3) {
+        const hasT3Alert = todaysAlerts.some(a => a.type === 'T3_HIT');
+        if (!hasT3Alert) {
+          // Calculate P&L for remaining position (final 30%)
+          const exitPnl = (t3 - sim.entry_price) * sim.qty_remaining;
           sim.realized_pnl = (sim.realized_pnl || 0) + exitPnl;
           sim.qty_exited = (sim.qty_exited || 0) + sim.qty_remaining;
           sim.qty_remaining = 0;
@@ -674,11 +695,11 @@ class IntradayMonitorJob {
           if (!sim.events) sim.events = [];
           sim.events.push({
             date: new Date(),
-            type: 'T2_HIT',
-            price: t2,
+            type: 'T3_HIT',
+            price: t3,
             qty: sim.qty_exited,
             pnl: Math.round(exitPnl),
-            detail: `T2 hit intraday! Full target achieved at ₹${t2.toFixed(2)} 🏆`
+            detail: `T3 hit intraday! Full target achieved at ₹${t3.toFixed(2)} 🏆`
           });
 
           // Sync tracking_status
@@ -686,32 +707,32 @@ class IntradayMonitorJob {
 
           const alert = {
             date: new Date(),
-            type: 'T2_HIT',
+            type: 'T3_HIT',
             price: livePrice,
-            level: t2,
+            level: t3,
             price_timestamp: priceTimestamp,
-            message: `T2 hit at ₹${livePrice.toFixed(2)} (target: ₹${t2.toFixed(2)}) — Full target achieved! 🏆`
+            message: `T3 hit at ₹${livePrice.toFixed(2)} (target: ₹${t3.toFixed(2)}) — Full target achieved! 🏆`
           };
 
           stock.intraday_alerts.push(alert);
           alerts.push({ symbol: stock.symbol, ...alert });
           needsSave = true;
 
-          console.log(`${runLabel} 🏆 ${stock.symbol}: T2_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — sim updated to FULL_EXIT`);
+          console.log(`${runLabel} 🏆 ${stock.symbol}: T3_HIT at ₹${livePrice.toFixed(2)} @ ${priceTimestamp || 'N/A'} — sim updated to FULL_EXIT`);
 
           // Send push notification
           if (!dryRun) {
             try {
               await firebaseService.sendAnalysisCompleteToAllUsers(
-                `🏆 T2 Hit: ${stock.symbol}`,
+                `🏆 T3 Hit: ${stock.symbol}`,
                 alert.message,
-                { type: 't2_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
+                { type: 't3_hit', symbol: stock.symbol, route: '/weekly-watchlist' }
               );
             } catch (notifError) {
               console.error(`${runLabel} Failed to send notification:`, notifError.message);
             }
           } else {
-            console.log(`${runLabel} [DRY-RUN] Would send T2 notification (skipped)`);
+            console.log(`${runLabel} [DRY-RUN] Would send T3 notification (skipped)`);
           }
         }
       }

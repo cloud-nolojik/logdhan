@@ -1,9 +1,9 @@
 import express from "express";
 import WeeklyWatchlist from "../models/weeklyWatchlist.js";
 import StockAnalysis from "../models/stockAnalysis.js";
+import LatestPrice from "../models/latestPrice.js";
 import { auth } from "../middleware/auth.js";
 import { calculateSetupScore, getEntryZone, checkEntryZoneProximity } from "../engine/index.js";
-import priceCacheService from "../services/priceCache.service.js";
 
 const router = express.Router();
 
@@ -65,8 +65,8 @@ function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, 
   const entry = _levels?.entry;
   const stop = _levels?.stop;
   const target1 = _levels?.target1;
-  const target = _levels?.target;
-  const target2 = _levels?.target2;
+  const target2 = _levels?.target2;  // T2: Main target
+  const target3 = _levels?.target3;  // T3: Extension target (optional)
   const close = latestSnapshot?.close;
 
   // Priority 1: Trade simulation states that override tracking_status
@@ -115,14 +115,26 @@ function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, 
     };
   }
 
-  // PARTIAL_EXIT — T1 hit, trailing remainder (check if TARGET also hit)
+  // PARTIAL_EXIT — T1 or T2 hit, trailing remainder
   if (journeyStatus === 'PARTIAL_EXIT') {
-    // Check if main target was also hit (tracking_status = TARGET_HIT)
+    // Check if T2 was hit (tracking_status = TARGET2_HIT) - trailing to T3
+    if (trackingStatus === 'TARGET2_HIT') {
+      return {
+        icon: 'star',  // ⭐
+        message: 'T2 hit — trailing to T3',
+        subtext: target3 ? `Stop locked at T2 ₹${target2?.toFixed(2)} | T3: ₹${target3.toFixed(2)}` : 'T2 achieved!',
+        background_color: '#1B5E20',  // Dark green
+        text_color: '#FFFFFF',
+        value_color: '#FFFFFF',
+        show_metrics: true
+      };
+    }
+    // Check if main target was hit (tracking_status = TARGET_HIT) - old naming, means T1 in new system
     if (trackingStatus === 'TARGET_HIT') {
       return {
         icon: 'star',  // ⭐
-        message: 'Target hit — 70% booked, trailing to T2',
-        subtext: target2 ? `T2: ₹${target2.toFixed(2)}` : 'Full target achieved!',
+        message: 'T1 hit — trailing to T2',
+        subtext: target2 ? `Stop at entry (risk-free) | T2: ₹${target2.toFixed(2)}` : 'T1 achieved!',
         background_color: '#1B5E20',  // Dark green
         text_color: '#FFFFFF',
         value_color: '#FFFFFF',
@@ -136,7 +148,7 @@ function calculateDailyUpdateCard(journeyStatus, trackingStatus, trackingFlags, 
     return {
       icon: 'check_circle',  // ✅
       message: `T1 booked — trailing remainder${rsiNote}`,
-      subtext: target ? `Next target: ₹${target.toFixed(2)}` : 'Trailing with stop at entry',
+      subtext: target1 ? `Stop at entry (risk-free) | T2: ₹${target2?.toFixed(2)}` : 'Trailing with stop at entry',
       background_color: '#2E7D32',  // Dark green
       text_color: '#FFFFFF',
       value_color: '#FFFFFF',
@@ -391,9 +403,10 @@ function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
     entry_range: levels.entryRange,
     stop: levels.stop,
     t1: levels.target1,
-    t1_basis: levels.target1Basis,
-    target: levels.target,
-    target2: levels.target2,
+    t1_basis: levels.target1_basis,
+    t2: levels.target2,
+    t2_basis: levels.target2_basis,
+    t3: levels.target3 || null,  // T3 is optional
     entry_confirmation: levels.entryConfirmation || 'close_above',
     entry_window_days: levels.entryWindowDays || 3,
     max_hold_days: levels.maxHoldDays || 5,
@@ -542,8 +555,9 @@ function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
   const peakGainPct = entryPrice > 0 ? ((peakPrice - entryPrice) / entryPrice) * 100 : 0;
 
   // Get price levels for progress bar (prefer levels object, fallback to screening_data)
-  const t1 = stock.levels?.target1 || stock.levels?.target || stock.screening_data?.T1;
-  const t2 = stock.levels?.target2 || stock.levels?.target || stock.screening_data?.T2 || stock.screening_data?.swing_target;
+  // Consistent naming: target1 (T1), target2 (T2), target3 (T3 - optional)
+  const t1 = stock.levels?.target1 || stock.screening_data?.T1;
+  const t2 = stock.levels?.target2 || stock.screening_data?.T2 || stock.screening_data?.swing_target;
   const stopLoss = stock.levels?.stop || stock.screening_data?.stop_loss || stock.entry_zone?.stop_loss;
 
   let distFromEntryPct = null;
@@ -579,18 +593,29 @@ function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
       break;
 
     case 'PARTIAL_EXIT':
-      // Check if main target was also hit
-      if (trackingStatus === 'TARGET_HIT') {
+      // Check which target was hit: T2 (trailing to T3) or T1 (trailing to T2)
+      const t2Level = stock.levels?.target2;
+      const t3Level = stock.levels?.target3;
+
+      // Check if T2 was hit (still PARTIAL_EXIT when holding for T3)
+      const hasT2Hit = sim.events?.some(e => e.type === 'T2_HIT');
+
+      if (hasT2Hit && t3Level) {
+        // T2 hit, holding 30% for T3, stop at T2
         emoji = '⭐';
-        headline = 'Target Hit - Trailing to T2';
-        const t2Level = stock.levels?.target2;
+        headline = 'T2 Hit - Trailing to T3';
+        subtext = `Stop locked at T2 ₹${t2Level?.toFixed(2)} | ${qtyRemaining} shares trailing to T3 (₹${t3Level.toFixed(2)})`;
+      } else if (trackingStatus === 'TARGET_HIT' || trackingStatus === 'TARGET1_HIT') {
+        // T1 hit, trailing to T2
+        emoji = '🟡';
+        headline = 'T1 Hit - Trailing to T2';
         subtext = t2Level
-          ? `70% booked at Target, ${qtyRemaining} shares trailing to T2 (₹${t2Level.toFixed(2)})`
-          : `Target reached! ${qtyRemaining} shares remaining`;
+          ? `Stop at entry ₹${entryPrice?.toFixed(2)} (risk-free) | ${qtyRemaining} shares trailing to T2`
+          : `50% booked at T1, ${qtyRemaining} shares remaining`;
       } else {
         emoji = '🟡';
-        headline = 'T1 Hit - Trailing Stop';
-        subtext = `50% booked at T1, ${qtyRemaining} shares trailing with SL @ ₹${trailingStop?.toFixed(2)}`;
+        headline = 'T1 Hit - Risk Free';
+        subtext = `Stop at entry ₹${trailingStop?.toFixed(2)} (risk-free) | ${qtyRemaining} shares trailing`;
       }
       pnlLine = `${pnlSign}₹${totalPnl.toFixed(0)} (${stockGainSign}${stockGainPct.toFixed(1)}%)`;
       break;
@@ -679,6 +704,7 @@ function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
  * GET /api/v1/weekly-watchlist
  * Get current week's watchlist (pure read, no simulation updates)
  *
+ * Prices are read from LatestPrice DB collection (updated every 5 mins by background job)
  * Simulation updates are handled by:
  * - 4 PM Daily Tracking Job (EOD data, close-based entry)
  * - 15-min Intraday Monitor Job (stop/T1/T2 alerts during market hours)
@@ -695,9 +721,28 @@ router.get("/", auth, async (req, res) => {
       });
     }
 
-    // Fetch all prices at once using price cache service
+    // Fetch all prices from DB (no external API calls - prices updated by background job every 5 mins)
     const instrumentKeys = watchlist.stocks.map(stock => stock.instrument_key);
-    const priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
+    const latestPrices = await LatestPrice.getPricesForInstruments(instrumentKeys);
+
+    // Build price map from DB results
+    const priceDataMap = {};
+    let oldestPriceUpdate = null;
+
+    latestPrices.forEach(priceDoc => {
+      priceDataMap[priceDoc.instrument_key] = {
+        price: priceDoc.last_traded_price,
+        change: priceDoc.change || 0,
+        change_percent: priceDoc.change_percent || 0,
+        previous_day_close: priceDoc.previous_day_close,
+        updated_at: priceDoc.updated_at
+      };
+
+      // Track oldest price update for cache age
+      if (!oldestPriceUpdate || priceDoc.updated_at < oldestPriceUpdate) {
+        oldestPriceUpdate = priceDoc.updated_at;
+      }
+    });
 
     // Fetch latest daily_track analysis for each stock (batch query)
     const dailyTrackAnalyses = await StockAnalysis.find({
@@ -717,7 +762,8 @@ router.get("/", auth, async (req, res) => {
 
     // Enrich stocks with current prices and card_display (no DB writes)
     const enrichedStocks = watchlist.stocks.map((stock) => {
-      const currentPrice = priceDataMap[stock.instrument_key]?.price || null;
+      const priceData = priceDataMap[stock.instrument_key];
+      const currentPrice = priceData?.price || null;
 
       let zoneStatus = null;
       if (currentPrice && stock.entry_zone) {
@@ -733,10 +779,17 @@ router.get("/", auth, async (req, res) => {
       return {
         ...stock.toObject(),
         current_price: currentPrice || null,
+        price_change: priceData?.change || 0,
+        price_change_percent: priceData?.change_percent || 0,
         zone_status: zoneStatus,
         card_display: cardDisplay
       };
     });
+
+    // Calculate price cache age in seconds
+    const pricesCacheAge = oldestPriceUpdate
+      ? Math.floor((Date.now() - new Date(oldestPriceUpdate).getTime()) / 1000)
+      : null;
 
     res.json({
       success: true,
@@ -744,7 +797,9 @@ router.get("/", auth, async (req, res) => {
         ...watchlist.toObject(),
         stocks: enrichedStocks
       },
-      score_explanations: SCORE_EXPLANATIONS
+      score_explanations: SCORE_EXPLANATIONS,
+      prices_updated_at: oldestPriceUpdate,
+      prices_cache_age_seconds: pricesCacheAge
     });
   } catch (error) {
     console.error("Error fetching weekly watchlist:", error);

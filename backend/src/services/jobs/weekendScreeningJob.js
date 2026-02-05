@@ -566,12 +566,12 @@ class WeekendScreeningJob {
           entry: stock.levels.entry,
           entryRange: stock.levels.entryRange,
           stop: stock.levels.stop,
-          // ── Targets ──
-          target1: stock.levels.target1 || null,           // T1 partial profit booking (50%)
-          target1Basis: stock.levels.target1Basis || null, // 'weekly_r1', 'daily_r1', or 'midpoint'
-          target: stock.levels.target,                     // T2 full exit target
-          target2: stock.levels.target2 || null,           // T3 extension target (trail only)
-          targetBasis: stock.levels.targetBasis,           // 'weekly_r1', 'weekly_r2', 'atr_extension_52w_breakout', etc.
+          // ── Targets (consistent naming: T1, T2, T3) ──
+          target1: stock.levels.target1 || null,           // T1: Partial profit booking (50%)
+          target1_basis: stock.levels.target1_basis || null, // 'weekly_r1', 'daily_r1', or 'midpoint'
+          target2: stock.levels.target2,                   // T2: Main target
+          target2_basis: stock.levels.target2_basis,       // 'weekly_r1', 'weekly_r2', 'atr_extension_52w_breakout', etc.
+          target3: stock.levels.target3 || null,           // T3: Extension target (optional)
           dailyR1Check: stock.levels.dailyR1Check || null, // Backward compat
           // ── Risk/Reward ──
           riskReward: stock.levels.riskReward,

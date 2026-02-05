@@ -55,25 +55,25 @@ const PHASE2_TRIGGERS = {
 /**
  * Calculate tracking status based on current price vs levels
  * @param {Object} dailyData - { ltp, daily_rsi, todays_volume, avg_volume_50d, ... }
- * @param {Object} levels - { entry, entryRange, stop, target, target2, archetype, ... }
+ * @param {Object} levels - { entry, entryRange, stop, target1, target2, target3, archetype, ... }
  * @param {string} symbol - Stock symbol for logging
  * @returns {string} - New tracking status
  */
 function calculateStatus(dailyData, levels, symbol = 'UNKNOWN') {
   const { ltp } = dailyData;
-  const { entry, entryRange, stop, target1, target, target2, archetype } = levels;
+  const { entry, entryRange, stop, target1, target2, target3, archetype } = levels;
 
   // Use entryRange if available, otherwise ±1% of entry
   const entryLow = entryRange?.[0] || entry * 0.99;
   const entryHigh = entryRange?.[1] || entry * 1.01;
 
-  // 3-stage targets: T1 (target1) → Target (main) → T2 (target2)
-  const t1 = target1;
-  const mainTarget = target;
-  const t2 = target2;
+  // 3-stage targets: T1 → T2 → T3 (T3 is optional)
+  const t1 = target1;    // T1: 50% booking
+  const t2 = target2;    // T2: Main target (70% of remaining if T3 exists, else 100%)
+  const t3 = target3;    // T3: Extension target (optional - final 30%)
 
   console.log(`[STATUS-CALC] ${symbol}: LTP=${ltp}, Entry=${entry}, EntryRange=[${entryLow?.toFixed(2)}-${entryHigh?.toFixed(2)}]`);
-  console.log(`[STATUS-CALC] ${symbol}: Stop=${stop}, T1=${t1 || 'N/A'}, Target=${mainTarget}, T2=${t2 || 'N/A'}, Archetype=${archetype || 'standard'}`);
+  console.log(`[STATUS-CALC] ${symbol}: Stop=${stop}, T1=${t1 || 'N/A'}, T2=${t2}, T3=${t3 || 'N/A'}, Archetype=${archetype || 'standard'}`);
 
   // Priority order matters — check terminal states first
 
@@ -83,16 +83,16 @@ function calculateStatus(dailyData, levels, symbol = 'UNKNOWN') {
     return 'STOPPED_OUT';
   }
 
-  // 2. T2 hit (if exists) — full target achieved
+  // 2. T3 hit (if exists) — full target achieved
+  if (t3 && ltp >= t3) {
+    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= T3 ${t3} -> TARGET3_HIT`);
+    return 'TARGET3_HIT';
+  }
+
+  // 3. T2 hit — main target
   if (t2 && ltp >= t2) {
     console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= T2 ${t2} -> TARGET2_HIT`);
     return 'TARGET2_HIT';
-  }
-
-  // 3. Main target hit — user can exit or hold for T2
-  if (mainTarget && ltp >= mainTarget) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= Target ${mainTarget} -> TARGET_HIT`);
-    return 'TARGET_HIT';
   }
 
   // 4. T1 hit — 50% booked, trailing remainder
@@ -121,9 +121,9 @@ function calculateStatus(dailyData, levels, symbol = 'UNKNOWN') {
   }
 
   // 7. Above entry but below T1 (running, no action needed)
-  const upperBound = t1 || mainTarget;
+  const upperBound = t1 || t2;
   if (ltp > entryHigh && upperBound && ltp < upperBound) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} > EntryHigh ${entryHigh.toFixed(2)} and < ${t1 ? 'T1' : 'Target'} ${upperBound} -> ABOVE_ENTRY`);
+    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} > EntryHigh ${entryHigh.toFixed(2)} and < ${t1 ? 'T1' : 'T2'} ${upperBound} -> ABOVE_ENTRY`);
     return 'ABOVE_ENTRY';
   }
 
@@ -365,10 +365,10 @@ function simulateTrade(stock, snapshots, currentPrice) {
   const levels = stock.levels;
   const entry = levels.entry;
   const stop = levels.stop;
-  // 3-stage targets: T1 → Target → T2
-  const t1 = levels.target1;                     // T1: Partial booking (50%)
-  const mainTarget = levels.target;              // Main target: user can exit or hold for T2
-  const t2 = levels.target2;                     // T2: Full exit (remaining)
+  // 3-stage targets: T1 → T2 → T3 (T3 is optional)
+  const t1 = levels.target1;    // T1: 50% booking
+  const t2 = levels.target2;    // T2: Main target (70% of remaining if T3 exists, else 100%)
+  const t3 = levels.target3;    // T3: Extension target (optional - final 30%)
 
   // Time rules from levels (with defaults for backward compat)
   const entryConfirmation = levels.entryConfirmation || 'close_above';
@@ -678,36 +678,49 @@ function simulateTrade(stock, snapshots, currentPrice) {
         detail: `T1 hit! Booked 50% (${exitQty} shares) at ₹${t1.toFixed(2)} | +₹${Math.round(pnl).toLocaleString('en-IN')} locked | Stop → entry ₹${sim.entry_price.toFixed(2)} (risk-free)`
       });
 
-      // Same day: also check main target and T2
-      if (mainTarget && high >= mainTarget) {
-        // Book 70% of remaining shares at Target, keep 30% for T2
-        const targetExitQty = Math.floor(sim.qty_remaining * 0.7);
-        const targetKeepQty = sim.qty_remaining - targetExitQty;
-        const targetPnl = (mainTarget - sim.entry_price) * targetExitQty;
-        sim.realized_pnl += targetPnl;
-        sim.qty_remaining = targetKeepQty;
-        sim.qty_exited += targetExitQty;
+      // Same day: also check T2 (and T3 if exists)
+      if (t2 && high >= t2) {
+        // If T3 exists: book 70%, keep 30% for T3
+        // If T3 does NOT exist: book 100% (full exit at T2)
+        const t2ExitQty = t3 ? Math.floor(sim.qty_remaining * 0.7) : sim.qty_remaining;
+        const t2KeepQty = sim.qty_remaining - t2ExitQty;
+        const t2Pnl = (t2 - sim.entry_price) * t2ExitQty;
+        sim.realized_pnl += t2Pnl;
+        sim.qty_remaining = t2KeepQty;
+        sim.qty_exited += t2ExitQty;
 
+        // If holding for T3, move trailing stop to T2
+        if (t3) {
+          sim.trailing_stop = t2;
+        }
+
+        const t2DetailMsg = t3
+          ? `T2 hit! Booked 70% (${t2ExitQty} shares) at ₹${t2.toFixed(2)} | Holding ${t2KeepQty} for T3 (₹${t3.toFixed(2)}) | Stop → T2 ₹${t2.toFixed(2)}`
+          : `T2 hit! Booked 100% (${t2ExitQty} shares) at ₹${t2.toFixed(2)} — FULL TARGET (no T3) 🏆`;
         sim.events.push({
           date,
-          type: 'TARGET_HIT',
-          price: mainTarget,
-          qty: targetExitQty,
-          pnl: Math.round(targetPnl),
-          detail: `Target hit! Booked 70% (${targetExitQty} shares) at ₹${mainTarget.toFixed(2)} | Holding ${targetKeepQty} for T2 (₹${t2?.toFixed(2) || 'N/A'})`
+          type: 'T2_HIT',
+          price: t2,
+          qty: t2ExitQty,
+          pnl: Math.round(t2Pnl),
+          detail: t2DetailMsg
         });
 
-        // Same day: also check T2
-        if (t2 && high >= t2) {
-          const pnl2 = (t2 - sim.entry_price) * sim.qty_remaining;
-          sim.realized_pnl += pnl2;
+        if (!t3) {
+          sim.status = 'FULL_EXIT';
+        }
+
+        // Same day: also check T3 (if it exists and we haven't already full exited)
+        if (t3 && high >= t3 && sim.qty_remaining > 0) {
+          const t3Pnl = (t3 - sim.entry_price) * sim.qty_remaining;
+          sim.realized_pnl += t3Pnl;
           sim.events.push({
             date,
-            type: 'T2_HIT',
-            price: t2,
+            type: 'T3_HIT',
+            price: t3,
             qty: sim.qty_remaining,
-            pnl: Math.round(pnl2),
-            detail: `T2 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t2.toFixed(2)} — FULL TARGET 🏆`
+            pnl: Math.round(t3Pnl),
+            detail: `T3 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t3.toFixed(2)} — FULL TARGET 🏆`
           });
           sim.qty_exited += sim.qty_remaining;
           sim.qty_remaining = 0;
@@ -718,42 +731,57 @@ function simulateTrade(stock, snapshots, currentPrice) {
     }
 
     // ══════════════════════════════════════════════
-    // CHECK TARGET (main swing target - only after PARTIAL_EXIT)
-    // Book 70% at Target, keep 30% for T2
+    // CHECK T2 (main swing target - only after PARTIAL_EXIT from T1)
+    // If T3 exists: book 70%, keep 30% for T3
+    // If T3 does NOT exist: book 100% (full exit)
     // ══════════════════════════════════════════════
-    if (sim.status === 'PARTIAL_EXIT' && mainTarget && high >= mainTarget) {
-      // Check if we already logged TARGET_HIT (don't double-book)
-      const alreadyHitTarget = sim.events.some(e => e.type === 'TARGET_HIT');
-      if (!alreadyHitTarget) {
-        // Book 70% of remaining shares at Target, keep 30% for T2
-        const exitQty = Math.floor(sim.qty_remaining * 0.7);
+    if (sim.status === 'PARTIAL_EXIT' && t2 && high >= t2) {
+      // Check if we already logged T2_HIT (don't double-book)
+      const alreadyHitT2 = sim.events.some(e => e.type === 'T2_HIT');
+      if (!alreadyHitT2) {
+        // If T3 exists: book 70%, keep 30% for T3
+        // If T3 does NOT exist: book 100% (full exit at T2)
+        const exitQty = t3 ? Math.floor(sim.qty_remaining * 0.7) : sim.qty_remaining;
         const keepQty = sim.qty_remaining - exitQty;
-        const pnl = (mainTarget - sim.entry_price) * exitQty;
+        const pnl = (t2 - sim.entry_price) * exitQty;
         sim.realized_pnl += pnl;
         sim.qty_remaining = keepQty;
         sim.qty_exited += exitQty;
 
-        sim.events.push({
-          date,
-          type: 'TARGET_HIT',
-          price: mainTarget,
-          qty: exitQty,
-          pnl: Math.round(pnl),
-          detail: `Target hit! Booked 70% (${exitQty} shares) at ₹${mainTarget.toFixed(2)} | Holding ${keepQty} for T2 (₹${t2?.toFixed(2) || 'N/A'})`
-        });
-      }
+        // If holding for T3, move trailing stop to T2
+        if (t3) {
+          sim.trailing_stop = t2;
+        }
 
-      // Same day: also check T2
-      if (t2 && high >= t2) {
-        const pnl = (t2 - sim.entry_price) * sim.qty_remaining;
-        sim.realized_pnl += pnl;
+        const detailMsg = t3
+          ? `T2 hit! Booked 70% (${exitQty} shares) at ₹${t2.toFixed(2)} | Holding ${keepQty} for T3 (₹${t3.toFixed(2)}) | Stop → T2 ₹${t2.toFixed(2)}`
+          : `T2 hit! Booked 100% (${exitQty} shares) at ₹${t2.toFixed(2)} — FULL TARGET (no T3) 🏆`;
         sim.events.push({
           date,
           type: 'T2_HIT',
           price: t2,
+          qty: exitQty,
+          pnl: Math.round(pnl),
+          detail: detailMsg
+        });
+
+        if (!t3) {
+          sim.status = 'FULL_EXIT';
+          continue;
+        }
+      }
+
+      // Same day: also check T3 (if it exists)
+      if (t3 && high >= t3 && sim.qty_remaining > 0) {
+        const pnl = (t3 - sim.entry_price) * sim.qty_remaining;
+        sim.realized_pnl += pnl;
+        sim.events.push({
+          date,
+          type: 'T3_HIT',
+          price: t3,
           qty: sim.qty_remaining,
           pnl: Math.round(pnl),
-          detail: `T2 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t2.toFixed(2)} — FULL TARGET 🏆`
+          detail: `T3 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t3.toFixed(2)} — FULL TARGET 🏆`
         });
         sim.qty_exited += sim.qty_remaining;
         sim.qty_remaining = 0;
@@ -763,18 +791,18 @@ function simulateTrade(stock, snapshots, currentPrice) {
     }
 
     // ══════════════════════════════════════════════
-    // CHECK T2 — remaining 50% (only after PARTIAL_EXIT)
+    // CHECK T3 — final 30% (only if T3 exists and after T2 hit)
     // ══════════════════════════════════════════════
-    if (sim.status === 'PARTIAL_EXIT' && t2 && high >= t2) {
-      const pnl = (t2 - sim.entry_price) * sim.qty_remaining;
+    if (sim.status === 'PARTIAL_EXIT' && t3 && high >= t3) {
+      const pnl = (t3 - sim.entry_price) * sim.qty_remaining;
       sim.realized_pnl += pnl;
       sim.events.push({
         date,
-        type: 'T2_HIT',
-        price: t2,
+        type: 'T3_HIT',
+        price: t3,
         qty: sim.qty_remaining,
         pnl: Math.round(pnl),
-        detail: `T2 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t2.toFixed(2)} — FULL TARGET 🏆`
+        detail: `T3 hit! Booked remaining ${sim.qty_remaining} shares at ₹${t3.toFixed(2)} — FULL TARGET 🏆`
       });
       sim.qty_exited += sim.qty_remaining;
       sim.qty_remaining = 0;
@@ -898,8 +926,8 @@ async function runPhase1(options = {}) {
 
   console.log(`${runLabel} Found ${watchlist.stocks.length} stocks in watchlist: ${watchlist.week_label}`);
 
-  // Filter to only stocks with valid levels
-  const validStocks = watchlist.stocks.filter(s => s.levels?.entry && s.levels?.stop && s.levels?.target);
+  // Filter to only stocks with valid levels (target2 is the main target)
+  const validStocks = watchlist.stocks.filter(s => s.levels?.entry && s.levels?.stop && s.levels?.target2);
   console.log(`${runLabel} ${validStocks.length} stocks have valid levels`);
 
   if (validStocks.length === 0) {
@@ -1108,10 +1136,11 @@ async function runPhase1(options = {}) {
       entry: stock.levels.entry,
       entryRange: stock.levels.entryRange,
       stop: stock.levels.stop,
-      target1: stock.levels.target1,       // T1 (50% booking)
-      target1Basis: stock.levels.target1Basis,
-      target: stock.levels.target,          // T2 (full exit)
-      target2: stock.levels.target2,        // T3 (extension)
+      target1: stock.levels.target1,         // T1 (50% booking)
+      target1_basis: stock.levels.target1_basis,
+      target2: stock.levels.target2,         // T2 (main target)
+      target2_basis: stock.levels.target2_basis,
+      target3: stock.levels.target3,         // T3 (extension, optional)
       archetype: stock.levels.archetype
     });
     console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Previous snapshot:`, prevSnapshot ? {
@@ -1136,10 +1165,10 @@ async function runPhase1(options = {}) {
     // Check if Phase 2 should trigger (now also checks intraday entry crossing)
     const { trigger, reason } = shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags, dailyData, stock.levels, stock.symbol);
 
-    // Calculate distance percentages
+    // Calculate distance percentages (target2 is the main target)
     const distFromEntry = ((dailyData.ltp - stock.levels.entry) / stock.levels.entry) * 100;
     const distFromStop = ((dailyData.ltp - stock.levels.stop) / stock.levels.stop) * 100;
-    const distFromTarget = ((dailyData.ltp - stock.levels.target) / stock.levels.target) * 100;
+    const distFromTarget = ((dailyData.ltp - stock.levels.target2) / stock.levels.target2) * 100;
 
     // Build daily snapshot
     const snapshot = {
@@ -1206,8 +1235,12 @@ async function runPhase1(options = {}) {
     const pnl = stock.trade_simulation.total_pnl;
     const pnlStr = pnl >= 0 ? `+₹${pnl.toLocaleString('en-IN')}` : `-₹${Math.abs(pnl).toLocaleString('en-IN')}`;
 
-    // ── SYNC tracking_status WITH SIMULATION TERMINAL STATES ──
+    // ── SYNC tracking_status WITH SIMULATION STATES ──
     // Simulation is the source of truth for trade outcomes
+    // Check for TARGET_HIT by looking at events (simulation doesn't have a TARGET_HIT status)
+    const hasTargetHitEvent = stock.trade_simulation.events?.some(e => e.type === 'TARGET_HIT');
+    const hasT1HitEvent = stock.trade_simulation.events?.some(e => e.type === 'T1_HIT');
+
     if (simStatus === 'FULL_EXIT' && stock.tracking_status !== 'FULL_EXIT') {
       stock.previous_status = stock.tracking_status;
       stock.tracking_status = 'FULL_EXIT';
@@ -1220,7 +1253,15 @@ async function runPhase1(options = {}) {
       stock.status_changed_at = processingDate;
       newStatus = 'STOPPED_OUT';
     }
-    else if (simStatus === 'PARTIAL_EXIT' && stock.tracking_status !== 'TARGET1_HIT') {
+    else if (simStatus === 'PARTIAL_EXIT' && hasTargetHitEvent && stock.tracking_status !== 'TARGET_HIT') {
+      // Main target was hit - 70% booked, holding 30% for T2
+      stock.previous_status = stock.tracking_status;
+      stock.tracking_status = 'TARGET_HIT';
+      stock.status_changed_at = processingDate;
+      newStatus = 'TARGET_HIT';
+    }
+    else if (simStatus === 'PARTIAL_EXIT' && hasT1HitEvent && !hasTargetHitEvent && stock.tracking_status !== 'TARGET1_HIT') {
+      // Only T1 hit - 50% booked, trailing to Target
       stock.previous_status = stock.tracking_status;
       stock.tracking_status = 'TARGET1_HIT';
       stock.status_changed_at = processingDate;
@@ -1420,8 +1461,9 @@ async function runPhase2(phase2Queue) {
             original_levels: {
               entry: stock.levels.entry,
               stop: stock.levels.stop,
-              target: stock.levels.target,
+              target1: stock.levels.target1,
               target2: stock.levels.target2,
+              target3: stock.levels.target3,
               archetype: stock.levels.archetype
             },
             daily_snapshot: {

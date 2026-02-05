@@ -256,10 +256,13 @@ async function initializeWeekendScreeningJob() {
   }
 }
 
-// Initialize price cache service
+// Initialize price cache service (every 5 mins during market hours)
 async function initializePriceCacheService() {
   try {
+    // Load weekly watchlist stocks into tracking
+    await priceCacheService.loadWeeklyWatchlistStocks();
 
+    // Start the price polling (every 5 mins)
     priceCacheService.start();
 
   } catch (error) {

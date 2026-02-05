@@ -46,12 +46,12 @@ const watchlistStockSchema = new mongoose.Schema({
     entry: Number,           // Single entry price
     entryRange: [Number],    // [low, high] entry range
     stop: Number,            // Stop loss price
-    // ── Targets ──
-    target1: Number,         // Partial booking level (50%) — from weekly R1, daily R1, or midpoint
-    target1Basis: String,    // 'weekly_r1', 'daily_r1', or 'midpoint'
-    target: Number,          // Full exit target (T2) from structural ladder
-    target2: Number,         // Extension target (T3, trail only, null if not applicable)
-    targetBasis: String,     // 'weekly_r1', 'weekly_r2', 'atr_extension_52w_breakout', etc.
+    // ── Targets (consistent naming: T1, T2, T3) ──
+    target1: Number,         // T1: Partial booking level (50%) — from weekly R1, daily R1, or midpoint
+    target1_basis: String,   // 'weekly_r1', 'daily_r1', or 'midpoint'
+    target2: Number,         // T2: Main target from structural ladder
+    target2_basis: String,   // 'weekly_r1', 'weekly_r2', 'atr_extension_52w_breakout', etc.
+    target3: Number,         // T3: Extension target (optional, for trailing - may be null)
     dailyR1Check: Number,    // Momentum confirmation checkpoint (backward compat)
     // ── Risk/Reward ──
     riskReward: Number,      // Risk:Reward ratio (e.g., 2.0 = 1:2)

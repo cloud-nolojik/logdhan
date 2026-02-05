@@ -277,8 +277,8 @@ export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, deb
   let upsideReason = '';
   let upsidePct = 0;
 
-  if (levels && levels.valid && isNum(levels.target) && isNum(currentPrice)) {
-    upsidePct = ((levels.target - currentPrice) / currentPrice) * 100;
+  if (levels && levels.valid && isNum(levels.target2) && isNum(currentPrice)) {
+    upsidePct = ((levels.target2 - currentPrice) / currentPrice) * 100;
 
     if (upsidePct >= 15) {
       upsideScore = 15;

@@ -147,17 +147,18 @@ Grades: A+ (90+), A (80-89), B+ (70-79), B (60-69), C (50-59), D (<50)
 6. If promoter pledge > 0%, it MUST appear in warnings with appropriate severity.
 7. Do NOT fill aggressive_entry. This field is deprecated. If an alternative entry exists,
    describe it in strategies[] as the "Alternative" strategy with a text description.
-8. target1, target (T2), and target2 (T3) are PRE-CALCULATED by the engine.
+8. target1, target2, and target3 are PRE-CALCULATED by the engine.
    Do NOT generate a trading_plan object. Use these levels in your text as:
-   - T1 (₹target1): 50% partial booking level
-   - T2 (₹target): Full exit for remaining position
-   - T3 (₹target2): Extension target for trailing (if exists)
+   - T1 (₹target1): 50% partial booking — book 50% of position, move stop to entry (risk-free)
+   - T2 (₹target2): Main target — book 70% of remaining (35% of original), hold 30% for T3
+   - T3 (₹target3): Extension target (optional) — book final 30% (15% of original)
+   If T3 does NOT exist, exit fully at T2 (book all remaining shares).
 9. Confidence adjustments must sum to a reasonable final confidence (0.5-0.95 range).
 10. Key factors should start with emoji indicators: ✅ for positives, ⚠️ for cautions, 🔴 for red flags.
 
 ## CRITICAL CONSTRAINTS
 
-- Use the PRE-CALCULATED trading levels (entry, stop, target1, target, target2) EXACTLY as provided. Do NOT recalculate them.
+- Use the PRE-CALCULATED trading levels (entry, stop, target1, target2, target3) EXACTLY as provided. Do NOT recalculate them.
 - The levels come from a structural ladder algorithm anchored to pivot levels. Trust them.
 - Do NOT output a trading_plan object — levels are 100% engine-calculated.
 - Return ONLY valid JSON. No markdown code fences, no explanation text outside the JSON object.`;
@@ -368,9 +369,9 @@ Entry Range: [₹${levels.entryRange?.[0] || 'N/A'} - ₹${levels.entryRange?.[1
 Entry Type: ${levels.entryType || 'N/A'}
 Entry Window: ${levels.entryWindowDays || 3} trading days (${levels.entryWindowDays === 2 ? 'Mon-Tue' : levels.entryWindowDays === 3 ? 'Mon-Wed' : 'Mon-Thu'})
 Stop Loss: ₹${levels.stop || 'N/A'}
-Target 1 (50% Booking): ₹${levels.target1 || 'N/A'} [${levels.target1Basis || 'N/A'}]
-Target 2 (Full Exit): ₹${levels.target || 'N/A'} [${levels.targetBasis || 'N/A'}]
-Target 3 (Trail Extension): ₹${levels.target2 || 'N/A'}
+Target 1 (50% Booking): ₹${levels.target1 || 'N/A'} [${levels.target1_basis || 'N/A'}]
+Target 2 (Main Target): ₹${levels.target2 || 'N/A'} [${levels.target2_basis || 'N/A'}]
+Target 3 (Trail Extension): ₹${levels.target3 || 'N/A'} (optional - may not exist)
 Risk:Reward: 1:${levels.riskReward || 'N/A'}
 Risk %: ${levels.riskPercent || 'N/A'}%
 Reward %: ${levels.rewardPercent || 'N/A'}%
@@ -387,7 +388,7 @@ This determines which strategy is PRIMARY and which is ALTERNATIVE in the strate
 - If archetype is "trend-follow" or "breakout": Primary = momentum/breakout entry at the pre-calculated buy_above level. Alternative = pullback entry if stock dips to EMA20/pivot.
 - If archetype is "pullback": Primary = dip-buy at the pre-calculated limit/support level. Alternative = confirmation entry if pullback deepens.
 ${levels.archetype === '52w_breakout' ? `\n⚠️ 52W BREAKOUT RETEST ZONE: For alternative/pullback entries on 52W breakout stocks, use the OLD 52W high level (₹${ind.high_52w || 'N/A'} ±2%) as the retest support zone, NOT the weekly pivot. The broken 52W resistance becomes new support.` : ''}
-${levels.targetBasis === 'atr_extension_52w_breakout' ? '⚠️ TARGET NOTE: Target is ATR-based extension (2.5x ATR), not a structural level. This stock is at new 52W highs with no overhead resistance. Include ATH_NO_RESISTANCE warning.' : ''}
+${levels.target2_basis === 'atr_extension_52w_breakout' ? '⚠️ TARGET NOTE: Target is ATR-based extension (2.5x ATR), not a structural level. This stock is at new 52W highs with no overhead resistance. Include ATH_NO_RESISTANCE warning.' : ''}
 
 === TECHNICAL INDICATORS ===
 Daily RSI (14): ${ind.rsi || 'N/A'}
@@ -586,8 +587,9 @@ IMPORTANT REMINDERS:
   - For buy_above entries: "Buy only if the stock CLOSES above ₹${levels.entry} on a daily candle"
   - For limit entries: "Place limit buy order at ₹${levels.entry}"
   - Always mention: "If entry doesn't trigger by ${levels.entryWindowDays === 2 ? 'Tuesday' : levels.entryWindowDays === 3 ? 'Wednesday' : 'Thursday'} close, skip this trade"
-  - Use T1 ₹${levels.target1} for 50% booking step
-  - Use T2 ₹${levels.target} for remaining exit step
+  - Step for T1: "At T1 (₹${levels.target1}), book 50% of position. Move stop to entry price — you're now risk-free."
+  - Step for T2: "At T2 (₹${levels.target2}), book 70% of remaining shares (35% of original)."
+  - ${levels.target3 ? `Step for T3: "At T3 (₹${levels.target3}), book final 30% of remaining (15% of original) — FULL EXIT."` : 'If T3 is null, exit fully at T2 (book all remaining shares).'}
 - Calculate max_loss in beginner_guide based on: (entry - stop) × Math.floor(100000 / entry)
 - GRADE: Use the engine grade (${stock.grade}) exactly. Do NOT override.
 - Keep total JSON under 3500 tokens.
@@ -675,6 +677,7 @@ function parseClaudeResponse(content, stock) {
   const levels = stock.levels || {};
 
   // Engine provides trading_plan — NOT Claude (v2)
+  // Consistent naming: target1, target2, target3 (T3 is optional)
   const trading_plan = {
     entry: levels.entry,
     entry_range: levels.entryRange,
@@ -683,10 +686,10 @@ function parseClaudeResponse(content, stock) {
     entry_window_days: levels.entryWindowDays || 3,
     stop_loss: levels.stop,
     target1: levels.target1,
-    target1_basis: levels.target1Basis,
-    target: levels.target,
+    target1_basis: levels.target1_basis,
     target2: levels.target2,
-    target_basis: levels.targetBasis,
+    target2_basis: levels.target2_basis,
+    target3: levels.target3 || null,  // Optional extension target
     risk_reward: levels.riskReward,
     risk_percent: levels.riskPercent,
     reward_percent: levels.rewardPercent,
@@ -801,12 +804,13 @@ function buildAnalysisMeta(stock, fundamentals, response, startTime, recentNews 
       entry: levels.entry,
       entry_range: levels.entryRange,
       stop: levels.stop,
-      target1: levels.target1,                       // Partial booking (50%) — from engine (v2)
-      target1Basis: levels.target1Basis || null,     // 'weekly_r1', 'daily_r1', 'midpoint'
-      target: levels.target,
-      target2: levels.target2,
+      // Consistent naming: target1, target2, target3 (T3 is optional)
+      target1: levels.target1,                       // T1: Partial booking (50%)
+      target1_basis: levels.target1_basis || null,   // 'weekly_r1', 'daily_r1', 'midpoint'
+      target2: levels.target2,                       // T2: Main target
+      target2_basis: levels.target2_basis || null,   // Which ladder level was used
+      target3: levels.target3 || null,               // T3: Extension target (optional)
       riskReward: levels.riskReward,
-      targetBasis: levels.targetBasis || null,       // Which ladder level was used for main target
       archetype: levels.archetype || null,           // '52w_breakout', 'trend-follow', etc.
       // Time rules (v2)
       entryConfirmation: levels.entryConfirmation || 'close_above',

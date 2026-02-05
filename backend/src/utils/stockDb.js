@@ -655,9 +655,7 @@ export async function findLevelCrossTime(instrumentKey, level, direction = 'abov
 }
 
 /**
- * Get daily OHLC candles from historical 1-minute data for a date range
- * Used to backfill daily snapshots when loading watchlist
- * Fetches 1-minute candles and aggregates them into daily OHLC
+ * Fetches daily candles for a date range using the daily historical API
  * @param {string} instrumentKey - The instrument key
  * @param {Date|string} fromDate - Start date (e.g., week start)
  * @param {Date|string} toDate - End date (e.g., today)
@@ -677,84 +675,48 @@ export async function getDailyCandlesForRange(instrumentKey, fromDate, toDate) {
       'Accept': 'application/json',
       'x-api-key': API_KEY
     },
-    timeout: 30000  // Longer timeout for 1-min data
+    timeout: 15000
   };
 
   try {
-    // Fetch historical 1-minute candles for the date range
-    // URL format: /v3/historical-candle/{instrument}/minutes/1/{to_date}/{from_date}
-    const url = `https://api.upstox.com/v3/historical-candle/${encodedInstrumentKey}/minutes/1/${toStr}/${fromStr}`;
+    // Use daily candles API - one candle per trading day (much more efficient)
+    // URL format: /v3/historical-candle/{instrument}/days/1/{to_date}/{from_date}
+    const url = `https://api.upstox.com/v3/historical-candle/${encodedInstrumentKey}/days/1/${toStr}/${fromStr}`;
 
-    console.log(`[getDailyCandlesForRange] Fetching 1-min candles for ${instrumentKey}`);
+    console.log(`[getDailyCandlesForRange] Fetching daily candles for ${instrumentKey}`);
     console.log(`[getDailyCandlesForRange] Date range: ${fromStr} to ${toStr}`);
-    console.log(`[getDailyCandlesForRange] URL: ${url}`);
 
     const response = await axios.get(url, axiosConfig);
     const candles = response.data?.data?.candles || [];
 
-    console.log(`[getDailyCandlesForRange] Got ${candles.length} 1-min candles`);
+    console.log(`[getDailyCandlesForRange] Got ${candles.length} daily candles`);
 
     if (candles.length === 0) {
       return [];
     }
 
-    // Candles are in reverse chronological order
+    // Candles are in reverse chronological order [most recent, ..., oldest]
     // Format: [timestamp, open, high, low, close, volume, ...]
-    // We need to aggregate them by day
-
     const istOffset = 5.5 * 60 * 60 * 1000; // IST offset
-    const dailyMap = new Map(); // dateStr -> { open, high, low, close, volume, firstTimestamp }
 
-    // Process candles (they're in reverse order, so last candle is earliest)
-    for (const candle of candles) {
-      const timestamp = new Date(candle[0]);
-      const istTime = new Date(timestamp.getTime() + istOffset);
-      const dateStr = istTime.toISOString().split('T')[0];
+    // Convert to our format and sort by date ascending
+    const dailyCandles = candles
+      .map(candle => {
+        const timestamp = new Date(candle[0]);
+        const istTime = new Date(timestamp.getTime() + istOffset);
+        const dateStr = istTime.toISOString().split('T')[0];
 
-      const open = candle[1];
-      const high = candle[2];
-      const low = candle[3];
-      const close = candle[4];
-      const volume = candle[5] || 0;
+        return {
+          date: new Date(dateStr + 'T09:15:00+05:30'), // Set to market open time IST
+          open: candle[1],
+          high: candle[2],
+          low: candle[3],
+          close: candle[4],
+          volume: candle[5] || 0
+        };
+      })
+      .sort((a, b) => a.date - b.date); // Sort ascending by date
 
-      if (!dailyMap.has(dateStr)) {
-        // First candle of the day (but remember we're processing in reverse)
-        dailyMap.set(dateStr, {
-          date: dateStr,
-          open: open,      // Will be overwritten by later (earlier) candles
-          high: high,
-          low: low,
-          close: close,    // This IS the close (last candle of day)
-          volume: volume,
-          firstTimestamp: timestamp
-        });
-      } else {
-        const day = dailyMap.get(dateStr);
-        // Update OHLC (processing in reverse, so this candle is EARLIER in the day)
-        day.open = open;  // Keep updating - the last one we see is the day's open
-        day.high = Math.max(day.high, high);
-        day.low = Math.min(day.low, low);
-        // day.close stays as first we saw (which is actually the day's close)
-        day.volume += volume;
-        if (timestamp < day.firstTimestamp) {
-          day.firstTimestamp = timestamp;
-        }
-      }
-    }
-
-    // Convert map to array, sorted by date ascending
-    const dailyCandles = Array.from(dailyMap.values())
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map(day => ({
-        date: new Date(day.date + 'T09:15:00+05:30'), // Set to market open time IST
-        open: day.open,
-        high: day.high,
-        low: day.low,
-        close: day.close,
-        volume: day.volume
-      }));
-
-    console.log(`[getDailyCandlesForRange] Aggregated into ${dailyCandles.length} daily candles`);
     dailyCandles.forEach((c, i) => {
       console.log(`[getDailyCandlesForRange] Day ${i + 1}: ${c.date.toISOString().split('T')[0]} O=${c.open} H=${c.high} L=${c.low} C=${c.close}`);
     });
@@ -762,7 +724,7 @@ export async function getDailyCandlesForRange(instrumentKey, fromDate, toDate) {
     return dailyCandles;
 
   } catch (error) {
-    console.error(`[getDailyCandlesForRange] Error fetching 1-min candles:`, error.message);
+    console.error(`[getDailyCandlesForRange] Error fetching daily candles:`, error.message);
     return [];
   }
 }
