@@ -69,7 +69,7 @@ import weeklySetupsRoutes from './routes/weeklySetups.js';
 import appFeedbackRoutes from './routes/appFeedback.js';
 import kiteAuthRoutes from './routes/kiteAuth.js';
 import kiteAdminRoutes from './routes/kiteAdmin.js';
-import { startKiteTokenRefreshJob } from './services/jobs/kiteTokenRefreshJob.js';
+import kiteTokenRefreshJob from './services/jobs/kiteTokenRefreshJob.js';
 
 const app = express();
 
@@ -356,7 +356,7 @@ app.listen(PORT, async () => {
   await initializePendingAnalysisReminderJob(); // pending-analysis-reminder (4:00 PM Mon-Fri, notify users)
 
   // Kite Connect token refresh job (6:00 AM IST daily)
-  startKiteTokenRefreshJob();
+  await kiteTokenRefreshJob.initialize();
   console.log('✅ Kite token refresh job scheduled');
 
 });
@@ -376,7 +376,8 @@ process.on('SIGINT', async () => {
       dailyNewsStocksJob.shutdown(),
       dailyTrackingJob.shutdown(),
       intradayMonitorJob.shutdown(),
-      pendingAnalysisReminderJob.shutdown()
+      pendingAnalysisReminderJob.shutdown(),
+      kiteTokenRefreshJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -401,7 +402,8 @@ process.on('SIGTERM', async () => {
       dailyNewsStocksJob.shutdown(),
       dailyTrackingJob.shutdown(),
       intradayMonitorJob.shutdown(),
-      pendingAnalysisReminderJob.shutdown()
+      pendingAnalysisReminderJob.shutdown(),
+      kiteTokenRefreshJob.shutdown()
     ]);
 
     // Close MongoDB connection
