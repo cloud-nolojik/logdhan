@@ -1,8 +1,6 @@
 import axios from 'axios';
-import * as OTPAuth from 'otplib';
+import { generateSync as generateTOTP } from 'otplib';
 import crypto from 'crypto';
-
-const { authenticator } = OTPAuth;
 import { CookieJar } from 'tough-cookie';
 import { wrapper } from 'axios-cookiejar-support';
 import KiteSession from '../models/kiteSession.js';
@@ -75,7 +73,7 @@ class KiteAutoLoginService {
 
       // Step 3: Generate TOTP and POST 2FA
       console.log('[KITE AUTO-LOGIN] Step 3: Submitting 2FA TOTP...');
-      const totp = authenticator.generate(this.totpSecret);
+      const totp = generateTOTP({ secret: this.totpSecret });
       console.log(`[KITE AUTO-LOGIN] Generated TOTP: ${totp} (length: ${totp.length})`);
 
       try {
