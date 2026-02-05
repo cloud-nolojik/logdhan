@@ -368,6 +368,7 @@ class KiteAutoLoginService {
    */
   async validateToken(accessToken) {
     try {
+      console.log('[KITE] validateToken: Making profile API call...');
       const resp = await axios.get(`${this.baseUrl}/user/profile`, {
         headers: {
           'Authorization': `token ${this.apiKey}:${accessToken}`,
@@ -375,9 +376,15 @@ class KiteAutoLoginService {
         }
       });
 
+      console.log('[KITE] validateToken: Response status:', resp.status);
+      console.log('[KITE] validateToken: user_id in response:', resp.data?.data?.user_id || 'none');
       return resp.status === 200 && resp.data?.data?.user_id;
     } catch (error) {
       console.log('[KITE] Token validation failed:', error.message);
+      if (error.response) {
+        console.log('[KITE] Token validation error status:', error.response.status);
+        console.log('[KITE] Token validation error data:', JSON.stringify(error.response.data));
+      }
       return false;
     }
   }
@@ -388,11 +395,21 @@ class KiteAutoLoginService {
   async getValidSession() {
     try {
       // Try to get existing session
+      console.log('[KITE] getValidSession: Looking for existing session...');
       const session = await KiteSession.findOne({ kite_user_id: this.userId });
+      console.log('[KITE] getValidSession: Session found:', session ? 'YES' : 'NO');
+
+      if (session) {
+        console.log('[KITE] getValidSession: session.is_valid:', session.is_valid);
+        console.log('[KITE] getValidSession: session.access_token:', session.access_token ? 'present' : 'missing');
+        console.log('[KITE] getValidSession: session.token_expiry:', session.token_expiry);
+      }
 
       if (session && session.is_valid && session.access_token) {
         // Check if token is still valid
+        console.log('[KITE] getValidSession: Validating token...');
         const isValid = await this.validateToken(session.access_token);
+        console.log('[KITE] getValidSession: Token validation result:', isValid);
 
         if (isValid) {
           // Update validation timestamp
