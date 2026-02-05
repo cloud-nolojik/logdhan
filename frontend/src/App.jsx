@@ -13,6 +13,7 @@ import PrivacyPolicy from './pages/PrivacyPolicy';
 import Terms from './pages/Terms';
 import RefundPolicy from './pages/RefundPolicy';
 import Contact from './pages/Contact';
+import AdminIndex from './pages/admin/AdminIndex';
 import WhatsAppAlerts from './pages/admin/WhatsAppAlerts';
 import AppFeedback from './pages/admin/AppFeedback';
 
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/admin" element={<AdminIndex />} />
           <Route path="/admin/whatsapp-alerts" element={<WhatsAppAlerts />} />
           <Route path="/admin/feedback" element={<AppFeedback />} />
         </Routes>
