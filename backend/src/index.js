@@ -66,6 +66,7 @@ import dailyNewsStocksRoutes from './routes/dailyNewsStocks.js';
 import apiUsageRoutes from './routes/apiUsage.js';
 import adminRoutes from './routes/admin.js';
 import weeklySetupsRoutes from './routes/weeklySetups.js';
+import appFeedbackRoutes from './routes/appFeedback.js';
 
 const app = express();
 
@@ -198,6 +199,7 @@ app.use('/api/v1/journal', journalRoutes);
 app.use('/api/v1/daily-news-stocks', dailyNewsStocksRoutes);
 app.use('/api/v1/usage', apiUsageRoutes);
 app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/app-feedback', appFeedbackRoutes);
 
 // App redirect routes for WhatsApp deep links
 app.use('/app', appRedirectRoutes);
