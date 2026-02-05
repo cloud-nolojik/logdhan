@@ -185,33 +185,73 @@ class KiteAutoLoginService {
         }
 
         if (sessId) {
-          // Try finish with allow redirects
-          const finishUrl = `${this.kiteWebUrl}/connect/finish?api_key=${this.apiKey}&sess_id=${sessId}`;
-          console.log('[KITE AUTO-LOGIN] Step 4 - Finish URL:', finishUrl);
+          // Try POST to /api/connect/authorize to grant permission
+          console.log('[KITE AUTO-LOGIN] Step 4 - Trying POST to /api/connect/authorize...');
 
           try {
-            const finishResp = await client.get(finishUrl, {
-              maxRedirects: 10,
-              validateStatus: () => true
-            });
+            const authorizeResp = await client.post(
+              `${this.kiteWebUrl}/api/connect/authorize`,
+              new URLSearchParams({
+                api_key: this.apiKey,
+                sess_id: sessId,
+                action: 'authorize'
+              }),
+              {
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded'
+                }
+              }
+            );
 
-            const finishFinalUrl = finishResp.request?.res?.responseUrl;
-            console.log('[KITE AUTO-LOGIN] Step 4 - Finish final URL:', finishFinalUrl);
+            console.log('[KITE AUTO-LOGIN] Step 4 - Authorize API response:', JSON.stringify(authorizeResp.data));
 
-            if (finishFinalUrl && finishFinalUrl.includes('request_token')) {
-              const url = new URL(finishFinalUrl);
-              requestToken = url.searchParams.get('request_token');
+            // Check if response contains request_token
+            if (authorizeResp.data?.data?.request_token) {
+              requestToken = authorizeResp.data.data.request_token;
+            } else if (authorizeResp.data?.request_token) {
+              requestToken = authorizeResp.data.request_token;
             }
 
-            if (!requestToken && finishResp.headers?.location?.includes('request_token')) {
-              const url = new URL(finishResp.headers.location);
-              requestToken = url.searchParams.get('request_token');
+            // If we got a redirect URL in response, extract token from it
+            if (!requestToken && authorizeResp.data?.data?.redirect_url) {
+              const redirectUrl = authorizeResp.data.data.redirect_url;
+              console.log('[KITE AUTO-LOGIN] Step 4 - Redirect URL from API:', redirectUrl);
+              if (redirectUrl.includes('request_token')) {
+                const url = new URL(redirectUrl);
+                requestToken = url.searchParams.get('request_token');
+              }
             }
-          } catch (finishError) {
-            console.log('[KITE AUTO-LOGIN] Step 4 - Finish error:', finishError.message);
-            if (finishError.response?.headers?.location?.includes('request_token')) {
-              const url = new URL(finishError.response.headers.location);
-              requestToken = url.searchParams.get('request_token');
+
+          } catch (authorizeError) {
+            console.log('[KITE AUTO-LOGIN] Step 4 - Authorize API error:', authorizeError.message);
+            if (authorizeError.response?.data) {
+              console.log('[KITE AUTO-LOGIN] Step 4 - Authorize API error response:', JSON.stringify(authorizeError.response.data));
+            }
+
+            // Try finish endpoint as fallback
+            const finishUrl = `${this.kiteWebUrl}/connect/finish?api_key=${this.apiKey}&sess_id=${sessId}`;
+            console.log('[KITE AUTO-LOGIN] Step 4 - Finish URL:', finishUrl);
+
+            try {
+              const finishResp = await client.get(finishUrl, {
+                maxRedirects: 10,
+                validateStatus: () => true
+              });
+
+              const finishFinalUrl = finishResp.request?.res?.responseUrl;
+              console.log('[KITE AUTO-LOGIN] Step 4 - Finish final URL:', finishFinalUrl);
+
+              if (finishFinalUrl && finishFinalUrl.includes('request_token')) {
+                const url = new URL(finishFinalUrl);
+                requestToken = url.searchParams.get('request_token');
+              }
+
+              if (!requestToken && finishResp.headers?.location?.includes('request_token')) {
+                const url = new URL(finishResp.headers.location);
+                requestToken = url.searchParams.get('request_token');
+              }
+            } catch (finishError) {
+              console.log('[KITE AUTO-LOGIN] Step 4 - Finish error:', finishError.message);
             }
           }
         }
