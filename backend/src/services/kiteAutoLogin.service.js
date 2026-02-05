@@ -1,6 +1,8 @@
 import axios from 'axios';
-import { authenticator } from 'otplib';
+import * as OTPAuth from 'otplib';
 import crypto from 'crypto';
+
+const { authenticator } = OTPAuth;
 import { CookieJar } from 'tough-cookie';
 import { wrapper } from 'axios-cookiejar-support';
 import KiteSession from '../models/kiteSession.js';

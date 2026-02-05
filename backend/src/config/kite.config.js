@@ -5,7 +5,7 @@
  * Orders are placed ONLY for the admin account specified by KITE_ADMIN_USER_ID.
  */
 
-module.exports = {
+const kiteConfig = {
   // Kite Connect API credentials
   API_KEY: process.env.KITE_API_KEY,
   API_SECRET: process.env.KITE_API_SECRET,
@@ -121,3 +121,5 @@ module.exports = {
     ERROR: 'ERROR',
   },
 };
+
+export default kiteConfig;
