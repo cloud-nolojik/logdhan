@@ -104,12 +104,14 @@ async function processSimulationForKiteOrders(phase1Results, stocksMap) {
           continue;
         }
 
+        // Get trading symbol - WeeklyWatchlist stores symbol directly on stock object
+        const tradingSymbol = stock.symbol;
         console.log(`[KITE-INTEGRATION] ${result.symbol}: Placing entry GTT - ` +
-                    `Qty: ${quantity}, Entry: ₹${entryPrice}, Current: ₹${currentPrice}`);
+                    `Symbol: ${tradingSymbol}, Qty: ${quantity}, Entry: ₹${entryPrice}, Current: ₹${currentPrice}`);
 
         // Place entry GTT
         const orderResult = await kiteOrderService.placeEntryGTT({
-          tradingSymbol: stock.stock.upstox_symbol || stock.stock.symbol,
+          tradingSymbol: tradingSymbol,
           entryPrice: entryPrice,
           currentPrice: currentPrice,
           quantity: quantity,
@@ -213,18 +215,18 @@ async function handleEntryExecuted(stock, results) {
   try {
     const sim = stock.trade_simulation;
     const levels = stock.levels;
-    const symbol = stock.stock.upstox_symbol || stock.stock.symbol;
+    const symbol = stock.symbol;
 
     const stopLoss = sim.trailing_stop || levels.stop;
     const target = levels.target1 || levels.target2;
     const quantity = sim.qty_remaining;
 
     if (!quantity || quantity < 1) {
-      console.log(`[KITE-INTEGRATION] ${stock.stock.symbol}: No remaining quantity for OCO GTT`);
+      console.log(`[KITE-INTEGRATION] ${stock.symbol}: No remaining quantity for OCO GTT`);
       return;
     }
 
-    console.log(`[KITE-INTEGRATION] ${stock.stock.symbol}: Placing OCO GTT - ` +
+    console.log(`[KITE-INTEGRATION] ${stock.symbol}: Placing OCO GTT - ` +
                 `SL: ₹${stopLoss}, T1: ₹${target}, Qty: ${quantity}`);
 
     const result = await kiteOrderService.placeOCOGTT({
@@ -239,11 +241,11 @@ async function handleEntryExecuted(stock, results) {
     });
 
     results.gttPlaced++;
-    console.log(`[KITE-INTEGRATION] ${stock.stock.symbol}: OCO GTT placed - ID: ${result.triggerId}`);
+    console.log(`[KITE-INTEGRATION] ${stock.symbol}: OCO GTT placed - ID: ${result.triggerId}`);
 
   } catch (error) {
-    console.error(`[KITE-INTEGRATION] ${stock.stock.symbol}: Error placing OCO GTT:`, error);
-    results.errors.push({ symbol: stock.stock.symbol, error: error.message });
+    console.error(`[KITE-INTEGRATION] ${stock.symbol}: Error placing OCO GTT:`, error);
+    results.errors.push({ symbol: stock.symbol, error: error.message });
   }
 }
 
@@ -254,7 +256,7 @@ async function handleT1Hit(stock, results) {
   try {
     const sim = stock.trade_simulation;
     const levels = stock.levels;
-    const symbol = stock.stock.upstox_symbol || stock.stock.symbol;
+    const symbol = stock.symbol;
 
     // Cancel existing GTT
     // TODO: Need to track GTT ID in the order model to cancel it
@@ -265,11 +267,11 @@ async function handleT1Hit(stock, results) {
     const quantity = sim.qty_remaining;
 
     if (!quantity || quantity < 1) {
-      console.log(`[KITE-INTEGRATION] ${stock.stock.symbol}: No remaining quantity after T1`);
+      console.log(`[KITE-INTEGRATION] ${stock.symbol}: No remaining quantity after T1`);
       return;
     }
 
-    console.log(`[KITE-INTEGRATION] ${stock.stock.symbol}: T1 hit - placing new OCO GTT - ` +
+    console.log(`[KITE-INTEGRATION] ${stock.symbol}: T1 hit - placing new OCO GTT - ` +
                 `SL@breakeven: ₹${stopLoss}, T2: ₹${target}, Qty: ${quantity}`);
 
     const result = await kiteOrderService.placeOCOGTT({
@@ -286,8 +288,8 @@ async function handleT1Hit(stock, results) {
     results.gttPlaced++;
 
   } catch (error) {
-    console.error(`[KITE-INTEGRATION] ${stock.stock.symbol}: Error handling T1:`, error);
-    results.errors.push({ symbol: stock.stock.symbol, error: error.message });
+    console.error(`[KITE-INTEGRATION] ${stock.symbol}: Error handling T1:`, error);
+    results.errors.push({ symbol: stock.symbol, error: error.message });
   }
 }
 
@@ -298,21 +300,21 @@ async function handleT2Hit(stock, results) {
   try {
     const sim = stock.trade_simulation;
     const levels = stock.levels;
-    const symbol = stock.stock.upstox_symbol || stock.stock.symbol;
+    const symbol = stock.symbol;
 
     if (!levels.target3) {
-      console.log(`[KITE-INTEGRATION] ${stock.stock.symbol}: T2 hit, no T3 - trade complete`);
+      console.log(`[KITE-INTEGRATION] ${stock.symbol}: T2 hit, no T3 - trade complete`);
       return;
     }
 
     // Place GTT for T3 with trailing stop
     const quantity = sim.qty_remaining;
     if (!quantity || quantity < 1) {
-      console.log(`[KITE-INTEGRATION] ${stock.stock.symbol}: No remaining quantity after T2`);
+      console.log(`[KITE-INTEGRATION] ${stock.symbol}: No remaining quantity after T2`);
       return;
     }
 
-    console.log(`[KITE-INTEGRATION] ${stock.stock.symbol}: T2 hit - placing GTT for T3`);
+    console.log(`[KITE-INTEGRATION] ${stock.symbol}: T2 hit - placing GTT for T3`);
 
     const result = await kiteOrderService.placeOCOGTT({
       tradingSymbol: symbol,
@@ -328,8 +330,8 @@ async function handleT2Hit(stock, results) {
     results.gttPlaced++;
 
   } catch (error) {
-    console.error(`[KITE-INTEGRATION] ${stock.stock.symbol}: Error handling T2:`, error);
-    results.errors.push({ symbol: stock.stock.symbol, error: error.message });
+    console.error(`[KITE-INTEGRATION] ${stock.symbol}: Error handling T2:`, error);
+    results.errors.push({ symbol: stock.symbol, error: error.message });
   }
 }
 
