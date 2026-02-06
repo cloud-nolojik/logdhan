@@ -1062,28 +1062,34 @@ function getWeekStart() {
 }
 
 /**
- * Get valid_until for weekly analysis (next Friday 3:59 PM IST = 10:29 AM UTC)
+ * Get valid_until for weekly analysis (next Friday 3:29:59 PM IST = 09:59:59 AM UTC)
+ * Weekend screening always targets NEXT Friday since trades are for the upcoming week.
  */
 async function getWeeklyValidUntil() {
   try {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
+
+    // Shift to IST to read correct calendar day/day-of-week
     const istNow = new Date(now.getTime() + istOffset);
 
-    // Find next Friday from IST perspective
+    // Find next Friday from IST perspective (always next, never current)
     const dayOfWeek = istNow.getUTCDay();
     let daysToFriday = (5 - dayOfWeek + 7) % 7;
-    if (daysToFriday === 0 && dayOfWeek !== 5) daysToFriday = 7;
     if (daysToFriday === 0) daysToFriday = 7; // If today is Friday, target next Friday
 
-    const nextFriday = new Date(istNow);
-    nextFriday.setUTCDate(nextFriday.getUTCDate() + daysToFriday);
+    const targetFriday = new Date(istNow);
+    targetFriday.setUTCDate(targetFriday.getUTCDate() + daysToFriday);
 
-    // Set to 3:59 PM IST (10:29 AM UTC)
-    nextFriday.setUTCHours(10, 29, 59, 0);
+    // Extract IST calendar date components from the shifted Date
+    const year = targetFriday.getUTCFullYear();
+    const month = targetFriday.getUTCMonth();
+    const day = targetFriday.getUTCDate();
 
-    // Convert back to UTC
-    return new Date(nextFriday.getTime() - istOffset);
+    // Build UTC timestamp for 3:29:59 PM IST on that calendar day
+    // Date.UTC gives ms for the given components in UTC, then subtract IST offset
+    const utcMs = Date.UTC(year, month, day, 15, 29, 59, 0) - istOffset;
+    return new Date(utcMs);
 
   } catch (error) {
     // Fallback: 7 days from now
