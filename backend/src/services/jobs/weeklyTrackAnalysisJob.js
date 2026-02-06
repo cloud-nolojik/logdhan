@@ -714,36 +714,31 @@ class WeeklyTrackAnalysisJob {
   }
 
   /**
-   * Helper: Get next day 9 AM IST (valid_until time)
+   * Helper: Get next trading day 9 AM IST (valid_until time)
    * 9 AM IST = 3:30 AM UTC
-   * Skips weekends: Fri → Sat 9AM, Sat → Mon 9AM, Sun → Mon 9AM
+   * Skips weekends: Fri → Mon 9AM, Sat → Mon 9AM, Sun → Mon 9AM
+   * @param {Date} fromDate - Base date to calculate from (defaults to now)
    */
-  getNextDay9AM() {
+  getNextDay9AM(fromDate = new Date()) {
     const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const now = new Date();
-
-    // Get current IST date
-    const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+    const istNow = new Date(fromDate.getTime() + IST_OFFSET_MS);
     const dayOfWeek = istNow.getUTCDay(); // 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
 
-    // Calculate days to add
     let daysToAdd = 1;
-    // For weekends, skip to Monday 9 AM
-    if (dayOfWeek === 6) {
-      // Saturday → Monday (add 2 days)
-      daysToAdd = 2;
-    } else if (dayOfWeek === 0) {
-      // Sunday → Monday (add 1 day)
-      daysToAdd = 1;
-    }
+    // Skip weekends: next day should be a weekday
+    if (dayOfWeek === 5) daysToAdd = 3;      // Fri → Mon
+    else if (dayOfWeek === 6) daysToAdd = 2;  // Sat → Mon
+    else if (dayOfWeek === 0) daysToAdd = 1;  // Sun → Mon
 
-    // Create next day at 9 AM IST
     const nextDay = new Date(istNow);
     nextDay.setUTCDate(nextDay.getUTCDate() + daysToAdd);
-    nextDay.setUTCHours(9, 0, 0, 0); // 9 AM IST
 
-    // Convert to UTC for storage
-    return new Date(nextDay.getTime() - IST_OFFSET_MS);
+    // Extract IST calendar date, then build 9 AM IST as UTC
+    const year = nextDay.getUTCFullYear();
+    const month = nextDay.getUTCMonth();
+    const day = nextDay.getUTCDate();
+    const utcMs = Date.UTC(year, month, day, 9, 0, 0, 0) - IST_OFFSET_MS;
+    return new Date(utcMs);
   }
 
   /**

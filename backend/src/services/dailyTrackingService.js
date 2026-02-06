@@ -1442,8 +1442,8 @@ async function runPhase2(phase2Queue) {
         }
       });
 
-      // Calculate valid_until (next day 9 AM IST)
-      const validUntil = getNextDay9AM();
+      // Calculate valid_until (next trading day 9 AM IST from the processing date)
+      const validUntil = getNextDay9AM(processingDate);
 
       // Save to StockAnalysis
       // Use processingDate for the analysis timestamp (matches the trading day being analyzed)
@@ -1719,24 +1719,29 @@ function getTodayStart() {
 /**
  * Get next day 9 AM IST (valid_until time)
  * 9 AM IST = 3:30 AM UTC
- * Skips weekends: Fri → Sat 9AM, Sat → Mon 9AM, Sun → Mon 9AM
+ * Skips weekends: Fri → Mon 9AM, Sat → Mon 9AM, Sun → Mon 9AM
+ * @param {Date} fromDate - Base date to calculate from (defaults to now)
  */
-function getNextDay9AM() {
+function getNextDay9AM(fromDate = new Date()) {
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-  const now = new Date();
-  const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+  const istNow = new Date(fromDate.getTime() + IST_OFFSET_MS);
   const dayOfWeek = istNow.getUTCDay(); // 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
 
   let daysToAdd = 1;
-  // For weekends, skip to Monday 9 AM
-  if (dayOfWeek === 6) daysToAdd = 2; // Sat → Mon
+  // Skip weekends: next day should be a weekday
+  if (dayOfWeek === 5) daysToAdd = 3; // Fri → Mon
+  else if (dayOfWeek === 6) daysToAdd = 2; // Sat → Mon
   else if (dayOfWeek === 0) daysToAdd = 1; // Sun → Mon
 
   const nextDay = new Date(istNow);
   nextDay.setUTCDate(nextDay.getUTCDate() + daysToAdd);
-  nextDay.setUTCHours(9, 0, 0, 0); // 9 AM IST
 
-  return new Date(nextDay.getTime() - IST_OFFSET_MS);
+  // Extract IST calendar date, then build 9 AM IST as UTC
+  const year = nextDay.getUTCFullYear();
+  const month = nextDay.getUTCMonth();
+  const day = nextDay.getUTCDate();
+  const utcMs = Date.UTC(year, month, day, 9, 0, 0, 0) - IST_OFFSET_MS;
+  return new Date(utcMs);
 }
 
 export {
