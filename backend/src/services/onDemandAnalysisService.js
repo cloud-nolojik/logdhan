@@ -349,9 +349,9 @@ function buildAnalysisCard(enrichedStock, classification, dataAsOf) {
       factors: (score_breakdown || []).map(b => ({
         name: b.factor,
         score: `${b.points}/${b.max}`,
-        status: b.points >= b.max * 0.7 ? 'strong'
-             : b.points >= b.max * 0.4 ? 'neutral'
-             : 'weak',
+        status: b.points >= b.max * 0.7 ? '✅'
+             : b.points >= b.max * 0.4 ? '⚠'
+             : '❌',
         value: b.value != null ? String(b.value) : null,
         explanation: b.reason
       })),
