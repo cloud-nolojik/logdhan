@@ -17,7 +17,7 @@ import StockAnalysis from '../models/stockAnalysis.js';
 import Notification from '../models/notification.js';
 import technicalDataService from './technicalData.service.js';
 import { enrichStock } from './stockEnrichmentService.js';
-import firebaseService from './firebase/firebase.service.js';
+import { firebaseService } from './firebase/firebase.service.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 import { round2 } from '../engine/helpers.js';
 
