@@ -376,6 +376,19 @@ class WeekendScreeningJob {
 
       if (allResults.length === 0) {
         console.log('[SCREENING JOB] ⚠️ No results from any scan - EXITING EARLY');
+
+        // Notify that no setups were found this week
+        try {
+          await firebaseService.sendAnalysisCompleteToAllUsers(
+            'Weekend Screening: No Setups Found',
+            'No stocks matched the screening criteria this week. The watchlist has not been updated.',
+            { type: 'weekend_screening_empty', route: '/weekly-watchlist' }
+          );
+          console.log('[SCREENING JOB] 📱 Empty screening notification sent');
+        } catch (notifError) {
+          console.error('[SCREENING JOB] ⚠️ Failed to send empty screening notification:', notifError.message);
+        }
+
         return result;
       }
 
