@@ -13,7 +13,7 @@ import { messagingService } from './messaging/messaging.service.js';
 import { User } from '../models/user.js';
 import modelSelectorService from './ai/modelSelector.service.js';
 import AnalysisSession from '../models/analysisSession.js';
-import { buildStage1, buildWeeklyDiscoveryPrompt } from '../prompts/swingPrompts.js';
+// import { buildStage1, buildWeeklyDiscoveryPrompt } from '../prompts/swingPrompts.js'; // REMOVED - swingPrompts.js deleted
 import { pickBestCandidate } from '../engine/index.js';
 import scanLevels from '../engine/scanLevels.js';
 import { calculateSetupScore } from '../engine/scoring.js';

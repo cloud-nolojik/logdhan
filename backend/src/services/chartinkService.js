@@ -19,12 +19,12 @@ const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
 /**
  * Pre-defined scan queries for swing trading
  *
- * ACTIVE SCAN:
+ * ACTIVE SCANS:
  * - A+ Momentum: Uptrend + 3% weekly gain + near 20d high + RSI 55-75
+ * - Pullback: EMA20 retest with low volume, RSI 40-58
  *
  * COMMENTED OUT (legacy scans):
  * - BREAKOUT: Near 20-day HIGH + Volume 1.5x + RSI 55-70
- * - PULLBACK: Near EMA 20 + RSI 40-55 (cooled off)
  * - MOMENTUM: 3-10% above EMA 20 + RSI 55-68
  * - CONSOLIDATION: Near 20-day HIGH + Tight range <2.5% + RSI 50-65
  */
@@ -32,6 +32,10 @@ export const SCAN_QUERIES = {
   // A+ Momentum - 52-week high breakout stocks with volume surge
   // Matches ChartInk scan: 52w high + Volume 1.5x (50-day) + RSI 55-75 + EMA20>EMA50 + 2% weekly gain
   a_plus_momentum: `( {cash} ( latest close > 1 day ago max( 252, high ) and latest volume > latest sma( volume, 50 ) * 1.5 and latest close > latest sma( close, 200 ) and latest rsi( 14 ) > 55 and latest rsi( 14 ) < 75 and latest ema( close, 20 ) > latest ema( close, 50 ) and market cap > 1000 and latest close > 100 and latest close > 1 week ago close * 1.02 ) )`,
+
+  // Pullback to EMA20 - Price retesting EMA20 support with low volume
+  // Within 2% of EMA20, EMA20>EMA50>SMA200, RSI 40-58, volume below 50-day avg
+  pullback: `( {cash} ( 1 day ago max( 60, high ) / latest close < 1.08 and latest low <= latest ema( close, 20 ) * 1.02 and latest low >= latest ema( close, 20 ) * 0.98 and latest close >= latest ema( close, 20 ) and latest close > latest sma( close, 200 ) and latest ema( close, 20 ) > latest ema( close, 50 ) and latest ema( close, 50 ) > latest sma( close, 200 ) and latest rsi( 14 ) > 40 and latest rsi( 14 ) < 58 and latest volume < latest sma( volume, 50 ) * 0.9 and latest close > 1 week ago close * 0.99 and latest close > latest open and latest close >= latest high * 0.98 and market cap > 1000 and latest close > 50 ) )`,
 
 //   a_plus_nextweek: `( {cash} (
 //   /* Trend filter */
@@ -248,13 +252,13 @@ export async function runAPlusNextWeekScan() {
 //   return runChartinkScan(SCAN_QUERIES.breakout);
 // }
 
-// /**
-//  * Run pullback scan
-//  * @returns {Promise<Array>}
-//  */
-// export async function runPullbackScan() {
-//   return runChartinkScan(SCAN_QUERIES.pullback);
-// }
+/**
+ * Run pullback scan
+ * @returns {Promise<Array>}
+ */
+export async function runPullbackScan() {
+  return runChartinkScan(SCAN_QUERIES.pullback);
+}
 
 // /**
 //  * Run momentum scan
@@ -305,11 +309,11 @@ export default {
   SCAN_QUERIES,
   runChartinkScan,
   runAPlusNextWeekScan,
+  runPullbackScan,
   runCombinedScan,
   runCustomScan
   // Legacy exports - commented out
   // runBreakoutScan,
-  // runPullbackScan,
   // runMomentumScan,
   // runConsolidationScan,
 };

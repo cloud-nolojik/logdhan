@@ -138,7 +138,7 @@ class WeekendScreeningJob {
       try {
         const result = await this.runWeekendScreening({
           userId,
-          scanTypes: scanTypes || ['a_plus_momentum']
+          scanTypes: scanTypes || ['a_plus_momentum', 'pullback']
         });
 
         console.log('═'.repeat(80));
@@ -250,7 +250,7 @@ class WeekendScreeningJob {
 
     const {
       userId = null,
-      scanTypes = ['a_plus_momentum'],
+      scanTypes = ['a_plus_momentum', 'pullback'],
       maxStocksPerUser = 10,
       filterSymbols = null,      // NEW: Array of symbols to filter (e.g., ['MTARTECH'])
       referenceDate = null,      // NEW: Date string 'YYYY-MM-DD' to filter candle data
@@ -342,6 +342,9 @@ class WeekendScreeningJob {
             switch (scanType) {
               case 'a_plus_momentum':
                 scanResults = await chartinkService.runAPlusNextWeekScan();
+                break;
+              case 'pullback':
+                scanResults = await chartinkService.runPullbackScan();
                 break;
               default:
                 console.warn(`[SCREENING JOB] Unknown scan type: ${scanType}`);
