@@ -118,6 +118,9 @@ This is a scan-type-matched swing trading system. The ChartInk scanner finds sto
 
 Score each stock on 7 factors totaling 100 points. The automated engine score and breakdown are provided as a baseline. You produce your OWN assessment that includes fundamental factors the engine cannot see (promoter pledge, institutional flows, pattern quality).
 
+**Use the rubric that matches the scan type. The correct rubric will be specified in the user message.**
+
+### MOMENTUM RUBRIC (for a_plus_momentum, breakout, consolidation scans):
 | Factor               | Max | Assessment Guide                                                    |
 |----------------------|-----|----------------------------------------------------------------------|
 | Volume Conviction    | 20  | vs 20d avg: ≥3x=20, ≥2.5x=18, ≥2x=16, ≥1.5x=12, ≥1.2x=8, <1x=2 |
@@ -127,6 +130,18 @@ Score each stock on 7 factors totaling 100 points. The automated engine score an
 | Upside to Target     | 15  | ≥15%=15, ≥12%=13, ≥10%=11, ≥8%=9, ≥6%=7, ≥4%=4, <4%=2            |
 | Promoter & Instit.   | 10  | 0% pledge+FII/DII buying=10, low pledge=7, moderate=4, high=0-2    |
 | Price Accessibility  | 5   | ≤₹200=5, ≤₹500=4, ≤₹1000=3, ≤₹2000=2, >₹2000=1                   |
+
+### PULLBACK RUBRIC (for pullback scans — INVERTED priorities):
+Pullback stocks were found BECAUSE they have low volume and cooled RSI near EMA20 support. These are FEATURES, not flaws. Score them using the pullback rubric:
+| Factor                  | Max | Assessment Guide                                                          |
+|-------------------------|-----|---------------------------------------------------------------------------|
+| EMA20 Proximity         | 25  | ≤0.5%=25, ≤1%=22, ≤2%=18, ≤3%=12, ≤5%=6, >5%=2 (core pullback thesis)  |
+| Volume Decline Quality  | 20  | INVERTED: ≤0.6x=20, ≤0.7x=18, ≤0.8x=16, ≤0.9x=13, ≤1x=10, >1.3x=0   |
+| RSI Cooling             | 15  | 45-52=15(ideal), 52-58=12, 40-45=8, 58-65=6, 35-40=4                    |
+| Trend Structure         | 15  | EMA20>EMA50=6, EMA50>SMA200=5, Price>SMA200=4 (sum components)           |
+| Risk:Reward             | 15  | ≥2.5:1=15, ≥2:1=13, ≥1.5:1=10, ≥1.3:1=6, ≥1:1=3, <1:1=0              |
+| Relative Strength       | 5   | vs Nifty 1M: ≥8%=5, ≥5%=4, ≥2%=3, ≥0%=2, <0%=0                        |
+| ATR% Tradability        | 5   | 1.5-3.5%=5, 1-1.5%=3, 3.5-5%=3, extreme=1                              |
 
 Grades: A+ (90+), A (80-89), B+ (70-79), B (60-69), C (50-59), D (<50)
 
@@ -357,6 +372,7 @@ Stock: ${stock.stock_name} (${stock.symbol})
 Instrument Key: ${stock.instrument_key}
 Current Price: ₹${stock.current_price}
 Scan Type: ${stock.scan_type} (how it was discovered by ChartInk scanner)
+⚠️ SCORING RUBRIC TO USE: ${stock.scan_type === 'pullback' ? 'PULLBACK RUBRIC — use pullback factor names and inverted priorities (low volume = good, cooled RSI = good, EMA20 proximity is the primary factor)' : 'MOMENTUM RUBRIC — use momentum factor names and standard priorities'}
 
 === ENGINE SCORE: ${stock.setup_score}/100 | GRADE: ${stock.grade} ===
 This is the automated scoring from the screening engine. Use as baseline, adjust for fundamentals.
@@ -454,7 +470,57 @@ ${newsContext ? newsContext : '=== RECENT NEWS ===\nNo recent news found for thi
   "setup_score": {
     "total": ${stock.setup_score || 'null'},
     "grade": "${stock.grade || 'N/A'}",
-    "factors": [
+    "factors": ${stock.scan_type === 'pullback' ? `[
+      {
+        "name": "EMA20 Proximity",
+        "score": "22/25",
+        "status": "✅",
+        "value": "0.7% from EMA20",
+        "explanation": "How close price is to EMA20 support — the core pullback thesis"
+      },
+      {
+        "name": "Volume Decline Quality",
+        "score": "18/20",
+        "status": "✅",
+        "value": "0.6x avg",
+        "explanation": "Low volume = controlled pullback, not panic selling. INVERTED: lower is better"
+      },
+      {
+        "name": "RSI Cooling",
+        "score": "15/15",
+        "status": "✅",
+        "value": "Daily 50.4 / Weekly 55.9",
+        "explanation": "Cooled RSI in ideal pullback zone (45-52) — ready to bounce"
+      },
+      {
+        "name": "Trend Structure",
+        "score": "15/15",
+        "status": "✅",
+        "value": "EMA20>EMA50>SMA200",
+        "explanation": "Full bullish EMA stack intact — pullback within a healthy uptrend"
+      },
+      {
+        "name": "Risk:Reward",
+        "score": "10/15",
+        "status": "✅",
+        "value": "1:1.5",
+        "explanation": "Assessment of the pre-calculated R:R for pullback entry"
+      },
+      {
+        "name": "Relative Strength",
+        "score": "3/5",
+        "status": "✅",
+        "value": "+3.2% vs Nifty",
+        "explanation": "Outperformer pulling back = strong candidate"
+      },
+      {
+        "name": "ATR Tradability",
+        "score": "5/5",
+        "status": "✅",
+        "value": "ATR 2.3%",
+        "explanation": "Ideal ATR% range for swing trading"
+      }
+    ]` : `[
       {
         "name": "Volume Conviction",
         "score": "19/20",
@@ -504,7 +570,7 @@ ${newsContext ? newsContext : '=== RECENT NEWS ===\nNo recent news found for thi
         "value": "₹1,202",
         "explanation": "Position sizing accessibility"
       }
-    ],
+    ]`},
     "strengths": ["Top 3-4 strengths as strings"],
     "watch_factors": ["Top 2-3 concerns as strings"]
   },

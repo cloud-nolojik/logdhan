@@ -750,6 +750,26 @@ class MarketHoursUtil {
   }
 
   /**
+   * Get the last completed trading day whose closing data is available.
+   * - After 4 PM IST on a trading day → today (intraday API has today's completed candle)
+   * - Before 4 PM IST on a trading day → previous trading day (historical API)
+   * - On a weekend/holiday → last trading day (historical API)
+   * @param {Date} date - Reference date (defaults to now)
+   * @returns {Promise<string>} Date string "YYYY-MM-DD" in IST
+   */
+  static async getLastCompletedTradingDay(date = new Date()) {
+    const ist = this.toIST(date);
+    const hour = ist.getHours();
+    const isTrading = await this.isTradingDay(date);
+
+    if (isTrading && hour >= 16) {
+      return this.formatDateIST(date);
+    }
+    const lastDay = await this.getLastTradingDay(date);
+    return this.formatDateIST(lastDay);
+  }
+
+  /**
    * Format date as YYYY-MM-DD in IST
    * @param {Date} date - Date to format
    * @returns {string} Formatted date string

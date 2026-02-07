@@ -481,17 +481,24 @@ class WeekendScreeningJob {
         console.log(`[SCREENING JOB] Levels stats: ${metadata.levels_stats.with_levels} with levels, ${metadata.levels_stats.without_levels} without`);
       }
 
-      // Filter for quality stocks - minimum score threshold
-      // NEW: Eliminated stocks are already filtered out by enrichment service
-      const MIN_SCORE = 60;
+      // Filter for quality stocks - scan-type-aware minimum score threshold
+      // Pullback stocks use different scoring framework with inverted priorities,
+      // so they need a lower threshold (50) vs momentum (60)
+      const MIN_SCORES = {
+        a_plus_momentum: 60,
+        pullback: 50
+      };
       const MAX_STOCKS = 15;
 
       // Filter for quality stocks:
       // - Not eliminated (RSI gate passed)
-      // - Meets minimum score threshold
+      // - Meets scan-type-specific minimum score threshold
       // - Has valid trading levels (structural ladder didn't reject)
       const qualifiedStocks = allEnrichedStocks
-        .filter(s => !s.eliminated && s.setup_score >= MIN_SCORE && s.levels?.entry)
+        .filter(s => {
+          const minScore = MIN_SCORES[s.scan_type] || 60;
+          return !s.eliminated && s.setup_score >= minScore && s.levels?.entry;
+        })
         .sort((a, b) => b.setup_score - a.setup_score);
 
       // Count eliminated stocks for reporting (now comes from metadata)
@@ -520,7 +527,7 @@ class WeekendScreeningJob {
 
       const enrichedStocks = deduplicatedStocks.slice(0, MAX_STOCKS);
 
-      console.log(`[SCREENING JOB] ✅ STEP 3 COMPLETE: Qualified stocks (${MIN_SCORE}+): ${qualifiedStocks.length} total, ${deduplicatedStocks.length} unique, ${enrichedStocks.length} selected`);
+      console.log(`[SCREENING JOB] ✅ STEP 3 COMPLETE: Qualified stocks (thresholds: ${JSON.stringify(MIN_SCORES)}): ${qualifiedStocks.length} total, ${deduplicatedStocks.length} unique, ${enrichedStocks.length} selected`);
 
       if (enrichedStocks.length === 0) {
         // Still mark screening as completed (ran successfully, just no results)
@@ -536,6 +543,19 @@ class WeekendScreeningJob {
         await watchlist.save();
 
         console.log('[SCREENING JOB] ⚠️ No qualified stocks this week - watchlist marked complete (empty)');
+
+        // Notify that scans found stocks but none qualified after scoring
+        try {
+          await firebaseService.sendAnalysisCompleteToAllUsers(
+            'Weekend Screening: No Qualified Setups',
+            `${allResults.length} stocks were scanned but none met the scoring threshold after analysis. The watchlist has not been updated.`,
+            { type: 'weekend_screening_empty', route: '/weekly-watchlist' }
+          );
+          console.log('[SCREENING JOB] 📱 Empty qualification notification sent');
+        } catch (notifError) {
+          console.error('[SCREENING JOB] ⚠️ Failed to send empty qualification notification:', notifError.message);
+        }
+
         return result;
       }
 

@@ -1,29 +1,28 @@
 /**
  * On-Demand Analysis Service
  *
- * Provides instant stock classification and analysis routing:
+ * Provides instant deterministic stock analysis:
  * 1. Fetches technical indicators
- * 2. Classifies stock as BULLISH SETUP vs NOT A SETUP (pure math, no AI)
- * 3. Routes bullish setups through full Claude analysis pipeline
- * 4. Returns instant "quick reject" for non-setups (no AI cost)
+ * 2. Classifies stock as BULLISH SETUP vs NOT A SETUP (pure math)
+ * 3. For bullish setups: enriches with levels/scoring → builds deterministic card
+ * 4. For non-setups: returns instant quick reject
  *
- * Market Hours Logic:
- * - Quick reject: Always allowed (pure math, ~3 seconds)
- * - Full analysis: Only after market hours (3:30 PM onwards)
+ * No AI. No validity period. Caches by dataAsOf (last completed trading day).
+ * Recomputes when new closing data is available.
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import Stock from '../models/stock.js';
 import StockAnalysis from '../models/stockAnalysis.js';
+import Notification from '../models/notification.js';
 import technicalDataService from './technicalData.service.js';
-import { enrichStock, mapToInstrumentKey } from './stockEnrichmentService.js';
-import { generateWeeklyAnalysis } from './weeklyAnalysisService.js';
-import fundamentalDataService from './fundamentalDataService.js';
+import { enrichStock } from './stockEnrichmentService.js';
+import firebaseService from './firebase/firebase.service.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 import { round2 } from '../engine/helpers.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CLASSIFICATION LOGIC (Pure Math - No AI)
+// CLASSIFICATION LOGIC (Pure Math)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -124,7 +123,6 @@ function classifyForAnalysis(indicators) {
   }
 
   // Strong momentum (above all MAs, RSI 55+) - check BEFORE pullback
-  // This catches stocks that are trending strongly above all MAs
   if (ema20 && ema50 && sma200 && rsi &&
       price > ema20 && price > ema50 && price > sma200 && rsi >= 55) {
     return {
@@ -134,11 +132,9 @@ function classifyForAnalysis(indicators) {
     };
   }
 
-  // Pullback to EMA20 (price within 3% of EMA20, above EMA50, but NOT above EMA20)
-  // This is a stock that has pulled back TO the EMA20 support zone
+  // Pullback to EMA20 (price within 3% of EMA20, above EMA50)
   if (ema20 && ema50 && price > ema50) {
     const distFromEma20 = ((price - ema20) / ema20) * 100;
-    // Pullback: price is AT or BELOW EMA20 (within 3% below), still above EMA50
     if (distFromEma20 <= 3 && distFromEma20 >= -5) {
       return {
         isSetup: true,
@@ -166,70 +162,6 @@ function classifyForAnalysis(indicators) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MARKET HOURS & VALIDITY LOGIC
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Check if full analysis should be blocked (during market hours)
- * Quick reject is always allowed
- */
-async function shouldBlockFullAnalysis() {
-  const session = await MarketHoursUtil.getTradingSession();
-
-  // Block full analysis during regular/pre-market/post-market hours on trading days
-  // Market: 9:00 AM - 4:00 PM IST (including post-market)
-  if (session.session === 'regular' || session.session === 'pre-market' || session.session === 'post-market') {
-    return {
-      blocked: true,
-      message: 'Full analysis available after 4 PM IST when closing data is finalized. Quick classification still works.',
-      session: session.session
-    };
-  }
-
-  return { blocked: false };
-}
-
-/**
- * Calculate valid_until time based on analysis type and market hours
- *
- * @param {boolean} isQuickReject - Whether this is a quick reject (vs full analysis)
- * @returns {Promise<Date>} UTC date for valid_until
- */
-async function getValidUntil(isQuickReject) {
-  const now = new Date();
-  const istNow = MarketHoursUtil.toIST(now);
-  const session = await MarketHoursUtil.getTradingSession();
-  const duringMarketHours = session.session === 'regular' || session.session === 'pre-market';
-
-  if (isQuickReject && duringMarketHours) {
-    // During market hours: quick reject valid until today 4 PM only
-    // (stock status could change by close)
-    return MarketHoursUtil.getUtcForIstTime({
-      baseDate: istNow,
-      hour: 16,
-      minute: 0,
-      second: 0
-    });
-  }
-
-  if (isQuickReject) {
-    // After market hours: quick reject valid until next trading day 9 AM
-    // (pre-market could shift conditions)
-    const nextTradingDay = await MarketHoursUtil.getNextTradingDay(istNow);
-    return MarketHoursUtil.getUtcForIstTime({
-      baseDate: nextTradingDay,
-      hour: 9,
-      minute: 0,
-      second: 0
-    });
-  }
-
-  // Full analysis: use weekly expiry (Friday 3:29 PM IST) - same as weekend screening
-  // Swing analysis with entry/stop/targets is valid for the whole trading week
-  return await MarketHoursUtil.getWeeklyValidUntilTime(now);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // QUICK REJECT RESPONSE BUILDER
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -240,31 +172,24 @@ async function getValidUntil(isQuickReject) {
 function buildQuickRejectResponse(classification, indicators, stockInfo) {
   const { reason, message, details } = classification;
 
-  // Build levels to watch based on rejection reason
   const levelsToWatch = buildLevelsToWatch(reason, indicators);
-
-  // Build key message with actionable insight
   const keyMessage = buildKeyMessage(reason, message, indicators);
 
   return {
-    // Verdict (compatible with existing UI)
     verdict: {
       action: 'NO_TRADE',
       confidence: 0.9,
       one_liner: message
     },
 
-    // Setup score (F grade for non-setups)
     setup_score: {
       total: 0,
       grade: 'F',
       breakdown: []
     },
 
-    // No trading plan for non-setups
     trading_plan: null,
 
-    // Quick reject details
     quick_reject: {
       reason,
       current_price: round2(indicators.price),
@@ -281,7 +206,6 @@ function buildQuickRejectResponse(classification, indicators, stockInfo) {
       ...details
     },
 
-    // Stock info
     stock_info: stockInfo
   };
 }
@@ -364,11 +288,251 @@ function buildKeyMessage(reason, baseMessage, indicators) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// DETERMINISTIC ANALYSIS CARD BUILDER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const SCAN_LABELS = {
+  a_plus_momentum: 'A+ Momentum',
+  momentum: 'Momentum',
+  breakout: 'Breakout',
+  pullback: 'Pullback',
+  consolidation_breakout: 'Consolidation Breakout'
+};
+
+/**
+ * Build deterministic analysis card from enriched stock data.
+ * Replaces AI-generated analysis with pure math/template output.
+ * Output matches v1.5 AnalysisData schema (ApiService.kt:604-716).
+ *
+ * @param {Object} enrichedStock - from enrichStock() with debug=true
+ * @param {Object} classification - from classifyForAnalysis()
+ * @param {string} dataAsOf - "YYYY-MM-DD" date of the closing data used
+ * @returns {Object} analysis_data matching v1.5 schema
+ */
+function buildAnalysisCard(enrichedStock, classification, dataAsOf) {
+  const {
+    symbol, stock_name, current_price, scan_type,
+    setup_score, grade, score_breakdown, levels, indicators
+  } = enrichedStock;
+
+  const hasValidLevels = levels && levels.entry && !levels.noData;
+
+  // Verdict action from grade
+  let action;
+  if (!hasValidLevels) {
+    action = 'WAIT';
+  } else if (grade === 'A+' || grade === 'A' || grade === 'B+') {
+    action = 'BUY';
+  } else if (grade === 'B') {
+    action = 'WAIT';
+  } else {
+    action = 'SKIP';
+  }
+
+  const scanLabel = SCAN_LABELS[scan_type] || scan_type;
+
+  return {
+    schema_version: '1.5',
+    symbol,
+    analysis_type: 'swing',
+    generated_at_ist: new Date().toISOString(),
+
+    verdict: {
+      action,
+      confidence: round2(setup_score / 100),
+      one_liner: `${scanLabel} setup | Grade ${grade} | ${classification.message}`
+    },
+
+    setup_score: {
+      total: setup_score,
+      grade,
+      factors: (score_breakdown || []).map(b => ({
+        name: b.factor,
+        score: `${b.points}/${b.max}`,
+        status: b.points >= b.max * 0.7 ? 'strong'
+             : b.points >= b.max * 0.4 ? 'neutral'
+             : 'weak',
+        value: b.value != null ? String(b.value) : null,
+        explanation: b.reason
+      })),
+      strengths: (score_breakdown || [])
+        .filter(b => b.points >= b.max * 0.7)
+        .map(b => b.reason),
+      watch_factors: (score_breakdown || [])
+        .filter(b => b.points < b.max * 0.4)
+        .map(b => b.reason)
+    },
+
+    trading_plan: hasValidLevels ? {
+      entry: levels.entry,
+      entry_range: levels.entryRange || null,
+      stop_loss: levels.stop,
+      target1: levels.target1,
+      target1_basis: levels.target1_basis || null,
+      target2: levels.target2,
+      target2_basis: levels.target2_basis || null,
+      target3: levels.target3 || null,
+      target: levels.target2,  // backward compat
+      risk_reward: levels.riskReward,
+      risk_percent: levels.riskPercent,
+      reward_percent: levels.rewardPercent
+    } : null,
+
+    beginner_guide: {
+      what_stock_is_doing: buildWhatStockIsDoing(scan_type, indicators, current_price),
+      why_this_is_interesting: classification.message,
+      steps_to_trade: hasValidLevels ? [
+        `Set buy order at ₹${round2(levels.entry)}`,
+        `Place stop loss at ₹${round2(levels.stop)} (${round2(levels.riskPercent)}% risk)`,
+        `Book 50% at T1 ₹${round2(levels.target1)}`,
+        `Trail rest to T2 ₹${round2(levels.target2)}`,
+        levels.weekEndRule === 'exit_if_no_t1'
+          ? 'Exit by Friday if T1 not hit'
+          : 'Hold through week-end if T1 hit'
+      ] : ['Wait for clearer setup before entering'],
+      if_it_fails: hasValidLevels ? {
+        max_loss: `₹${round2(levels.entry - levels.stop)} per share`,
+        loss_percent: `${round2(levels.riskPercent)}%`,
+        why_okay: `Risk:Reward is 1:${round2(levels.riskReward)} — you risk ${round2(levels.riskPercent)}% to gain ${round2(levels.rewardPercent)}%`
+      } : null
+    },
+
+    what_to_watch: {
+      if_bought: hasValidLevels
+        ? `Book 50% at T1 (₹${round2(levels.target1)}). Move stop to entry after T1 hit. Final target ₹${round2(levels.target2)}.`
+        : null,
+      if_waiting: `Watch for price near ₹${round2(levels?.entry || current_price)}. ` +
+        `${indicators?.rsi ? `RSI is ${round2(indicators.rsi)} — ` : ''}` +
+        `${scan_type === 'pullback' ? 'look for bounce off EMA20 support.' : 'look for breakout confirmation with volume.'}`
+    },
+
+    warnings: buildWarnings(indicators, levels),
+
+    strategies: []  // always empty array for backward compat
+  };
+}
+
+function buildWhatStockIsDoing(scanType, indicators, price) {
+  switch (scanType) {
+    case 'a_plus_momentum':
+      return `Stock is at 52-week highs with strong momentum. Trading at ₹${round2(price)}.`;
+    case 'breakout':
+      return `Stock is near 52-week highs, setting up for a breakout. RSI ${round2(indicators?.rsi || 0)}.`;
+    case 'pullback':
+      return `Stock in uptrend has pulled back to EMA20 support (₹${round2(indicators?.ema20 || 0)}). This is a buy-the-dip zone.`;
+    case 'momentum':
+      return `Stock is trending above all key moving averages with healthy RSI (${round2(indicators?.rsi || 0)}).`;
+    case 'consolidation_breakout':
+      return `Stock is above 200-day MA and consolidating. Potential breakout developing.`;
+    default:
+      return `Stock setup detected at ₹${round2(price)}.`;
+  }
+}
+
+function buildWarnings(indicators, levels) {
+  const warnings = [];
+
+  if (indicators?.volume_vs_avg && indicators.volume_vs_avg < 0.8) {
+    warnings.push({
+      code: 'LOW_VOLUME',
+      severity: 'medium',
+      message: `Volume is ${round2(indicators.volume_vs_avg)}x average — below normal conviction`,
+      mitigation: 'Wait for volume confirmation before entering'
+    });
+  }
+
+  if (indicators?.rsi && indicators.rsi > 65) {
+    warnings.push({
+      code: 'RSI_ELEVATED',
+      severity: 'low',
+      message: `RSI at ${round2(indicators.rsi)} is elevated — stock is running hot`,
+      mitigation: 'Consider smaller position size or wait for pullback'
+    });
+  }
+
+  if (indicators?.atr_pct && indicators.atr_pct > 4) {
+    warnings.push({
+      code: 'HIGH_VOLATILITY',
+      severity: 'medium',
+      message: `ATR% is ${round2(indicators.atr_pct)}% — high volatility means wider swings`,
+      mitigation: 'Use smaller position size to manage risk'
+    });
+  }
+
+  if (levels?.riskReward && levels.riskReward < 1.5) {
+    warnings.push({
+      code: 'LOW_RR',
+      severity: 'high',
+      message: `Risk:Reward is 1:${round2(levels.riskReward)} — below ideal 1:2 threshold`,
+      mitigation: 'Consider skipping this setup or waiting for better entry'
+    });
+  }
+
+  return warnings; // always array, never null
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Send in-app notification + Firebase push when analysis completes.
+ * Mirrors aiAnalyze.service.js sendAnalysisCompleteNotification() behavior.
+ * Failures are swallowed — notification should never break analysis.
+ */
+async function sendAnalysisNotification(userId, analysisRecord) {
+  try {
+    if (!userId) return;
+
+    const stockName = analysisRecord.stock_name || analysisRecord.stock_symbol;
+    const verdict = analysisRecord.analysis_data?.verdict?.action || 'DONE';
+    const grade = analysisRecord.analysis_data?.setup_score?.grade || '';
+
+    const message = verdict === 'NO_TRADE'
+      ? `${stockName} — Not a swing setup right now.`
+      : `${stockName} analysis ready! Verdict: ${verdict}${grade ? ` (Grade ${grade})` : ''}`;
+
+    // In-app notification
+    await Notification.createNotification({
+      userId,
+      title: 'Analysis Complete',
+      message,
+      type: 'ai_review',
+      relatedStock: {
+        trading_symbol: analysisRecord.stock_symbol,
+        instrument_key: analysisRecord.instrument_key
+      },
+      metadata: {
+        analysisId: analysisRecord._id.toString(),
+        analysisType: analysisRecord.analysis_type
+      }
+    });
+
+    // Firebase push
+    await firebaseService.sendToUser(
+      userId,
+      'Analysis Complete',
+      message,
+      {
+        type: 'AI_ANALYSIS_COMPLETE',
+        stockSymbol: analysisRecord.stock_symbol,
+        analysisId: analysisRecord._id.toString(),
+        route: '/analysis'
+      }
+    );
+  } catch (error) {
+    console.error(`[ON-DEMAND] Error sending notification:`, error.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN ANALYSIS FUNCTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Main entry point for on-demand stock analysis
+ * Main entry point for on-demand stock analysis.
+ * Fully deterministic — no AI, no market hours blocking.
+ * Caches by dataAsOf: same closing data = same result.
  *
  * @param {string} instrumentKey - Stock instrument key
  * @param {string} userId - User ID for tracking
@@ -378,13 +542,7 @@ function buildKeyMessage(reason, baseMessage, indicators) {
 export async function analyze(instrumentKey, userId, options = {}) {
   const requestId = uuidv4().slice(0, 8);
   const startTime = Date.now();
-  const {
-    stock_name,
-    stock_symbol,
-    forceFresh = false,
-    sendNotification = true,
-    skipNotification = false
-  } = options;
+  const { stock_name, stock_symbol, sendNotification } = options;
 
   console.log(`\n[ON-DEMAND] [${requestId}] ═══════════════════════════════════════════════`);
   console.log(`[ON-DEMAND] [${requestId}] Analyzing: ${stock_symbol || instrumentKey}`);
@@ -412,19 +570,25 @@ export async function analyze(instrumentKey, userId, options = {}) {
     console.log(`[ON-DEMAND] [${requestId}] Stock: ${stockInfo.stock_name} (${stockInfo.trading_symbol})`);
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 2: Check for existing valid analysis (cache)
+    // STEP 2: dataAsOf freshness check (replaces old valid_until cache)
+    // Same closing data = same result, return cached
     // ═══════════════════════════════════════════════════════════════════════════
-    if (!forceFresh) {
-      const existingAnalysis = await StockAnalysis.findValidAnalysis(instrumentKey, 'swing');
-      if (existingAnalysis) {
-        console.log(`[ON-DEMAND] [${requestId}] ✅ Returning cached analysis (valid until ${existingAnalysis.valid_until})`);
-        return {
-          success: true,
-          data: existingAnalysis,
-          cached: true,
-          fromQuickReject: !!existingAnalysis.analysis_data?.quick_reject
-        };
-      }
+    const dataAsOf = await MarketHoursUtil.getLastCompletedTradingDay();
+    const existing = await StockAnalysis.findOne({
+      instrument_key: instrumentKey,
+      analysis_type: 'swing',
+      status: 'completed',
+      'analysis_meta.data_as_of_ist': dataAsOf
+    }).lean();
+
+    if (existing) {
+      console.log(`[ON-DEMAND] [${requestId}] ✅ Returning cached analysis (dataAsOf=${dataAsOf})`);
+      return {
+        success: true,
+        data: existing,
+        cached: true,
+        fromQuickReject: !!existing.analysis_data?.quick_reject
+      };
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -451,20 +615,15 @@ export async function analyze(instrumentKey, userId, options = {}) {
       `${classification.isSetup ? `scanType=${classification.scanType}` : `reason=${classification.reason}`}`);
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 5A: NOT A SETUP → Return quick reject (instant, no AI)
+    // STEP 5: NOT A SETUP → Quick reject, save to DB, return
     // ═══════════════════════════════════════════════════════════════════════════
     if (!classification.isSetup) {
       console.log(`[ON-DEMAND] [${requestId}] ⚡ Quick reject: ${classification.reason}`);
 
       const quickRejectData = buildQuickRejectResponse(classification, indicators, stockInfo);
-      const validUntil = await getValidUntil(true);
 
-      // Save to StockAnalysis for caching
       const analysis = await StockAnalysis.findOneAndUpdate(
-        {
-          instrument_key: instrumentKey,
-          analysis_type: 'swing'
-        },
+        { instrument_key: instrumentKey, analysis_type: 'swing' },
         {
           instrument_key: instrumentKey,
           stock_name: stockInfo.stock_name,
@@ -479,15 +638,17 @@ export async function analyze(instrumentKey, userId, options = {}) {
             quick_reject: quickRejectData.quick_reject,
             verdict: quickRejectData.verdict,
             setup_score: quickRejectData.setup_score,
-            strategies: [] // No strategies for quick reject
+            warnings: [],
+            strategies: []
           },
-          valid_until: validUntil,
+          analysis_meta: { data_as_of_ist: dataAsOf, source: 'on_demand_deterministic' },
+          valid_until: null,
           last_validated_at: new Date(),
           progress: {
             percentage: 100,
             current_step: 'Quick classification complete',
-            steps_completed: 2,
-            total_steps: 2,
+            steps_completed: 1,
+            total_steps: 1,
             estimated_time_remaining: 0,
             last_updated: new Date()
           }
@@ -497,6 +658,10 @@ export async function analyze(instrumentKey, userId, options = {}) {
 
       const duration = Date.now() - startTime;
       console.log(`[ON-DEMAND] [${requestId}] ✅ Quick reject complete in ${duration}ms`);
+
+      if (sendNotification && userId) {
+        sendAnalysisNotification(userId, analysis).catch(() => {});
+      }
 
       return {
         success: true,
@@ -508,68 +673,58 @@ export async function analyze(instrumentKey, userId, options = {}) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 5B: BULLISH SETUP → Check if full analysis is allowed
+    // STEP 6: BULLISH SETUP → Enrich + deterministic card
     // ═══════════════════════════════════════════════════════════════════════════
-    const blockCheck = await shouldBlockFullAnalysis();
-    if (blockCheck.blocked) {
-      console.log(`[ON-DEMAND] [${requestId}] ⏳ Full analysis blocked: ${blockCheck.message}`);
+    console.log(`[ON-DEMAND] [${requestId}] Running deterministic analysis pipeline...`);
 
-      // Save a "pending" record so the app has something to display
-      const validUntil = await getValidUntil(true); // Use quick reject validity (today 4 PM)
+    // Enrich stock with full technical data + levels + score (debug=true for score_breakdown)
+    const chartinkStock = {
+      nsecode: stockInfo.trading_symbol,
+      name: stockInfo.stock_name,
+      close: indicators.price,
+      volume: 0,
+      scan_type: classification.scanType
+    };
+
+    const enrichedStock = await enrichStock(chartinkStock, 0, true);
+
+    if (!enrichedStock || enrichedStock.eliminated) {
+      console.log(`[ON-DEMAND] [${requestId}] ❌ Stock eliminated during enrichment: ${enrichedStock?.eliminationReason || 'Unknown'}`);
+
+      // Save elimination as a reject
+      const eliminationData = {
+        schema_version: '1.5',
+        symbol: stockInfo.trading_symbol,
+        analysis_type: 'swing',
+        verdict: {
+          action: 'NO_TRADE',
+          confidence: 0.9,
+          one_liner: enrichedStock?.eliminationReason || 'Failed quality checks during enrichment'
+        },
+        setup_score: { total: 0, grade: 'F', factors: [], strengths: [], watch_factors: [] },
+        trading_plan: null,
+        warnings: [],
+        strategies: []
+      };
 
       const analysis = await StockAnalysis.findOneAndUpdate(
-        {
-          instrument_key: instrumentKey,
-          analysis_type: 'swing'
-        },
+        { instrument_key: instrumentKey, analysis_type: 'swing' },
         {
           instrument_key: instrumentKey,
           stock_name: stockInfo.stock_name,
           stock_symbol: stockInfo.trading_symbol,
           analysis_type: 'swing',
           current_price: indicators.price,
-          status: 'completed', // Mark as completed so app shows it
-          analysis_data: {
-            schema_version: '1.5',
-            symbol: stockInfo.trading_symbol,
-            analysis_type: 'swing',
-            // Classification info for the app to display
-            classification: {
-              isSetup: true,
-              scanType: classification.scanType,
-              message: classification.message
-            },
-            // Verdict tells the app this is a valid setup but blocked
-            verdict: {
-              action: 'PENDING_FULL_ANALYSIS',
-              confidence: 0.8,
-              one_liner: `${classification.message} Full analysis available after 4 PM IST.`
-            },
-            setup_score: {
-              total: null, // Score will be calculated in full analysis
-              grade: 'TBD',
-              breakdown: []
-            },
-            // Indicator snapshot
-            indicators_snapshot: {
-              price: round2(indicators.price),
-              rsi: indicators.rsi ? round2(indicators.rsi) : null,
-              weekly_rsi: indicators.weeklyRsi ? round2(indicators.weeklyRsi) : null,
-              ema20: indicators.ema20 ? round2(indicators.ema20) : null,
-              high_52w: indicators.high52W ? round2(indicators.high52W) : null
-            },
-            // Flag indicating full analysis is pending
-            pending_full_analysis: true,
-            blocked_reason: blockCheck.message,
-            strategies: [] // No strategies yet
-          },
-          valid_until: validUntil,
+          status: 'completed',
+          analysis_data: eliminationData,
+          analysis_meta: { data_as_of_ist: dataAsOf, source: 'on_demand_deterministic' },
+          valid_until: null,
           last_validated_at: new Date(),
           progress: {
-            percentage: 50,
-            current_step: 'Bullish setup detected - full analysis available after market hours',
-            steps_completed: 2,
-            total_steps: 4,
+            percentage: 100,
+            current_step: 'Complete',
+            steps_completed: 1,
+            total_steps: 1,
             estimated_time_remaining: 0,
             last_updated: new Date()
           }
@@ -577,112 +732,55 @@ export async function analyze(instrumentKey, userId, options = {}) {
         { upsert: true, new: true, runValidators: false }
       );
 
-      const duration = Date.now() - startTime;
-      console.log(`[ON-DEMAND] [${requestId}] ✅ Saved pending analysis in ${duration}ms`);
+      if (sendNotification && userId) {
+        sendAnalysisNotification(userId, analysis).catch(() => {});
+      }
 
       return {
         success: true,
         data: analysis,
         cached: false,
-        blocked: true,
-        message: blockCheck.message,
-        classification,
-        fromQuickReject: false,
-        pendingFullAnalysis: true
+        eliminated: true,
+        reason: enrichedStock?.eliminationReason || 'Failed enrichment',
+        classification
       };
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 6: Run full analysis pipeline (enrich → fundamentals → Claude)
-    // ═══════════════════════════════════════════════════════════════════════════
-    console.log(`[ON-DEMAND] [${requestId}] Running full analysis pipeline...`);
+    // Build deterministic analysis card
+    const analysisData = buildAnalysisCard(enrichedStock, classification, dataAsOf);
 
-    // Create pending analysis record
-    await StockAnalysis.findOneAndUpdate(
+    // Save to DB (single atomic write)
+    const analysis = await StockAnalysis.findOneAndUpdate(
       { instrument_key: instrumentKey, analysis_type: 'swing' },
       {
         instrument_key: instrumentKey,
         stock_name: stockInfo.stock_name,
         stock_symbol: stockInfo.trading_symbol,
         analysis_type: 'swing',
-        status: 'in_progress',
+        current_price: enrichedStock.current_price,
+        status: 'completed',
+        analysis_data: analysisData,
+        analysis_meta: { data_as_of_ist: dataAsOf, source: 'on_demand_deterministic' },
+        valid_until: null,
+        last_validated_at: new Date(),
         progress: {
-          percentage: 10,
-          current_step: 'Enriching stock data',
+          percentage: 100,
+          current_step: 'Complete',
           steps_completed: 1,
-          total_steps: 8,
-          estimated_time_remaining: 45,
+          total_steps: 1,
+          estimated_time_remaining: 0,
           last_updated: new Date()
         }
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, runValidators: false }
     );
-
-    // Enrich stock with full technical data + levels + score
-    const chartinkStock = {
-      nsecode: stockInfo.trading_symbol,
-      name: stockInfo.stock_name,
-      close: indicators.price,
-      volume: 0, // Will be fetched by enrichStock
-      scan_type: classification.scanType
-    };
-
-    const enrichedStock = await enrichStock(chartinkStock, 0, false);
-
-    if (!enrichedStock || enrichedStock.eliminated) {
-      console.log(`[ON-DEMAND] [${requestId}] ❌ Stock eliminated during enrichment: ${enrichedStock?.eliminationReason || 'Unknown'}`);
-
-      // Return as quick reject
-      return {
-        success: true,
-        eliminated: true,
-        reason: enrichedStock?.eliminationReason || 'Failed enrichment',
-        stockInfo
-      };
-    }
-
-    // Update progress
-    await StockAnalysis.updateOne(
-      { instrument_key: instrumentKey, analysis_type: 'swing' },
-      {
-        'progress.percentage': 30,
-        'progress.current_step': 'Fetching fundamental data',
-        'progress.steps_completed': 3,
-        'progress.last_updated': new Date()
-      }
-    );
-
-    // Fetch fundamental data
-    let fundamentals = null;
-    try {
-      fundamentals = await fundamentalDataService.fetchFundamentalData(stockInfo.trading_symbol);
-    } catch (err) {
-      console.warn(`[ON-DEMAND] [${requestId}] ⚠️ Failed to fetch fundamentals: ${err.message}`);
-    }
-
-    // Update progress
-    await StockAnalysis.updateOne(
-      { instrument_key: instrumentKey, analysis_type: 'swing' },
-      {
-        'progress.percentage': 50,
-        'progress.current_step': 'Generating AI analysis',
-        'progress.steps_completed': 5,
-        'progress.last_updated': new Date()
-      }
-    );
-
-    // Generate Claude analysis
-    // Pass daily validUntil (next market open 9 AM IST) for on-demand/manual analyses
-    // Weekend screening analyses use weekly expiry (Friday 3:59 PM) by default
-    const dailyValidUntil = await MarketHoursUtil.getValidUntilTime(new Date());
-    const analysis = await generateWeeklyAnalysis(enrichedStock, {
-      fundamentals,
-      marketContext: null, // Will be generated by weeklyAnalysisService
-      validUntil: dailyValidUntil
-    });
 
     const duration = Date.now() - startTime;
-    console.log(`[ON-DEMAND] [${requestId}] ✅ Full analysis complete in ${duration}ms`);
+    console.log(`[ON-DEMAND] [${requestId}] ✅ Deterministic analysis complete in ${duration}ms`);
+
+    if (sendNotification && userId) {
+      sendAnalysisNotification(userId, analysis).catch(() => {});
+    }
 
     return {
       success: true,
@@ -695,7 +793,7 @@ export async function analyze(instrumentKey, userId, options = {}) {
   } catch (error) {
     console.error(`[ON-DEMAND] [${requestId}] ❌ Error:`, error.message);
 
-    // Mark as failed if there's a pending analysis
+    // Mark as failed if there's an in-progress analysis
     await StockAnalysis.updateOne(
       { instrument_key: instrumentKey, analysis_type: 'swing', status: 'in_progress' },
       {
@@ -719,6 +817,5 @@ export async function analyze(instrumentKey, userId, options = {}) {
 export default {
   analyze,
   classifyForAnalysis,
-  shouldBlockFullAnalysis,
-  getValidUntil
+  buildAnalysisCard
 };

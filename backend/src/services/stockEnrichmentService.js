@@ -353,7 +353,7 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
   // STEP 2: Calculate setup score WITH levels (Framework-based scoring)
   // Now includes weekly_rsi for dual-timeframe elimination
   // ═══════════════════════════════════════════════════════════════════════════
-  const scoreResult = calculateSetupScore(stockData, levels, niftyReturn1M, debug);
+  const scoreResult = calculateSetupScore(stockData, levels, niftyReturn1M, debug, scanTypeForLevels);
 
   if (debug) {
     console.log(`[ENRICH DEBUG] ${nsecode} - Score result:`, {

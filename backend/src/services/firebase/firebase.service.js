@@ -62,13 +62,13 @@ class FirebaseService {
           data: {
             ...stringifiedData,
             click_action: 'FLUTTER_NOTIFICATION_CLICK',
-            channel_id: 'trade_notifications'
+            channel_id: 'logdhan_notifications'
           },
           android: {
             priority: 'high',
             notification: {
               sound: 'default',
-              channelId: 'trade_notifications',
+              channelId: 'logdhan_notifications',
               priority: 'high',
               defaultSound: true
             }
@@ -146,13 +146,13 @@ class FirebaseService {
         data: {
           ...data,
           click_action: 'FLUTTER_NOTIFICATION_CLICK',
-          channel_id: 'trade_notifications'
+          channel_id: 'logdhan_notifications'
         },
         android: {
           priority: 'high',
           notification: {
             sound: 'default',
-            channelId: 'trade_notifications'
+            channelId: 'logdhan_notifications'
           }
         },
         apns: {

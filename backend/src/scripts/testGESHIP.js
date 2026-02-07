@@ -25,7 +25,7 @@ import technicalDataService from '../services/technicalData.service.js';
 import Stock from '../models/stock.js';
 import MarketHoursUtil from '../utils/marketHours.js';
 
-const { classifyForAnalysis, shouldBlockFullAnalysis } = onDemandAnalysisService;
+const { classifyForAnalysis } = onDemandAnalysisService;
 
 async function testGESHIP() {
   console.log('\n═══════════════════════════════════════════════════════════════════');
@@ -74,12 +74,8 @@ async function testGESHIP() {
     // Step 2: Check market hours
     console.log('⏰ Step 2: Checking market hours...');
     const session = await MarketHoursUtil.getTradingSession();
-    const blockCheck = await shouldBlockFullAnalysis();
     console.log(`   Current session: ${session.session}`);
-    console.log(`   Full analysis blocked: ${blockCheck.blocked}`);
-    if (blockCheck.blocked) {
-      console.log(`   Reason: ${blockCheck.message}`);
-    }
+    console.log(`   Note: Full analysis no longer blocked during market hours (deterministic)`);
     console.log('');
 
     // Step 3: Fetch technical indicators

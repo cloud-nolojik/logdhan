@@ -7,7 +7,7 @@
  * - Candidate Ranking
  * - Confidence Calculation
  *
- * FRAMEWORK FACTORS (100 points total):
+ * MOMENTUM FRAMEWORK FACTORS (100 points total):
  * 1. Volume Conviction     - 20 pts (Critical)
  * 2. Risk:Reward Ratio     - 20 pts (Critical)
  * 3. RSI Position          - 15 pts (High) + Elimination filter
@@ -15,6 +15,15 @@
  * 5. Upside % to Target    - 15 pts (High)
  * 6. Relative Strength     - 10 pts (Medium)
  * 7. Price Accessibility   -  5 pts (Low)
+ *
+ * PULLBACK FRAMEWORK FACTORS (100 points total):
+ * 1. EMA20 Proximity       - 25 pts (Critical) - the core pullback thesis
+ * 2. Volume Decline Quality - 20 pts (Critical) - INVERTED: low volume = good
+ * 3. RSI Cooling           - 15 pts (High) - cooled RSI = controlled pullback
+ * 4. Trend Structure       - 15 pts (High) - EMA stack must be intact
+ * 5. Risk:Reward Ratio     - 15 pts (High) - recalibrated for pullback R:R
+ * 6. Relative Strength     -  5 pts (Medium)
+ * 7. ATR% Tradability      -  5 pts (Low)
  */
 
 import { round2, isNum, clamp } from './helpers.js';
@@ -53,9 +62,15 @@ export function getGrade(score) {
  * @param {Object} levels - Trading levels from calculateAPlusMomentumLevels (optional)
  * @param {number} niftyReturn1M - Nifty 1-month return for relative strength
  * @param {boolean} debug - Include detailed breakdown
+ * @param {string} scanType - Scan type for scan-specific scoring ('a_plus_momentum', 'pullback')
  * @returns {Object} { score, grade, breakdown, eliminated, eliminationReason }
  */
-export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, debug = false) {
+export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, debug = false, scanType = 'a_plus_momentum') {
+  // Route to pullback-specific scoring
+  if (scanType === 'pullback') {
+    return calculatePullbackScore(stock, levels, niftyReturn1M, debug);
+  }
+
   const {
     last,
     price,
@@ -402,6 +417,357 @@ export function calculateSetupScore(stock, levels = null, niftyReturn1M = 0, deb
     eliminated: false,
     eliminationReason: null,
     // Include levels info in result for reference
+    levels_valid: levels?.valid || false,
+    risk_reward: rrValue
+  };
+}
+
+/**
+ * Calculate Pullback Score for a stock
+ *
+ * Evaluates pullback trading quality on 0-100 scale using pullback-specific factors.
+ * Inverted priorities from momentum scoring: low volume = good, cooled RSI = good.
+ *
+ * @param {Object} stock - Stock data with indicators
+ * @param {Object} levels - Trading levels from calculatePullbackLevels
+ * @param {number} niftyReturn1M - Nifty 1-month return for relative strength
+ * @param {boolean} debug - Include detailed breakdown
+ * @returns {Object} { score, grade, breakdown, eliminated, eliminationReason }
+ */
+function calculatePullbackScore(stock, levels = null, niftyReturn1M = 0, debug = false) {
+  const {
+    last,
+    price,
+    close,
+    rsi,
+    rsi14,
+    ema20,
+    ema50,
+    dma200,
+    volume_vs_avg,
+    volume,
+    volume_20avg,
+    return_1m,
+    atr,
+    atr_pct
+  } = stock;
+
+  const currentPrice = last || price || close;
+  const currentRsi = rsi14 || rsi;
+  const weeklyRsi = stock.weekly_rsi;
+
+  // Validate minimum required data
+  if (!isNum(currentPrice)) {
+    return {
+      score: 0,
+      grade: 'D',
+      breakdown: [{ factor: 'DATA_ERROR', points: 0, max: 100, value: null, reason: 'Missing price data' }],
+      eliminated: true,
+      eliminationReason: 'Missing price data'
+    };
+  }
+
+  // ============================================
+  // PRE-FILTER: RSI Elimination (shared with momentum)
+  // ============================================
+  if (isNum(currentRsi) && currentRsi > 72) {
+    return {
+      score: 0,
+      grade: 'X',
+      breakdown: [{ factor: 'RSI_ELIMINATED', points: 0, max: 100, value: round2(currentRsi), reason: `Daily RSI ${round2(currentRsi)} > 72 (too extended for pullback)` }],
+      eliminated: true,
+      eliminationReason: `Daily RSI ${round2(currentRsi)} > 72 (too extended)`
+    };
+  }
+
+  if (isNum(weeklyRsi) && weeklyRsi > 72) {
+    return {
+      score: 0,
+      grade: 'X',
+      breakdown: [{ factor: 'WEEKLY_RSI_ELIMINATED', points: 0, max: 100, value: round2(weeklyRsi), reason: `Weekly RSI ${round2(weeklyRsi)} > 72 (weekly overbought)` }],
+      eliminated: true,
+      eliminationReason: `Weekly RSI ${round2(weeklyRsi)} > 72 (weekly overbought)`
+    };
+  }
+
+  // Pullback-specific: RSI too weak = trend may be broken
+  if (isNum(currentRsi) && currentRsi < 35) {
+    return {
+      score: 0,
+      grade: 'X',
+      breakdown: [{ factor: 'RSI_TOO_WEAK', points: 0, max: 100, value: round2(currentRsi), reason: `RSI ${round2(currentRsi)} < 35 — trend may be broken, not a pullback` }],
+      eliminated: true,
+      eliminationReason: `RSI ${round2(currentRsi)} < 35 — trend may be broken`
+    };
+  }
+
+  const breakdown = [];
+  let totalScore = 0;
+
+  // ============================================
+  // FACTOR 1: EMA20 Proximity (25 pts) - PRIMARY
+  // The core pullback thesis: price at EMA20 support
+  // ============================================
+  let emaScore = 0;
+  let emaReason = '';
+
+  if (isNum(ema20) && isNum(currentPrice) && ema20 > 0) {
+    const distancePct = Math.abs(currentPrice - ema20) / ema20 * 100;
+
+    if (distancePct <= 0.5) {
+      emaScore = 25;
+      emaReason = `Textbook pullback (${round2(distancePct)}% from EMA20) — sitting right on support`;
+    } else if (distancePct <= 1.0) {
+      emaScore = 22;
+      emaReason = `Very close to EMA20 (${round2(distancePct)}% away) — strong support zone`;
+    } else if (distancePct <= 2.0) {
+      emaScore = 18;
+      emaReason = `Near EMA20 (${round2(distancePct)}% away) — within pullback range`;
+    } else if (distancePct <= 3.0) {
+      emaScore = 12;
+      emaReason = `Approaching EMA20 (${round2(distancePct)}% away) — may not reach`;
+    } else if (distancePct <= 5.0) {
+      emaScore = 6;
+      emaReason = `Far from EMA20 (${round2(distancePct)}% away) — extended`;
+    } else {
+      emaScore = 2;
+      emaReason = `Too far from EMA20 (${round2(distancePct)}% away) — not a pullback`;
+    }
+  } else {
+    emaScore = 5;
+    emaReason = 'No EMA20 data available';
+  }
+
+  totalScore += emaScore;
+  breakdown.push({ factor: 'EMA20 Proximity', points: emaScore, max: 25, reason: emaReason });
+
+  // ============================================
+  // FACTOR 2: Volume Decline Quality (20 pts) - INVERTED
+  // Low volume = controlled profit-taking (good for pullback)
+  // ============================================
+  const volRatio = volume_vs_avg || (volume && volume_20avg ? volume / volume_20avg : null);
+
+  let volumeScore = 0;
+  let volumeReason = '';
+
+  if (isNum(volRatio)) {
+    if (volRatio <= 0.6) {
+      volumeScore = 20;
+      volumeReason = `Very low volume (${round2(volRatio)}x avg) — controlled pullback, no panic selling`;
+    } else if (volRatio <= 0.7) {
+      volumeScore = 18;
+      volumeReason = `Low volume (${round2(volRatio)}x avg) — healthy profit-taking`;
+    } else if (volRatio <= 0.8) {
+      volumeScore = 16;
+      volumeReason = `Below average volume (${round2(volRatio)}x avg) — normal pullback`;
+    } else if (volRatio <= 0.9) {
+      volumeScore = 13;
+      volumeReason = `Slightly below avg (${round2(volRatio)}x avg) — acceptable`;
+    } else if (volRatio <= 1.0) {
+      volumeScore = 10;
+      volumeReason = `Average volume (${round2(volRatio)}x avg) — neutral`;
+    } else if (volRatio <= 1.3) {
+      volumeScore = 5;
+      volumeReason = `Above average (${round2(volRatio)}x avg) — some selling pressure`;
+    } else {
+      volumeScore = 0;
+      volumeReason = `High volume decline (${round2(volRatio)}x avg) — possible distribution`;
+    }
+  } else {
+    volumeScore = 8;
+    volumeReason = 'No volume data available';
+  }
+
+  totalScore += volumeScore;
+  breakdown.push({ factor: 'Volume Decline Quality', points: volumeScore, max: 20, reason: volumeReason });
+
+  // ============================================
+  // FACTOR 3: RSI Cooling (15 pts)
+  // Pullback RSI should be cooled, not hot
+  // ============================================
+  let rsiScore = 0;
+  let rsiReason = '';
+
+  if (isNum(currentRsi)) {
+    if (currentRsi >= 45 && currentRsi <= 52) {
+      rsiScore = 15;
+      rsiReason = `Ideal pullback zone (RSI ${round2(currentRsi)}) — cooled but not broken`;
+    } else if (currentRsi > 52 && currentRsi <= 58) {
+      rsiScore = 12;
+      rsiReason = `Good cooldown (RSI ${round2(currentRsi)}) — still has room to bounce`;
+    } else if (currentRsi >= 40 && currentRsi < 45) {
+      rsiScore = 8;
+      rsiReason = `Deep pullback (RSI ${round2(currentRsi)}) — watch for trend break`;
+    } else if (currentRsi > 58 && currentRsi <= 65) {
+      rsiScore = 6;
+      rsiReason = `Not fully cooled (RSI ${round2(currentRsi)}) — pullback may continue`;
+    } else if (currentRsi >= 35 && currentRsi < 40) {
+      rsiScore = 4;
+      rsiReason = `Very deep pullback (RSI ${round2(currentRsi)}) — risky`;
+    } else {
+      rsiScore = 2;
+      rsiReason = `Outside pullback range (RSI ${round2(currentRsi)})`;
+    }
+  } else {
+    rsiScore = 7;
+    rsiReason = 'No RSI data available';
+  }
+
+  totalScore += rsiScore;
+  breakdown.push({ factor: 'RSI Cooling', points: rsiScore, max: 15, reason: rsiReason, value: currentRsi ? round2(currentRsi) : 'N/A' });
+
+  // ============================================
+  // FACTOR 4: Trend Structure (15 pts)
+  // EMA stack must be intact for pullback to be valid
+  // ============================================
+  let trendScore = 0;
+  let trendReason = '';
+  const trendParts = [];
+
+  if (isNum(ema20) && isNum(ema50) && ema20 > ema50) {
+    trendScore += 6;
+    trendParts.push('EMA20 > EMA50');
+  }
+  if (isNum(ema50) && isNum(dma200) && ema50 > dma200) {
+    trendScore += 5;
+    trendParts.push('EMA50 > SMA200');
+  }
+  if (isNum(currentPrice) && isNum(dma200) && currentPrice > dma200) {
+    trendScore += 4;
+    trendParts.push('Price > SMA200');
+  }
+
+  if (trendParts.length === 3) {
+    trendReason = `Full trend stack intact: ${trendParts.join(', ')}`;
+  } else if (trendParts.length > 0) {
+    trendReason = `Partial trend: ${trendParts.join(', ')}`;
+  } else {
+    trendReason = 'No trend structure data — EMA stack not confirmed';
+    trendScore = 3;
+  }
+
+  totalScore += trendScore;
+  breakdown.push({ factor: 'Trend Structure', points: trendScore, max: 15, reason: trendReason });
+
+  // ============================================
+  // FACTOR 5: Risk:Reward Ratio (15 pts) - recalibrated for pullback
+  // ============================================
+  let rrScore = 0;
+  let rrReason = '';
+  let rrValue = null;
+
+  if (levels && levels.valid && isNum(levels.riskReward)) {
+    rrValue = levels.riskReward;
+
+    if (rrValue >= 2.5) {
+      rrScore = 15;
+      rrReason = `Excellent R:R (1:${round2(rrValue)}) — great pullback setup`;
+    } else if (rrValue >= 2.0) {
+      rrScore = 13;
+      rrReason = `Very good R:R (1:${round2(rrValue)})`;
+    } else if (rrValue >= 1.5) {
+      rrScore = 10;
+      rrReason = `Good R:R (1:${round2(rrValue)}) — solid for pullback`;
+    } else if (rrValue >= 1.3) {
+      rrScore = 6;
+      rrReason = `Acceptable R:R (1:${round2(rrValue)}) — minimum for pullback`;
+    } else if (rrValue >= 1.0) {
+      rrScore = 3;
+      rrReason = `Marginal R:R (1:${round2(rrValue)}) — tight but possible`;
+    } else {
+      rrScore = 0;
+      rrReason = `Poor R:R (1:${round2(rrValue)}) — not recommended`;
+    }
+  } else if (levels && !levels.valid) {
+    rrScore = 0;
+    rrReason = `Levels invalid: ${levels.reason || 'unknown'}`;
+  } else {
+    rrScore = 7;
+    rrReason = 'R:R not calculated (levels not provided)';
+  }
+
+  totalScore += rrScore;
+  breakdown.push({ factor: 'Risk:Reward', points: rrScore, max: 15, reason: rrReason, value: rrValue ? `1:${round2(rrValue)}` : 'N/A' });
+
+  // ============================================
+  // FACTOR 6: Relative Strength vs Nifty (5 pts)
+  // Outperformer pulling back = strong candidate
+  // ============================================
+  let rsScore = 0;
+  let rsReason = '';
+
+  if (isNum(return_1m) && isNum(niftyReturn1M)) {
+    const outperformance = return_1m - niftyReturn1M;
+
+    if (outperformance >= 8) {
+      rsScore = 5;
+      rsReason = `Strong outperformer pulling back (+${round2(outperformance)}% vs Nifty)`;
+    } else if (outperformance >= 5) {
+      rsScore = 4;
+      rsReason = `Good outperformer (+${round2(outperformance)}% vs Nifty)`;
+    } else if (outperformance >= 2) {
+      rsScore = 3;
+      rsReason = `Slight outperformer (+${round2(outperformance)}% vs Nifty)`;
+    } else if (outperformance >= 0) {
+      rsScore = 2;
+      rsReason = `In line with Nifty (${round2(outperformance)}%)`;
+    } else {
+      rsScore = 0;
+      rsReason = `Underperforming (${round2(outperformance)}% vs Nifty)`;
+    }
+  } else if (isNum(return_1m)) {
+    if (return_1m >= 5) rsScore = 4;
+    else if (return_1m >= 0) rsScore = 2;
+    else rsScore = 0;
+    rsReason = `1M return: ${round2(return_1m)}% (no Nifty comparison)`;
+  } else {
+    rsScore = 2;
+    rsReason = 'No relative strength data';
+  }
+
+  totalScore += rsScore;
+  breakdown.push({ factor: 'Relative Strength', points: rsScore, max: 5, reason: rsReason });
+
+  // ============================================
+  // FACTOR 7: ATR% Tradability (5 pts)
+  // Ideal ATR% for swing: 1.5-3.5%
+  // ============================================
+  let atrScore = 0;
+  let atrReason = '';
+
+  const atrPct = atr_pct || (isNum(atr) && isNum(currentPrice) && currentPrice > 0 ? (atr / currentPrice) * 100 : null);
+
+  if (isNum(atrPct)) {
+    if (atrPct >= 1.5 && atrPct <= 3.5) {
+      atrScore = 5;
+      atrReason = `Ideal volatility (ATR ${round2(atrPct)}%) — good for swing`;
+    } else if (atrPct >= 1.0 && atrPct < 1.5) {
+      atrScore = 3;
+      atrReason = `Low volatility (ATR ${round2(atrPct)}%) — moves may be small`;
+    } else if (atrPct > 3.5 && atrPct <= 5.0) {
+      atrScore = 3;
+      atrReason = `High volatility (ATR ${round2(atrPct)}%) — wider stops needed`;
+    } else {
+      atrScore = 1;
+      atrReason = `Extreme volatility (ATR ${round2(atrPct)}%) — risky`;
+    }
+  } else {
+    atrScore = 2;
+    atrReason = 'No ATR data available';
+  }
+
+  totalScore += atrScore;
+  breakdown.push({ factor: 'ATR Tradability', points: atrScore, max: 5, reason: atrReason });
+
+  // ============================================
+  // FINAL RESULT
+  // ============================================
+  return {
+    score: round2(totalScore),
+    grade: getGrade(totalScore),
+    breakdown: debug ? breakdown : undefined,
+    eliminated: false,
+    eliminationReason: null,
     levels_valid: levels?.valid || false,
     risk_reward: rrValue
   };

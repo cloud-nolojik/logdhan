@@ -1171,11 +1171,12 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // GUARD F: Minimum target (2%) - worth the effort
+  // GUARD F: Minimum target - worth the effort
+  // Pullback targets are tighter (1.5%), momentum needs more room (2%)
   // ─────────────────────────────────────────────────────────────────────────
   const reward = target - entry;
   const rewardPercent = (reward / entry) * 100;
-  const MIN_TARGET_PERCENT = 2.0;
+  const MIN_TARGET_PERCENT = scanType === 'pullback' ? 1.5 : 2.0;
 
   if (rewardPercent < MIN_TARGET_PERCENT) {
     return {

@@ -191,6 +191,10 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
 
       if (!isDataStale(dbRecord.updated_at) && !isOutdated) {
         console.log(`[TechnicalData] Using cached ${dbTimeframe} data for ${symbol} (${dbRecord.candle_data.length} candles)`);
+        // Merge today's intraday candle if after 4 PM on trading day (daily only)
+        if (dbTimeframe === '1d') {
+          return mergeTodayIntradayCandle(candleArray, instrumentKey, symbol);
+        }
         return candleArray;
       }
 
@@ -244,11 +248,71 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
 
     console.log(`[TechnicalData] Saved ${candleDataForDb.length} ${dbTimeframe} candles to DB for ${symbol}`);
 
+    // Merge today's intraday candle if after 4 PM on trading day (daily only)
+    if (dbTimeframe === '1d') {
+      return mergeTodayIntradayCandle(apiCandles, instrumentKey, symbol);
+    }
     return apiCandles;
 
   } catch (error) {
     console.error(`[TechnicalData] Error getting ${timeframe} data for ${symbol}:`, error.message);
     return [];
+  }
+}
+
+/**
+ * Merge today's completed intraday candle into historical daily candles.
+ * Between 4 PM - midnight IST on a trading day, the historical API only has
+ * up to yesterday's close. The intraday API has today's completed candle.
+ * @param {Array} dailyCandles - Historical candles [[timestamp, o, h, l, c, v], ...]
+ * @param {string} instrumentKey - Instrument key for intraday fetch
+ * @param {string} symbol - Trading symbol for logging
+ * @returns {Promise<Array>} Candles with today's candle appended if applicable
+ */
+async function mergeTodayIntradayCandle(dailyCandles, instrumentKey, symbol) {
+  try {
+    const ist = MarketHoursUtil.toIST(new Date());
+    const hour = ist.getHours();
+    const isTrading = await MarketHoursUtil.isTradingDay(new Date());
+
+    // Only merge after 4 PM IST on a trading day
+    if (!isTrading || hour < 16) {
+      return dailyCandles;
+    }
+
+    // Check if today's candle is already in the historical data
+    const todayStr = ist.toISOString().split('T')[0];
+    const lastCandle = dailyCandles[dailyCandles.length - 1];
+    if (lastCandle) {
+      const lastDate = new Date(lastCandle[0]).toISOString().split('T')[0];
+      if (lastDate === todayStr) {
+        console.log(`[TechnicalData] ${symbol}: Today's candle already in historical data`);
+        return dailyCandles;
+      }
+    }
+
+    // Fetch today's intraday data
+    const liveData = await fetchLiveIntradayData(instrumentKey);
+    if (!liveData) {
+      console.log(`[TechnicalData] ${symbol}: No intraday data for today - using historical only`);
+      return dailyCandles;
+    }
+
+    // Build today's daily candle from intraday aggregation
+    const todayCandle = [
+      `${todayStr}T00:00:00+05:30`,
+      liveData.open,
+      liveData.high,
+      liveData.low,
+      liveData.ltp,     // closing price = last traded price (market closed)
+      liveData.volume
+    ];
+
+    console.log(`[TechnicalData] ${symbol}: Merged today's intraday candle (close=${liveData.ltp}, vol=${liveData.volume})`);
+    return [...dailyCandles, todayCandle];
+  } catch (error) {
+    console.warn(`[TechnicalData] ${symbol}: Failed to merge intraday candle: ${error.message}`);
+    return dailyCandles;
   }
 }
 
