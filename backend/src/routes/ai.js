@@ -649,7 +649,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
 
       // Check if analysis is expired
       const now = new Date();
-      const isExpired = analysis.valid_until && now > new Date(analysis.valid_until);
+      const isExpired = analysis.valid_until ? now > new Date(analysis.valid_until) : false;
 
       // Extract position management data
       const positionData = analysis.analysis_data?.position_management || analysis.analysis_data || {};
@@ -789,8 +789,9 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     const analysis = anyAnalysis; // Use the found analysis
 
     // Check if analysis is expired (for weekly watchlist stocks)
+    // valid_until is null for on-demand deterministic analysis — never expired
     const now = new Date();
-    const isExpired = analysis.valid_until && now > new Date(analysis.valid_until);
+    const isExpired = analysis.valid_until ? now > new Date(analysis.valid_until) : false;
 
     // Generate expiry message for users
     let expiryMessage = null;
