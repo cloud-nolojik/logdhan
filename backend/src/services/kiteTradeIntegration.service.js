@@ -10,6 +10,7 @@
 
 import kiteOrderService from './kiteOrder.service.js';
 import kiteAutoLoginService from './kiteAutoLogin.service.js';
+import KiteOrder from '../models/kiteOrder.js';
 import KiteAuditLog from '../models/kiteAuditLog.js';
 import kiteConfig from '../config/kite.config.js';
 import { firebaseService } from './firebase/firebase.service.js';
@@ -67,27 +68,53 @@ async function processSimulationForKiteOrders(phase1Results, stocksMap) {
 
     console.log(`[KITE-INTEGRATION] Filtered ENTRY_SIGNALED stocks: ${entrySignaledStocks.length}`);
 
-    if (entrySignaledStocks.length === 0) {
-      console.log('[KITE-INTEGRATION] No entry signals detected today');
+    // Skip pullback (touch) stocks — already handled by morning brief
+    const breakoutSignals = entrySignaledStocks.filter(result => {
+      const stock = stocksMap.get(result.symbol);
+      const entryConfirmation = stock?.levels?.entryConfirmation || 'close_above';
+      if (entryConfirmation === 'touch') {
+        console.log(`[KITE-INTEGRATION] ${result.symbol}: Skipping — pullback (touch) handled by morning brief`);
+        return false;
+      }
+      return true;
+    });
+
+    console.log(`[KITE-INTEGRATION] Breakout signals (after touch filter): ${breakoutSignals.length}`);
+
+    // Only place GTTs for top-confidence stocks (A+ or A grade)
+    const highConfidenceSignals = breakoutSignals.filter(result => {
+      const stock = stocksMap.get(result.symbol);
+      const grade = stock?.grade;
+      if (grade === 'A+' || grade === 'A') return true;
+      console.log(`[KITE-INTEGRATION] ${result.symbol}: Skipping GTT — grade ${grade || 'ungraded'} below threshold (need A+ or A)`);
+      results.ordersSkipped++;
+      return false;
+    });
+
+    console.log(`[KITE-INTEGRATION] High confidence signals (A+/A): ${highConfidenceSignals.length}`);
+
+    if (highConfidenceSignals.length === 0) {
+      console.log('[KITE-INTEGRATION] No high-confidence breakout signals to process');
       console.log('[KITE-INTEGRATION] ════════════════════════════════════════');
       return results;
     }
 
-    console.log(`[KITE-INTEGRATION] Found ${entrySignaledStocks.length} stocks with entry signals`);
+    console.log(`[KITE-INTEGRATION] Found ${highConfidenceSignals.length} high-confidence breakout stocks`);
 
     // Get available balance and calculate per-stock allocation
     const balance = await kiteOrderService.getAvailableBalance();
-    const capitalPerStock = balance.usable / entrySignaledStocks.length;
+    const capitalPerStock = balance.usable / highConfidenceSignals.length;
 
     console.log(`[KITE-INTEGRATION] Balance: ₹${balance.available.toFixed(2)}, ` +
                 `Usable: ₹${balance.usable.toFixed(2)}, ` +
                 `Per stock: ₹${capitalPerStock.toFixed(2)}`);
 
     // Send notification before placing orders
-    await sendOrderNotification(entrySignaledStocks, balance);
+    await sendOrderNotification(highConfidenceSignals, balance);
 
-    // Process each entry signal
-    for (const result of entrySignaledStocks) {
+    // Process each high-confidence breakout entry signal — entry GTT ONLY (no OCO)
+    // OCO is placed later by processPostEntryOrders() after sim confirms actual ENTRY
+    for (const result of highConfidenceSignals) {
       try {
         const stock = stocksMap.get(result.symbol);
         const levels = stock.levels;
@@ -129,46 +156,9 @@ async function processSimulationForKiteOrders(phase1Results, stocksMap) {
         });
 
         console.log(`[KITE-INTEGRATION] ${result.symbol}: Entry GTT placed - ID: ${orderResult.triggerId}`);
-
-        // Place OCO GTT for SL + Target immediately after entry GTT
-        const stopLoss = levels.stop;
-        const target = levels.target1 || levels.target2;
-
-        if (stopLoss && target) {
-          console.log(`[KITE-INTEGRATION] ${result.symbol}: Placing OCO GTT - SL: ₹${stopLoss}, T1: ₹${target}, Qty: ${quantity}`);
-
-          try {
-            const ocoResult = await kiteOrderService.placeOCOGTT({
-              tradingSymbol: tradingSymbol,
-              currentPrice: currentPrice,
-              stopLoss: stopLoss,
-              target: target,
-              quantity: quantity,
-              stockId: stock._id,
-              simulationId: stock.trade_simulation?._id || `sim_${stock._id}`,
-              orderType: 'STOP_LOSS'
-            });
-
-            console.log(`[KITE-INTEGRATION] ${result.symbol}: OCO GTT placed - ID: ${ocoResult.triggerId}`);
-            results.orders.push({
-              symbol: result.symbol,
-              triggerId: ocoResult.triggerId,
-              type: 'OCO',
-              stopLoss,
-              target,
-              quantity
-            });
-          } catch (ocoError) {
-            console.error(`[KITE-INTEGRATION] ${result.symbol}: Failed to place OCO GTT:`, ocoError.message);
-            results.errors.push({
-              symbol: result.symbol,
-              type: 'OCO',
-              error: ocoError.message
-            });
-          }
-        } else {
-          console.log(`[KITE-INTEGRATION] ${result.symbol}: Skipping OCO GTT - missing levels: stop=${stopLoss}, target=${target}`);
-        }
+        // NO OCO here — OCO placed by processPostEntryOrders() after sim confirms actual ENTRY,
+        // or by kiteOrderSyncJob after polling detects entry fill. Placing OCO alongside entry GTT
+        // creates accidental short-sell risk if entry never fills.
 
       } catch (stockError) {
         console.error(`[KITE-INTEGRATION] ${result.symbol}: Error placing order:`, stockError.message);
@@ -298,8 +288,7 @@ async function handleT1Hit(stock, results) {
     const levels = stock.levels;
     const symbol = stock.symbol;
 
-    // Cancel existing GTT
-    // TODO: Need to track GTT ID in the order model to cancel it
+    // Old OCO is cancelled by syncKiteGTTs() which runs before processPostEntryOrders()
 
     // Place new OCO GTT with SL at entry (breakeven)
     const stopLoss = sim.entry_price;  // Breakeven
@@ -376,6 +365,153 @@ async function handleT2Hit(stock, results) {
 }
 
 /**
+ * Sync Kite GTTs with simulation state.
+ * Cancels orphaned/stale GTTs for stocks that have moved past their entry window,
+ * stopped out, or hit T1 (pre-cleanup before handleT1Hit places new OCO).
+ *
+ * Must run BEFORE processPostEntryOrders() in the daily tracking pipeline.
+ *
+ * @param {Array} phase1Results - Results from Phase 1 of daily tracking
+ * @param {Map} stocksMap - Map of stock symbol to stock document
+ * @returns {Object} - { cancelled, alreadyCancelled, errors }
+ */
+async function syncKiteGTTs(phase1Results, stocksMap) {
+  const results = { cancelled: 0, alreadyCancelled: 0, errors: [] };
+
+  console.log('[KITE-GTT-SYNC] ════════════════════════════════════════');
+  console.log('[KITE-GTT-SYNC] Syncing Kite GTTs with simulation state...');
+
+  try {
+    for (const phaseResult of phase1Results) {
+      const stock = stocksMap.get(phaseResult.symbol);
+      if (!stock) continue;
+
+      const sim = stock.trade_simulation;
+      const trackingStatus = stock.tracking_status;
+      const simStatus = sim?.status;
+      const latestEvent = sim?.events?.[sim.events.length - 1];
+
+      let shouldCancelAll = false;
+      let shouldCancelOCO = false;
+      let cancelReason = '';
+
+      // 1. EXPIRED — entry window closed
+      if (trackingStatus === 'EXPIRED') {
+        shouldCancelAll = true;
+        cancelReason = 'Entry window expired';
+      }
+
+      // 2. STOPPED_OUT — sim detected stop, Kite GTT might still be active
+      if (simStatus === 'STOPPED_OUT' || latestEvent?.type === 'STOPPED_OUT' || latestEvent?.type === 'TRAILING_STOP') {
+        shouldCancelAll = true;
+        cancelReason = `Simulation stopped out (${latestEvent?.type || simStatus})`;
+      }
+
+      // 3. FULL_EXIT — trade completed
+      if (trackingStatus === 'FULL_EXIT' || simStatus === 'FULL_EXIT') {
+        shouldCancelAll = true;
+        cancelReason = 'Full exit — trade completed';
+      }
+
+      // 4. T1_HIT — cancel old OCO so handleT1Hit() can place new one with SL at breakeven
+      if (latestEvent?.type === 'T1_HIT') {
+        shouldCancelOCO = true;
+        cancelReason = 'T1 hit — replacing OCO with breakeven SL';
+      }
+
+      if (shouldCancelAll) {
+        // Cancel ALL active GTTs for this stock (entry + OCO)
+        const activeGTTs = await KiteOrder.find({
+          trading_symbol: stock.symbol,
+          is_gtt: true,
+          gtt_status: 'active'
+        });
+
+        if (activeGTTs.length === 0) {
+          continue;
+        }
+
+        console.log(`[KITE-GTT-SYNC] ${stock.symbol}: Cancelling ${activeGTTs.length} active GTTs — ${cancelReason}`);
+
+        for (const gttOrder of activeGTTs) {
+          try {
+            await kiteOrderService.cancelGTT(gttOrder.gtt_id, {
+              reason: cancelReason,
+              source: 'DAILY_TRACKING'
+            });
+            results.cancelled++;
+            console.log(`[KITE-GTT-SYNC] ${stock.symbol}: Cancelled GTT ${gttOrder.gtt_id} (${gttOrder.order_type})`);
+          } catch (cancelError) {
+            // GTT might already be cancelled/expired on Kite side
+            if (cancelError.message?.includes('not found') || cancelError.response?.status === 404) {
+              console.warn(`[KITE-GTT-SYNC] ${stock.symbol}: GTT ${gttOrder.gtt_id} already gone on Kite — updating local status`);
+              await KiteOrder.findByIdAndUpdate(gttOrder._id, {
+                gtt_status: 'cancelled',
+                status: 'CANCELLED',
+                notes: `${cancelReason} (already cancelled on Kite)`
+              });
+              results.alreadyCancelled++;
+            } else {
+              console.error(`[KITE-GTT-SYNC] ${stock.symbol}: Failed to cancel GTT ${gttOrder.gtt_id}:`, cancelError.message);
+              results.errors.push({ symbol: stock.symbol, gtt_id: gttOrder.gtt_id, error: cancelError.message });
+            }
+          }
+        }
+
+      } else if (shouldCancelOCO) {
+        // Cancel only OCO GTTs (SL/Target), keep entry GTT if any
+        const activeOCOs = await KiteOrder.find({
+          trading_symbol: stock.symbol,
+          is_gtt: true,
+          gtt_status: 'active',
+          order_type: { $in: ['STOP_LOSS', 'TARGET1', 'TARGET2'] }
+        });
+
+        if (activeOCOs.length === 0) {
+          continue;
+        }
+
+        console.log(`[KITE-GTT-SYNC] ${stock.symbol}: Cancelling ${activeOCOs.length} OCO GTTs — ${cancelReason}`);
+
+        for (const ocoOrder of activeOCOs) {
+          try {
+            await kiteOrderService.cancelGTT(ocoOrder.gtt_id, {
+              reason: cancelReason,
+              source: 'DAILY_TRACKING'
+            });
+            results.cancelled++;
+            console.log(`[KITE-GTT-SYNC] ${stock.symbol}: Cancelled OCO GTT ${ocoOrder.gtt_id} (${ocoOrder.order_type})`);
+          } catch (cancelError) {
+            if (cancelError.message?.includes('not found') || cancelError.response?.status === 404) {
+              console.warn(`[KITE-GTT-SYNC] ${stock.symbol}: OCO GTT ${ocoOrder.gtt_id} already gone on Kite`);
+              await KiteOrder.findByIdAndUpdate(ocoOrder._id, {
+                gtt_status: 'cancelled',
+                status: 'CANCELLED',
+                notes: `${cancelReason} (already cancelled on Kite)`
+              });
+              results.alreadyCancelled++;
+            } else {
+              console.error(`[KITE-GTT-SYNC] ${stock.symbol}: Failed to cancel OCO GTT ${ocoOrder.gtt_id}:`, cancelError.message);
+              results.errors.push({ symbol: stock.symbol, gtt_id: ocoOrder.gtt_id, error: cancelError.message });
+            }
+          }
+        }
+      }
+    }
+
+    console.log(`[KITE-GTT-SYNC] Complete: ${results.cancelled} cancelled, ${results.alreadyCancelled} already gone, ${results.errors.length} errors`);
+    console.log('[KITE-GTT-SYNC] ════════════════════════════════════════');
+
+    return results;
+
+  } catch (error) {
+    console.error('[KITE-GTT-SYNC] syncKiteGTTs failed:', error);
+    results.errors.push({ global: error.message });
+    return results;
+  }
+}
+
+/**
  * Send push notification before placing orders
  */
 async function sendOrderNotification(stocks, balance) {
@@ -418,11 +554,13 @@ function isKiteIntegrationEnabled() {
 export {
   processSimulationForKiteOrders,
   processPostEntryOrders,
+  syncKiteGTTs,
   isKiteIntegrationEnabled
 };
 
 export default {
   processSimulationForKiteOrders,
   processPostEntryOrders,
+  syncKiteGTTs,
   isKiteIntegrationEnabled
 };

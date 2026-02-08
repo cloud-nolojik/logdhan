@@ -2,6 +2,7 @@ import express from "express";
 import WeeklyWatchlist from "../models/weeklyWatchlist.js";
 import StockAnalysis from "../models/stockAnalysis.js";
 import LatestPrice from "../models/latestPrice.js";
+import KiteOrder from "../models/kiteOrder.js";
 import { auth } from "../middleware/auth.js";
 import { calculateSetupScore, getEntryZone, checkEntryZoneProximity } from "../engine/index.js";
 
@@ -773,6 +774,23 @@ router.get("/", auth, async (req, res) => {
       }
     }
 
+    // Fetch active Kite GTT orders for all watchlist stocks (single batch query)
+    const tradingSymbols = watchlist.stocks.map(s => s.symbol);
+    const activeKiteOrders = await KiteOrder.find({
+      trading_symbol: { $in: tradingSymbols },
+      is_gtt: true,
+      gtt_status: { $in: ['active', 'triggered'] }
+    }).sort({ created_at: -1 }).lean();
+
+    // Build map: trading_symbol -> array of active orders (most recent first)
+    const kiteOrderMap = {};
+    for (const order of activeKiteOrders) {
+      if (!kiteOrderMap[order.trading_symbol]) {
+        kiteOrderMap[order.trading_symbol] = [];
+      }
+      kiteOrderMap[order.trading_symbol].push(order);
+    }
+
     // Enrich stocks with current prices and card_display (no DB writes)
     const enrichedStocks = watchlist.stocks.map((stock) => {
       const priceData = priceDataMap[stock.instrument_key];
@@ -789,13 +807,49 @@ router.get("/", auth, async (req, res) => {
       // Calculate card_display for trade journey visualization
       const cardDisplay = calculateCardDisplay(stock, currentPrice, dailyTrackAnalysis);
 
+      // Build order_status from active Kite GTTs for this stock
+      const stockOrders = kiteOrderMap[stock.symbol] || [];
+      let orderStatus = null;
+      if (stockOrders.length > 0) {
+        const entryOrder = stockOrders.find(o => o.order_type === 'ENTRY');
+        const slOrder = stockOrders.find(o => o.order_type === 'STOP_LOSS');
+        const targetOrder = stockOrders.find(o => o.order_type === 'TARGET1' || o.order_type === 'TARGET2');
+
+        if (entryOrder) {
+          orderStatus = {
+            has_active_gtt: true,
+            gtt_type: entryOrder.gtt_status === 'triggered' ? 'ENTRY_FILLED' : 'ENTRY',
+            gtt_price: entryOrder.price,
+            gtt_quantity: entryOrder.quantity,
+            gtt_status: entryOrder.gtt_status,
+            gtt_placed_at: entryOrder.placed_at || entryOrder.created_at,
+            gtt_id: entryOrder.gtt_id
+          };
+        }
+
+        if (slOrder || targetOrder) {
+          // OCO is active (entry already filled, SL+Target protecting position)
+          orderStatus = {
+            has_active_gtt: true,
+            gtt_type: 'OCO',
+            gtt_status: 'active',
+            stop_loss: slOrder?.price || null,
+            target: targetOrder?.price || null,
+            gtt_quantity: slOrder?.quantity || targetOrder?.quantity,
+            gtt_placed_at: slOrder?.placed_at || slOrder?.created_at || targetOrder?.created_at,
+            gtt_id: slOrder?.gtt_id || targetOrder?.gtt_id
+          };
+        }
+      }
+
       return {
         ...stock.toObject(),
         current_price: currentPrice || null,
         price_change: priceData?.change || 0,
         price_change_percent: priceData?.change_percent || 0,
         zone_status: zoneStatus,
-        card_display: cardDisplay
+        card_display: cardDisplay,
+        order_status: orderStatus
       };
     });
 

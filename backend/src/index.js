@@ -34,6 +34,8 @@ import dailyNewsStocksJob from './services/jobs/dailyNewsStocksJob.js'; // daily
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 import intradayMonitorJob from './services/jobs/intradayMonitorJob.js'; // intraday-monitor (every 15 min during market hours)
 import pendingAnalysisReminderJob from './services/jobs/pendingAnalysisReminderJob.js'; // pending-analysis-reminder (4:00 PM Mon-Fri, notify users about pending stocks)
+import morningBriefJob from './services/jobs/morningBriefJob.js'; // morning-brief (8:00 AM Monday)
+import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -332,6 +334,24 @@ async function initializePendingAnalysisReminderJob() {
   }
 }
 
+// Initialize morning brief job (8:00 AM Monday IST - categorize stocks + place entry GTTs)
+async function initializeMorningBriefJob() {
+  try {
+    await morningBriefJob.initialize();
+  } catch (error) {
+    console.error('Failed to initialize morning brief job:', error);
+  }
+}
+
+// Initialize Kite order sync job (every 30 min during market hours - detect fills, place OCO)
+async function initializeKiteOrderSyncJob() {
+  try {
+    await kiteOrderSyncJob.initialize();
+  } catch (error) {
+    console.error('Failed to initialize Kite order sync job:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -354,6 +374,8 @@ app.listen(PORT, async () => {
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
   await initializeIntradayMonitorJob(); // intraday-monitor (every 15 min during market hours)
   await initializePendingAnalysisReminderJob(); // pending-analysis-reminder (4:00 PM Mon-Fri, notify users)
+  await initializeMorningBriefJob(); // morning-brief (8:00 AM Monday)
+  await initializeKiteOrderSyncJob(); // kite-order-sync (every 30 min during market hours)
 
   // Kite Connect token refresh job (6:00 AM IST daily)
   await kiteTokenRefreshJob.initialize();
@@ -377,6 +399,8 @@ process.on('SIGINT', async () => {
       dailyTrackingJob.shutdown(),
       intradayMonitorJob.shutdown(),
       pendingAnalysisReminderJob.shutdown(),
+      morningBriefJob.shutdown(),
+      kiteOrderSyncJob.shutdown(),
       kiteTokenRefreshJob.shutdown()
     ]);
 
@@ -403,6 +427,8 @@ process.on('SIGTERM', async () => {
       dailyTrackingJob.shutdown(),
       intradayMonitorJob.shutdown(),
       pendingAnalysisReminderJob.shutdown(),
+      morningBriefJob.shutdown(),
+      kiteOrderSyncJob.shutdown(),
       kiteTokenRefreshJob.shutdown()
     ]);
 

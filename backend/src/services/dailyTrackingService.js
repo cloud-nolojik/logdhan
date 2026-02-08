@@ -25,7 +25,7 @@ import { buildDailyTrackPrompt } from '../prompts/dailyTrackPrompts.js';
 import Anthropic from '@anthropic-ai/sdk';
 import ApiUsage from '../models/apiUsage.js';
 import { firebaseService } from './firebase/firebase.service.js';
-import { processSimulationForKiteOrders, processPostEntryOrders, isKiteIntegrationEnabled } from './kiteTradeIntegration.service.js';
+import { processSimulationForKiteOrders, processPostEntryOrders, syncKiteGTTs, isKiteIntegrationEnabled } from './kiteTradeIntegration.service.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 2 TRIGGERS - When to call AI
@@ -172,11 +172,15 @@ function calculateFlags(dailyData, levels, symbol = 'UNKNOWN') {
     flags.push('VOLUME_SPIKE');
   }
 
-  // Approaching entry (within 2% above entry) - also a flag
+  // Approaching entry (within 2% above entry) — only when OUTSIDE entry zone.
+  // calculateStatus() handles ENTRY_ZONE; this flag covers the "getting close" range.
+  const entryLow = levels.entryRange?.[0] || entry * 0.99;
+  const entryHigh = levels.entryRange?.[1] || entry * 1.01;
+  const inEntryZone = ltp >= entryLow && ltp <= entryHigh;
   const distFromEntry = ((ltp - entry) / entry) * 100;
-  console.log(`[FLAGS-CALC] ${symbol}: Distance from entry = ${distFromEntry.toFixed(2)}%`);
-  if (distFromEntry > 0 && distFromEntry <= 2) {
-    console.log(`[FLAGS-CALC] ${symbol}: Within 2% above entry -> APPROACHING_ENTRY`);
+  console.log(`[FLAGS-CALC] ${symbol}: Distance from entry = ${distFromEntry.toFixed(2)}%, inEntryZone=${inEntryZone}`);
+  if (!inEntryZone && distFromEntry > 0 && distFromEntry <= 2) {
+    console.log(`[FLAGS-CALC] ${symbol}: Within 2% above entry, outside entry zone -> APPROACHING_ENTRY`);
     flags.push('APPROACHING_ENTRY');
   }
 
@@ -362,6 +366,9 @@ function checkEntryQuality(close, entry, stop) {
  * @param {number} currentPrice - Latest price for unrealized P&L
  * @returns {Object} trade_simulation object for DB
  */
+// PERF NOTE: Replays all snapshots from day 1 on every run.
+// Fine for current scale (10 stocks x 5 days). For multi-week
+// holds or larger watchlists, consider incremental simulation.
 function simulateTrade(stock, snapshots, currentPrice) {
   const levels = stock.levels;
   const entry = levels.entry;
@@ -984,6 +991,10 @@ async function runPhase1(options = {}) {
         const targetCandle = candles?.find(c => c.date.toISOString().split('T')[0] === targetDate);
 
         if (targetCandle) {
+          // Find prev_close from the candle before targetDate for gap detection
+          const targetIndex = candles.findIndex(c => c.date.toISOString().split('T')[0] === targetDate);
+          const prevCandle = targetIndex > 0 ? candles[targetIndex - 1] : null;
+
           // Build dailyData structure matching what getDailyAnalysisData returns
           dailyDataMap.set(stock.symbol, {
             symbol: stock.symbol,
@@ -992,11 +1003,12 @@ async function runPhase1(options = {}) {
             high: targetCandle.high,
             low: targetCandle.low,
             todays_volume: targetCandle.volume,
+            prev_close: prevCandle ? prevCandle.close : 0,  // Previous trading day's close for gap detection
             avg_volume_50d: 0,  // Not available from historical data
             daily_rsi: null,    // Not available from historical data
             _candles: candles   // Store all candles for simulation
           });
-          console.log(`${runLabel} ${stock.symbol}: Got candle for ${targetDate} — Close: ₹${targetCandle.close.toFixed(2)}`);
+          console.log(`${runLabel} ${stock.symbol}: Got candle for ${targetDate} — Close: ₹${targetCandle.close.toFixed(2)}, Prev close: ${prevCandle ? '₹' + prevCandle.close.toFixed(2) : 'N/A'}`);
         } else {
           console.log(`${runLabel} ${stock.symbol}: No candle for ${targetDate}`);
         }
@@ -1178,9 +1190,6 @@ async function runPhase1(options = {}) {
     console.log(`[DAILY-TRACK-P1] ${stock.symbol}: NEW status=${newStatus}, NEW flags=[${newFlags.join(', ')}]`);
     console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Status changed? ${newStatus !== oldStatus ? 'YES' : 'NO'}`);
 
-    // Check if Phase 2 should trigger (now also checks intraday entry crossing)
-    const { trigger, reason } = shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags, dailyData, stock.levels, stock.symbol);
-
     // Calculate distance percentages (target2 is the main target)
     const distFromEntry = ((dailyData.ltp - stock.levels.entry) / stock.levels.entry) * 100;
     const distFromStop = ((dailyData.ltp - stock.levels.stop) / stock.levels.stop) * 100;
@@ -1204,7 +1213,7 @@ async function runPhase1(options = {}) {
       tracking_status: newStatus,
       tracking_flags: newFlags,
       nifty_change_pct: nifty_change_pct,
-      phase2_triggered: trigger
+      phase2_triggered: false  // Updated after simulation sync below
     };
 
     // Update stock in watchlist
@@ -1290,6 +1299,13 @@ async function runPhase1(options = {}) {
       newStatus = 'EXPIRED';
     }
 
+    // Update snapshot with simulation-corrected status
+    snapshot.tracking_status = newStatus;
+
+    // Check if Phase 2 should trigger (AFTER simulation sync so status is accurate)
+    const { trigger, reason } = shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags, dailyData, stock.levels, stock.symbol);
+    snapshot.phase2_triggered = trigger;
+
     // Check if trade is in terminal state
     const isTerminal = ['FULL_EXIT', 'STOPPED_OUT', 'EXPIRED'].includes(simStatus);
 
@@ -1342,21 +1358,25 @@ async function runPhase1(options = {}) {
     console.log(`${runLabel} ✅ Phase 1 complete (DRY RUN - not saved). ${phase1Results.length} stocks processed, ${phase2Queue.length} would be queued for Phase 2`);
   }
 
-  return { phase1Results, phase2Queue, stocksMap };
+  return { phase1Results, phase2Queue, stocksMap, watchlist };
 }
 
 /**
  * Run Phase 2: AI analysis for triggered stocks
  * @param {Object[]} phase2Queue - Array of { stock, dailyData, triggerReason, snapshot, tradeSimulation }
+ * @param {Object|null} watchlist - Watchlist reference from Phase 1 (avoids re-fetching from DB)
  * @returns {Object[]} - Results array
  */
-async function runPhase2(phase2Queue) {
+async function runPhase2(phase2Queue, watchlist = null) {
   const runLabel = '[DAILY-TRACK-P2]';
 
   if (phase2Queue.length === 0) {
     console.log(`${runLabel} No stocks queued for Phase 2. Skipping AI calls.`);
     return [];
   }
+
+  // Use watchlist from Phase 1 if available, otherwise fetch once from DB
+  const wl = watchlist || await WeeklyWatchlist.getCurrentWeek();
 
   console.log(`${runLabel} Starting Phase 2: AI Analysis for ${phase2Queue.length} stocks...`);
 
@@ -1500,14 +1520,14 @@ async function runPhase2(phase2Queue) {
         { upsert: true, new: true }
       );
 
-      // Update snapshot with analysis reference
-      const watchlist = await WeeklyWatchlist.getCurrentWeek();
-      const stockInWatchlist = watchlist.stocks.find(s => s.instrument_key === stock.instrument_key);
-      if (stockInWatchlist) {
-        const lastSnapshot = stockInWatchlist.daily_snapshots[stockInWatchlist.daily_snapshots.length - 1];
-        if (lastSnapshot) {
-          lastSnapshot.phase2_analysis_id = savedAnalysis._id;
-          await watchlist.save();
+      // Update snapshot with analysis reference (using in-memory watchlist, no per-stock DB fetch)
+      if (wl) {
+        const stockInWatchlist = wl.stocks.find(s => s.instrument_key === stock.instrument_key);
+        if (stockInWatchlist) {
+          const lastSnapshot = stockInWatchlist.daily_snapshots[stockInWatchlist.daily_snapshots.length - 1];
+          if (lastSnapshot) {
+            lastSnapshot.phase2_analysis_id = savedAnalysis._id;
+          }
         }
       }
 
@@ -1528,6 +1548,16 @@ async function runPhase2(phase2Queue) {
         success: false,
         error: error.message
       });
+    }
+  }
+
+  // Save watchlist once with all Phase 2 analysis references
+  if (wl && results.some(r => r.success)) {
+    try {
+      await wl.save();
+      console.log(`${runLabel} Watchlist saved with Phase 2 analysis references`);
+    } catch (saveErr) {
+      console.error(`${runLabel} Failed to save watchlist with Phase 2 references:`, saveErr.message);
     }
   }
 
@@ -1554,7 +1584,7 @@ async function runDailyTracking(options = {}) {
 
   try {
     // Phase 1: Status updates
-    const { phase1Results, phase2Queue, stocksMap } = await runPhase1({ targetDate, dryRun });
+    const { phase1Results, phase2Queue, stocksMap, watchlist } = await runPhase1({ targetDate, dryRun });
 
     // Kite Order Placement: Place GTT orders for ENTRY_SIGNALED stocks
     let kiteResults = null;
@@ -1585,10 +1615,30 @@ async function runDailyTracking(options = {}) {
       console.log(`${runLabel} ⏭️ Skipping Kite integration (dryRun=${dryRun}, enabled=${isKiteIntegrationEnabled()})`);
     }
 
+    // Sync Kite GTTs — cancel stale/orphaned GTTs before placing new ones
+    if (!dryRun && isKiteIntegrationEnabled()) {
+      try {
+        const syncResults = await syncKiteGTTs(phase1Results, stocksMap);
+        console.log(`${runLabel} 🔄 Kite GTT sync: ${syncResults.cancelled} cancelled, ${syncResults.alreadyCancelled} already gone, ${syncResults.errors.length} errors`);
+      } catch (syncError) {
+        console.error(`${runLabel} ❌ Kite GTT sync failed:`, syncError.message);
+      }
+    }
+
+    // Post-entry orders — handle T1_HIT (new OCO), ENTRY (OCO for breakout), T2_HIT
+    if (!dryRun && isKiteIntegrationEnabled()) {
+      try {
+        const postEntryResults = await processPostEntryOrders(phase1Results, stocksMap);
+        console.log(`${runLabel} 📊 Kite post-entry: ${postEntryResults.gttPlaced} placed, ${postEntryResults.errors.length} errors`);
+      } catch (postError) {
+        console.error(`${runLabel} ❌ Kite post-entry failed:`, postError.message);
+      }
+    }
+
     // Phase 2: AI analysis (only for triggered stocks, skip in dry run)
     let phase2Results = [];
     if (!dryRun && phase2Queue.length > 0) {
-      phase2Results = await runPhase2(phase2Queue);
+      phase2Results = await runPhase2(phase2Queue, watchlist);
     } else if (dryRun && phase2Queue.length > 0) {
       console.log(`${runLabel} SKIP Phase 2 (dry run) — would analyze ${phase2Queue.length} stocks:`);
       phase2Queue.forEach(item => {
