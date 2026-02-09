@@ -693,7 +693,7 @@ class WeekendScreeningJob {
       console.log('[SCREENING JOB] 📌 STEP 5/5: Generating AI analysis for top stocks...');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
 
-      const MAX_AI_ANALYSIS = 4;  // Limit to top 4 stocks
+      const MAX_AI_ANALYSIS = MAX_STOCKS;  // Match top 3 stocks limit
       const stocksForAI = enrichedStocks.slice(0, MAX_AI_ANALYSIS);
 
       if (stocksForAI.length > 0) {
