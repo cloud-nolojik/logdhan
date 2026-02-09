@@ -2,16 +2,17 @@
  * Test Script: Run Weekend Screening for specific stocks
  *
  * This script calls the actual weekend screening job with filters:
- * - Only process specified stocks (default: MTARTECH)
+ * - Only process specified stocks
  * - Skip ChartInk scan, use stock list directly
  * - Skip archiving previous week
  * - Optional: Filter candle data up to a reference date
+ * - Optional: Specify scan type (default: auto-detect from existing watchlist or 'pullback')
  *
  * Usage:
- *   node backend/scripts/test-screening-mtartech.js
- *   node backend/scripts/test-screening-mtartech.js RELIANCE TATAPOWER
- *   node backend/scripts/test-screening-mtartech.js --date=2026-01-30
- *   node backend/scripts/test-screening-mtartech.js MTARTECH --date=2026-01-30
+ *   node backend/scripts/test-screening-mtartech.js ALKEM
+ *   node backend/scripts/test-screening-mtartech.js ALKEM --date=2026-02-06
+ *   node backend/scripts/test-screening-mtartech.js RELIANCE TATAPOWER --date=2026-01-30
+ *   node backend/scripts/test-screening-mtartech.js MTARTECH --scan=a_plus_momentum
  */
 
 import mongoose from 'mongoose';
@@ -31,8 +32,15 @@ const allArgs = process.argv.slice(2);
 const dateArg = allArgs.find(arg => arg.startsWith('--date='));
 const REFERENCE_DATE = dateArg ? dateArg.split('=')[1] : null;
 
+const scanArg = allArgs.find(arg => arg.startsWith('--scan='));
+const SCAN_TYPE = scanArg ? scanArg.split('=')[1] : null;
+
 const symbolArgs = allArgs.filter(arg => !arg.startsWith('--'));
-const SYMBOLS = symbolArgs.length > 0 ? symbolArgs.map(s => s.toUpperCase()) : ['MTARTECH'];
+if (symbolArgs.length === 0) {
+  console.error('Usage: node backend/scripts/test-screening-mtartech.js SYMBOL [--date=YYYY-MM-DD] [--scan=scan_type]');
+  process.exit(1);
+}
+const SYMBOLS = symbolArgs.map(s => s.toUpperCase());
 
 async function run() {
   console.log('');
@@ -61,11 +69,15 @@ async function run() {
 
   try {
     // Run the screening job with filters
+    const scanTypes = SCAN_TYPE ? [SCAN_TYPE] : ['pullback', 'breakout', 'momentum', 'consolidation_breakout', 'a_plus_momentum'];
+    console.log(`  Scan Types: ${SCAN_TYPE || 'all (auto-detect)'}`);
+    console.log('');
+
     const result = await weekendScreeningJob.runWeekendScreening({
       filterSymbols: SYMBOLS,
       skipArchive: true,
       skipChartink: true,  // Don't run ChartInk, use symbols directly
-      scanTypes: ['a_plus_momentum'],
+      scanTypes,
       referenceDate: REFERENCE_DATE  // Filter candles up to this date (null = use latest)
     });
 

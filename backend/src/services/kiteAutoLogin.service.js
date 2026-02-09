@@ -263,35 +263,53 @@ class KiteAutoLoginService {
       console.log('[KITE AUTO-LOGIN] Step 4 complete. Got request_token.');
 
       // Step 5: Exchange request_token for access_token
-      console.log('[KITE AUTO-LOGIN] Step 5: Exchanging for access_token...');
-      const checksum = crypto.createHash('sha256')
-        .update(this.apiKey + requestToken + this.apiSecret)
-        .digest('hex');
+      // IMPORTANT: If Step 4 followed the redirect to our own /api/kite/auth/callback,
+      // that callback already exchanged the request_token (they're single-use on Kite).
+      // Check if a valid session was saved by the callback before trying to exchange again.
+      let session;
+      const existingSession = await KiteSession.findOne({
+        kite_user_id: this.userId,
+        is_valid: true,
+        access_token: { $exists: true, $ne: null }
+      });
 
-      const sessionResp = await axios.post(
-        `${this.baseUrl}/session/token`,
-        new URLSearchParams({
-          api_key: this.apiKey,
-          request_token: requestToken,
-          checksum: checksum
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Kite-Version': '3'
+      if (existingSession && existingSession.token_created_at &&
+          (Date.now() - existingSession.token_created_at.getTime()) < 30000) {
+        // Session was saved within the last 30 seconds — callback already exchanged the token
+        console.log('[KITE AUTO-LOGIN] Step 5: Skipped — token already exchanged by OAuth callback');
+        session = existingSession;
+      } else {
+        // Callback didn't exchange it — do it ourselves
+        console.log('[KITE AUTO-LOGIN] Step 5: Exchanging for access_token...');
+        const checksum = crypto.createHash('sha256')
+          .update(this.apiKey + requestToken + this.apiSecret)
+          .digest('hex');
+
+        const sessionResp = await axios.post(
+          `${this.baseUrl}/session/token`,
+          new URLSearchParams({
+            api_key: this.apiKey,
+            request_token: requestToken,
+            checksum: checksum
+          }),
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Kite-Version': '3'
+            }
           }
+        );
+
+        if (!sessionResp.data?.data?.access_token) {
+          throw new Error(`Token exchange failed: ${JSON.stringify(sessionResp.data)}`);
         }
-      );
 
-      if (!sessionResp.data?.data?.access_token) {
-        throw new Error(`Token exchange failed: ${JSON.stringify(sessionResp.data)}`);
+        const sessionData = sessionResp.data.data;
+        console.log('[KITE AUTO-LOGIN] Step 5 complete. Got access_token.');
+
+        // Save session to database
+        session = await this.saveSession(sessionData);
       }
-
-      const sessionData = sessionResp.data.data;
-      console.log('[KITE AUTO-LOGIN] Step 5 complete. Got access_token.');
-
-      // Save session to database
-      const session = await this.saveSession(sessionData);
 
       const durationMs = Date.now() - startTime;
       console.log(`[KITE AUTO-LOGIN] Login successful! Duration: ${durationMs}ms`);
@@ -300,7 +318,7 @@ class KiteAutoLoginService {
       await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.LOGIN, {
         kiteUserId: this.userId,
         status: 'SUCCESS',
-        response: { user_name: sessionData.user_name, email: sessionData.email },
+        response: { user_name: session.user_name, email: session.email },
         durationMs,
         source: 'AUTO'
       });
