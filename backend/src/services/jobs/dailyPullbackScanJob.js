@@ -4,9 +4,9 @@
  * Runs ChartInk pullback scan daily to catch mid-week pullback setups
  * that weren't present during Saturday's weekend screening.
  *
- * Schedule: Monday-Friday at 3:45 PM IST
- *   - After 3:35 PM price prefetch
- *   - Before 4:00 PM daily tracking
+ * Schedule: Tuesday-Saturday at 5:00 AM IST
+ *   - Runs next morning so ChartInk uses fully settled previous day's daily candle
+ *   - Tue-Fri covers Mon-Thu trading days (Sat 6 PM weekend scan covers Friday)
  *
  * Only adds NEW stocks (skips stocks already in the current week's watchlist).
  * Runs AI analysis inline for top 4 new stocks.
@@ -188,13 +188,13 @@ class DailyPullbackScanJob {
         name: 'daily-pullback-scan'
       });
 
-      // Monday-Friday at 3:45 PM IST
-      // Cron: 45 15 * * 1-5 = 3:45 PM, Mon-Fri
-      await this.agenda.every('45 15 * * 1-5', 'daily-pullback-scan', {}, {
+      // Tuesday-Friday at 5:00 AM IST (next morning after Mon-Thu trading days)
+      // Cron: 0 5 * * 2-5 = 5:00 AM, Tue-Fri (Saturday 6 PM weekend scan covers Friday)
+      await this.agenda.every('0 5 * * 2-5', 'daily-pullback-scan', {}, {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log('[DAILY-PULLBACK] Recurring job scheduled: 3:45 PM IST, Mon-Fri');
+      console.log('[DAILY-PULLBACK] Recurring job scheduled: 5:00 AM IST, Tue-Fri');
 
     } catch (error) {
       console.error('[DAILY-PULLBACK] Failed to schedule jobs:', error);

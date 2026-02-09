@@ -37,6 +37,9 @@ import pendingAnalysisReminderJob from './services/jobs/pendingAnalysisReminderJ
 import morningBriefJob from './services/jobs/morningBriefJob.js'; // morning-brief (8:00 AM Monday)
 import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
 import dailyPullbackScanJob from './services/jobs/dailyPullbackScanJob.js'; // daily-pullback-scan (3:45 PM Mon-Fri)
+import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-picks-scan (8:45 AM Mon-Fri)
+import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // daily-picks-entry (9:15 AM), fill-check (9:45 AM), monitor (*/15 10-14)
+import dailyExitJob from './services/jobs/dailyExitJob.js'; // daily-exit (3:00 PM Mon-Fri)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -72,6 +75,7 @@ import weeklySetupsRoutes from './routes/weeklySetups.js';
 import appFeedbackRoutes from './routes/appFeedback.js';
 import kiteAuthRoutes from './routes/kiteAuth.js';
 import kiteAdminRoutes from './routes/kiteAdmin.js';
+import dailyPicksRoutes from './routes/dailyPicks.js';
 import kiteTokenRefreshJob from './services/jobs/kiteTokenRefreshJob.js';
 
 const app = express();
@@ -208,6 +212,7 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/app-feedback', appFeedbackRoutes);
 app.use('/api/kite/auth', kiteAuthRoutes);
 app.use('/api/admin/kite', kiteAdminRoutes);
+app.use('/api/v1/daily-picks', dailyPicksRoutes);
 
 // App redirect routes for WhatsApp deep links
 app.use('/app', appRedirectRoutes);
@@ -362,6 +367,33 @@ async function initializeDailyPullbackScanJob() {
   }
 }
 
+// Initialize daily picks job (8:45 AM Mon-Fri IST - scan + enrich + score + notify)
+async function initializeDailyPicksJob() {
+  try {
+    await dailyPicksJob.initialize();
+  } catch (error) {
+    console.error('Failed to initialize daily picks job:', error);
+  }
+}
+
+// Initialize daily entry job (9:15 AM entry, 9:45 AM fill-check, */15 10-14 monitor)
+async function initializeDailyEntryJob() {
+  try {
+    await dailyEntryJob.initialize();
+  } catch (error) {
+    console.error('Failed to initialize daily entry job:', error);
+  }
+}
+
+// Initialize daily exit job (3:00 PM Mon-Fri IST - force-exit open positions)
+async function initializeDailyExitJob() {
+  try {
+    await dailyExitJob.initialize();
+  } catch (error) {
+    console.error('Failed to initialize daily exit job:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -388,6 +420,11 @@ app.listen(PORT, async () => {
   await initializeMorningBriefJob(); // morning-brief (8:00 AM Monday)
   await initializeKiteOrderSyncJob(); // kite-order-sync (every 30 min during market hours)
 
+  // Daily picks jobs
+  await initializeDailyPicksJob(); // daily-picks-scan (8:45 AM Mon-Fri)
+  await initializeDailyEntryJob(); // daily-picks-entry (9:15), fill-check (9:45), monitor (*/15 10-14)
+  await initializeDailyExitJob(); // daily-exit (3:00 PM Mon-Fri)
+
   // Kite Connect token refresh job (6:00 AM IST daily)
   await kiteTokenRefreshJob.initialize();
   console.log('✅ Kite token refresh job scheduled');
@@ -413,7 +450,10 @@ process.on('SIGINT', async () => {
       pendingAnalysisReminderJob.shutdown(),
       morningBriefJob.shutdown(),
       kiteOrderSyncJob.shutdown(),
-      kiteTokenRefreshJob.shutdown()
+      kiteTokenRefreshJob.shutdown(),
+      dailyPicksJob.shutdown(),
+      dailyEntryJob.shutdown(),
+      dailyExitJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -442,7 +482,10 @@ process.on('SIGTERM', async () => {
       pendingAnalysisReminderJob.shutdown(),
       morningBriefJob.shutdown(),
       kiteOrderSyncJob.shutdown(),
-      kiteTokenRefreshJob.shutdown()
+      kiteTokenRefreshJob.shutdown(),
+      dailyPicksJob.shutdown(),
+      dailyEntryJob.shutdown(),
+      dailyExitJob.shutdown()
     ]);
 
     // Close MongoDB connection

@@ -507,7 +507,7 @@ class WeekendScreeningJob {
         a_plus_momentum: 60,
         pullback: 50
       };
-      const MAX_STOCKS = 15;
+      const MAX_STOCKS = 3;
 
       // Filter for quality stocks:
       // - Not eliminated (RSI gate passed)
