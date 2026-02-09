@@ -29,7 +29,8 @@ const kiteAuditLogSchema = new mongoose.Schema({
       'POSITIONS_FETCH',
       'PROFILE_FETCH',
       'ERROR',
-      'MANUAL_ACTION'
+      'MANUAL_ACTION',
+      'OAUTH_CALLBACK'
     ],
     required: true,
     index: true
@@ -154,7 +155,7 @@ const kiteAuditLogSchema = new mongoose.Schema({
   // Metadata
   source: {
     type: String,
-    enum: ['AUTO', 'MANUAL', 'SCHEDULED', 'WEBHOOK'],
+    enum: ['AUTO', 'MANUAL', 'SCHEDULED', 'WEBHOOK', 'OAUTH'],
     default: 'AUTO'
   },
   notes: {

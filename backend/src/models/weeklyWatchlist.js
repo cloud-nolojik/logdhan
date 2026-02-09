@@ -44,6 +44,7 @@ const watchlistStockSchema = new mongoose.Schema({
   // STRUCTURAL LADDER: Weekly R1 → R2 → 52W High → REJECT
   levels: {
     entry: Number,           // Single entry price
+    entry_basis: String,     // 'ema20', 'friday_high', '20d_high', '52w_high' — what entry is derived from
     entryRange: [Number],    // [low, high] entry range
     stop: Number,            // Stop loss price
     // ── Targets (consistent naming: T1, T2, T3) ──

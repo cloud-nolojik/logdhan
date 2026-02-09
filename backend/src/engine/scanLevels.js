@@ -21,7 +21,7 @@ import { round2, isNum } from './helpers.js';
  */
 export function roundToTick(price, tick = 0.05) {
   if (!isNum(price)) return 0;
-  return Math.round(price / tick) * tick;
+  return parseFloat((Math.round(price / tick) * tick).toFixed(2));
 }
 
 /**
@@ -504,6 +504,7 @@ export function calculateTradingLevels(scanType, data) {
     scanType,
     mode: result.mode,
     entry: roundToTick(guarded.entry),
+    entry_basis: result.entry_basis || null,
     entryRange: result.entryRange ? [roundToTick(result.entryRange[0]), roundToTick(result.entryRange[1])] : null,
     stop: roundToTick(guarded.stop),
     // ── Targets (consistent naming: target1, target2, target3) ──
@@ -624,6 +625,7 @@ function calculateBreakoutLevels(data) {
     mode: 'BREAKOUT',
     archetype: 'breakout',
     entry,
+    entry_basis: '20d_high',
     entryRange,
     stop,
     target: targetResult.target2,
@@ -715,8 +717,9 @@ function calculatePullbackLevels(data) {
     const dipAmount = Math.min(0.1 * atr, maxDip);
     entry = ema20 - dipAmount;
 
-    // Entry range: Slightly above and below EMA20
-    entryRange = [roundToTick(ema20 - 0.3 * atr), roundToTick(ema20 + 0.3 * atr)];
+    // Entry range: Tight band around entry for limit order (±0.5% of entry, capped at 0.2*ATR)
+    const pullbackSpread = Math.min(entry * 0.005, 0.2 * atr);
+    entryRange = [roundToTick(entry - pullbackSpread), roundToTick(entry + pullbackSpread)];
 
     // Stop: Below EMA20 support
     stop = ema20 - (0.6 * atr);
@@ -737,8 +740,8 @@ function calculatePullbackLevels(data) {
     // Entry: Above Friday high = bounce confirmed
     entry = fridayHigh + (0.1 * atr);
 
-    // Entry range for slippage
-    entryRange = [roundToTick(entry), roundToTick(entry + 0.3 * atr)];
+    // Entry range for slippage (buy_above: entry to entry + 0.2*ATR)
+    entryRange = [roundToTick(entry), roundToTick(entry + 0.2 * atr)];
 
     // Stop: Below EMA20 support
     stop = ema20 - (0.6 * atr);
@@ -780,6 +783,7 @@ function calculatePullbackLevels(data) {
     mode,
     archetype: 'pullback',
     entry,
+    entry_basis: mode === 'PULLBACK_AGGRESSIVE' ? 'ema20' : 'friday_high',
     entryRange,
     stop,
     target: targetResult.target2,
@@ -897,6 +901,7 @@ function calculateMomentumLevels(data) {
     mode: 'MOMENTUM',
     archetype: 'trend-follow',
     entry,
+    entry_basis: 'friday_high',
     entryRange,
     stop,
     target: targetResult.target2,
@@ -975,6 +980,7 @@ function calculateConsolidationLevels(data) {
     mode: 'CONSOLIDATION_BREAKOUT',
     archetype: 'breakout',
     entry,
+    entry_basis: 'friday_high',
     entryRange,
     stop,
     target: targetResult.target2,
@@ -1072,6 +1078,7 @@ function calculateAPlusMomentumLevels(data) {
     mode: 'A_PLUS_MOMENTUM',
     archetype: '52w_breakout',
     entry,
+    entry_basis: '52w_high',
     entryRange,
     stop,
     target: targetResult.target2,         // T2 (main target — from structural ladder or ATR extension)

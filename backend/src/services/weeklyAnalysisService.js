@@ -143,7 +143,7 @@ Pullback stocks were found BECAUSE they have low volume and cooled RSI near EMA2
 | Relative Strength       | 5   | vs Nifty 1M: ≥8%=5, ≥5%=4, ≥2%=3, ≥0%=2, <0%=0                        |
 | ATR% Tradability        | 5   | 1.5-3.5%=5, 1-1.5%=3, 3.5-5%=3, extreme=1                              |
 
-Grades: A+ (90+), A (80-89), B+ (70-79), B (60-69), C (50-59), D (<50)
+Grades: A+ (80+), A (70-79), B+ (60-69), B (50-59), C (40-49), D (<40)
 
 ## VERDICT ACTIONS
 
@@ -157,7 +157,7 @@ Grades: A+ (90+), A (80-89), B+ (70-79), B (60-69), C (50-59), D (<50)
 1. Be specific with numbers — say "8.01x average volume", not "high volume".
 2. Every warning MUST have a mitigation action.
 3. Beginner guide must have 5-6 numbered steps a first-time trader can follow.
-4. The verdict one_liner must be actionable in a single sentence.
+4. The verdict one_liner must be actionable in a single sentence. If Risk:Reward is below 2:1, the one_liner MUST acknowledge this (e.g., "...but R:R is tight at 1.4:1"). If any scoring factor scores ≤40% of its maximum, mention the weakest factor as a caveat.
 5. Chart observations must include RSI value and status for BOTH weekly and daily timeframes.
 6. If promoter pledge > 0%, it MUST appear in warnings with appropriate severity.
 7. Do NOT fill aggressive_entry. This field is deprecated. If an alternative entry exists,
@@ -169,6 +169,7 @@ Grades: A+ (90+), A (80-89), B+ (70-79), B (60-69), C (50-59), D (<50)
    - T3 (₹target3): Extension target (optional) — book final 30% (15% of original)
    If T3 does NOT exist, exit fully at T2 (book all remaining shares).
 9. Confidence adjustments must sum to a reasonable final confidence (0.5-0.95 range).
+   Risk:Reward MUST be included as a confidence adjustment: R:R < 1.5:1 → delta -0.10, R:R 1.5-2.0:1 → delta -0.05, R:R ≥ 2.5:1 → delta +0.05.
 10. Key factors should start with emoji indicators: ✅ for positives, ⚠️ for cautions, 🔴 for red flags.
 
 ## CRITICAL CONSTRAINTS
@@ -380,9 +381,10 @@ ${scoreBreakdown}
 
 === PRE-CALCULATED TRADING LEVELS (Structural Ladder) ===
 Mode: ${levels.mode || 'N/A'}
-Entry: ₹${levels.entry || 'N/A'} (confirmation: ${levels.entryConfirmation === 'touch' ? 'limit order fills on touch' : 'daily CLOSE must be above this level'})
+Entry: ₹${levels.entry || 'N/A'} (basis: ${levels.entry_basis || 'N/A'}, confirmation: ${levels.entryConfirmation === 'touch' ? 'limit order fills on touch' : 'daily CLOSE must be above this level'})
 Entry Range: [₹${levels.entryRange?.[0] || 'N/A'} - ₹${levels.entryRange?.[1] || 'N/A'}]
 Entry Type: ${levels.entryType || 'N/A'}
+⚠️ ENTRY BASIS: The entry price is derived from "${levels.entry_basis || 'N/A'}". When describing entry level, refer to this basis — do NOT attribute it to a different indicator (e.g., do not say "near daily pivot" if basis is "ema20").
 Entry Window: ${levels.entryWindowDays || 3} trading days (${levels.entryWindowDays === 2 ? 'Mon-Tue' : levels.entryWindowDays === 3 ? 'Mon-Wed' : 'Mon-Thu'})
 Stop Loss: ₹${levels.stop || 'N/A'}
 Target 1 (50% Booking): ₹${levels.target1 || 'N/A'} [${levels.target1_basis || 'N/A'}]
@@ -1037,9 +1039,11 @@ function calculateSetupScoreTotal(parsedSetupScore, stock) {
 
     // Calculate grade based on total
     let calculatedGrade = 'D';
-    if (calculatedTotal >= 80) calculatedGrade = 'A';
-    else if (calculatedTotal >= 65) calculatedGrade = 'B';
-    else if (calculatedTotal >= 50) calculatedGrade = 'C';
+    if (calculatedTotal >= 80) calculatedGrade = 'A+';
+    else if (calculatedTotal >= 70) calculatedGrade = 'A';
+    else if (calculatedTotal >= 60) calculatedGrade = 'B+';
+    else if (calculatedTotal >= 50) calculatedGrade = 'B';
+    else if (calculatedTotal >= 40) calculatedGrade = 'C';
 
     return {
       ...parsedSetupScore,
