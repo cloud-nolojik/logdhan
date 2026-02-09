@@ -266,15 +266,16 @@ class KiteAutoLoginService {
       // IMPORTANT: If Step 4 followed the redirect to our own /api/kite/auth/callback,
       // that callback already exchanged the request_token (they're single-use on Kite).
       // Check if a valid session was saved by the callback before trying to exchange again.
+      const SESSION_FRESHNESS_MS = 30_000; // 30 seconds — callback exchange should complete well within this
       let session;
       const existingSession = await KiteSession.findOne({
         kite_user_id: this.userId,
         is_valid: true,
         access_token: { $exists: true, $ne: null }
-      });
+      }).sort({ token_created_at: -1 });
 
       if (existingSession && existingSession.token_created_at &&
-          (Date.now() - existingSession.token_created_at.getTime()) < 30000) {
+          (Date.now() - existingSession.token_created_at.getTime()) < SESSION_FRESHNESS_MS) {
         // Session was saved within the last 30 seconds — callback already exchanged the token
         console.log('[KITE AUTO-LOGIN] Step 5: Skipped — token already exchanged by OAuth callback');
         session = existingSession;

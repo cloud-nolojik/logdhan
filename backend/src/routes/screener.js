@@ -2,6 +2,7 @@ import express from "express";
 import chartinkService, { SCAN_QUERIES } from "../services/chartinkService.js";
 import stockEnrichmentService from "../services/stockEnrichmentService.js";
 import weekendScreeningJob from "../services/jobs/weekendScreeningJob.js";
+import dailyPullbackScanJob from "../services/jobs/dailyPullbackScanJob.js";
 import { auth } from "../middleware/auth.js";
 
 const router = express.Router();
@@ -314,6 +315,47 @@ router.get("/job-status", auth, async (req, res) => {
 
   } catch (error) {
     console.error("Error getting job status:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/v1/screener/trigger-daily-pullback
+ * Manually trigger daily pullback scan job
+ */
+router.post("/trigger-daily-pullback", auth, async (req, res) => {
+  try {
+    const result = await dailyPullbackScanJob.triggerNow(req.body || {});
+
+    res.json({
+      success: true,
+      message: "Daily pullback scan triggered",
+      ...result
+    });
+
+  } catch (error) {
+    console.error("Error triggering daily pullback scan:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/v1/screener/daily-pullback-status
+ * Get daily pullback scan job status
+ */
+router.get("/daily-pullback-status", auth, async (req, res) => {
+  try {
+    const stats = dailyPullbackScanJob.getStats();
+    const nextRun = await dailyPullbackScanJob.getNextRun();
+
+    res.json({
+      success: true,
+      stats,
+      nextRun
+    });
+
+  } catch (error) {
+    console.error("Error getting daily pullback status:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

@@ -36,6 +36,7 @@ import intradayMonitorJob from './services/jobs/intradayMonitorJob.js'; // intra
 import pendingAnalysisReminderJob from './services/jobs/pendingAnalysisReminderJob.js'; // pending-analysis-reminder (4:00 PM Mon-Fri, notify users about pending stocks)
 import morningBriefJob from './services/jobs/morningBriefJob.js'; // morning-brief (8:00 AM Monday)
 import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
+import dailyPullbackScanJob from './services/jobs/dailyPullbackScanJob.js'; // daily-pullback-scan (3:45 PM Mon-Fri)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -352,6 +353,15 @@ async function initializeKiteOrderSyncJob() {
   }
 }
 
+// Initialize daily pullback scan job (3:45 PM Mon-Fri IST - pullback scan after price prefetch)
+async function initializeDailyPullbackScanJob() {
+  try {
+    await dailyPullbackScanJob.initialize();
+  } catch (error) {
+    console.error('Failed to initialize daily pullback scan job:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -370,6 +380,7 @@ app.listen(PORT, async () => {
   // Scheduled jobs:
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST)
   await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
+  await initializeDailyPullbackScanJob(); // daily-pullback-scan (3:45 PM Mon-Fri, pullback only)
   await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
   await initializeIntradayMonitorJob(); // intraday-monitor (every 15 min during market hours)
@@ -395,6 +406,7 @@ process.on('SIGINT', async () => {
     await Promise.all([
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
+      dailyPullbackScanJob.shutdown(),
       dailyNewsStocksJob.shutdown(),
       dailyTrackingJob.shutdown(),
       intradayMonitorJob.shutdown(),
@@ -423,6 +435,7 @@ process.on('SIGTERM', async () => {
     await Promise.all([
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
+      dailyPullbackScanJob.shutdown(),
       dailyNewsStocksJob.shutdown(),
       dailyTrackingJob.shutdown(),
       intradayMonitorJob.shutdown(),

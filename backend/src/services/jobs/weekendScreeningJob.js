@@ -255,7 +255,9 @@ class WeekendScreeningJob {
       filterSymbols = null,      // NEW: Array of symbols to filter (e.g., ['MTARTECH'])
       referenceDate = null,      // NEW: Date string 'YYYY-MM-DD' to filter candle data
       skipArchive = false,       // NEW: Skip archiving previous week (for testing)
-      skipChartink = false       // NEW: Skip ChartInk scan, use filterSymbols directly
+      skipChartink = false,      // NEW: Skip ChartInk scan, use filterSymbols directly
+      skipExisting = false,      // Skip stocks already in current week's watchlist (for daily scans)
+      dailyMode = false          // Suppress metadata overwrite + empty-result notifications
     } = options;
 
     console.log(`[SCREENING JOB] 📋 Parsed options:`);
@@ -272,13 +274,26 @@ class WeekendScreeningJob {
     const result = {
       usersProcessed: 0,
       totalStocksAdded: 0,
+      totalStocksUpdated: 0,
       totalStocksEliminated: 0,  // NEW: Track eliminated stocks
+      duplicatesSkipped: 0,      // Stocks skipped because already in watchlist (daily mode)
       previousWeekArchived: false,
       errors: [],
       scanResults: {}
     };
 
     try {
+      // Daily mode guard: bail out if no active watchlist exists (weekend screening hasn't run)
+      // Cache the watchlist reference for the skipExisting filter later (avoids double query)
+      let dailyModeWatchlist = null;
+      if (dailyMode) {
+        dailyModeWatchlist = await WeeklyWatchlist.getCurrentWeek();
+        if (!dailyModeWatchlist) {
+          console.log('[SCREENING JOB] Daily mode: No active watchlist — skipping (weekend screening may not have run)');
+          return result;
+        }
+      }
+
       // Step 0: Archive previous active week before creating new one
       console.log('');
       console.log('[SCREENING JOB] ──────────────────────────────────────────────────────────────');
@@ -380,16 +395,20 @@ class WeekendScreeningJob {
       if (allResults.length === 0) {
         console.log('[SCREENING JOB] ⚠️ No results from any scan - EXITING EARLY');
 
-        // Notify that no setups were found this week
-        try {
-          await firebaseService.sendAnalysisCompleteToAllUsers(
-            'Weekend Screening: No Setups Found',
-            'No stocks matched the screening criteria this week. The watchlist has not been updated.',
-            { type: 'weekend_screening_empty', route: '/weekly-watchlist' }
-          );
-          console.log('[SCREENING JOB] 📱 Empty screening notification sent');
-        } catch (notifError) {
-          console.error('[SCREENING JOB] ⚠️ Failed to send empty screening notification:', notifError.message);
+        // Notify that no setups were found (skip in daily mode — zero results is normal)
+        if (!dailyMode) {
+          try {
+            await firebaseService.sendAnalysisCompleteToAllUsers(
+              'Weekend Screening: No Setups Found',
+              'No stocks matched the screening criteria this week. The watchlist has not been updated.',
+              { type: 'weekend_screening_empty', route: '/weekly-watchlist' }
+            );
+            console.log('[SCREENING JOB] 📱 Empty screening notification sent');
+          } catch (notifError) {
+            console.error('[SCREENING JOB] ⚠️ Failed to send empty screening notification:', notifError.message);
+          }
+        } else {
+          console.log('[SCREENING JOB] Daily mode: No pullback results today (normal)');
         }
 
         return result;
@@ -525,35 +544,52 @@ class WeekendScreeningJob {
         }
       }
 
-      const enrichedStocks = deduplicatedStocks.slice(0, MAX_STOCKS);
+      let enrichedStocks = deduplicatedStocks.slice(0, MAX_STOCKS);
 
       console.log(`[SCREENING JOB] ✅ STEP 3 COMPLETE: Qualified stocks (thresholds: ${JSON.stringify(MIN_SCORES)}): ${qualifiedStocks.length} total, ${deduplicatedStocks.length} unique, ${enrichedStocks.length} selected`);
 
+      // Daily mode: filter out stocks already in current week's watchlist
+      if (skipExisting && enrichedStocks.length > 0) {
+        // Reuse cached watchlist from daily mode guard, or fetch fresh
+        const currentWatchlist = dailyModeWatchlist || await WeeklyWatchlist.getCurrentWeek();
+        if (currentWatchlist) {
+          const existingKeys = new Set(currentWatchlist.stocks.map(s => s.instrument_key));
+          const beforeCount = enrichedStocks.length;
+          enrichedStocks = enrichedStocks.filter(s => !existingKeys.has(s.instrument_key));
+          result.duplicatesSkipped = beforeCount - enrichedStocks.length;
+          console.log(`[SCREENING JOB] skipExisting: ${beforeCount} → ${enrichedStocks.length} (skipped ${result.duplicatesSkipped} already in watchlist)`);
+        }
+      }
+
       if (enrichedStocks.length === 0) {
-        // Still mark screening as completed (ran successfully, just no results)
-        // This is important for weekend display - shows "no opportunities" instead of "screening pending"
-        const watchlist = await WeeklyWatchlist.getOrCreateCurrentWeek();
-        watchlist.screening_run_at = new Date();
-        watchlist.screening_completed = true;
-        watchlist.scan_types_used = scanTypes;
-        watchlist.total_screener_results = allResults.length;
-        watchlist.total_eliminated = eliminatedCount;
-        watchlist.grade_a_count = 0;
-        watchlist.grade_a_plus_count = 0;
-        await watchlist.save();
+        if (!dailyMode) {
+          // Still mark screening as completed (ran successfully, just no results)
+          // This is important for weekend display - shows "no opportunities" instead of "screening pending"
+          const watchlist = await WeeklyWatchlist.getOrCreateCurrentWeek();
+          watchlist.screening_run_at = new Date();
+          watchlist.screening_completed = true;
+          watchlist.scan_types_used = scanTypes;
+          watchlist.total_screener_results = allResults.length;
+          watchlist.total_eliminated = eliminatedCount;
+          watchlist.grade_a_count = 0;
+          watchlist.grade_a_plus_count = 0;
+          await watchlist.save();
 
-        console.log('[SCREENING JOB] ⚠️ No qualified stocks this week - watchlist marked complete (empty)');
+          console.log('[SCREENING JOB] ⚠️ No qualified stocks this week - watchlist marked complete (empty)');
 
-        // Notify that scans found stocks but none qualified after scoring
-        try {
-          await firebaseService.sendAnalysisCompleteToAllUsers(
-            'Weekend Screening: No Qualified Setups',
-            `${allResults.length} stocks were scanned but none met the scoring threshold after analysis. The watchlist has not been updated.`,
-            { type: 'weekend_screening_empty', route: '/weekly-watchlist' }
-          );
-          console.log('[SCREENING JOB] 📱 Empty qualification notification sent');
-        } catch (notifError) {
-          console.error('[SCREENING JOB] ⚠️ Failed to send empty qualification notification:', notifError.message);
+          // Notify that scans found stocks but none qualified after scoring
+          try {
+            await firebaseService.sendAnalysisCompleteToAllUsers(
+              'Weekend Screening: No Qualified Setups',
+              `${allResults.length} stocks were scanned but none met the scoring threshold after analysis. The watchlist has not been updated.`,
+              { type: 'weekend_screening_empty', route: '/weekly-watchlist' }
+            );
+            console.log('[SCREENING JOB] 📱 Empty qualification notification sent');
+          } catch (notifError) {
+            console.error('[SCREENING JOB] ⚠️ Failed to send empty qualification notification:', notifError.message);
+          }
+        } else {
+          console.log(`[SCREENING JOB] Daily mode: No new qualified pullback stocks today (${result.duplicatesSkipped} duplicates skipped)`);
         }
 
         return result;
@@ -631,17 +667,19 @@ class WeekendScreeningJob {
 
       const addResult = await WeeklyWatchlist.addStocks(stocksToAdd);
 
-      // Update watchlist metadata
+      // Update watchlist metadata (only for full weekend screening, not daily scans)
       const watchlist = addResult.watchlist;
-      watchlist.screening_run_at = new Date();
-      watchlist.screening_completed = true;  // Mark screening as completed (even with 0 results)
-      watchlist.scan_types_used = scanTypes;
-      watchlist.total_screener_results = allResults.length;
-      watchlist.total_eliminated = eliminatedCount;  // NEW: Track eliminated count
-      // Count actual Grade A+ and A stocks in the watchlist
-      watchlist.grade_a_plus_count = watchlist.stocks.filter(s => s.grade === 'A+').length;
-      watchlist.grade_a_count = watchlist.stocks.filter(s => s.grade === 'A' || s.grade === 'A+').length;
-      await watchlist.save();
+      if (!dailyMode) {
+        watchlist.screening_run_at = new Date();
+        watchlist.screening_completed = true;  // Mark screening as completed (even with 0 results)
+        watchlist.scan_types_used = scanTypes;
+        watchlist.total_screener_results = allResults.length;
+        watchlist.total_eliminated = eliminatedCount;  // NEW: Track eliminated count
+        // Count actual Grade A+ and A stocks in the watchlist
+        watchlist.grade_a_plus_count = watchlist.stocks.filter(s => s.grade === 'A+').length;
+        watchlist.grade_a_count = watchlist.stocks.filter(s => s.grade === 'A' || s.grade === 'A+').length;
+        await watchlist.save();
+      }
 
       result.totalStocksAdded = addResult.added;
       result.totalStocksUpdated = addResult.updated;
@@ -711,15 +749,20 @@ class WeekendScreeningJob {
       console.log(`[SCREENING JOB] 📊 Final Result: ${JSON.stringify(result)}`);
       console.log('');
 
-      // Send push notification to all users about new weekly setups
+      // Send push notification to all users
       if (result.totalStocksAdded > 0) {
         try {
-          await firebaseService.sendAnalysisCompleteToAllUsers(
-            'Weekend Screening Complete',
-            `${result.totalStocksAdded} new setup${result.totalStocksAdded > 1 ? 's' : ''} found for the week`,
-            { type: 'weekend_screening', route: '/weekly-watchlist' }
-          );
-          console.log('[SCREENING JOB] 📱 Push notifications sent to all users');
+          const notifTitle = dailyMode ? 'Daily Pullback Scan' : 'Weekend Screening Complete';
+          const notifBody = dailyMode
+            ? `${result.totalStocksAdded} new pullback setup${result.totalStocksAdded > 1 ? 's' : ''} added to this week's watchlist`
+            : `${result.totalStocksAdded} new setup${result.totalStocksAdded > 1 ? 's' : ''} found for the week`;
+          const notifType = dailyMode ? 'daily_pullback_scan' : 'weekend_screening';
+
+          await firebaseService.sendAnalysisCompleteToAllUsers(notifTitle, notifBody, {
+            type: notifType,
+            route: '/weekly-watchlist'
+          });
+          console.log(`[SCREENING JOB] 📱 Push notifications sent (${notifType})`);
         } catch (notifError) {
           console.error('[SCREENING JOB] ⚠️ Failed to send notifications:', notifError.message);
         }
