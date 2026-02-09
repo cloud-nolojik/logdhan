@@ -76,6 +76,7 @@ import appFeedbackRoutes from './routes/appFeedback.js';
 import kiteAuthRoutes from './routes/kiteAuth.js';
 import kiteAdminRoutes from './routes/kiteAdmin.js';
 import dailyPicksRoutes from './routes/dailyPicks.js';
+import jobMonitorRoutes from './routes/jobMonitor.js';
 import kiteTokenRefreshJob from './services/jobs/kiteTokenRefreshJob.js';
 
 const app = express();
@@ -213,6 +214,7 @@ app.use('/api/v1/app-feedback', appFeedbackRoutes);
 app.use('/api/kite/auth', kiteAuthRoutes);
 app.use('/api/admin/kite', kiteAdminRoutes);
 app.use('/api/v1/daily-picks', dailyPicksRoutes);
+app.use('/api/v1/job-monitor', jobMonitorRoutes);
 
 // App redirect routes for WhatsApp deep links
 app.use('/app', appRedirectRoutes);

@@ -16,6 +16,7 @@ import Contact from './pages/Contact';
 import AdminIndex from './pages/admin/AdminIndex';
 import WhatsAppAlerts from './pages/admin/WhatsAppAlerts';
 import AppFeedback from './pages/admin/AppFeedback';
+import JobMonitor from './pages/admin/JobMonitor';
 
 export default function App() {
   return (
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="/admin" element={<AdminIndex />} />
           <Route path="/admin/whatsapp-alerts" element={<WhatsAppAlerts />} />
           <Route path="/admin/feedback" element={<AppFeedback />} />
+          <Route path="/admin/jobs" element={<JobMonitor />} />
         </Routes>
       </main>
       <Footer />
