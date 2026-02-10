@@ -20,79 +20,75 @@ export const DAILY_SCANS = {
   compression_bullish: {
     type: 'bullish',
     query: `( {cash} (
-      latest high - latest low < 1 day ago high - 1 day ago low and
       1 day ago high - 1 day ago low < 2 days ago high - 2 days ago low and
-      latest close > latest open and
-      latest close > latest ema( close, 20 ) and
-      latest ema( close, 20 ) > latest ema( close, 50 ) and
-      latest close > latest sma( close, 200 ) and
-      latest rsi( 14 ) > 45 and
-      latest rsi( 14 ) < 65 and
-      latest high - latest low > latest close * 0.015 and
+      2 days ago high - 2 days ago low < 3 days ago high - 3 days ago low and
+      1 day ago close > 1 day ago open and
+      1 day ago close > 1 day ago ema( close, 20 ) and
+      1 day ago ema( close, 20 ) > 1 day ago ema( close, 50 ) and
+      1 day ago close > 1 day ago sma( close, 200 ) and
+      1 day ago rsi( 14 ) > 45 and
+      1 day ago rsi( 14 ) < 65 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
 
   // Scan 2: Pullback at EMA20 Support — Ready to bounce
   // Stock pulled back to EMA20 on LOW volume in an uptrend
-  // WHY IT WORKS: Low volume pullback = healthy dip, not panic selling
-  // High ADR stock bouncing from support = 2%+ move likely
   pullback_at_support: {
     type: 'bullish',
     query: `( {cash} (
-      latest low <= latest ema( close, 20 ) * 1.01 and
-      latest close >= latest ema( close, 20 ) * 0.98 and
-      latest close > latest sma( close, 200 ) and
-      latest ema( close, 20 ) > latest ema( close, 50 ) and
-      latest ema( close, 50 ) > latest sma( close, 200 ) and
-      latest volume < latest sma( volume, 50 ) and
-      latest rsi( 14 ) > 35 and
-      latest rsi( 14 ) < 55 and
-      latest high - latest low > latest close * 0.015 and
+      1 day ago low <= 1 day ago ema( close, 20 ) * 1.01 and
+      1 day ago close >= 1 day ago ema( close, 20 ) * 0.98 and
+      1 day ago close > 1 day ago sma( close, 200 ) and
+      1 day ago ema( close, 20 ) > 1 day ago ema( close, 50 ) and
+      1 day ago ema( close, 50 ) > 1 day ago sma( close, 200 ) and
+      1 day ago volume < 1 day ago sma( volume, 50 ) and
+      1 day ago rsi( 14 ) > 35 and
+      1 day ago rsi( 14 ) < 55 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
 
   // Scan 3: Momentum Carry — Yesterday closed at high with strong volume
   // Buyers still in control, likely gap up or continuation today
-  // WHY IT WORKS: Close near high + above-avg volume = unfilled demand
   momentum_carry: {
     type: 'bullish',
     query: `( {cash} (
-      latest close >= latest high * 0.98 and
-      latest close > latest open and
-      latest close > 1 day ago close * 1.01 and
-      latest volume > latest sma( volume, 50 ) * 1.5 and
-      latest rsi( 14 ) > 55 and
-      latest rsi( 14 ) < 72 and
-      latest ema( close, 20 ) > latest ema( close, 50 ) and
-      latest close > latest sma( close, 200 ) and
-      latest high - latest low > latest close * 0.015 and
+      1 day ago close >= 1 day ago high * 0.98 and
+      1 day ago close > 1 day ago open and
+      1 day ago close > 2 days ago close * 1.01 and
+      1 day ago volume > 1 day ago sma( volume, 50 ) * 1.5 and
+      1 day ago rsi( 14 ) > 55 and
+      1 day ago rsi( 14 ) < 72 and
+      1 day ago ema( close, 20 ) > 1 day ago ema( close, 50 ) and
+      1 day ago close > 1 day ago sma( close, 200 ) and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
 
   // Scan 4: Breakout Setup — Sitting just below 20-day high
   // One push away from breakout, coiling near resistance
-  // WHY IT WORKS: Within 3% of 20-day high + uptrend = a 2% move = new high
   breakout_setup: {
     type: 'bullish',
     query: `( {cash} (
-      latest close > latest max( 20, high ) * 0.97 and
-      latest close <= latest max( 20, high ) and
-      latest close > latest open and
-      latest ema( close, 20 ) > latest ema( close, 50 ) and
-      latest rsi( 14 ) > 50 and
-      latest rsi( 14 ) < 68 and
-      latest high - latest low > latest close * 0.015 and
+      1 day ago close > 1 day ago max( 20, high ) * 0.97 and
+      1 day ago close <= 1 day ago max( 20, high ) and
+      1 day ago close > 1 day ago open and
+      1 day ago ema( close, 20 ) > 1 day ago ema( close, 50 ) and
+      1 day ago rsi( 14 ) > 50 and
+      1 day ago rsi( 14 ) < 68 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -106,57 +102,55 @@ export const DAILY_SCANS = {
   compression_bearish: {
     type: 'bearish',
     query: `( {cash} (
-      latest high - latest low < 1 day ago high - 1 day ago low and
       1 day ago high - 1 day ago low < 2 days ago high - 2 days ago low and
-      latest close < latest open and
-      latest close < latest ema( close, 20 ) and
-      latest ema( close, 20 ) < latest ema( close, 50 ) and
-      latest rsi( 14 ) > 35 and
-      latest rsi( 14 ) < 50 and
-      latest high - latest low > latest close * 0.015 and
+      2 days ago high - 2 days ago low < 3 days ago high - 3 days ago low and
+      1 day ago close < 1 day ago open and
+      1 day ago close < 1 day ago ema( close, 20 ) and
+      1 day ago ema( close, 20 ) < 1 day ago ema( close, 50 ) and
+      1 day ago rsi( 14 ) > 35 and
+      1 day ago rsi( 14 ) < 50 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
 
   // Scan 6: Failed at EMA20 Resistance
   // Tried to rally to EMA20, got rejected, closed red on low volume
-  // WHY IT WORKS: Weak bounce to resistance in downtrend = sellers waiting
   failed_at_resistance: {
     type: 'bearish',
     query: `( {cash} (
-      latest high >= latest ema( close, 20 ) * 0.99 and
-      latest close <= latest ema( close, 20 ) * 1.01 and
-      latest close < latest open and
-      latest close < latest sma( close, 200 ) and
-      latest ema( close, 20 ) < latest ema( close, 50 ) and
-      latest volume < latest sma( volume, 50 ) and
-      latest rsi( 14 ) > 40 and
-      latest rsi( 14 ) < 55 and
-      latest high - latest low > latest close * 0.015 and
+      1 day ago high >= 1 day ago ema( close, 20 ) * 0.99 and
+      1 day ago close <= 1 day ago ema( close, 20 ) * 1.01 and
+      1 day ago close < 1 day ago open and
+      1 day ago close < 1 day ago sma( close, 200 ) and
+      1 day ago ema( close, 20 ) < 1 day ago ema( close, 50 ) and
+      1 day ago volume < 1 day ago sma( volume, 50 ) and
+      1 day ago rsi( 14 ) > 40 and
+      1 day ago rsi( 14 ) < 55 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
 
   // Scan 7: Bearish Momentum Carry
   // Yesterday closed at low with strong volume = sellers in control
-  // WHY IT WORKS: Close near low + above-avg volume = unfilled supply
   momentum_carry_bearish: {
     type: 'bearish',
     query: `( {cash} (
-      latest close <= latest low * 1.02 and
-      latest close < latest open and
-      latest close < 1 day ago close * 0.99 and
-      latest volume > latest sma( volume, 50 ) * 1.5 and
-      latest rsi( 14 ) > 28 and
-      latest rsi( 14 ) < 45 and
-      latest ema( close, 20 ) < latest ema( close, 50 ) and
-      latest high - latest low > latest close * 0.015 and
+      1 day ago close <= 1 day ago low * 1.02 and
+      1 day ago close < 1 day ago open and
+      1 day ago close < 2 days ago close * 0.99 and
+      1 day ago volume > 1 day ago sma( volume, 50 ) * 1.5 and
+      1 day ago rsi( 14 ) > 28 and
+      1 day ago rsi( 14 ) < 45 and
+      1 day ago ema( close, 20 ) < 1 day ago ema( close, 50 ) and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -166,14 +160,14 @@ export const DAILY_SCANS = {
   breakdown_setup: {
     type: 'bearish',
     query: `( {cash} (
-      latest close < latest min( 20, low ) * 1.03 and
-      latest close >= latest min( 20, low ) and
-      latest close < latest open and
-      latest ema( close, 20 ) < latest ema( close, 50 ) and
-      latest rsi( 14 ) < 45 and
-      latest high - latest low > latest close * 0.015 and
+      1 day ago close < 1 day ago min( 20, low ) * 1.03 and
+      1 day ago close >= 1 day ago min( 20, low ) and
+      1 day ago close < 1 day ago open and
+      1 day ago ema( close, 20 ) < 1 day ago ema( close, 50 ) and
+      1 day ago rsi( 14 ) < 45 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   }

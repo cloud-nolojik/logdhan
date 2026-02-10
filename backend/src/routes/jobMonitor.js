@@ -30,7 +30,7 @@ const JOB_REGISTRY = [
   { key: 'morningBrief', name: 'morning-brief', description: 'Categorize stocks + GTT orders', schedule: '8:00 AM Monday', collection: 'morning_brief_jobs', singleton: morningBriefJob },
   { key: 'kiteOrderSync', name: 'kite-order-sync', description: 'GTT fill detection + OCO', schedule: '*/30 9:00-15:30 Mon-Fri', collection: 'kite_order_sync_jobs', singleton: kiteOrderSyncJob },
   { key: 'dailyPullbackScan', name: 'daily-pullback-scan', description: 'ChartInk pullback scan', schedule: '3:45 PM Tue-Fri', collection: 'daily_pullback_scan_jobs', singleton: dailyPullbackScanJob },
-  { key: 'dailyPicksScan', name: 'daily-picks-scan', description: 'Scan + enrich + score picks', schedule: '8:45 AM Mon-Fri', collection: 'daily_picks_jobs', singleton: dailyPicksJob },
+  { key: 'dailyPicksScan', name: 'daily-picks-scan', description: 'Scan + enrich + score picks', schedule: '9:09 AM Mon-Fri', collection: 'daily_picks_jobs', singleton: dailyPicksJob },
   { key: 'dailyEntry', name: 'daily-picks-entry', description: 'MIS orders + fill check + monitor', schedule: '9:15/9:45/*/15 Mon-Fri', collection: 'daily_entry_jobs', singleton: dailyEntryJob },
   { key: 'dailyExit', name: 'daily-exit', description: 'Force-exit open positions', schedule: '3:00 PM Mon-Fri', collection: 'daily_exit_jobs', singleton: dailyExitJob },
   { key: 'kiteTokenRefresh', name: 'kite-token-refresh', description: 'Refresh Kite access token', schedule: '6:00 AM Daily', collection: 'kite_token_jobs', singleton: kiteTokenRefreshJob },
