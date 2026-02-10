@@ -32,7 +32,7 @@ const JOB_REGISTRY = [
   { key: 'dailyPullbackScan', name: 'daily-pullback-scan', description: 'ChartInk pullback scan', schedule: '3:45 PM Tue-Fri', collection: 'daily_pullback_scan_jobs', singleton: dailyPullbackScanJob },
   { key: 'dailyPicksScan', name: 'daily-picks-scan', description: 'Scan + enrich + score picks', schedule: '9:09 AM Mon-Fri', collection: 'daily_picks_jobs', singleton: dailyPicksJob },
   { key: 'dailyEntry', name: 'daily-picks-entry', description: 'MIS orders + fill check + monitor', schedule: '9:15/9:45/*/15 Mon-Fri', collection: 'daily_entry_jobs', singleton: dailyEntryJob },
-  { key: 'dailyExit', name: 'daily-exit', description: 'Force-exit open positions', schedule: '3:00 PM Mon-Fri', collection: 'daily_exit_jobs', singleton: dailyExitJob },
+  { key: 'dailyExit', name: 'daily-exit', description: 'Force-exit open positions', schedule: '3:00 PM Mon-Fri', collection: null, singleton: dailyExitJob }, // node-cron — no MongoDB collection (was Agenda 'daily_exit_jobs', switched after missed 3 PM exit on Feb 10)
   { key: 'kiteTokenRefresh', name: 'kite-token-refresh', description: 'Refresh Kite access token', schedule: '6:00 AM Daily', collection: 'kite_token_jobs', singleton: kiteTokenRefreshJob },
   { key: 'dataPrefetch', name: 'daily-price-prefetch', description: 'Prefetch closing prices', schedule: '3:35 PM Mon-Fri', collection: 'data_prefetch_jobs', singleton: agendaDataPrefetchService },
   { key: 'priceCache', name: 'price-cache', description: 'In-memory price polling (5 min)', schedule: '*/5 during market hours', collection: null, singleton: priceCacheService },

@@ -51,6 +51,7 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.2.1",
+    "node-cron": "^4.2.1",
     "openai": "^4.77.0",
     "otplib": "^13.2.1",
     "p-queue": "^8.1.0",
