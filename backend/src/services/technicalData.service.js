@@ -27,6 +27,32 @@ import MarketHoursUtil from '../utils/marketHours.js';
 
 const API_KEY = process.env.UPSTOX_API_KEY;
 
+// Concurrency limit for parallel Upstox API calls (avoid rate limiting)
+const API_CONCURRENCY = 5;
+
+/**
+ * Run async tasks with concurrency limit
+ * @param {Array} items - Items to process
+ * @param {number} concurrency - Max concurrent tasks
+ * @param {Function} fn - Async function to run on each item
+ * @returns {Array} Results in same order as items
+ */
+async function pMap(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let idx = 0;
+
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 // Data is considered stale if older than 1 day
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
@@ -152,7 +178,8 @@ async function fetchFromUpstox(instrumentKey, timeframe, days = 365) {
     // Upstox returns newest first, reverse to oldest first
     return candles.reverse();
   } catch (error) {
-    console.error(`[TechnicalData] Error fetching ${timeframe} candles for ${instrumentKey}:`, error.message);
+    const status = error.response?.status || 'N/A';
+    console.error(`[TechnicalData] Error fetching ${timeframe} candles for ${instrumentKey}: HTTP ${status} - ${error.message}`);
     return [];
   }
 }
@@ -215,7 +242,8 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
     if (apiCandles.length === 0) {
       // If API fails but we have stale data, use it
       if (dbRecord && dbRecord.candle_data?.length > 0) {
-        console.log(`[TechnicalData] API failed, using stale ${dbTimeframe} data for ${symbol}`);
+        const latestStale = dbRecord.candle_data[dbRecord.candle_data.length - 1];
+        console.warn(`[TechnicalData] ⚠ API failed for ${symbol}, falling back to STALE ${dbTimeframe} data (latest candle: ${latestStale?.timestamp?.split('T')[0] || 'unknown'})`);
         return dbRecord.candle_data.map(c => [c.timestamp, c.open, c.high, c.low, c.close, c.volume]);
       }
       return [];
@@ -717,18 +745,15 @@ export async function getTechnicalData(symbols) {
   // Look up instrument keys
   const symbolMap = await lookupInstrumentKeys(symbols);
 
-  // Calculate data for each stock in parallel
-  const stockPromises = symbols.map(async (symbol) => {
-    const stockInfo = symbolMap[symbol];
-    if (!stockInfo) {
-      return { symbol, error: 'Symbol not found in database' };
-    }
-    return calculateStockData(symbol, stockInfo.instrumentKey);
-  });
-
-  // Get NIFTY context in parallel with stock data
+  // Get NIFTY context in parallel with concurrency-limited stock data
   const [stocks, nifty] = await Promise.all([
-    Promise.all(stockPromises),
+    pMap(symbols, API_CONCURRENCY, async (symbol) => {
+      const stockInfo = symbolMap[symbol];
+      if (!stockInfo) {
+        return { symbol, error: 'Symbol not found in database' };
+      }
+      return calculateStockData(symbol, stockInfo.instrumentKey);
+    }),
     getNiftyContext()
   ]);
 
@@ -1060,8 +1085,9 @@ export async function getDailyAnalysisData(symbols) {
     }
   }
 
-  // Calculate data for each stock in parallel
-  const stockPromises = symbols.map(async (symbol) => {
+  // Calculate data for each stock with concurrency limit (avoid Upstox API rate limiting)
+  console.log(`[DailyAnalysis] Processing ${symbols.length} stocks with concurrency=${API_CONCURRENCY}`);
+  const stocks = await pMap(symbols, API_CONCURRENCY, async (symbol) => {
     const stockInfo = symbolMap[symbol];
     if (!stockInfo) {
       return {
@@ -1085,8 +1111,6 @@ export async function getDailyAnalysisData(symbols) {
     const livePrice = livePriceMap[stockInfo.instrumentKey];
     return calculateDailyStockData(symbol, stockInfo.instrumentKey, livePrice);
   });
-
-  const stocks = await Promise.all(stockPromises);
 
   // Generate IST timestamp
   const nowIST = MarketHoursUtil.toIST(new Date());
