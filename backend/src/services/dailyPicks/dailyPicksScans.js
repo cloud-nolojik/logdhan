@@ -197,3 +197,19 @@ export const SCAN_ORDER_BY_REGIME = {
   NEUTRAL: ['compression_bullish', 'pullback_at_support', 'momentum_carry', 'breakout_setup', 'compression_bearish', 'failed_at_resistance', 'momentum_carry_bearish', 'breakdown_setup'],
   UNKNOWN: ['compression_bullish', 'pullback_at_support', 'momentum_carry', 'breakout_setup']
 };
+
+/**
+ * Map daily picks scan types to scanLevels engine archetypes.
+ * Used by calculateLevels() for scan-type-specific entry/stop/target.
+ * Only LONG picks use the engine; SHORT picks use mirrored pivot logic.
+ */
+export const SCAN_ARCHETYPE = {
+  compression_bullish: 'consolidation_breakout',
+  pullback_at_support: 'pullback',
+  momentum_carry: 'momentum',
+  breakout_setup: 'breakout',
+  compression_bearish: 'consolidation_breakout',
+  failed_at_resistance: 'pullback',
+  momentum_carry_bearish: 'momentum',
+  breakdown_setup: 'breakout'
+};

@@ -12,10 +12,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
 
-import { DAILY_SCANS, SCAN_LABELS, SCAN_ORDER_BY_REGIME } from './dailyPicksScans.js';
+import { DAILY_SCANS, SCAN_LABELS, SCAN_ORDER_BY_REGIME, SCAN_ARCHETYPE } from './dailyPicksScans.js';
 import { runChartinkScan } from '../chartinkService.js';
 import { getDailyAnalysisData } from '../technicalData.service.js';
 import { fetchAndCheckRegime } from '../../engine/regime.js';
+import scanLevels from '../../engine/scanLevels.js';
 import DailyPick from '../../models/dailyPick.js';
 import MarketSentiment from '../../models/marketSentiment.js';
 import ApiUsage from '../../models/apiUsage.js';
@@ -108,8 +109,16 @@ async function runDailyPicks(options = {}) {
       return { success: true, picks: 0, doc };
     }
 
-    // Step 5: Calculate levels for each pick
-    const picksWithLevels = topPicks.map(p => calculateLevels(p));
+    // Step 5: Calculate levels for each pick (engine may reject — null = dropped)
+    const picksWithLevels = topPicks.map(p => calculateLevels(p)).filter(Boolean);
+    console.log(`${LOG} After engine validation: ${picksWithLevels.length}/${topPicks.length} picks have viable levels`);
+
+    if (picksWithLevels.length === 0) {
+      console.log(`${LOG} All picks rejected by engine (no viable R:R). Saving empty doc.`);
+      const doc = await saveToDB(marketContext, [], scanResult);
+      await sendNotification(marketContext, [], doc);
+      return { success: true, picks: 0, doc };
+    }
 
     // Step 6: Generate AI insights (non-fatal)
     const picksWithInsights = await generatePickInsights(picksWithLevels, marketContext);
@@ -307,7 +316,14 @@ async function enrichCandidates(candidates) {
         prev_close: prevClose,
         last_daily_close: lastDailyClose,
         volume: stock.todays_volume || 0,
-        avg_volume_50d: stock.avg_volume_50d || 0
+        avg_volume_50d: stock.avg_volume_50d || 0,
+        // Indicators for scan-type-specific levels (from engine)
+        ema20: stock.ema20 || 0,
+        ema50: stock.ema50 || 0,
+        atr: stock.atr || 0,
+        high_20d: stock.high_20d || 0,
+        low_20d: stock.low_20d || 0,
+        daily_pivot_levels: stock.daily_pivot_levels || null
       }
     });
   }
@@ -386,43 +402,112 @@ function scoreCandidates(enrichedCandidates) {
 // STEP 5: CALCULATE LEVELS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Calculate entry/stop/target levels using scan-type-specific engine.
+ * Returns null if the engine rejects the setup (no fallback — enforces discipline).
+ */
 function calculateLevels(pick) {
-  const { _ohlcv, direction } = pick;
-  // Use last completed daily candle close for entry (not prev_close which is 2 days ago)
+  const { _ohlcv, direction, scan_type } = pick;
   const lastClose = _ohlcv.last_daily_close || _ohlcv.close;
 
-  console.log(`${LOG} [Levels] ${pick.symbol}: direction=${direction} OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} prevClose:${_ohlcv.prev_close} lastDailyClose:${_ohlcv.last_daily_close}} → entry will be lastDailyClose=${lastClose}`);
+  console.log(`${LOG} [Levels] ${pick.symbol}: direction=${direction} scan=${scan_type} OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} lastClose:${lastClose}} ema20=${_ohlcv.ema20} atr=${_ohlcv.atr} high20D=${_ohlcv.high_20d}`);
 
-  let entry, stop, target;
+  // ── SHORT picks: mirrored structural logic (scanLevels only handles BUY) ──
+  if (direction === 'SHORT') {
+    const entry = lastClose;
+    const atr = _ohlcv.atr;
+    const stop = atr > 0 ? round2(entry + 1.5 * atr) : _ohlcv.high;
+    const pivots = _ohlcv.daily_pivot_levels;
 
-  if (direction === 'LONG') {
-    entry = lastClose;                    // Last trading day's close (open estimate)
-    stop = _ohlcv.low;                    // Previous day's low
-    target = round2(entry * (1 + TARGET_PCT / 100));
-  } else {
-    entry = lastClose;                    // Last trading day's close (open estimate)
-    stop = _ohlcv.high;                   // Previous day's high
-    target = round2(entry * (1 - TARGET_PCT / 100));
+    // Target: daily S1 (closest support below entry), then S2
+    const target = (pivots?.s1 && pivots.s1 < entry) ? round2(pivots.s1)
+                 : (pivots?.s2 && pivots.s2 < entry) ? round2(pivots.s2)
+                 : null;
+
+    if (!target) {
+      console.log(`${LOG} [Levels] ${pick.symbol}: SHORT REJECTED — no pivot S1/S2 below entry ${entry}`);
+      return null;
+    }
+
+    const risk = stop - entry;
+    const reward = entry - target;
+    const riskReward = risk > 0 ? round2(reward / risk) : 0;
+
+    if (risk <= 0 || riskReward < 1.2) {
+      console.log(`${LOG} [Levels] ${pick.symbol}: SHORT REJECTED — R:R ${riskReward}:1 < 1.2`);
+      return null;
+    }
+
+    const riskPct = round2((risk / entry) * 100);
+    const rewardPct = round2((reward / entry) * 100);
+
+    console.log(`${LOG} [Levels] ${pick.symbol}: SHORT_STRUCTURAL entry=${entry} stop=${stop} target=${target} R:R=${riskReward}`);
+
+    return {
+      ...pick,
+      levels: {
+        entry: round2(entry),
+        stop: round2(stop),
+        target,
+        risk_pct: riskPct,
+        reward_pct: rewardPct,
+        risk_reward: riskReward,
+        mode: 'SHORT_STRUCTURAL',
+        reason: `Short via pivot ${pivots?.s1 && pivots.s1 < entry ? 'S1' : 'S2'}, ATR stop`
+      }
+    };
   }
 
-  console.log(`${LOG} [Levels] ${pick.symbol}: entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)}`);
+  // ── LONG picks: use scan-type-specific engine ──
+  const archetype = SCAN_ARCHETYPE[scan_type];
+  if (!archetype) {
+    console.log(`${LOG} [Levels] ${pick.symbol}: REJECTED — no archetype for scan_type="${scan_type}"`);
+    return null;
+  }
 
-  const riskPct = direction === 'LONG'
-    ? round2(((entry - stop) / entry) * 100)
-    : round2(((stop - entry) / entry) * 100);
+  if (!_ohlcv.ema20 || !_ohlcv.atr) {
+    console.log(`${LOG} [Levels] ${pick.symbol}: REJECTED — missing indicators (ema20=${_ohlcv.ema20}, atr=${_ohlcv.atr})`);
+    return null;
+  }
 
-  const rewardPct = TARGET_PCT;
-  const riskReward = riskPct > 0 ? round2(rewardPct / riskPct) : 0;
+  const levelsData = {
+    ema20: _ohlcv.ema20,
+    atr: _ohlcv.atr,
+    fridayHigh: _ohlcv.high,
+    fridayClose: lastClose,
+    fridayLow: _ohlcv.low,
+    high20D: _ohlcv.high_20d || null,
+    dailyR1: _ohlcv.daily_pivot_levels?.r1 || null,
+    dailyR2: _ohlcv.daily_pivot_levels?.r2 || null,
+    weeklyR1: null,
+    weeklyR2: null,
+    high52W: null
+  };
+
+  console.log(`${LOG} [Levels] ${pick.symbol}: Running engine archetype="${archetype}" with data:`, JSON.stringify(levelsData));
+
+  const engineResult = scanLevels.calculateTradingLevels(archetype, levelsData);
+
+  if (!engineResult.valid) {
+    console.log(`${LOG} [Levels] ${pick.symbol}: REJECTED by engine — ${engineResult.reason}`);
+    return null;
+  }
+
+  console.log(`${LOG} [Levels] ${pick.symbol}: ${engineResult.mode} entry=${engineResult.entry} stop=${engineResult.stop} target=${engineResult.target2} R:R=${engineResult.riskReward}`);
 
   return {
     ...pick,
     levels: {
-      entry: round2(entry),
-      stop: round2(stop),
-      target: round2(target),
-      risk_pct: riskPct,
-      reward_pct: rewardPct,
-      risk_reward: riskReward
+      entry: engineResult.entry,
+      stop: engineResult.stop,
+      target: engineResult.target2,
+      target1: engineResult.target1 || null,
+      risk_pct: engineResult.riskPercent,
+      reward_pct: engineResult.rewardPercent,
+      risk_reward: engineResult.riskReward,
+      entry_type: engineResult.entryType,
+      mode: engineResult.mode,
+      reason: engineResult.reason
     }
   };
 }

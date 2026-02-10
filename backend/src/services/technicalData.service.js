@@ -1007,7 +1007,15 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       avg_volume_50d: avgVolume50d,
       latest_candle_date: latestDailyCandle[0]?.split('T')[0] || null,
       prev_candle_date: previousDayCandle ? previousDayCandle[0]?.split('T')[0] : null,
-      data_source: dataSource
+      data_source: dataSource,
+      // Indicators for scan-type-specific level calculation
+      ema20: round2(dailyIndicators.ema20) || 0,
+      ema50: round2(dailyIndicators.ema50) || 0,
+      sma200: round2(dailyIndicators.sma200) || 0,
+      atr: round2(dailyIndicators.atr) || 0,
+      high_20d: round2(dailyIndicators.high_20d) || 0,
+      low_20d: round2(dailyIndicators.low_20d) || 0,
+      daily_pivot_levels: dailyPivot
     };
   } catch (error) {
     console.error(`[DailyAnalysis] Error calculating data for ${symbol}:`, error.message);
