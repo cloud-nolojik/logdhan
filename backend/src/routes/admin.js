@@ -602,15 +602,36 @@ async function processBulkPushAlerts(jobId, users, alertType, watchlistData) {
 /**
  * POST /api/v1/admin/flush-logs
  * Truncate PM2 log files (clears logs without restarting)
+ * Allows localhost calls (from live logs page on same server) without auth
  */
-router.post('/flush-logs', simpleAdminAuth, async (req, res) => {
+router.post('/flush-logs', async (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  const isLocalhost = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+
+  if (!isLocalhost) {
+    // Require admin auth for remote calls
+    return simpleAdminAuth(req, res, async () => {
+      try {
+        const { exec } = await import('child_process');
+        const { promisify } = await import('util');
+        const execAsync = promisify(exec);
+        await execAsync('pm2 flush');
+        console.log('[ADMIN] PM2 logs flushed (remote)');
+        res.json({ success: true, message: 'All PM2 logs flushed' });
+      } catch (error) {
+        console.error('[ADMIN] Failed to flush logs:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to flush logs: ' + error.message });
+      }
+    });
+  }
+
   try {
     const { exec } = await import('child_process');
     const { promisify } = await import('util');
     const execAsync = promisify(exec);
 
     await execAsync('pm2 flush');
-    console.log('[ADMIN] PM2 logs flushed');
+    console.log('[ADMIN] PM2 logs flushed (localhost)');
 
     res.json({ success: true, message: 'All PM2 logs flushed' });
   } catch (error) {

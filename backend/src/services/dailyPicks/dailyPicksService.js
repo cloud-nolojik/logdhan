@@ -12,11 +12,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
 
-import { DAILY_SCANS, SCAN_LABELS, SCAN_ORDER_BY_REGIME, SCAN_ARCHETYPE } from './dailyPicksScans.js';
+import { DAILY_SCANS, SCAN_LABELS, SCAN_ORDER_BY_REGIME } from './dailyPicksScans.js';
 import { runChartinkScan } from '../chartinkService.js';
 import { getDailyAnalysisData } from '../technicalData.service.js';
 import { fetchAndCheckRegime } from '../../engine/regime.js';
-import scanLevels from '../../engine/scanLevels.js';
 import DailyPick from '../../models/dailyPick.js';
 import MarketSentiment from '../../models/marketSentiment.js';
 import ApiUsage from '../../models/apiUsage.js';
@@ -415,7 +414,7 @@ function calculateLevels(pick) {
 
   console.log(`${LOG} [Levels] ${pick.symbol}: direction=${direction} scan=${scan_type} OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} lastClose:${lastClose}} ema20=${_ohlcv.ema20} atr=${_ohlcv.atr} high20D=${_ohlcv.high_20d}`);
 
-  // ── SHORT picks: mirrored structural logic (scanLevels only handles BUY) ──
+  // ── SHORT picks: inline intraday formula ──
   if (direction === 'SHORT') {
     const entry = lastClose;
     const atr = _ohlcv.atr;
@@ -461,58 +460,58 @@ function calculateLevels(pick) {
     };
   }
 
-  // ── LONG picks: use scan-type-specific engine ──
-  const archetype = SCAN_ARCHETYPE[scan_type];
-  if (!archetype) {
-    console.log(`${LOG} [Levels] ${pick.symbol}: REJECTED — no archetype for scan_type="${scan_type}"`);
-    return null;
-  }
+  // ── LONG picks: simple intraday formula (mirror of SHORT) ──
+  // Entry at yesterday's close, ATR-based stop, pivot R1/R2 targets
+  // Positions MUST close same day by 3:30 PM
+  {
+    const entry = lastClose;
+    const atr = _ohlcv.atr;
+    const stop = atr > 0 ? round2(entry - 1.5 * atr) : _ohlcv.low;
+    const pivots = _ohlcv.daily_pivot_levels;
+    const yesterdayHigh = _ohlcv.high;
 
-  if (!_ohlcv.ema20 || !_ohlcv.atr) {
-    console.log(`${LOG} [Levels] ${pick.symbol}: REJECTED — missing indicators (ema20=${_ohlcv.ema20}, atr=${_ohlcv.atr})`);
-    return null;
-  }
+    // Target cascade: R1 → R2 → yesterdayHigh (first resistance above entry)
+    const target = (pivots?.r1 && pivots.r1 > entry) ? round2(pivots.r1)
+                 : (pivots?.r2 && pivots.r2 > entry) ? round2(pivots.r2)
+                 : (yesterdayHigh && yesterdayHigh > entry) ? round2(yesterdayHigh)
+                 : null;
 
-  const levelsData = {
-    ema20: _ohlcv.ema20,
-    atr: _ohlcv.atr,
-    fridayHigh: _ohlcv.high,
-    fridayClose: lastClose,
-    fridayLow: _ohlcv.low,
-    high20D: _ohlcv.high_20d || null,
-    dailyR1: _ohlcv.daily_pivot_levels?.r1 || null,
-    dailyR2: _ohlcv.daily_pivot_levels?.r2 || null,
-    weeklyR1: _ohlcv.weekly_r1 || null,
-    weeklyR2: _ohlcv.weekly_r2 || null,
-    high52W: _ohlcv.high_52w || null
-  };
-
-  console.log(`${LOG} [Levels] ${pick.symbol}: Running engine archetype="${archetype}" with data:`, JSON.stringify(levelsData));
-
-  const engineResult = scanLevels.calculateTradingLevels(archetype, levelsData);
-
-  if (!engineResult.valid) {
-    console.log(`${LOG} [Levels] ${pick.symbol}: REJECTED by engine — ${engineResult.reason}`);
-    return null;
-  }
-
-  console.log(`${LOG} [Levels] ${pick.symbol}: ${engineResult.mode} entry=${engineResult.entry} stop=${engineResult.stop} target=${engineResult.target2} R:R=${engineResult.riskReward}`);
-
-  return {
-    ...pick,
-    levels: {
-      entry: engineResult.entry,
-      stop: engineResult.stop,
-      target: engineResult.target2,
-      target1: engineResult.target1 || null,
-      risk_pct: engineResult.riskPercent,
-      reward_pct: engineResult.rewardPercent,
-      risk_reward: engineResult.riskReward,
-      entry_type: engineResult.entryType,
-      mode: engineResult.mode,
-      reason: engineResult.reason
+    if (!target) {
+      console.log(`${LOG} [Levels] ${pick.symbol}: LONG REJECTED — no pivot R1/R2 or yesterdayHigh above entry ${entry}`);
+      return null;
     }
-  };
+
+    const risk = entry - stop;
+    const reward = target - entry;
+    const riskReward = risk > 0 ? round2(reward / risk) : 0;
+
+    if (risk <= 0 || riskReward < 1.2) {
+      console.log(`${LOG} [Levels] ${pick.symbol}: LONG REJECTED — R:R ${riskReward}:1 < 1.2`);
+      return null;
+    }
+
+    const riskPct = round2((risk / entry) * 100);
+    const rewardPct = round2((reward / entry) * 100);
+    const targetLevel = (pivots?.r1 && pivots.r1 > entry) ? 'R1'
+                      : (pivots?.r2 && pivots.r2 > entry) ? 'R2'
+                      : 'yesterdayHigh';
+
+    console.log(`${LOG} [Levels] ${pick.symbol}: LONG_INTRADAY entry=${entry} stop=${stop} target=${target} (${targetLevel}) R:R=${riskReward}`);
+
+    return {
+      ...pick,
+      levels: {
+        entry: round2(entry),
+        stop: round2(stop),
+        target,
+        risk_pct: riskPct,
+        reward_pct: rewardPct,
+        risk_reward: riskReward,
+        mode: 'LONG_INTRADAY',
+        reason: `Long via pivot ${targetLevel}, ATR stop`
+      }
+    };
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -25,7 +25,7 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-import weekendScreeningJob from '../src/services/jobs/weekendScreeningJob.js';
+import weekendScreeningJob from '../src/services/weeklyPicks/weekendScreeningJob.js';
 
 // Parse command line args
 const allArgs = process.argv.slice(2);
