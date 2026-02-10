@@ -323,7 +323,10 @@ async function enrichCandidates(candidates) {
         atr: stock.atr || 0,
         high_20d: stock.high_20d || 0,
         low_20d: stock.low_20d || 0,
-        daily_pivot_levels: stock.daily_pivot_levels || null
+        high_52w: stock.high_52w || 0,
+        daily_pivot_levels: stock.daily_pivot_levels || null,
+        weekly_r1: stock.weekly_r1 || null,
+        weekly_r2: stock.weekly_r2 || null
       }
     });
   }
@@ -479,9 +482,9 @@ function calculateLevels(pick) {
     high20D: _ohlcv.high_20d || null,
     dailyR1: _ohlcv.daily_pivot_levels?.r1 || null,
     dailyR2: _ohlcv.daily_pivot_levels?.r2 || null,
-    weeklyR1: null,
-    weeklyR2: null,
-    high52W: null
+    weeklyR1: _ohlcv.weekly_r1 || null,
+    weeklyR2: _ohlcv.weekly_r2 || null,
+    high52W: _ohlcv.high_52w || null
   };
 
   console.log(`${LOG} [Levels] ${pick.symbol}: Running engine archetype="${archetype}" with data:`, JSON.stringify(levelsData));

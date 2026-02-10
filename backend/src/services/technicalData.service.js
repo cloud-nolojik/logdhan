@@ -990,6 +990,20 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     // This is what the stock last closed at (for entry estimation)
     const lastDailyClose = round2(latestDailyCandle[4]);
 
+    // Calculate 52-week high (max high from last 252 trading days)
+    const tradingDays52w = Math.min(dailyCandles.length, 252);
+    const recentCandles52w = dailyCandles.slice(-tradingDays52w);
+    const high52w = Math.max(...recentCandles52w.map(c => c[2]));
+
+    // Calculate weekly pivots from aggregated weekly candles
+    const weeklyCandles = aggregateToWeekly(dailyCandles);
+    let weeklyPivot = null;
+    if (weeklyCandles.length >= 2) {
+      // Use the previous completed week (not the current incomplete one)
+      const prevWeek = weeklyCandles[weeklyCandles.length - 2];
+      weeklyPivot = calcClassicPivots(prevWeek[2], prevWeek[3], prevWeek[4]);
+    }
+
     return {
       symbol,
       instrument_key: instrumentKey,
@@ -1015,7 +1029,10 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       atr: round2(dailyIndicators.atr) || 0,
       high_20d: round2(dailyIndicators.high_20d) || 0,
       low_20d: round2(dailyIndicators.low_20d) || 0,
-      daily_pivot_levels: dailyPivot
+      high_52w: round2(high52w) || 0,
+      daily_pivot_levels: dailyPivot,
+      weekly_r1: weeklyPivot?.r1 || null,
+      weekly_r2: weeklyPivot?.r2 || null
     };
   } catch (error) {
     console.error(`[DailyAnalysis] Error calculating data for ${symbol}:`, error.message);
