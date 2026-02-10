@@ -188,13 +188,14 @@ class DailyPullbackScanJob {
         name: 'daily-pullback-scan'
       });
 
+      // DISABLED: Auto-schedule commented out. Manual trigger still works from Job Monitor.
       // Tuesday-Friday at 5:00 AM IST (next morning after Mon-Thu trading days)
       // Cron: 0 5 * * 2-5 = 5:00 AM, Tue-Fri (Saturday 6 PM weekend scan covers Friday)
-      await this.agenda.every('0 5 * * 2-5', 'daily-pullback-scan', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // await this.agenda.every('0 5 * * 2-5', 'daily-pullback-scan', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
-      console.log('[DAILY-PULLBACK] Recurring job scheduled: 5:00 AM IST, Tue-Fri');
+      console.log('[DAILY-PULLBACK] Auto-schedule DISABLED. Manual trigger available.');
 
     } catch (error) {
       console.error('[DAILY-PULLBACK] Failed to schedule jobs:', error);

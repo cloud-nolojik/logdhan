@@ -64,9 +64,9 @@ const watchlistStockSchema = new mongoose.Schema({
     archetype: String,       // '52w_breakout', 'pullback', 'trend-follow', 'breakout', etc.
     reason: String,          // Human-readable explanation
     // ── Time Rules (v2) ──
-    entryConfirmation: {     // 'close_above' (daily close) or 'touch' (limit fill)
+    entryConfirmation: {     // 'close_above' | 'touch' (limit fill) | 'touch_bounce' (low touches entry + close above)
       type: String,
-      enum: ['close_above', 'touch'],
+      enum: ['close_above', 'touch', 'touch_bounce'],
       default: 'close_above'
     },
     entryWindowDays: {       // Days to trigger entry (2=Mon-Tue, 3=Mon-Wed, 4=Mon-Thu)

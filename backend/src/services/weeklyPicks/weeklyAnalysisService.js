@@ -381,7 +381,7 @@ ${scoreBreakdown}
 
 === PRE-CALCULATED TRADING LEVELS (Structural Ladder) ===
 Mode: ${levels.mode || 'N/A'}
-Entry: ₹${levels.entry || 'N/A'} (basis: ${levels.entry_basis || 'N/A'}, confirmation: ${levels.entryConfirmation === 'touch' ? 'limit order fills on touch' : 'daily CLOSE must be above this level'})
+Entry: ₹${levels.entry || 'N/A'} (basis: ${levels.entry_basis || 'N/A'}, confirmation: ${levels.entryConfirmation === 'touch' ? 'limit order fills on touch' : levels.entryConfirmation === 'touch_bounce' ? 'price must touch entry AND close above (touch + bounce)' : 'daily CLOSE must be above this level'})
 Entry Range: [₹${levels.entryRange?.[0] || 'N/A'} - ₹${levels.entryRange?.[1] || 'N/A'}]
 Entry Type: ${levels.entryType || 'N/A'}
 ⚠️ ENTRY BASIS: The entry price is derived from "${levels.entry_basis || 'N/A'}". When describing entry level, refer to this basis — do NOT attribute it to a different indicator (e.g., do not say "near daily pivot" if basis is "ema20").

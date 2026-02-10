@@ -226,21 +226,33 @@ function shouldTriggerPhase2(newStatus, oldStatus, newFlags, oldFlags, dailyData
     }
   }
 
-  // CHECK: Close-based entry signal (Two-Phase Entry)
-  // Signal is confirmed when daily CLOSE >= entry level
+  // CHECK: Entry signal (Two-Phase Entry)
+  // For close_above: daily CLOSE >= entry confirms signal
+  // For touch_bounce: open must be near/above entry, low dips to touch entry, close >= entry
   // Actual entry happens at NEXT day's open (user buys after seeing notification)
   if (dailyData && levels) {
     const entry = levels.entry;
     const close = dailyData.ltp || dailyData.close;  // ltp for live, close for historical
+    const low = dailyData.low;
     const stop = levels.stop;
+    const entryConfirmation = levels.entryConfirmation || 'close_above';
     const capital = 100000;  // Standard simulation capital
     const plannedQty = Math.floor(capital / entry);
 
     // Statuses that indicate we were BELOW entry before
     const belowEntryStatuses = ['WATCHING', 'RETEST_ZONE', 'APPROACHING'];
 
-    // If old status was below entry AND today's close confirmed entry
-    if (belowEntryStatuses.includes(oldStatus) && close >= entry) {
+    // Check entry signal based on confirmation type (must match simulateTrade logic)
+    let entrySignalConfirmed = false;
+    if (entryConfirmation === 'close_above') {
+      entrySignalConfirmed = close >= entry;
+    } else if (entryConfirmation === 'touch_bounce') {
+      const open = dailyData.open;
+      entrySignalConfirmed = open >= entry * 0.99 && low <= entry && close >= entry;
+    }
+    // Note: 'touch' entries are same-day fills handled in simulation, not here
+
+    if (belowEntryStatuses.includes(oldStatus) && entrySignalConfirmed) {
       // Check entry quality to include in the trigger reason
       const entryQuality = checkEntryQuality(close, entry, stop);
       const premiumPct = entryQuality.premium_pct;
@@ -533,7 +545,7 @@ function simulateTrade(stock, snapshots, currentPrice) {
           price: close,
           qty: 0,
           pnl: 0,
-          detail: `Entry window expired — no ${entryConfirmation === 'close_above' ? 'close above' : 'touch at'} ₹${entry.toFixed(2)} within ${entryWindowDays} days`
+          detail: `Entry window expired — no ${entryConfirmation === 'close_above' ? 'close above' : entryConfirmation === 'touch_bounce' ? 'touch+bounce at' : 'touch at'} ₹${entry.toFixed(2)} within ${entryWindowDays} days`
         });
         break;
       }
@@ -548,6 +560,9 @@ function simulateTrade(stock, snapshots, currentPrice) {
         // touch-based: signal when price touches entry (for limit order fills)
         // For touch, we could enter same day at the limit price
         signalTriggered = low <= entry && high >= entry;
+      } else if (entryConfirmation === 'touch_bounce') {
+        // touch_bounce: stock must open near/above entry, dip to touch it, close above
+        signalTriggered = open >= entry * 0.99 && low <= entry && close >= entry;
       }
 
       if (signalTriggered) {

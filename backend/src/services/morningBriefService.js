@@ -199,7 +199,8 @@ function categorizeStocks(stocks) {
     } else {
       item.action = 'watch_breakout';
       categories.breakout.push(item);
-      console.log(`${LOG_PREFIX}   ${stock.symbol}: Breakout (close_above) — entry ₹${entry}, dist ${item.distancePct.toFixed(1)}%`);
+      const confirmLabel = item.entryConfirmation === 'touch_bounce' ? 'touch_bounce' : 'close_above';
+      console.log(`${LOG_PREFIX}   ${stock.symbol}: Watch (${confirmLabel}) — entry ₹${entry}, dist ${item.distancePct.toFixed(1)}%`);
     }
   }
 

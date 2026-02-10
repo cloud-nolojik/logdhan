@@ -816,14 +816,15 @@ class IntradayMonitorJob {
         name: 'intraday-monitor'
       });
 
+      // DISABLED: Auto-schedule commented out. Manual trigger still works from Job Monitor.
       // Every 15 minutes during market hours (9:15 AM - 3:30 PM IST, weekdays)
       // The job itself checks if we're in market hours
       // Cron: */15 = every 15 minutes
-      await this.agenda.every('*/15 * * * 1-5', 'intraday-monitor', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // await this.agenda.every('*/15 * * * 1-5', 'intraday-monitor', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
-      console.log('[INTRADAY-MONITOR] Recurring job scheduled: every 15 min, weekdays');
+      console.log('[INTRADAY-MONITOR] Auto-schedule DISABLED. Manual trigger available.');
 
     } catch (error) {
       console.error('[INTRADAY-MONITOR] Failed to schedule jobs:', error);

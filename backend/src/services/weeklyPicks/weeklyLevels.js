@@ -148,9 +148,9 @@ function getWeeklyTimeRules(archetype) {
     };
   }
 
-  // Pullback — conservative, buy_above only
+  // Pullback — touch + bounce: price must dip to entry AND close above it
   return {
-    entryConfirmation: 'close_above',
+    entryConfirmation: 'touch_bounce',
     entryWindowDays: 3,
     maxHoldDays: 5,
     weekEndRule: 'exit_if_no_t1',

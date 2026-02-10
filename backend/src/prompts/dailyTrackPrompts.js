@@ -201,7 +201,7 @@ WEEKEND ANALYSIS CONTEXT:
 Symbol: ${stock.symbol} | Grade: ${weekendGrade} | Archetype: ${levels.archetype || 'standard'}
 
 LEVELS (engine-calculated, final):
-  Entry: ₹${levels.entry?.toFixed(2) || 'N/A'} (confirmation: ${levels.entryConfirmation === 'touch' ? 'limit order touch' : 'daily CLOSE above'})
+  Entry: ₹${levels.entry?.toFixed(2) || 'N/A'} (confirmation: ${levels.entryConfirmation === 'touch' ? 'limit order touch' : levels.entryConfirmation === 'touch_bounce' ? 'touch + bounce (low touches entry, close above)' : 'daily CLOSE above'})
   Stop: ₹${levels.stop?.toFixed(2) || 'N/A'}
   T1 (50% booking): ₹${levels.target1?.toFixed(2) || 'N/A'} [${levels.target1_basis || 'N/A'}] — book 50%, move stop to entry
   T2 (main target): ₹${levels.target2?.toFixed(2) || 'N/A'} [${levels.target2_basis || 'N/A'}] — book 70% of remaining, hold 30% for T3

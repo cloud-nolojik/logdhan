@@ -158,13 +158,14 @@ class PendingAnalysisReminderJob {
         name: 'pending-analysis-reminder'
       });
 
+      // DISABLED: Auto-schedule commented out. Manual trigger still works from Job Monitor.
       // 4:00 PM IST every weekday (Monday-Friday)
       // Runs at market close when full analysis becomes available
-      await this.agenda.every('0 16 * * 1-5', 'pending-analysis-reminder', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // await this.agenda.every('0 16 * * 1-5', 'pending-analysis-reminder', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
-      console.log('[PENDING-REMINDER] Recurring job scheduled: 4:00 PM IST weekdays');
+      console.log('[PENDING-REMINDER] Auto-schedule DISABLED. Manual trigger available.');
 
     } catch (error) {
       console.error('[PENDING-REMINDER] Failed to schedule jobs:', error);
