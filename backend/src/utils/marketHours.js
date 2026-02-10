@@ -43,7 +43,7 @@ class MarketHoursUtil {
    * @param {Date} date - Date to check
    * @returns {Promise<boolean>}
    */
-  static async isTradingDay(date) {
+  static async isTradingDay(date = new Date()) {
     try {
       // Dynamic import to avoid circular dependency
       const MarketTiming = (await import('../models/marketTiming.js')).default;

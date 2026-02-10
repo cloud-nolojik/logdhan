@@ -30,7 +30,6 @@ import { messagingService } from './services/messaging/messaging.service.js';
 import priceCacheService from './services/priceCache.service.js'; // In-memory price caching service
 import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM IST)
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
-import dailyNewsStocksJob from './services/jobs/dailyNewsStocksJob.js'; // daily-news-scrape (8:30 AM Mon-Fri)
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 import intradayMonitorJob from './services/jobs/intradayMonitorJob.js'; // intraday-monitor (every 15 min during market hours)
 import pendingAnalysisReminderJob from './services/jobs/pendingAnalysisReminderJob.js'; // pending-analysis-reminder (4:00 PM Mon-Fri, notify users about pending stocks)
@@ -68,7 +67,6 @@ import dashboardRoutes from './routes/dashboard.js';
 import weeklyWatchlistRoutes from './routes/weeklyWatchlist.js';
 import screenerRoutes from './routes/screener.js';
 import journalRoutes from './routes/journal.js';
-import dailyNewsStocksRoutes from './routes/dailyNewsStocks.js';
 import apiUsageRoutes from './routes/apiUsage.js';
 import adminRoutes from './routes/admin.js';
 import weeklySetupsRoutes from './routes/weeklySetups.js';
@@ -207,7 +205,6 @@ app.use('/api/v1/weekly-watchlist', weeklyWatchlistRoutes);
 app.use('/api/v1/weeklysetups', weeklySetupsRoutes);
 app.use('/api/v1/screener', screenerRoutes);
 app.use('/api/v1/journal', journalRoutes);
-app.use('/api/v1/daily-news-stocks', dailyNewsStocksRoutes);
 app.use('/api/v1/usage', apiUsageRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/app-feedback', appFeedbackRoutes);
@@ -298,16 +295,6 @@ async function initializeAgendaDataPrefetchService() {
   }
 }
 
-// Initialize daily news stocks job (8:30 AM Mon-Fri IST)
-async function initializeDailyNewsStocksJob() {
-  try {
-
-    await dailyNewsStocksJob.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize daily news stocks job:', error);
-  }
-}
 
 // Initialize daily tracking job (4:00 PM Mon-Fri IST - Phase 1 status updates + Phase 2 AI for changes)
 async function initializeDailyTrackingJob() {
@@ -415,7 +402,6 @@ app.listen(PORT, async () => {
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST)
   await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
   await initializeDailyPullbackScanJob(); // daily-pullback-scan (3:45 PM Mon-Fri, pullback only)
-  await initializeDailyNewsStocksJob(); // daily-news-scrape (8:30 AM Mon-Fri IST)
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
   await initializeIntradayMonitorJob(); // intraday-monitor (every 15 min during market hours)
   await initializePendingAnalysisReminderJob(); // pending-analysis-reminder (4:00 PM Mon-Fri, notify users)
@@ -446,7 +432,6 @@ process.on('SIGINT', async () => {
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
       dailyPullbackScanJob.shutdown(),
-      dailyNewsStocksJob.shutdown(),
       dailyTrackingJob.shutdown(),
       intradayMonitorJob.shutdown(),
       pendingAnalysisReminderJob.shutdown(),
@@ -478,7 +463,6 @@ process.on('SIGTERM', async () => {
       weekendScreeningJob.shutdown(),
       agendaDataPrefetchService.stop(),
       dailyPullbackScanJob.shutdown(),
-      dailyNewsStocksJob.shutdown(),
       dailyTrackingJob.shutdown(),
       intradayMonitorJob.shutdown(),
       pendingAnalysisReminderJob.shutdown(),

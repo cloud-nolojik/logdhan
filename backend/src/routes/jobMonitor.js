@@ -4,7 +4,6 @@ import { auth } from '../middleware/auth.js';
 
 // Import all job singletons
 import weekendScreeningJob from '../services/jobs/weekendScreeningJob.js';
-import dailyNewsStocksJob from '../services/jobs/dailyNewsStocksJob.js';
 import dailyTrackingJob from '../services/jobs/dailyTrackingJob.js';
 import intradayMonitorJob from '../services/jobs/intradayMonitorJob.js';
 import pendingAnalysisReminderJob from '../services/jobs/pendingAnalysisReminderJob.js';
@@ -25,7 +24,6 @@ const ALLOWED_MOBILE = '919008108650';
 // Job registry — maps each job to its singleton, Agenda collection, and metadata
 const JOB_REGISTRY = [
   { key: 'weekendScreening', name: 'weekend-screening', description: 'ChartInk scans + AI analysis', schedule: 'Sat 6:00 PM', collection: 'weekend_screening_jobs', singleton: weekendScreeningJob },
-  { key: 'dailyNewsScrape', name: 'daily-news-scrape', description: 'StreetGains pre-market news', schedule: '8:30 AM Mon-Fri', collection: 'daily_news_jobs', singleton: dailyNewsStocksJob },
   { key: 'dailyTracking', name: 'daily-tracking', description: 'Phase 1 status + Phase 2 AI', schedule: '4:00 PM Mon-Fri', collection: 'daily_tracking_jobs', singleton: dailyTrackingJob },
   { key: 'intradayMonitor', name: 'intraday-monitor', description: 'Stop/T1/T2/T3 monitoring', schedule: '*/15 9:15-15:30 Mon-Fri', collection: 'intraday_monitor_jobs', singleton: intradayMonitorJob },
   { key: 'pendingAnalysisReminder', name: 'pending-analysis-reminder', description: 'Notify pending analysis', schedule: '4:00 PM Mon-Fri', collection: 'pending_analysis_reminder_jobs', singleton: pendingAnalysisReminderJob },
