@@ -285,6 +285,8 @@ async function enrichCandidates(candidates) {
     const prevLow = low;
     const candlePattern = detectCandlePattern(open, high, low, close, 0, prevHigh, prevLow, prevClose);
 
+    console.log(`${LOG} [Enrich] ${candidate.symbol}: O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} ltp=${stock.ltp} vol=${stock.todays_volume} avgVol50=${stock.avg_volume_50d} rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
+
     enriched.push({
       ...candidate,
       instrument_key: stock.instrument_key,
@@ -386,6 +388,8 @@ function calculateLevels(pick) {
   const { _ohlcv, direction } = pick;
   const prevClose = _ohlcv.prev_close || _ohlcv.close;
 
+  console.log(`${LOG} [Levels] ${pick.symbol}: direction=${direction} OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} prevClose:${_ohlcv.prev_close}} → entry will be prevClose=${prevClose}`);
+
   let entry, stop, target;
 
   if (direction === 'LONG') {
@@ -397,6 +401,8 @@ function calculateLevels(pick) {
     stop = _ohlcv.high;                   // Previous day's high
     target = round2(entry * (1 - TARGET_PCT / 100));
   }
+
+  console.log(`${LOG} [Levels] ${pick.symbol}: entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)}`);
 
   const riskPct = direction === 'LONG'
     ? round2(((entry - stop) / entry) * 100)
