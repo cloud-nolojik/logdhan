@@ -13,7 +13,7 @@
  */
 
 import Agenda from 'agenda';
-import weekendScreeningJob from './weekendScreeningJob.js';
+import weekendScreeningJob from '../weeklyPicks/weekendScreeningJob.js';
 
 class DailyPullbackScanJob {
   constructor() {

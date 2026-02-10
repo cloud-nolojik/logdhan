@@ -143,7 +143,7 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
         }
 
         console.log(`[AI ROUTE] 🎯 Step 2: Importing weeklyTrackAnalysisJob...`);
-        const weeklyTrackAnalysisJob = (await import('../services/jobs/weeklyTrackAnalysisJob.js')).default;
+        const weeklyTrackAnalysisJob = (await import('../services/weeklyPicks/weeklyTrackAnalysisJob.js')).default;
 
         console.log(`[AI ROUTE] 🎯 Step 3: Calling analyzeStock with:`, {
           instrument_key,

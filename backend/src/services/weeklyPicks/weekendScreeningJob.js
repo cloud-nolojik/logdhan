@@ -9,12 +9,13 @@
  */
 
 import Agenda from 'agenda';
-import chartinkService from '../chartinkService.js';
+import { runAPlusNextWeekScan, runPullbackScan } from './weeklyPicksScans.js';
+import { calculateWeeklyTradingLevels } from './weeklyLevels.js';
 import stockEnrichmentService from '../stockEnrichmentService.js';
 import WeeklyWatchlist from '../../models/weeklyWatchlist.js';
 import { getCurrentPrice } from '../../utils/stockDb.js';
 import priceCacheService from '../priceCache.service.js';
-import weeklyAnalysisService from '../weeklyAnalysisService.js';
+import weeklyAnalysisService from './weeklyAnalysisService.js';
 import { firebaseService } from '../firebase/firebase.service.js';
 
 class WeekendScreeningJob {
@@ -356,10 +357,10 @@ class WeekendScreeningJob {
 
             switch (scanType) {
               case 'a_plus_momentum':
-                scanResults = await chartinkService.runAPlusNextWeekScan();
+                scanResults = await runAPlusNextWeekScan();
                 break;
               case 'pullback':
-                scanResults = await chartinkService.runPullbackScan();
+                scanResults = await runPullbackScan();
                 break;
               default:
                 console.warn(`[SCREENING JOB] Unknown scan type: ${scanType}`);
@@ -488,7 +489,8 @@ class WeekendScreeningJob {
           maxResults: 100,
           debug: true,   // Enable debug for first few stocks
           debugCount: 3,
-          referenceDate   // Pass through for historical testing (null = use live data)
+          referenceDate,  // Pass through for historical testing (null = use live data)
+          levelCalculator: calculateWeeklyTradingLevels  // Weekly-specific percentage-based levels
         }
       );
 

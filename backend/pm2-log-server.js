@@ -191,123 +191,289 @@ app.get('/api/pm2/logfile/:filename', (req, res) => {
   }
 });
 
-// Simple web interface
+// Web interface
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
     <html>
     <head>
-        <title>PM2 Log Viewer</title>
+        <title>SwingSetups.ai - Live Logs</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .container { max-width: 1200px; margin: 0 auto; }
-            .log-container { background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 10px 0; }
-            .log-content { background: #000; color: #0f0; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
-            .controls { margin: 10px 0; }
-            button { padding: 8px 16px; margin: 5px; cursor: pointer; }
-            select, input { padding: 5px; margin: 5px; }
-            .error { color: red; }
-            .info { color: blue; }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+            .header {
+                background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #1e3a5f 100%);
+                padding: 20px 24px;
+                border-bottom: 1px solid rgba(99, 102, 241, 0.3);
+            }
+            .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 16px; }
+            .header h1 span.fire { margin-right: 6px; }
+
+            .controls {
+                display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+            }
+            .controls select {
+                background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+                padding: 8px 12px; border-radius: 6px; font-size: 13px; cursor: pointer;
+            }
+            .btn {
+                padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500;
+                cursor: pointer; border: 1px solid #334155; background: #1e293b; color: #e2e8f0;
+                transition: all 0.15s;
+            }
+            .btn:hover { background: #334155; }
+            .btn-danger { border-color: #dc2626; color: #fca5a5; }
+            .btn-danger:hover { background: #dc2626; color: #fff; }
+
+            .live-badge {
+                display: inline-flex; align-items: center; gap: 6px;
+                padding: 6px 14px; border-radius: 20px;
+                background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4);
+                font-size: 12px; font-weight: 600; color: #fca5a5;
+            }
+            .live-dot {
+                width: 8px; height: 8px; border-radius: 50%; background: #ef4444;
+                animation: pulse 1.5s infinite;
+            }
+            .live-badge.paused { background: rgba(100, 116, 139, 0.2); border-color: #475569; color: #94a3b8; }
+            .live-badge.paused .live-dot { background: #64748b; animation: none; }
+            @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+            .log-area {
+                flex: 1; padding: 16px 24px; overflow: hidden; display: flex; flex-direction: column;
+            }
+            .log-content {
+                flex: 1; background: #020617; border: 1px solid #1e293b; border-radius: 8px;
+                padding: 16px; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+                font-size: 12.5px; line-height: 1.7; color: #67e8f9;
+                overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+                min-height: calc(100vh - 160px);
+            }
+            .log-content::-webkit-scrollbar { width: 8px; }
+            .log-content::-webkit-scrollbar-track { background: #0f172a; }
+            .log-content::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+            .log-line { display: block; padding: 1px 0; }
+
+            .status-bar {
+                padding: 6px 24px; background: #0f172a; border-top: 1px solid #1e293b;
+                font-size: 11px; color: #64748b; display: flex; justify-content: space-between;
+            }
+
+            .toast {
+                position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+                padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 500;
+                z-index: 100; transition: opacity 0.3s; opacity: 0;
+            }
+            .toast.show { opacity: 1; }
+            .toast.success { background: #065f46; color: #6ee7b7; border: 1px solid #059669; }
+            .toast.error { background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; }
         </style>
     </head>
     <body>
-        <div class="container">
-            <h1>PM2 Log Viewer</h1>
-            
+        <div class="header">
+            <h1><span class="fire">🔥</span> SwingSetups.ai  -  Live Logs</h1>
             <div class="controls">
-                <button onclick="loadProcesses()">Refresh Processes</button>
-                <select id="processSelect">
-                    <option value="">Select Process</option>
+                <select id="processSelect" onchange="switchProcess()">
+                    <option value="">Loading...</option>
                 </select>
-                <select id="logType">
-                    <option value="both">Both (Out + Error)</option>
-                    <option value="out">Output Only</option>
-                    <option value="error">Error Only</option>
-                </select>
-                <input type="number" id="lineCount" value="50" min="1" max="1000" placeholder="Lines">
-                <button onclick="loadLogs()">Load Logs</button>
-                <button onclick="loadAllLogs()">All Processes</button>
+                <button class="btn btn-danger" onclick="clearDisplay()">Clear Display</button>
+                <button class="btn" onclick="flushLogs()">Flush PM2 Logs</button>
+                <button class="btn" onclick="toggleAutoRefresh()" id="autoRefreshBtn">Toggle Auto-Refresh</button>
+                <button class="btn" onclick="downloadLogs()">Download</button>
+                <div class="live-badge" id="liveBadge">
+                    <div class="live-dot"></div>
+                    LIVE
+                </div>
             </div>
-
-            <div id="processInfo"></div>
-            <div id="logOutput"></div>
         </div>
 
+        <div class="log-area">
+            <div class="log-content" id="logOutput">Connecting...</div>
+        </div>
+
+        <div class="status-bar">
+            <span id="statusLeft">Lines: 0</span>
+            <span id="statusRight">Last updated: -</span>
+        </div>
+
+        <div class="toast" id="toast"></div>
+
         <script>
+            let autoRefresh = true;
+            let refreshInterval = null;
+            let currentProcess = '';
+            let lineCount = 200;
+
+            function showToast(message, type = 'success') {
+                const t = document.getElementById('toast');
+                t.textContent = message;
+                t.className = 'toast show ' + type;
+                setTimeout(() => t.className = 'toast', 3000);
+            }
+
             async function loadProcesses() {
                 try {
-                    const response = await fetch('/api/pm2/list');
-                    const processes = await response.json();
-                    
+                    const res = await fetch('/api/pm2/list');
+                    const procs = await res.json();
                     const select = document.getElementById('processSelect');
-                    select.innerHTML = '<option value="">Select Process</option>';
-                    
-                    processes.forEach(proc => {
-                        const option = document.createElement('option');
-                        option.value = proc.name;
-                        option.textContent = \`\${proc.name} (pid: \${proc.pid}, status: \${proc.pm2_env.status})\`;
-                        select.appendChild(option);
+                    select.innerHTML = '';
+
+                    // Add "All" option
+                    const allOpt = document.createElement('option');
+                    allOpt.value = '__all__';
+                    allOpt.textContent = 'All Processes';
+                    select.appendChild(allOpt);
+
+                    procs.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p.name;
+                        opt.textContent = p.name + ' (' + p.pm2_env.status + ')';
+                        select.appendChild(opt);
                     });
-                    
-                    document.getElementById('processInfo').innerHTML = 
-                        \`<p class="info">Found \${processes.length} PM2 processes</p>\`;
-                } catch (error) {
-                    document.getElementById('processInfo').innerHTML = 
-                        \`<p class="error">Failed to load processes: \${error.message}</p>\`;
+
+                    // Default to first real process if available
+                    if (procs.length > 0) {
+                        select.value = procs[0].name;
+                        currentProcess = procs[0].name;
+                    }
+                    fetchLogs();
+                } catch (e) {
+                    document.getElementById('logOutput').textContent = 'Failed to load processes: ' + e.message;
                 }
             }
 
-            async function loadLogs() {
-                const processName = document.getElementById('processSelect').value;
-                const logType = document.getElementById('logType').value;
-                const lines = document.getElementById('lineCount').value;
-                
-                if (!processName) {
-                    alert('Please select a process');
-                    return;
-                }
+            function switchProcess() {
+                currentProcess = document.getElementById('processSelect').value;
+                document.getElementById('logOutput').textContent = 'Loading...';
+                fetchLogs();
+            }
 
+            async function fetchLogs() {
                 try {
-                    const response = await fetch(\`/api/pm2/logs/\${processName}?type=\${logType}&lines=\${lines}\`);
-                    const data = await response.json();
-                    
-                    document.getElementById('logOutput').innerHTML = \`
-                        <div class="log-container">
-                            <h3>Logs for \${processName} (\${data.type}, last \${data.lines} lines)</h3>
-                            <div class="log-content">\${data.logs}</div>
-                        </div>
-                    \`;
-                } catch (error) {
-                    document.getElementById('logOutput').innerHTML = 
-                        \`<p class="error">Failed to load logs: \${error.message}</p>\`;
+                    let url;
+                    if (currentProcess === '__all__' || !currentProcess) {
+                        url = '/api/pm2/logs?lines=' + lineCount;
+                    } else {
+                        url = '/api/pm2/logs/' + currentProcess + '?type=out&lines=' + lineCount;
+                    }
+
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    const logEl = document.getElementById('logOutput');
+                    const wasAtBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 50;
+
+                    logEl.textContent = data.logs || 'No logs available';
+
+                    if (wasAtBottom) {
+                        logEl.scrollTop = logEl.scrollHeight;
+                    }
+
+                    const lines = (data.logs || '').split('\\n').filter(l => l.trim()).length;
+                    document.getElementById('statusLeft').textContent = 'Lines: ' + lines;
+                    document.getElementById('statusRight').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+                } catch (e) {
+                    document.getElementById('logOutput').textContent = 'Error fetching logs: ' + e.message;
                 }
             }
 
-            async function loadAllLogs() {
-                const lines = document.getElementById('lineCount').value;
-                
+            function clearDisplay() {
+                document.getElementById('logOutput').textContent = '';
+                document.getElementById('statusLeft').textContent = 'Lines: 0';
+                showToast('Display cleared');
+            }
+
+            async function flushLogs() {
+                if (!confirm('This will permanently delete all PM2 log files on the server. Continue?')) return;
                 try {
-                    const response = await fetch(\`/api/pm2/logs?lines=\${lines}\`);
-                    const data = await response.json();
-                    
-                    document.getElementById('logOutput').innerHTML = \`
-                        <div class="log-container">
-                            <h3>All PM2 Logs (last \${data.lines} lines)</h3>
-                            <div class="log-content">\${data.logs}</div>
-                        </div>
-                    \`;
-                } catch (error) {
-                    document.getElementById('logOutput').innerHTML = 
-                        \`<p class="error">Failed to load logs: \${error.message}</p>\`;
+                    const body = currentProcess && currentProcess !== '__all__'
+                        ? JSON.stringify({ processName: currentProcess })
+                        : '{}';
+                    const res = await fetch('/api/pm2/flush', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        document.getElementById('logOutput').textContent = '';
+                        showToast(data.message);
+                    } else {
+                        showToast('Failed to flush: ' + (data.error || 'Unknown error'), 'error');
+                    }
+                } catch (e) {
+                    showToast('Error: ' + e.message, 'error');
                 }
             }
 
-            // Auto-load processes on page load
+            function toggleAutoRefresh() {
+                autoRefresh = !autoRefresh;
+                const badge = document.getElementById('liveBadge');
+                const btn = document.getElementById('autoRefreshBtn');
+
+                if (autoRefresh) {
+                    startAutoRefresh();
+                    badge.className = 'live-badge';
+                    badge.innerHTML = '<div class="live-dot"></div> LIVE';
+                    showToast('Auto-refresh enabled (5s)');
+                } else {
+                    stopAutoRefresh();
+                    badge.className = 'live-badge paused';
+                    badge.innerHTML = '<div class="live-dot"></div> PAUSED';
+                    showToast('Auto-refresh paused');
+                }
+            }
+
+            function startAutoRefresh() {
+                stopAutoRefresh();
+                refreshInterval = setInterval(fetchLogs, 5000);
+            }
+
+            function stopAutoRefresh() {
+                if (refreshInterval) {
+                    clearInterval(refreshInterval);
+                    refreshInterval = null;
+                }
+            }
+
+            function downloadLogs() {
+                const logs = document.getElementById('logOutput').textContent;
+                const blob = new Blob([logs], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = (currentProcess || 'all') + '-logs-' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + '.txt';
+                a.click();
+                URL.revokeObjectURL(url);
+                showToast('Logs downloaded');
+            }
+
+            // Init
             loadProcesses();
+            startAutoRefresh();
         </script>
     </body>
     </html>
   `);
+});
+
+// Flush (clear) PM2 logs
+app.post('/api/pm2/flush', async (req, res) => {
+  const { processName } = req.body || {};
+
+  try {
+    if (processName) {
+      await execPM2Command(`flush ${processName}`);
+      res.json({ success: true, message: `Logs flushed for ${processName}` });
+    } else {
+      await execPM2Command('flush');
+      res.json({ success: true, message: 'All PM2 logs flushed' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to flush logs', details: error });
+  }
 });
 
 // Health check endpoint

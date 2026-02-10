@@ -28,7 +28,7 @@ import { subscriptionService } from './services/subscription/subscriptionService
 import { azureStorageService } from './services/storage/azureStorage.service.js';
 import { messagingService } from './services/messaging/messaging.service.js';
 import priceCacheService from './services/priceCache.service.js'; // In-memory price caching service
-import weekendScreeningJob from './services/jobs/weekendScreeningJob.js'; // weekend-screening (Sat 6PM IST)
+import weekendScreeningJob from './services/weeklyPicks/weekendScreeningJob.js'; // weekend-screening (Sat 6PM IST)
 import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 import intradayMonitorJob from './services/jobs/intradayMonitorJob.js'; // intraday-monitor (every 15 min during market hours)

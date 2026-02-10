@@ -1,8 +1,11 @@
 /**
  * ChartInk Service
  *
- * Fetches scan results from ChartInk programmatically.
+ * Generic ChartInk API wrapper. Fetches scan results programmatically.
  * Uses their web interface with CSRF token handling.
+ *
+ * Weekly scan queries are in weeklyPicks/weeklyPicksScans.js
+ * Daily scan queries are in dailyPicks/dailyPicksScans.js
  */
 
 import axios from 'axios';
@@ -15,141 +18,6 @@ const client = wrapper(axios.create({ jar }));
 
 const CHARTINK_BASE_URL = 'https://chartink.com';
 const SCAN_URL = `${CHARTINK_BASE_URL}/screener/process`;
-
-/**
- * Pre-defined scan queries for swing trading
- *
- * ACTIVE SCANS:
- * - A+ Momentum: Uptrend + 3% weekly gain + near 20d high + RSI 55-75
- * - Pullback: EMA20 retest with low volume, RSI 40-58
- *
- * COMMENTED OUT (legacy scans):
- * - BREAKOUT: Near 20-day HIGH + Volume 1.5x + RSI 55-70
- * - MOMENTUM: 3-10% above EMA 20 + RSI 55-68
- * - CONSOLIDATION: Near 20-day HIGH + Tight range <2.5% + RSI 50-65
- */
-export const SCAN_QUERIES = {
-  // A+ Momentum - 52-week high breakout stocks with volume surge
-  // Matches ChartInk scan: 52w high + Volume 1.5x (50-day) + RSI 55-75 + EMA20>EMA50 + 2% weekly gain
-  a_plus_momentum: `( {cash} ( latest close > 1 day ago max( 252, high ) and latest volume > latest sma( volume, 50 ) * 1.5 and latest close > latest sma( close, 200 ) and latest rsi( 14 ) > 55 and latest rsi( 14 ) < 75 and latest ema( close, 20 ) > latest ema( close, 50 ) and market cap > 1000 and latest close > 100 and latest close > 1 week ago close * 1.02 ) )`,
-
-  // Pullback to EMA20 - Price retesting EMA20 support with low volume
-  // Within 2% of EMA20, EMA20>EMA50>SMA200, RSI 40-58, volume below 50-day avg
-  pullback: `( {cash} ( 1 day ago max( 60, high ) / latest close < 1.08 and latest low <= latest ema( close, 20 ) * 1.02 and latest low >= latest ema( close, 20 ) * 0.98 and latest close >= latest ema( close, 20 ) and latest close > latest sma( close, 200 ) and latest ema( close, 20 ) > latest ema( close, 50 ) and latest ema( close, 50 ) > latest sma( close, 200 ) and latest rsi( 14 ) > 40 and latest rsi( 14 ) < 58 and latest volume < latest sma( volume, 50 ) * 0.9 and latest close > 1 week ago close * 0.99 and latest close > latest open and latest close >= latest high * 0.98 and market cap > 1000 and latest close > 50 ) )`,
-
-//   a_plus_nextweek: `( {cash} (
-//   /* Trend filter */
-//   latest ema( close, 20 ) > latest ema( close, 50 )
-//   and latest ema( close, 50 ) > latest sma( close, 200 )
-//   and latest close > latest ema( close, 20 )
-
-//   /* True compression: NR7 */
-//   and latest range < min( 7, range )
-
-//   /* Tight 10-day base (optional but powerful) */
-//   and ( max( 10, high ) - min( 10, low ) ) < latest close * 0.06
-
-//   /* Strong close near the top of the day */
-//   and latest close >= latest high * 0.98
-//   and latest close > latest open
-
-//   /* Volume confirmation (not crazy spike, but demand present) */
-//   and latest volume > 1.2 * latest sma( volume, 20 )
-
-//   /* Momentum not overheated */
-//   and latest rsi( 14 ) >= 52
-//   and latest rsi( 14 ) <= 66
-
-//   /* Tradability */
-//   and latest sma( volume, 20 ) > 500000
-//   and market cap > 10000
-// ) )`
-  
-
-//   a_plus_momentum: `( {cash} (
-//   /* Trend filter */
-//   latest ema( close, 20 ) > latest ema( close, 50 )
-//   and latest ema( close, 50 ) > latest sma( close, 200 )
-//   and latest close > latest ema( close, 20 )
-
-//   /* True compression: NR7 */
-//   and latest range < min( 7, range )
-
-//   /* Tight 10-day base (optional but powerful) */
-//   and ( max( 10, high ) - min( 10, low ) ) < latest close * 0.06
-
-//   /* Strong close near the top of the day */
-//   and latest close >= latest high * 0.98
-//   and latest close > latest open
-
-//   /* Volume confirmation (not crazy spike, but demand present) */
-//   and latest volume > 1.2 * latest sma( volume, 20 )
-
-//   /* Momentum not overheated */
-//   and latest rsi( 14 ) >= 52
-//   and latest rsi( 14 ) <= 66
-
-//   /* Tradability */
-//   and latest sma( volume, 20 ) > 500000
-//   and market cap > 10000
-// ) )`
-
-  // // Breakout Candidates - Near 20-day high with volume surge
-  // // EMA20 > EMA50 > SMA200, RSI 55-70, Volume 1.5x avg
-  // breakout: `( {cash} (
-  //     latest ema( close, 20 ) > latest ema( close, 50 )
-  //     and latest ema( close, 50 ) > latest sma( close, 200 )
-  //     and latest close > latest ema( close, 20 )
-  //     and latest close >= max( 20, latest high ) * 0.97
-  //     and latest close <= max( 20, latest high ) * 1.03
-  //     and latest volume > 1.5 * latest sma( volume, 20 )
-  //     and latest rsi( 14 ) > 55
-  //     and latest rsi( 14 ) < 70
-  //     and latest sma( volume, 20 ) > 300000
-  //     and market cap > 10000
-  // ) )`,
-
-  // // Pullback to EMA20 - Price pulling back to support
-  // // Close within 3% of EMA20, RSI 40-55 (cooled off)
-  // pullback: `( {cash} (
-  //   latest ema( close, 20 ) > latest ema( close, 50 )
-  //   and latest ema( close, 50 ) > latest sma( close, 200 )
-  //   and latest close >= latest ema( close, 20 ) * 0.97
-  //   and latest close <= latest ema( close, 20 ) * 1.03
-  //   and latest rsi( 14 ) >= 40
-  //   and latest rsi( 14 ) <= 55
-  //   and latest sma( volume, 20 ) > 300000
-  //   and market cap > 10000
-  // ) )`,
-
-  // // Momentum with Volume - 3-10% above EMA20
-  // // Strong momentum stocks with RSI 55-68
-  // momentum: `( {cash} (
-  //   latest ema( close, 20 ) > latest ema( close, 50 )
-  //   and latest ema( close, 50 ) > latest sma( close, 200 )
-  //   and latest close > latest ema( close, 20 ) * 1.03
-  //   and latest close < latest ema( close, 20 ) * 1.10
-  //   and latest rsi( 14 ) >= 55
-  //   and latest rsi( 14 ) <= 68
-  //   and latest sma( volume, 20 ) > 300000
-  //   and market cap > 10000
-  // ) )`,
-
-  // // Consolidation Breakout - Near 20-day high with tight range
-  // // Range < 2.5%, RSI 50-65
-  // consolidation_breakout: `( {cash} (
-  //   latest ema( close, 20 ) > latest ema( close, 50 )
-  //   and latest ema( close, 50 ) > latest sma( close, 200 )
-  //   and latest close > latest ema( close, 20 )
-  //   and latest close >= max( 20, latest high ) * 0.97
-  //   and latest close <= max( 20, latest high ) * 1.03
-  //   and ( latest high - latest low ) < latest close * 0.025
-  //   and latest rsi( 14 ) >= 50
-  //   and latest rsi( 14 ) <= 65
-  //   and latest sma( volume, 20 ) > 300000
-  //   and market cap > 10000
-  // ) )`
-};
 
 /**
  * Get CSRF token from ChartInk
@@ -185,11 +53,11 @@ async function getChartinkSession() {
  */
 export async function runChartinkScan(scanQuery) {
   try {
-    console.log('[CHARTINK] 🔍 Running scan...');
+    console.log('[CHARTINK] Running scan...');
     console.log('[CHARTINK] Query:', scanQuery.substring(0, 100) + '...');
 
     const csrfToken = await getChartinkSession();
-    console.log('[CHARTINK] ✅ Got CSRF token');
+    console.log('[CHARTINK] Got CSRF token');
 
     const response = await client.post(SCAN_URL,
       `scan_clause=${encodeURIComponent(scanQuery)}`,
@@ -205,8 +73,8 @@ export async function runChartinkScan(scanQuery) {
       }
     );
 
-    console.log('[CHARTINK] 📥 Response status:', response.status);
-    console.log('[CHARTINK] 📥 Raw data count:', response.data?.data?.length || 0);
+    console.log('[CHARTINK] Response status:', response.status);
+    console.log('[CHARTINK] Raw data count:', response.data?.data?.length || 0);
 
     if (response.data && response.data.data) {
       const results = response.data.data.map(stock => ({
@@ -219,78 +87,19 @@ export async function runChartinkScan(scanQuery) {
       }));
 
       // Log each stock found
-      console.log('[CHARTINK] ✅ Stocks found:');
+      console.log('[CHARTINK] Stocks found:');
       results.forEach((stock, i) => {
-        console.log(`[CHARTINK]    ${i + 1}. ${stock.nsecode} (${stock.name}) - ₹${stock.close} | ${stock.per_change}%`);
+        console.log(`[CHARTINK]    ${i + 1}. ${stock.nsecode} (${stock.name}) - ${stock.close} | ${stock.per_change}%`);
       });
 
       return results;
     }
 
-    console.log('[CHARTINK] ⚠️ No data in response');
+    console.log('[CHARTINK] No data in response');
     return [];
   } catch (error) {
-    console.error('[CHARTINK] ❌ Error running scan:', error.message);
+    console.error('[CHARTINK] Error running scan:', error.message);
     throw new Error(`ChartInk scan error: ${error.message}`);
-  }
-}
-
-/**
- * Run A+ Next Week scan (primary scan)
- * @returns {Promise<Array>}
- */
-export async function runAPlusNextWeekScan() {
-  return runChartinkScan(SCAN_QUERIES.a_plus_momentum);
-}
-
-// Legacy scan functions - commented out
-// /**
-//  * Run breakout scan
-//  * @returns {Promise<Array>}
-//  */
-// export async function runBreakoutScan() {
-//   return runChartinkScan(SCAN_QUERIES.breakout);
-// }
-
-/**
- * Run pullback scan
- * @returns {Promise<Array>}
- */
-export async function runPullbackScan() {
-  return runChartinkScan(SCAN_QUERIES.pullback);
-}
-
-// /**
-//  * Run momentum scan
-//  * @returns {Promise<Array>}
-//  */
-// export async function runMomentumScan() {
-//   return runChartinkScan(SCAN_QUERIES.momentum);
-// }
-
-// /**
-//  * Run consolidation breakout scan
-//  * @returns {Promise<Array>}
-//  */
-// export async function runConsolidationScan() {
-//   return runChartinkScan(SCAN_QUERIES.consolidation_breakout);
-// }
-
-/**
- * Run combined scan - now just runs A+ Next Week
- * @returns {Promise<{ a_plus_momentum: Array, combined: Array }>}
- */
-export async function runCombinedScan() {
-  try {
-    const results = await runAPlusNextWeekScan();
-
-    return {
-      a_plus_momentum: results,
-      combined: results.map(stock => ({ ...stock, scan_type: 'a_plus_momentum' }))
-    };
-  } catch (error) {
-    console.error('Error running combined scan:', error.message);
-    throw error;
   }
 }
 
@@ -306,14 +115,6 @@ export async function runCustomScan(query, name = 'custom') {
 }
 
 export default {
-  SCAN_QUERIES,
   runChartinkScan,
-  runAPlusNextWeekScan,
-  runPullbackScan,
-  runCombinedScan,
-  runCustomScan
-  // Legacy exports - commented out
-  // runBreakoutScan,
-  // runMomentumScan,
-  // runConsolidationScan,
+  runCustomScan,
 };

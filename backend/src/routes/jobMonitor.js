@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { auth } from '../middleware/auth.js';
 
 // Import all job singletons
-import weekendScreeningJob from '../services/jobs/weekendScreeningJob.js';
+import weekendScreeningJob from '../services/weeklyPicks/weekendScreeningJob.js';
 import dailyTrackingJob from '../services/jobs/dailyTrackingJob.js';
 import intradayMonitorJob from '../services/jobs/intradayMonitorJob.js';
 import pendingAnalysisReminderJob from '../services/jobs/pendingAnalysisReminderJob.js';

@@ -226,7 +226,7 @@ export async function getStockIndicators(instrument_key, debug = false) {
  * @param {string} scanType - Scan type (e.g., 'a_plus_momentum')
  * @returns {Object} Trading levels { entry, stop, target, riskReward, ... }
  */
-function calculateLevelsForStock(stockData, scanType) {
+function calculateLevelsForStock(stockData, scanType, levelCalculator = null) {
   const {
     ema20, atr, fridayHigh, fridayClose, fridayLow, high_20d, high_52w, fridayVolume, volume_20avg,
     // Pivot levels for target anchoring (NEW)
@@ -258,8 +258,10 @@ function calculateLevelsForStock(stockData, scanType) {
   };
 
   try {
-    const levels = calculateTradingLevels(scanType || 'a_plus_momentum', levelsData);
-    return levels;
+    if (levelCalculator) {
+      return levelCalculator(scanType || 'a_plus_momentum', levelsData);
+    }
+    return calculateTradingLevels(scanType || 'a_plus_momentum', levelsData);
   } catch (error) {
     console.error(`Error calculating levels:`, error.message);
     return { valid: false, reason: error.message };
@@ -282,7 +284,7 @@ function calculateLevelsForStock(stockData, scanType) {
  * @param {boolean} [debug=false] - Enable debug logging
  * @returns {Promise<Object | null>}
  */
-export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = false, referenceDate = null) {
+export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = false, referenceDate = null, levelCalculator = null) {
   const { nsecode, name, per_change, close, volume, scan_type } = chartinkStock;
 
   // Map to instrument_key
@@ -334,7 +336,7 @@ export async function enrichStock(chartinkStock, niftyReturn1M = 0, debug = fals
   // STEP 1: Calculate trading levels FIRST (for framework scoring)
   // ═══════════════════════════════════════════════════════════════════════════
   const scanTypeForLevels = scan_type || 'a_plus_momentum';
-  const levels = calculateLevelsForStock(stockData, scanTypeForLevels);
+  const levels = calculateLevelsForStock(stockData, scanTypeForLevels, levelCalculator);
 
   if (debug) {
     console.log(`[ENRICH DEBUG] ${nsecode} - Levels calculated:`, {
@@ -607,7 +609,8 @@ export async function enrichStocks(chartinkResults, options = {}) {
     maxResults = 20,
     debug = false,
     debugCount = 3,
-    referenceDate = null  // Filter candles up to this date (YYYY-MM-DD)
+    referenceDate = null,  // Filter candles up to this date (YYYY-MM-DD)
+    levelCalculator = null // Optional: custom level calculator (e.g., weekly-specific)
   } = options;
 
   if (referenceDate) {
@@ -627,7 +630,7 @@ export async function enrichStocks(chartinkResults, options = {}) {
         debuggedCount++;
       }
 
-      const enriched = await enrichStock(stock, niftyReturn1M, shouldDebug, referenceDate);
+      const enriched = await enrichStock(stock, niftyReturn1M, shouldDebug, referenceDate, levelCalculator);
 
       if (!enriched) {
         continue;

@@ -1,7 +1,8 @@
 import express from "express";
-import chartinkService, { SCAN_QUERIES } from "../services/chartinkService.js";
+import chartinkService from "../services/chartinkService.js";
+import { WEEKLY_SCAN_QUERIES as SCAN_QUERIES } from "../services/weeklyPicks/weeklyPicksScans.js";
 import stockEnrichmentService from "../services/stockEnrichmentService.js";
-import weekendScreeningJob from "../services/jobs/weekendScreeningJob.js";
+import weekendScreeningJob from "../services/weeklyPicks/weekendScreeningJob.js";
 import dailyPullbackScanJob from "../services/jobs/dailyPullbackScanJob.js";
 import { auth } from "../middleware/auth.js";
 
