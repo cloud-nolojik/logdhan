@@ -159,6 +159,7 @@ export default function JobMonitor() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [triggeringJob, setTriggeringJob] = useState(null);
   const [toast, setToast] = useState(null);
+  const [flushing, setFlushing] = useState(false);
 
   const getToken = () => localStorage.getItem('token');
 
@@ -247,6 +248,31 @@ export default function JobMonitor() {
     }
   };
 
+  const handleFlushLogs = async () => {
+    const token = getToken();
+    if (!token) return;
+
+    setFlushing(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/job-monitor/flush-logs`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setToast({ type: 'success', message: 'PM2 logs cleared successfully' });
+      } else {
+        setToast({ type: 'error', message: data.error || 'Failed to clear logs' });
+      }
+    } catch (e) {
+      setToast({ type: 'error', message: 'Connection error: ' + e.message });
+    } finally {
+      setFlushing(false);
+    }
+  };
+
   // Error / loading states
   if (loading) {
     return (
@@ -284,6 +310,13 @@ export default function JobMonitor() {
               </p>
             </div>
             <div className="flex items-center gap-3">
+              <button
+                onClick={handleFlushLogs}
+                disabled={flushing}
+                className="px-3 py-1.5 text-sm bg-red-500 hover:bg-red-600 text-white rounded-md transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {flushing ? 'Clearing...' : 'Clear Logs'}
+              </button>
               <button
                 onClick={fetchStatus}
                 className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"

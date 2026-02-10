@@ -171,4 +171,24 @@ router.post('/trigger/:jobKey', auth, jobMonitorAuth, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/v1/job-monitor/flush-logs
+ * Flush (truncate) all PM2 log files
+ */
+router.post('/flush-logs', auth, jobMonitorAuth, async (req, res) => {
+  try {
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    await execAsync('pm2 flush');
+    console.log('[JOB-MONITOR] PM2 logs flushed by', req.user.mobileNumber);
+
+    res.json({ success: true, message: 'All PM2 logs flushed' });
+  } catch (error) {
+    console.error('[JOB-MONITOR] Failed to flush logs:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to flush logs: ' + error.message });
+  }
+});
+
 export default router;
