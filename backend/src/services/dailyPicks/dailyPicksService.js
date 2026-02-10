@@ -285,7 +285,8 @@ async function enrichCandidates(candidates) {
     const prevLow = low;
     const candlePattern = detectCandlePattern(open, high, low, close, 0, prevHigh, prevLow, prevClose);
 
-    console.log(`${LOG} [Enrich] ${candidate.symbol}: O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} ltp=${stock.ltp} vol=${stock.todays_volume} avgVol50=${stock.avg_volume_50d} rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
+    const lastDailyClose = stock.last_daily_close || close;
+    console.log(`${LOG} [Enrich] ${candidate.symbol}: O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${stock.todays_volume} avgVol50=${stock.avg_volume_50d} rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
 
     enriched.push({
       ...candidate,
@@ -304,6 +305,7 @@ async function enrichCandidates(candidates) {
         low,
         close,
         prev_close: prevClose,
+        last_daily_close: lastDailyClose,
         volume: stock.todays_volume || 0,
         avg_volume_50d: stock.avg_volume_50d || 0
       }
@@ -386,18 +388,19 @@ function scoreCandidates(enrichedCandidates) {
 
 function calculateLevels(pick) {
   const { _ohlcv, direction } = pick;
-  const prevClose = _ohlcv.prev_close || _ohlcv.close;
+  // Use last completed daily candle close for entry (not prev_close which is 2 days ago)
+  const lastClose = _ohlcv.last_daily_close || _ohlcv.close;
 
-  console.log(`${LOG} [Levels] ${pick.symbol}: direction=${direction} OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} prevClose:${_ohlcv.prev_close}} → entry will be prevClose=${prevClose}`);
+  console.log(`${LOG} [Levels] ${pick.symbol}: direction=${direction} OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} prevClose:${_ohlcv.prev_close} lastDailyClose:${_ohlcv.last_daily_close}} → entry will be lastDailyClose=${lastClose}`);
 
   let entry, stop, target;
 
   if (direction === 'LONG') {
-    entry = prevClose;                    // Market buy at open estimate
+    entry = lastClose;                    // Last trading day's close (open estimate)
     stop = _ohlcv.low;                    // Previous day's low
     target = round2(entry * (1 + TARGET_PCT / 100));
   } else {
-    entry = prevClose;                    // Market sell at open estimate
+    entry = lastClose;                    // Last trading day's close (open estimate)
     stop = _ohlcv.high;                   // Previous day's high
     target = round2(entry * (1 - TARGET_PCT / 100));
   }

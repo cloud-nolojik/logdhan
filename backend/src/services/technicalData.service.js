@@ -961,10 +961,15 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     console.log(`[DailyStockData] ${symbol}: FINAL -> LTP=${ltp}, Open=${open}, High=${high}, Low=${low}, Vol=${todayVolume}`);
     console.log(`[DailyStockData] ${symbol}: prev_close=${prevClose} (from ${previousDayCandle ? previousDayCandle[0]?.split('T')[0] : 'same candle'}), avgVol50d=${avgVolume50d}`);
 
+    // last_daily_close = close of the most recent completed daily candle
+    // This is what the stock last closed at (for entry estimation)
+    const lastDailyClose = round2(latestDailyCandle[4]);
+
     return {
       symbol,
       instrument_key: instrumentKey,
       prev_close: prevClose,
+      last_daily_close: lastDailyClose,
       open,
       high,
       low,
