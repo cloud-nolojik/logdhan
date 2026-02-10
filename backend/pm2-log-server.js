@@ -280,7 +280,6 @@ app.get('/', (req, res) => {
                     <option value="">Loading...</option>
                 </select>
                 <button class="btn btn-danger" onclick="clearDisplay()">Clear Display</button>
-                <button class="btn" onclick="flushLogs()">Flush PM2 Logs</button>
                 <button class="btn" onclick="toggleAutoRefresh()" id="autoRefreshBtn">Toggle Auto-Refresh</button>
                 <button class="btn" onclick="downloadLogs()">Download</button>
                 <div class="live-badge" id="liveBadge">
@@ -379,14 +378,7 @@ app.get('/', (req, res) => {
                 }
             }
 
-            function clearDisplay() {
-                document.getElementById('logOutput').textContent = '';
-                document.getElementById('statusLeft').textContent = 'Lines: 0';
-                showToast('Display cleared');
-            }
-
-            async function flushLogs() {
-                if (!confirm('This will permanently delete all PM2 log files on the server. Continue?')) return;
+            async function clearDisplay() {
                 try {
                     const body = currentProcess && currentProcess !== '__all__'
                         ? JSON.stringify({ processName: currentProcess })
@@ -397,14 +389,18 @@ app.get('/', (req, res) => {
                         body
                     });
                     const data = await res.json();
+                    document.getElementById('logOutput').textContent = '';
+                    document.getElementById('statusLeft').textContent = 'Lines: 0';
                     if (data.success) {
-                        document.getElementById('logOutput').textContent = '';
                         showToast(data.message);
                     } else {
-                        showToast('Failed to flush: ' + (data.error || 'Unknown error'), 'error');
+                        showToast('Failed to flush logs: ' + (data.error || 'Unknown error'), 'error');
                     }
                 } catch (e) {
-                    showToast('Error: ' + e.message, 'error');
+                    // Still clear the display even if flush fails
+                    document.getElementById('logOutput').textContent = '';
+                    document.getElementById('statusLeft').textContent = 'Lines: 0';
+                    showToast('Error flushing logs: ' + e.message, 'error');
                 }
             }
 
