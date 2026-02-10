@@ -599,4 +599,24 @@ async function processBulkPushAlerts(jobId, users, alertType, watchlistData) {
   console.log(`Bulk push alert job ${jobId} completed: ${successCount} success, ${failureCount} failures`);
 }
 
+/**
+ * POST /api/v1/admin/flush-logs
+ * Truncate PM2 log files (clears logs without restarting)
+ */
+router.post('/flush-logs', simpleAdminAuth, async (req, res) => {
+  try {
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    await execAsync('pm2 flush');
+    console.log('[ADMIN] PM2 logs flushed');
+
+    res.json({ success: true, message: 'All PM2 logs flushed' });
+  } catch (error) {
+    console.error('[ADMIN] Failed to flush logs:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to flush logs: ' + error.message });
+  }
+});
+
 export default router;
