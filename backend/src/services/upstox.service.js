@@ -1,5 +1,6 @@
 import axios from 'axios';
 import crypto from 'crypto';
+import { rateLimitedGet } from '../utils/upstoxRateLimiter.js';
 
 class UpstoxService {
   constructor() {
@@ -1171,7 +1172,7 @@ class UpstoxService {
   async getCandleData(instrumentToken, interval, accessToken, count = 100) {
     try {
 
-      const response = await axios.get(
+      const response = await rateLimitedGet(
         `${this.baseURL}/historical-candle/${instrumentToken}/${interval}`,
         {
           headers: {
@@ -1181,7 +1182,8 @@ class UpstoxService {
           params: {
             count: count
           }
-        }
+        },
+        { caller: 'upstox.getCandleData' }
       );
 
       return {
@@ -1207,7 +1209,7 @@ class UpstoxService {
   async getMarketDepth(instrumentToken, accessToken) {
     try {
 
-      const response = await axios.get(
+      const response = await rateLimitedGet(
         `${this.baseURL}/market-quote/quotes`,
         {
           headers: {
@@ -1217,7 +1219,8 @@ class UpstoxService {
           params: {
             instrument_key: instrumentToken
           }
-        }
+        },
+        { caller: 'upstox.getMarketDepth' }
       );
 
       return {
@@ -1243,7 +1246,7 @@ class UpstoxService {
   async getLiveMarketData(instrumentTokens, accessToken) {
     try {
 
-      const response = await axios.get(
+      const response = await rateLimitedGet(
         `${this.baseURL}/market-quote/ltp`,
         {
           headers: {
@@ -1253,7 +1256,8 @@ class UpstoxService {
           params: {
             instrument_key: instrumentTokens.join(',')
           }
-        }
+        },
+        { caller: 'upstox.getLiveMarketData' }
       );
 
       return {

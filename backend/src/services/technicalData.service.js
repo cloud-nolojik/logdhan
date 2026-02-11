@@ -15,7 +15,7 @@
  */
 
 import OpenAI from 'openai';
-import axios from 'axios';
+import { rateLimitedGet } from '../utils/upstoxRateLimiter.js';
 import Stock from '../models/stock.js';
 import PreFetchedData from '../models/preFetchedData.js';
 import { indicators as indicatorsEngine } from '../engine/index.js';
@@ -159,13 +159,13 @@ async function fetchFromUpstox(instrumentKey, timeframe, days = 365) {
   console.log(`[TechnicalData] Date range (IST): ${fromDateStr} to ${toDateStr}`);
 
   try {
-    const response = await axios.get(url, {
+    const response = await rateLimitedGet(url, {
       headers: {
         'Accept': 'application/json',
         'Api-Version': '2.0'
       },
       timeout: 15000
-    });
+    }, { caller: 'fetchFromUpstox' });
 
     const candles = response.data?.data?.candles || [];
     console.log(`[TechnicalData] Fetched ${candles.length} ${timeframe} candles for ${instrumentKey}`);

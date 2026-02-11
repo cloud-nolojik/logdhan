@@ -1,4 +1,4 @@
-import axios from 'axios';
+import { rateLimitedGet } from '../utils/upstoxRateLimiter.js';
 import { aiReviewService } from './ai/aiReview.service.js';
 import dailyDataPrefetchService from './dailyDataPrefetch.service.js';
 import incrementalUpdaterService from './incrementalUpdater.service.js';
@@ -578,16 +578,15 @@ class CandleFetcherService {
     try {
       const encodedUrl = url.replace(/\|/g, '%7C');
 
-      const response = await axios.get(encodedUrl, {
+      const response = await rateLimitedGet(encodedUrl, {
         headers: {
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         },
         timeout: 10000,
-        validateStatus: function (status) {
-          return status < 500;
-        }
-      });
+        // validateStatus removed — letting axios throw on 4xx so the rate limiter
+        // can catch 429/403 and retry with backoff. 5xx still throws by default.
+      }, { caller: 'candleFetcher.fetchCandleData' });
 
       return response.data;
 

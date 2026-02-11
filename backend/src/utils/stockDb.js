@@ -1,5 +1,5 @@
 import Stock from '../models/stock.js';
-import axios from 'axios';
+import { rateLimitedGet } from './upstoxRateLimiter.js';
 
 const API_KEY = process.env.UPSTOX_API_KEY || '5d2c7442-7ce9-44b3-a0df-19c110d72262';
 
@@ -220,7 +220,7 @@ export async function getDailyCandles(instrumentKey) {
     console.log(`[getDailyCandles] Headers:`, JSON.stringify(axiosConfig.headers));
     console.log(`[getDailyCandles] Date Range: ${previousDayFormattedDate} to ${currentDayFormattedDate}`);
 
-    const response = await axios.get(url, axiosConfig);
+    const response = await rateLimitedGet(url, axiosConfig, { caller: 'stockDb' });
 
     console.log(`[getDailyCandles] Response Status: ${response.status}`);
     console.log(`[getDailyCandles] Response Headers:`, JSON.stringify(response.headers));
@@ -357,7 +357,7 @@ export async function getCurrentPrice(instrumentKey, sendCandles = false) {
         console.log(`[getCurrentPrice] Trying: ${format.name}`);
         console.log(`[getCurrentPrice] URL: ${format.url}`);
 
-        const response = await axios.get(format.url, axiosConfig);
+        const response = await rateLimitedGet(format.url, axiosConfig, { caller: 'getCurrentPrice' });
 
         console.log(`[getCurrentPrice] Response Status: ${response.status}`);
         console.log(`[getCurrentPrice] Response Data:`, JSON.stringify(response.data).substring(0, 1000));
@@ -525,7 +525,7 @@ export async function findHistoricalLevelCrossTime(instrumentKey, level, directi
     console.log(`[findHistoricalLevelCrossTime] Date: ${formattedDate}, Level: ${level}, Direction: ${direction}`);
     console.log(`[findHistoricalLevelCrossTime] URL: ${url}`);
 
-    const response = await axios.get(url, axiosConfig);
+    const response = await rateLimitedGet(url, axiosConfig, { caller: 'stockDb' });
     const candles = response.data?.data?.candles || [];
 
     console.log(`[findHistoricalLevelCrossTime] Got ${candles.length} candles`);
@@ -596,7 +596,7 @@ export async function findLevelCrossTime(instrumentKey, level, direction = 'abov
     console.log(`[findLevelCrossTime] Fetching intraday candles for ${instrumentKey}`);
     console.log(`[findLevelCrossTime] Level: ${level}, Direction: ${direction}`);
 
-    const response = await axios.get(url, axiosConfig);
+    const response = await rateLimitedGet(url, axiosConfig, { caller: 'stockDb' });
     const candles = response.data?.data?.candles || [];
 
     console.log(`[findLevelCrossTime] Got ${candles.length} candles`);
@@ -686,7 +686,7 @@ export async function getDailyCandlesForRange(instrumentKey, fromDate, toDate) {
     console.log(`[getDailyCandlesForRange] Fetching daily candles for ${instrumentKey}`);
     console.log(`[getDailyCandlesForRange] Date range: ${fromStr} to ${toStr}`);
 
-    const response = await axios.get(url, axiosConfig);
+    const response = await rateLimitedGet(url, axiosConfig, { caller: 'stockDb' });
     const candles = response.data?.data?.candles || [];
 
     console.log(`[getDailyCandlesForRange] Got ${candles.length} daily candles`);

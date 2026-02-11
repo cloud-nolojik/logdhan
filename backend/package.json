@@ -35,6 +35,7 @@
     "axios": "^1.10.0",
     "axios-cookiejar-support": "^6.0.5",
     "bcryptjs": "^2.4.3",
+    "bottleneck": "^2.19.5",
     "canvas": "^2.11.2",
     "chart.js": "^4.5.0",
     "chartjs-adapter-date-fns": "^3.0.0",

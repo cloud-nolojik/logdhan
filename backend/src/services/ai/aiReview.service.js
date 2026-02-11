@@ -1,5 +1,6 @@
 import axios from 'axios';
 import Parser from 'rss-parser';
+import { rateLimitedGet } from '../../utils/upstoxRateLimiter.js';
 // Removed QuickChart import due to ES module compatibility issues
 import fs from 'fs';
 import path from 'path';
@@ -1361,13 +1362,13 @@ class AIReviewService {
         throw new Error(`Holiday data required for ${year} but no Upstox token available`);
       }
 
-      const response = await axios.get('https://api.upstox.com/v2/market/holidays', {
+      const response = await rateLimitedGet('https://api.upstox.com/v2/market/holidays', {
         headers: {
           'Authorization': `Bearer ${upstoxToken}`,
           'Accept': 'application/json'
         },
         timeout: 10000
-      });
+      }, { caller: 'aiReview.getMarketHolidays' });
 
       if (response.data?.status === 'success' && Array.isArray(response.data.data)) {
         const holidays = new Set();
@@ -1877,11 +1878,11 @@ class AIReviewService {
     //     console.log(`📡 FETCH: ${instrument} | ${interval} | ${fromDate} → ${toDate}`);
 
     try {
-      const response = await axios.get(url, {
+      const response = await rateLimitedGet(url, {
         headers: {
           'x-api-key': this.upstoxApiKey
         }
-      });
+      }, { caller: 'aiReview.fetchCandleData' });
 
       // Check if data exists in nested structure
       const actualCandles = response.data?.data?.candles || response.data?.candles;
@@ -2821,11 +2822,11 @@ class AIReviewService {
     //     console.log(`📡 Fetching latest candle from: ${url}`);
 
     try {
-      const response = await axios.get(url, {
+      const response = await rateLimitedGet(url, {
         headers: {
           'x-api-key': this.upstoxApiKey
         }
-      });
+      }, { caller: 'aiReview.fetchLatestCandle' });
 
       // Check if data exists in nested structure
       const actualCandles = response.data?.data?.candles || response.data?.candles;
