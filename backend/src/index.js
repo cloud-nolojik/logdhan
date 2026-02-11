@@ -29,13 +29,8 @@ import { azureStorageService } from './services/storage/azureStorage.service.js'
 import { messagingService } from './services/messaging/messaging.service.js';
 import priceCacheService from './services/priceCache.service.js'; // In-memory price caching service
 import weekendScreeningJob from './services/weeklyPicks/weekendScreeningJob.js'; // weekend-screening (Sat 6PM IST)
-import agendaDataPrefetchService from './services/agendaDataPrefetchService.js'; // daily-price-prefetch (3:35 PM Mon-Fri)
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
-import intradayMonitorJob from './services/jobs/intradayMonitorJob.js'; // intraday-monitor (every 15 min during market hours)
-import pendingAnalysisReminderJob from './services/jobs/pendingAnalysisReminderJob.js'; // pending-analysis-reminder (4:00 PM Mon-Fri, notify users about pending stocks)
-import morningBriefJob from './services/jobs/morningBriefJob.js'; // morning-brief (8:00 AM Monday)
 import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
-import dailyPullbackScanJob from './services/jobs/dailyPullbackScanJob.js'; // daily-pullback-scan (3:45 PM Mon-Fri)
 import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-picks-scan (8:45 AM Mon-Fri)
 import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // daily-picks-entry (9:15 AM), fill-check (9:45 AM), monitor (*/15 10-14)
 import dailyExitJob from './services/jobs/dailyExitJob.js'; // daily-exit (3:00 PM Mon-Fri)
@@ -223,9 +218,6 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// Chart cleanup is now handled by Agenda service (agendaDataPrefetchService)
-// Runs every hour via scheduled job 'chart-cleanup'
-
 // Initialize Azure Storage
 async function initializeAzureStorage() {
   try {
@@ -284,18 +276,6 @@ async function initializePriceCacheService() {
   }
 }
 
-// Initialize Agenda data prefetch service (daily-price-prefetch at 3:35 PM Mon-Fri)
-async function initializeAgendaDataPrefetchService() {
-  try {
-
-    await agendaDataPrefetchService.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize Agenda data prefetch service:', error);
-  }
-}
-
-
 // Initialize daily tracking job (4:00 PM Mon-Fri IST - Phase 1 status updates + Phase 2 AI for changes)
 async function initializeDailyTrackingJob() {
   try {
@@ -307,52 +287,12 @@ async function initializeDailyTrackingJob() {
   }
 }
 
-// Initialize intraday monitor job (every 15 min during market hours 9:15 AM - 3:30 PM IST)
-async function initializeIntradayMonitorJob() {
-  try {
-
-    await intradayMonitorJob.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize intraday monitor job:', error);
-  }
-}
-
-// Initialize pending analysis reminder job (4:00 PM Mon-Fri IST - notify users about pending stocks)
-async function initializePendingAnalysisReminderJob() {
-  try {
-
-    await pendingAnalysisReminderJob.initialize();
-
-  } catch (error) {
-    console.error('❌ Failed to initialize pending analysis reminder job:', error);
-  }
-}
-
-// Initialize morning brief job (8:00 AM Monday IST - categorize stocks + place entry GTTs)
-async function initializeMorningBriefJob() {
-  try {
-    await morningBriefJob.initialize();
-  } catch (error) {
-    console.error('Failed to initialize morning brief job:', error);
-  }
-}
-
 // Initialize Kite order sync job (every 30 min during market hours - detect fills, place OCO)
 async function initializeKiteOrderSyncJob() {
   try {
     await kiteOrderSyncJob.initialize();
   } catch (error) {
     console.error('Failed to initialize Kite order sync job:', error);
-  }
-}
-
-// Initialize daily pullback scan job (3:45 PM Mon-Fri IST - pullback scan after price prefetch)
-async function initializeDailyPullbackScanJob() {
-  try {
-    await dailyPullbackScanJob.initialize();
-  } catch (error) {
-    console.error('Failed to initialize daily pullback scan job:', error);
   }
 }
 
@@ -400,12 +340,7 @@ app.listen(PORT, async () => {
 
   // Scheduled jobs:
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST)
-  await initializeAgendaDataPrefetchService(); // daily-price-prefetch (3:35 PM Mon-Fri)
-  await initializeDailyPullbackScanJob(); // daily-pullback-scan (3:45 PM Mon-Fri, pullback only)
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
-  await initializeIntradayMonitorJob(); // intraday-monitor (every 15 min during market hours)
-  await initializePendingAnalysisReminderJob(); // pending-analysis-reminder (4:00 PM Mon-Fri, notify users)
-  await initializeMorningBriefJob(); // morning-brief (8:00 AM Monday)
   await initializeKiteOrderSyncJob(); // kite-order-sync (every 30 min during market hours)
 
   // Daily picks jobs
@@ -430,12 +365,7 @@ process.on('SIGINT', async () => {
     // Stop all Agenda services gracefully
     await Promise.all([
       weekendScreeningJob.shutdown(),
-      agendaDataPrefetchService.stop(),
-      dailyPullbackScanJob.shutdown(),
       dailyTrackingJob.shutdown(),
-      intradayMonitorJob.shutdown(),
-      pendingAnalysisReminderJob.shutdown(),
-      morningBriefJob.shutdown(),
       kiteOrderSyncJob.shutdown(),
       kiteTokenRefreshJob.shutdown(),
       dailyPicksJob.shutdown(),
@@ -461,12 +391,7 @@ process.on('SIGTERM', async () => {
     // Stop all Agenda services gracefully
     await Promise.all([
       weekendScreeningJob.shutdown(),
-      agendaDataPrefetchService.stop(),
-      dailyPullbackScanJob.shutdown(),
       dailyTrackingJob.shutdown(),
-      intradayMonitorJob.shutdown(),
-      pendingAnalysisReminderJob.shutdown(),
-      morningBriefJob.shutdown(),
       kiteOrderSyncJob.shutdown(),
       kiteTokenRefreshJob.shutdown(),
       dailyPicksJob.shutdown(),

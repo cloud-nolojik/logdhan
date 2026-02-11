@@ -5,16 +5,11 @@ import { auth } from '../middleware/auth.js';
 // Import all job singletons
 import weekendScreeningJob from '../services/weeklyPicks/weekendScreeningJob.js';
 import dailyTrackingJob from '../services/jobs/dailyTrackingJob.js';
-import intradayMonitorJob from '../services/jobs/intradayMonitorJob.js';
-import pendingAnalysisReminderJob from '../services/jobs/pendingAnalysisReminderJob.js';
-import morningBriefJob from '../services/jobs/morningBriefJob.js';
 import kiteOrderSyncJob from '../services/jobs/kiteOrderSyncJob.js';
-import dailyPullbackScanJob from '../services/jobs/dailyPullbackScanJob.js';
 import dailyPicksJob from '../services/jobs/dailyPicksJob.js';
 import dailyEntryJob from '../services/jobs/dailyEntryJob.js';
 import dailyExitJob from '../services/jobs/dailyExitJob.js';
 import kiteTokenRefreshJob from '../services/jobs/kiteTokenRefreshJob.js';
-import agendaDataPrefetchService from '../services/agendaDataPrefetchService.js';
 import priceCacheService from '../services/priceCache.service.js';
 
 const router = express.Router();
@@ -25,16 +20,11 @@ const ALLOWED_MOBILE = '919008108650';
 const JOB_REGISTRY = [
   { key: 'weekendScreening', name: 'weekend-screening', description: 'ChartInk scans + AI analysis', schedule: 'Sat 6:00 PM', collection: 'weekend_screening_jobs', singleton: weekendScreeningJob },
   { key: 'dailyTracking', name: 'daily-tracking', description: 'Phase 1 status + Phase 2 AI', schedule: '4:00 PM Mon-Fri', collection: 'daily_tracking_jobs', singleton: dailyTrackingJob },
-  { key: 'intradayMonitor', name: 'intraday-monitor', description: 'Stop/T1/T2/T3 monitoring', schedule: '*/15 9:15-15:30 Mon-Fri', collection: 'intraday_monitor_jobs', singleton: intradayMonitorJob },
-  { key: 'pendingAnalysisReminder', name: 'pending-analysis-reminder', description: 'Notify pending analysis', schedule: '4:00 PM Mon-Fri', collection: 'pending_analysis_reminder_jobs', singleton: pendingAnalysisReminderJob },
-  { key: 'morningBrief', name: 'morning-brief', description: 'Categorize stocks + GTT orders', schedule: '8:00 AM Monday', collection: 'morning_brief_jobs', singleton: morningBriefJob },
   { key: 'kiteOrderSync', name: 'kite-order-sync', description: 'GTT fill detection + OCO', schedule: '*/30 9:00-15:30 Mon-Fri', collection: 'kite_order_sync_jobs', singleton: kiteOrderSyncJob },
-  { key: 'dailyPullbackScan', name: 'daily-pullback-scan', description: 'ChartInk pullback scan', schedule: '3:45 PM Tue-Fri', collection: 'daily_pullback_scan_jobs', singleton: dailyPullbackScanJob },
   { key: 'dailyPicksScan', name: 'daily-picks-scan', description: 'Scan + enrich + score picks', schedule: '9:09 AM Mon-Fri', collection: 'daily_picks_jobs', singleton: dailyPicksJob },
   { key: 'dailyEntry', name: 'daily-picks-entry', description: 'MIS orders + fill check + monitor', schedule: '9:15/9:45/*/15 Mon-Fri', collection: 'daily_entry_jobs', singleton: dailyEntryJob },
   { key: 'dailyExit', name: 'daily-exit', description: 'Force-exit open positions', schedule: '3:00 PM Mon-Fri', collection: null, singleton: dailyExitJob }, // node-cron — no MongoDB collection (was Agenda 'daily_exit_jobs', switched after missed 3 PM exit on Feb 10)
   { key: 'kiteTokenRefresh', name: 'kite-token-refresh', description: 'Refresh Kite access token', schedule: '6:00 AM Daily', collection: 'kite_token_jobs', singleton: kiteTokenRefreshJob },
-  { key: 'dataPrefetch', name: 'daily-price-prefetch', description: 'Prefetch closing prices', schedule: '3:35 PM Mon-Fri', collection: 'data_prefetch_jobs', singleton: agendaDataPrefetchService },
   { key: 'priceCache', name: 'price-cache', description: 'In-memory price polling (5 min)', schedule: '*/5 during market hours', collection: null, singleton: priceCacheService },
 ];
 

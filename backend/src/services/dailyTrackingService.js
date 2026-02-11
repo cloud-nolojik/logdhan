@@ -1695,14 +1695,18 @@ async function runDailyTracking(options = {}) {
     console.log(`${runLabel} Total time: ${totalDuration}ms`);
     console.log(`${'═'.repeat(60)}\n`);
 
-    // Send push notification to all users if there were status changes or AI analysis (skip in dry run)
-    if (!dryRun && summary.phase2.successful > 0) {
+    // Send push notification to all users after every run (skip in dry run)
+    if (!dryRun) {
       try {
-        await firebaseService.sendAnalysisCompleteToAllUsers(
-          'Daily Analysis Complete',
-          `${summary.phase2.successful} stock${summary.phase2.successful > 1 ? 's' : ''} analyzed with status updates`,
-          { type: 'daily_analysis', route: '/weekly-watchlist' }
-        );
+        const analyzed = summary.phase2.successful;
+        const title = analyzed > 0 ? 'Daily Analysis Complete' : 'Daily Tracking Complete';
+        const body = analyzed > 0
+          ? `${analyzed} stock${analyzed > 1 ? 's' : ''} analyzed with status updates`
+          : `${summary.phase1.stocks_processed} stocks tracked — no changes today`;
+        await firebaseService.sendAnalysisCompleteToAllUsers(title, body, {
+          type: 'daily_analysis',
+          route: '/weekly-watchlist'
+        });
         console.log(`${runLabel} 📱 Push notifications sent to all users`);
       } catch (notifError) {
         console.error(`${runLabel} ⚠️ Failed to send notifications:`, notifError.message);
