@@ -28,7 +28,7 @@ export default function Home() {
           <div className="grid lg:grid-cols-[1.15fr_0.85fr] gap-10 p-10">
             <div className="space-y-6">
               <div className="inline-flex items-center text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200 bg-emerald-500/10 border border-emerald-400/30 px-4 py-2 rounded-full">
-                30-day free trial
+                100% free, ad-supported
               </div>
               <div className="space-y-3">
                 <h2 className="text-3xl md:text-4xl font-black text-white leading-tight">
@@ -64,26 +64,26 @@ export default function Home() {
                   See FAQ
                 </a>
               </div>
-              <p className="text-sm text-white/60">No card needed. Cancel anytime.</p>
+              <p className="text-sm text-white/60">No payments. No subscriptions. Just download and start.</p>
             </div>
             <div className="bg-white/5 rounded-2xl border border-white/10 p-6 space-y-4">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-200">
-                Plans at a glance
+                How it works
               </p>
               <ul className="space-y-3 text-white">
                 <li className="flex gap-3">
                   <span className="mt-0.5">✅</span>
                   <div>
-                    <p className="font-semibold">Free trial</p>
-                    <p className="text-sm text-white/70">30 days • Track up to 3 stocks</p>
+                    <p className="font-semibold">Free forever</p>
+                    <p className="text-sm text-white/70">Add up to 5 stocks per day • Watch short ads to unlock content</p>
                   </div>
                 </li>
                 <li className="flex gap-3">
                   <span className="mt-0.5">📊</span>
                   <div>
-                    <p className="font-semibold">Pricing</p>
+                    <p className="font-semibold">No limits on watchlist</p>
                     <p className="text-sm text-white/70">
-                      Plans from ₹99 to ₹1999 per month. Track from 3 to 100 stocks based on your plan.
+                      Grow your watchlist over time. No total limit — just 5 new adds per day.
                     </p>
                   </div>
                 </li>

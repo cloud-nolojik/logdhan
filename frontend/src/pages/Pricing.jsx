@@ -1,107 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { Link } from "react-router-dom";
 
 export default function Pricing() {
-  const [pricingPlans, setPricingPlans] = useState([]);
-  const [plansLoading, setPlansLoading] = useState(true);
-  const [plansError, setPlansError] = useState(null);
-
-  useEffect(() => {
-    const fetchPlans = async () => {
-      try {
-        setPlansLoading(true);
-        setPlansError(null);
-
-        const response = await fetch("/api/v1/public/plans");
-        if (!response.ok) {
-          throw new Error("Failed to fetch plans");
-        }
-
-        const data = await response.json();
-        if (data.success && Array.isArray(data.data)) {
-          setPricingPlans(data.data);
-        } else {
-          throw new Error("Invalid pricing data received");
-        }
-      } catch (err) {
-        console.error("Error fetching plans:", err);
-        setPlansError(err.message || "Unable to load plans right now.");
-        setPricingPlans([]);
-      } finally {
-        setPlansLoading(false);
-      }
-    };
-
-    fetchPlans();
-  }, []);
-
-  // helper to attach style "tone" per plan
-  const formatPlanForCard = (plan) => {
-    const isTrial = plan.type === "TRIAL";
-
-    const tone =
-      isTrial ? "emerald" : plan.isPopular ? "blue" : plan.isBestValue ? "amber" : "violet";
-
-    const toneStyles = {
-      emerald: {
-        accentText: "text-emerald-600",
-        accentLight: "text-emerald-500",
-        badgeBg: "bg-emerald-100 text-emerald-800",
-        cardRing: "ring-emerald-100",
-      },
-      blue: {
-        accentText: "text-blue-600",
-        accentLight: "text-blue-500",
-        badgeBg: "bg-blue-100 text-blue-800",
-        cardRing: "ring-blue-100",
-      },
-      amber: {
-        accentText: "text-amber-600",
-        accentLight: "text-amber-500",
-        badgeBg: "bg-amber-100 text-amber-800",
-        cardRing: "ring-amber-100",
-      },
-      violet: {
-        accentText: "text-violet-600",
-        accentLight: "text-violet-500",
-        badgeBg: "bg-violet-100 text-violet-800",
-        cardRing: "ring-violet-100",
-      },
-    };
-
-    const styles = toneStyles[tone];
-
-    return {
-      name: plan.name,
-      stockLimit: plan.stockLimit,
-      price: isTrial ? "FREE" : `₹${plan.price}`,
-      billing:
-        plan.billingCycle === "MONTHLY"
-          ? "per month"
-          : plan.billingCycle === "ANNUALLY"
-          ? "per year"
-          : "1-month trial",
-      features: plan.features,
-      isTrial,
-      isPopular: plan.isPopular,
-      isBestValue: plan.isBestValue,
-      badge: isTrial
-        ? "FREE Trial"
-        : plan.isPopular
-        ? "Most Popular"
-        : plan.isBestValue
-        ? "Best Value"
-        : "Advanced",
-      emoji: isTrial ? "🎁" : plan.isPopular ? "⭐" : plan.isBestValue ? "💎" : "📈",
-      buttonText: isTrial
-        ? "Start free trial"
-        : plan.isPopular || plan.isBestValue
-        ? "Subscribe now"
-        : "Choose plan",
-      styles,
-    };
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-16 sm:px-6 lg:px-8">
       {/* soft background */}
@@ -110,133 +10,66 @@ export default function Pricing() {
       <div className="mx-auto max-w-6xl">
         {/* HEADER */}
         <div className="text-center mb-12">
-          <p className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-            Pricing · Educational swing analysis
+          <p className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+            100% free, ad-supported
           </p>
           <h1 className="mt-4 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight text-slate-900">
-            AI swing strategy{" "}
+            Everything is{" "}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-emerald-500">
-              plans for your watchlist
+              free
             </span>
           </h1>
           <p className="mt-4 max-w-2xl mx-auto text-sm sm:text-base text-slate-600">
-            One account works across all platforms. Start with the free trial, then pick the
-            watchlist size that suits you.
+            No subscriptions, no hidden fees. SwingSetups is completely free and supported
+            by short advertisements.
           </p>
         </div>
 
-        {/* TOP HIGHLIGHT / DISCLAIMER */}
-        <div className="mb-10 rounded-3xl border border-emerald-100 bg-white shadow-sm p-6 sm:p-8 text-center">
-          <div className="text-3xl mb-3">🎆</div>
-          <p className="text-sm sm:text-base text-slate-700 mb-4">
-            <span className="font-semibold text-emerald-600">
-              AI swing setups + optional WhatsApp alerts
-            </span>{" "}
-            for educational learning. Same analysis on every plan – only watchlist size changes.
-          </p>
-          <div className="inline-flex flex-col sm:flex-row items-center gap-3 justify-center">
-            <Link
-              to="/download"
-              className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-emerald-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:brightness-105 transition"
-            >
-              🎁 Start with 1-month free trial
-            </Link>
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-[11px] font-medium text-amber-800 text-left">
-              ⚠️ SwingSetups is{" "}
-              <span className="font-semibold">not SEBI-registered – educational only.</span> We
-              do not provide investment advice or portfolio management services.
-            </div>
-          </div>
-        </div>
-
-        {/* ERROR / LOADING */}
-        {plansLoading && (
-          <div className="text-center py-10">
-            <div className="inline-block h-6 w-6 animate-spin rounded-full border-b-2 border-blue-500 mb-3" />
-            <p className="text-sm text-slate-600">Loading pricing plans…</p>
-          </div>
-        )}
-
-        {plansError && !plansLoading && (
-          <div className="mb-8 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            Couldn&apos;t load plans right now. Please try again later. ({plansError})
-          </div>
-        )}
-
-        {/* PLANS */}
-        {!plansLoading && pricingPlans.length > 0 && (
-          <div className="mb-12 grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-            {pricingPlans.map((plan, index) => {
-              const card = formatPlanForCard(plan);
-
-              return (
-                <div
-                  key={index}
-                  className={`relative flex flex-col rounded-3xl bg-white border border-slate-100 shadow-sm hover:shadow-lg transition-shadow duration-200 p-6 sm:p-7 ${card.styles.cardRing}`}
-                >
-                  {/* badge */}
-                  <span
-                    className={`absolute right-4 top-4 rounded-full px-3 py-1 text-[10px] font-semibold ${card.styles.badgeBg}`}
-                  >
-                    {card.badge}
-                  </span>
-
-                  <div className="mb-3 text-3xl">{card.emoji}</div>
-                  <h3 className="text-lg sm:text-xl font-semibold text-slate-900">
-                    {card.name}
-                  </h3>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {card.isTrial
-                      ? "Best way to explore SwingSetups"
-                      : card.isPopular
-                      ? "Most common choice"
-                      : card.isBestValue
-                      ? "For bigger watchlists"
-                      : "For very active users"}
-                  </p>
-
-                  <div className="mt-5 mb-4">
-                    <div
-                      className={`text-3xl font-semibold leading-tight ${card.styles.accentText}`}
-                    >
-                      {card.price}
-                    </div>
-                    <div className="text-xs text-slate-500">{card.billing}</div>
-                  </div>
-
-                  <div className="mb-5 space-y-2 text-sm">
-                    <div className="flex items-center gap-2 text-slate-700">
-                      <span className={`${card.styles.accentLight} text-base font-semibold`}>
-                        {card.stockLimit}
-                      </span>
-                      <span className="text-xs text-slate-500">stocks watchlist</span>
-                    </div>
-                    {card.features?.slice(0, 2).map((feature, i) => (
-                      <div key={i} className="flex items-start gap-2 text-xs text-slate-600">
-                        <span className="mt-0.5">✅</span>
-                        <span>{feature}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <button
-                    className="mt-auto w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
-                  >
-                    {card.buttonText}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* FEATURES BLOCK – always shown */}
-        <div className="mb-10 rounded-3xl bg-white border border-slate-100 shadow-sm p-6 sm:p-8">
+        {/* HOW IT WORKS CARD */}
+        <div className="mb-10 rounded-3xl border border-emerald-100 bg-white shadow-sm p-6 sm:p-8">
           <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-6 text-center">
-            What&apos;s included in every plan
+            How SwingSetups works
           </h2>
 
-          {/* Feature Categories */}
+          <div className="grid md:grid-cols-3 gap-6 mb-8">
+            <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-5 text-center">
+              <div className="text-3xl mb-3">🆓</div>
+              <h3 className="text-base font-semibold text-emerald-900 mb-2">Free forever</h3>
+              <p className="text-xs text-emerald-700">
+                No subscription fees, no in-app purchases. All features are available to everyone.
+              </p>
+            </div>
+
+            <div className="rounded-2xl bg-blue-50 border border-blue-100 p-5 text-center">
+              <div className="text-3xl mb-3">📊</div>
+              <h3 className="text-base font-semibold text-blue-900 mb-2">5 stocks per day</h3>
+              <p className="text-xs text-blue-700">
+                Add up to 5 new stocks to your watchlist each day. No limit on total watchlist size —
+                it grows over time.
+              </p>
+            </div>
+
+            <div className="rounded-2xl bg-amber-50 border border-amber-100 p-5 text-center">
+              <div className="text-3xl mb-3">📺</div>
+              <h3 className="text-base font-semibold text-amber-900 mb-2">Watch short ads</h3>
+              <p className="text-xs text-amber-700">
+                Unlock Daily Picks, Trail Protection, and Trade Check by watching a brief ad.
+                Each unlock lasts for the trading day.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-100 border border-slate-200 px-4 py-3 text-xs text-slate-700 text-center">
+            That's it. No credit card needed. No trials. No "upgrade" walls.
+          </div>
+        </div>
+
+        {/* FEATURES BLOCK */}
+        <div className="mb-10 rounded-3xl bg-white border border-slate-100 shadow-sm p-6 sm:p-8">
+          <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-6 text-center">
+            What's included
+          </h2>
+
           <div className="space-y-6">
             {/* DISCOVERY */}
             <div className="rounded-2xl bg-blue-50 border border-blue-100 p-5">
@@ -247,6 +80,7 @@ export default function Pricing() {
               <ul className="text-xs text-blue-800 space-y-1">
                 <li className="flex gap-2"><span>✓</span> Weekly Grade A stock picks (Saturday)</li>
                 <li className="flex gap-2"><span>✓</span> 4 setup types: Breakout, Pullback, Momentum, Consolidation</li>
+                <li className="flex gap-2"><span>✓</span> Daily Picks — top opportunities each trading day</li>
               </ul>
             </div>
 
@@ -258,7 +92,7 @@ export default function Pricing() {
               </div>
               <ul className="text-xs text-emerald-800 space-y-1">
                 <li className="flex gap-2"><span>✓</span> Daily post-market analysis (4 PM)</li>
-                <li className="flex gap-2"><span>✓</span> Clear verdicts: &quot;WAIT&quot;, &quot;SKIP&quot;, &quot;HOLD&quot;, &quot;EXIT&quot;</li>
+                <li className="flex gap-2"><span>✓</span> Clear verdicts: "WAIT", "SKIP", "HOLD", "EXIT"</li>
                 <li className="flex gap-2"><span>✓</span> Exact ₹ risk/reward amounts</li>
                 <li className="flex gap-2"><span>✓</span> Beginner-friendly explanations</li>
               </ul>
@@ -297,26 +131,67 @@ export default function Pricing() {
                 </div>
                 <ul className="text-xs text-pink-800 space-y-1">
                   <li className="flex gap-2"><span>✓</span> Permission to skip weak setups</li>
-                  <li className="flex gap-2"><span>✓</span> &quot;Why it&apos;s okay&quot; when trades fail</li>
+                  <li className="flex gap-2"><span>✓</span> "Why it's okay" when trades fail</li>
                   <li className="flex gap-2"><span>✓</span> No FOMO - quality over quantity</li>
                 </ul>
               </div>
             </div>
           </div>
+        </div>
 
-          <div className="mt-6 rounded-2xl bg-slate-100 border border-slate-200 px-4 py-3 text-xs text-slate-700 text-center">
-            💡 <span className="font-medium">Only difference between plans:</span> How many stocks you can track (3 to 100).
-            All features are the same.
+        {/* WHY ADS? */}
+        <div className="mb-10 rounded-3xl bg-white border border-slate-100 shadow-sm p-6 sm:p-8">
+          <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-4 text-center">
+            Why ads?
+          </h2>
+          <p className="text-sm text-slate-600 text-center max-w-2xl mx-auto mb-6">
+            We believe quality trading education shouldn't be locked behind expensive subscriptions.
+            Short ads let us keep everything free while covering our AI and infrastructure costs.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
+            <div className="flex items-start gap-3">
+              <span className="text-emerald-500 mt-0.5">✓</span>
+              <p className="text-sm text-slate-700">Ads are short (15-30 seconds)</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="text-emerald-500 mt-0.5">✓</span>
+              <p className="text-sm text-slate-700">Unlocks last the full trading day</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="text-emerald-500 mt-0.5">✓</span>
+              <p className="text-sm text-slate-700">No pop-ups or banner interruptions</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="text-emerald-500 mt-0.5">✓</span>
+              <p className="text-sm text-slate-700">Your data is never sold</p>
+            </div>
           </div>
         </div>
 
-        {/* FOOT NOTE */}
-        <div className="rounded-2xl bg-slate-900 text-slate-100 px-4 py-4 text-xs sm:text-[11px]">
+        {/* CTA */}
+        <div className="mb-10 rounded-3xl bg-slate-900 text-white p-6 sm:p-8 text-center">
+          <div className="text-3xl mb-3">📈</div>
+          <h2 className="text-xl sm:text-2xl font-semibold mb-3">
+            Ready to start?
+          </h2>
+          <p className="text-sm text-slate-300 mb-6 max-w-lg mx-auto">
+            Download the app, add your first stocks, and get AI swing analysis — all for free.
+          </p>
+          <Link
+            to="/download"
+            className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-emerald-500 px-8 py-3 text-sm font-semibold text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:brightness-105 transition"
+          >
+            Download the App
+          </Link>
+        </div>
+
+        {/* DISCLAIMER */}
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-xs text-amber-800">
           <p>
-            <span className="font-semibold">ℹ️ Note:</span> Subscriptions renew automatically.
-            You can cancel anytime. Payments are processed securely by Cashfree. All prices
-            include GST. SwingSetups does not execute orders or manage money – it only provides
-            an educational view of price regions.
+            <span className="font-semibold">⚠️ Educational only:</span> SwingSetups is not
+            SEBI-registered. We do not provide investment advice or portfolio management services.
+            All analysis is AI-generated educational content. Trading involves risk; past performance
+            does not guarantee future results.
           </p>
         </div>
       </div>

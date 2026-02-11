@@ -24,8 +24,7 @@ export default function Footer() {
             <div className="flex flex-col gap-2 text-sm text-slate-300">
               <Link to="/privacy-policy" className="hover:text-blue-400 transition">Privacy Policy</Link>
               <Link to="/terms" className="hover:text-blue-400 transition">Terms & Conditions</Link>
-              <Link to="/refund-policy" className="hover:text-blue-400 transition">Refund Policy</Link>
-              <Link to="/pricing-policy" className="hover:text-blue-400 transition">Pricing Policy</Link>
+              <Link to="/contact" className="hover:text-blue-400 transition">Contact</Link>
             </div>
           </div>
         </div>
@@ -39,7 +38,7 @@ export default function Footer() {
             <p>Registered under the Companies Act, 2013 | Headquartered in Bengaluru, India</p>
             <p className="mt-3 text-amber-400">SwingSetups is an educational tool. It does not provide investment advice or portfolio management services.</p>
           </div>
-          <div className="text-sm text-slate-300 mt-4">© 2025 Nolojik Innovations Private Limited. All rights reserved.</div>
+          <div className="text-sm text-slate-300 mt-4">© 2025-2026 Nolojik Innovations Private Limited. All rights reserved.</div>
         </div>
       </div>
     </footer>

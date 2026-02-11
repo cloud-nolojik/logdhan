@@ -215,14 +215,14 @@ const userSchema = new mongoose.Schema({
     }]
   },
   watchlist: [watchlistItemSchema],
+  dailyAddTracker: {
+    date: { type: String, default: '' },   // IST date string "YYYY-MM-DD"
+    keys: [{ type: String }]                // unique instrument_keys added that day
+  },
   // Auto trading feature
   enableAutoTrade: {
     type: Boolean,
     default: false
-  },
-  isVerified: {
-    type: Boolean,
-    default: true
   },
   hasConsented: {
     type: Boolean,

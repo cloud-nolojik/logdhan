@@ -28,7 +28,11 @@ const faqs = [
   },
   {
     q: 'How many stocks can I track?',
-    a: 'The free trial lets you track up to 3 stocks for 30 days. Paid plans allow larger watchlists, from 3 to 100 stocks depending on your subscription tier. Every Saturday, we also share our discovery of Grade A setups.'
+    a: 'You can add up to 5 new stocks per day to your watchlist. There\'s no limit on total watchlist size — your watchlist grows over time. Every Saturday, we also share our discovery of Grade A setups that you can add to your list.'
+  },
+  {
+    q: 'Why is there a daily add limit?',
+    a: 'We limit additions to 5 per day to ensure our AI can provide thorough, quality analysis for every stock. This helps maintain analysis accuracy for all users. If you remove a stock and re-add it the same day, it doesn\'t count against your limit.'
   },
   {
     q: 'What time is analysis updated?',

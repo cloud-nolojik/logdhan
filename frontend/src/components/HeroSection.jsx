@@ -73,7 +73,7 @@ export default function HeroSection() {
                   Download the App
                 </Link>
                 <p className="text-xs text-slate-400 mt-1.5 ml-1">
-                  30-day free trial with 3 stocks
+                  Free — add up to 5 stocks per day
                 </p>
               </div>
               <Link

@@ -29,8 +29,9 @@ export default function Terms() {
             <h2 className="text-lg font-semibold text-slate-900 mb-1">1. Service Description</h2>
             <p className="text-slate-600">
               SwingSetups provides AI-generated analysis of stock price behaviour for educational purposes.
-              The platform does not execute orders, suggest trades, or manage portfolios. Access is provided
-              through subscription plans based on the number of stocks tracked.
+              The platform does not execute orders, suggest trades, or manage portfolios. Access is free
+              and supported by advertisements. Users may add up to 5 new stocks to their watchlist per
+              calendar day.
             </p>
           </div>
 
@@ -47,11 +48,14 @@ export default function Terms() {
             </ul>
           </div>
 
-          {/* 3. Subscription & Billing */}
+          {/* 3. Ad-Supported Service */}
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 mb-1">3. Subscription & Billing</h2>
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">3. Ad-Supported Service</h2>
             <p className="text-slate-600">
-              SwingSetups operates on recurring subscription plans. The primary difference between plans is watchlist capacity. Payments follow our Refund Policy and pricing may change with prior notice.
+              SwingSetups is a free, ad-supported application. Content such as Daily Picks, Trail Protection,
+              and Trade Check is unlocked by watching short rewarded advertisements. No subscription fees,
+              in-app purchases, or payment processing is involved. Watchlist additions are limited to 5 new
+              stocks per day to ensure quality analysis for all users.
             </p>
           </div>
 

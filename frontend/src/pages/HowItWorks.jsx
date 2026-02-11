@@ -100,10 +100,10 @@ export default function HowItWorks() {
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <span className="px-3 py-1 bg-emerald-50 text-emerald-700 text-xs font-medium rounded-full">
-                    3 stocks (Free trial)
+                    Add up to 5 new stocks per day
                   </span>
                   <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-medium rounded-full">
-                    Up to 100 stocks (Paid plans)
+                    No total watchlist limit
                   </span>
                 </div>
               </div>
@@ -321,7 +321,7 @@ export default function HowItWorks() {
             Ready to trade with clarity?
           </h2>
           <p className="text-sm sm:text-base text-slate-600 mb-6 max-w-2xl mx-auto">
-            Start with 3 stocks free for 30 days. See exactly how we turn confusing charts
+            Start free — add up to 5 stocks per day. See exactly how we turn confusing charts
             into clear actions.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
@@ -329,13 +329,7 @@ export default function HowItWorks() {
               to="/download"
               className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-emerald-500 px-8 py-3 text-sm font-semibold text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:brightness-105 transition"
             >
-              Start Free Trial
-            </Link>
-            <Link
-              to="/pricing"
-              className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-8 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 transition"
-            >
-              View Pricing
+              Download the App
             </Link>
           </div>
         </motion.div>

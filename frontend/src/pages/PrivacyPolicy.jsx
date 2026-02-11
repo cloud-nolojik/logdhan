@@ -46,8 +46,8 @@ export default function PrivacyPolicy() {
                 <span className="font-semibold">Device information:</span> device type, operating system, app version, and basic technical logs.
               </li>
               <li>
-                <span className="font-semibold">Payment information:</span> subscription and transaction details processed via our payment gateway
-                (card or UPI details are handled securely by the payment provider, not stored by us).
+                <span className="font-semibold">Ad interaction data:</span> ad views, completion status, and daily usage tracking
+                (stocks added per day for fair usage tracking).
               </li>
             </ul>
           </div>
@@ -63,7 +63,7 @@ export default function PrivacyPolicy() {
             <ul className="list-disc list-inside space-y-1 text-slate-300 text-sm md:text-base">
               <li>Generate daily AI-based swing analysis for the stocks in your watchlist.</li>
               <li>Show you relevant content, explanations, and alerts inside the app.</li>
-              <li>Maintain your subscription, billing, and account access.</li>
+              <li>Serve relevant advertisements and enforce fair usage limits.</li>
               <li>Monitor performance, fix bugs, and improve the overall product.</li>
               <li>Communicate important updates, service changes, or policy changes.</li>
             </ul>
@@ -92,7 +92,7 @@ export default function PrivacyPolicy() {
             </p>
             <ul className="list-disc list-inside space-y-1 text-slate-300 text-sm md:text-base">
               <li>Cloud hosting providers (for servers and databases).</li>
-              <li>Payment gateway providers (for processing subscriptions).</li>
+              <li>Ad network providers (Google AdMob) for serving advertisements.</li>
               <li>Analytics tools (to understand app performance and usage patterns).</li>
             </ul>
             <p className="text-slate-300 mt-2">

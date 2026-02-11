@@ -6,12 +6,10 @@ import SEBIDisclaimerBanner from './components/SEBIDisclaimerBanner';
 import Home from './pages/Home';
 import HowItWorks from './pages/HowItWorks';
 import Pricing from './pages/Pricing';
-import PricingPolicy from './pages/PricingPolicy';
 import Download from './pages/Download';
 import DownloadAndroid from './pages/DownloadAndroid';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import Terms from './pages/Terms';
-import RefundPolicy from './pages/RefundPolicy';
 import Contact from './pages/Contact';
 import AdminIndex from './pages/admin/AdminIndex';
 import WhatsAppAlerts from './pages/admin/WhatsAppAlerts';
@@ -33,12 +31,10 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/pricing" element={<Pricing />} />
-          <Route path="/pricing-policy" element={<PricingPolicy />} />
           <Route path="/download" element={<Download />} />
           <Route path="/download/android" element={<DownloadAndroid />} />
          <Route path="/privacy-policy" element={<PrivacyPolicy />} />
           <Route path="/terms" element={<Terms />} />
-          <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="/contact" element={<Contact />} />
           <Route path="/admin" element={<AdminIndex />} />
           <Route path="/admin/whatsapp-alerts" element={<WhatsAppAlerts />} />

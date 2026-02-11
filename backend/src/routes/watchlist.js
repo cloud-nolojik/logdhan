@@ -1,7 +1,6 @@
 import express from 'express';
 import { auth } from '../middleware/auth.js';
 import { User } from '../models/user.js';
-import { Subscription } from '../models/subscription.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 // Use database version instead of JSON file version
 import { getExactStock } from '../utils/stockDb.js';
@@ -10,6 +9,46 @@ import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 import { checkEntryZoneProximity } from '../engine/index.js';
 
 const router = express.Router();
+
+const DAILY_ADD_LIMIT = 5;
+
+function getTodayISTDateString() {
+  const now = new Date();
+  const istMs = now.getTime() + (5.5 * 60 * 60 * 1000);
+  const istDate = new Date(istMs);
+  return istDate.toISOString().split('T')[0]; // "YYYY-MM-DD"
+}
+
+function checkDailyAddLimit(user, instrumentKey) {
+  const today = getTodayISTDateString();
+  const tracker = user.dailyAddTracker || { date: '', keys: [] };
+
+  // Reset tracker if it's a new day
+  if (tracker.date !== today) {
+    return { canAdd: true, addedToday: 0, remaining: DAILY_ADD_LIMIT };
+  }
+
+  // Already added this stock today — re-add is free (doesn't count again)
+  if (tracker.keys.includes(instrumentKey)) {
+    return { canAdd: true, addedToday: tracker.keys.length, remaining: Math.max(0, DAILY_ADD_LIMIT - tracker.keys.length) };
+  }
+
+  // Check limit
+  if (tracker.keys.length >= DAILY_ADD_LIMIT) {
+    return { canAdd: false, addedToday: tracker.keys.length, remaining: 0 };
+  }
+
+  return { canAdd: true, addedToday: tracker.keys.length, remaining: DAILY_ADD_LIMIT - tracker.keys.length };
+}
+
+function trackDailyAdd(user, instrumentKey) {
+  const today = getTodayISTDateString();
+  if (!user.dailyAddTracker || user.dailyAddTracker.date !== today) {
+    user.dailyAddTracker = { date: today, keys: [instrumentKey] };
+  } else if (!user.dailyAddTracker.keys.includes(instrumentKey)) {
+    user.dailyAddTracker.keys.push(instrumentKey);
+  }
+}
 
 // Add stock to watchlist
 router.post('/', auth, async (req, res) => {
@@ -32,29 +71,18 @@ router.post('/', auth, async (req, res) => {
       return res.status(200).json({ message: 'Stock already in watchlist' });
     }
 
-    // Check stock limit based on subscription
-    const currentStockCount = user.watchlist.length;
-
-    try {
-      const stockLimitCheck = await Subscription.canUserAddStock(req.user.id, currentStockCount);
-
-      if (!stockLimitCheck.canAdd) {
-        return res.status(403).json({
-          error: 'Stock limit reached',
-          message: `You can add maximum ${stockLimitCheck.stockLimit} stocks to your watchlist. Current: ${stockLimitCheck.currentCount}`,
-          data: {
-            stockLimit: stockLimitCheck.stockLimit,
-            currentCount: stockLimitCheck.currentCount,
-            canAdd: false,
-            needsUpgrade: true
-          }
-        });
-      }
-    } catch (subscriptionError) {
-      console.error('Error checking subscription limits:', subscriptionError);
-      return res.status(400).json({
-        error: 'Subscription check failed',
-        message: subscriptionError.message
+    // Check daily add limit (5 unique new stocks per day)
+    const dailyCheck = checkDailyAddLimit(user, instrument_key);
+    if (!dailyCheck.canAdd) {
+      return res.status(403).json({
+        error: 'Daily limit reached',
+        message: `You can add up to ${DAILY_ADD_LIMIT} new stocks per day. Come back tomorrow!`,
+        data: {
+          dailyLimit: DAILY_ADD_LIMIT,
+          addedToday: dailyCheck.addedToday,
+          remaining: 0,
+          canAdd: false
+        }
       });
     }
 
@@ -65,8 +93,11 @@ router.post('/', auth, async (req, res) => {
       name: stock.name,
       exchange: stock.exchange,
       addedAt: new Date(),
-      added_source: 'manual' // Explicitly mark as manual add
+      added_source: 'manual'
     });
+
+    // Track daily add
+    trackDailyAdd(user, instrument_key);
     await user.save();
 
     res.status(201).json({
@@ -127,31 +158,19 @@ router.post('/track-weekly', auth, async (req, res) => {
       });
     }
 
-    // Check stock limit based on subscription
-    const currentStockCount = user.watchlist.length;
-
-    try {
-      const stockLimitCheck = await Subscription.canUserAddStock(req.user.id, currentStockCount);
-
-      if (!stockLimitCheck.canAdd) {
-        return res.status(403).json({
-          success: false,
-          error: 'Stock limit reached',
-          message: `You can add maximum ${stockLimitCheck.stockLimit} stocks. Current: ${stockLimitCheck.currentCount}`,
-          data: {
-            stockLimit: stockLimitCheck.stockLimit,
-            currentCount: stockLimitCheck.currentCount,
-            canAdd: false,
-            needsUpgrade: true
-          }
-        });
-      }
-    } catch (subscriptionError) {
-      console.error('Error checking subscription limits:', subscriptionError);
-      return res.status(400).json({
+    // Check daily add limit (5 unique new stocks per day)
+    const dailyCheck = checkDailyAddLimit(user, instrument_key);
+    if (!dailyCheck.canAdd) {
+      return res.status(403).json({
         success: false,
-        error: 'Subscription check failed',
-        message: subscriptionError.message
+        error: 'Daily limit reached',
+        message: `You can add up to ${DAILY_ADD_LIMIT} new stocks per day. Come back tomorrow!`,
+        data: {
+          dailyLimit: DAILY_ADD_LIMIT,
+          addedToday: dailyCheck.addedToday,
+          remaining: 0,
+          canAdd: false
+        }
       });
     }
 
@@ -164,6 +183,9 @@ router.post('/track-weekly', auth, async (req, res) => {
       addedAt: new Date(),
       added_source: 'weekly_track'
     });
+
+    // Track daily add
+    trackDailyAdd(user, instrument_key);
     await user.save();
     console.log('✅ Stock added to watchlist:', stock.trading_symbol, 'for user:', req.user.id);
 
@@ -295,14 +317,15 @@ router.get('/', auth, async (req, res) => {
             name: item.name,
             exchange: item.exchange,
             addedAt: item.addedAt,
-            added_source: item.added_source || 'screener',
+            added_source: item.added_source || 'manual',
             current_price: null,
             net_change: 0,
             percent_change: 0,
             has_analysis: false,
             analysis_status: null,
             ai_confidence: null,
-            strategy_type: null
+            strategy_type: null,
+            simple_verdict: null
           };
         }
       })
@@ -310,21 +333,16 @@ router.get('/', auth, async (req, res) => {
 
     const endTime = Date.now();
 
-    // Get subscription info for stock limits
-    let stockLimitInfo = null;
-    try {
-      const subscription = await Subscription.findActiveForUser(req.user.id);
-      if (subscription) {
-        stockLimitInfo = {
-          stockLimit: subscription.stockLimit,
-          currentCount: watchlist.length,
-          remaining: Math.max(0, subscription.stockLimit - watchlist.length),
-          canAddMore: subscription.stockLimit > watchlist.length
-        };
-      }
-    } catch (error) {
-      console.warn('Error fetching subscription for stock limits:', error);
-    }
+    // Get daily add limit info
+    const today = getTodayISTDateString();
+    const tracker = user.dailyAddTracker || { date: '', keys: [] };
+    const addedToday = tracker.date === today ? tracker.keys.length : 0;
+    const stockLimitInfo = {
+      dailyLimit: DAILY_ADD_LIMIT,
+      addedToday,
+      remaining: Math.max(0, DAILY_ADD_LIMIT - addedToday),
+      canAddMore: addedToday < DAILY_ADD_LIMIT
+    };
 
     // Get cache statistics for last update time
     const cacheStats = priceCacheService.getStats();

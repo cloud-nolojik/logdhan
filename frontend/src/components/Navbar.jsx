@@ -21,7 +21,6 @@ export default function Navbar() {
         {[
           { to: "/", label: "Home" },
           { to: "/how-it-works", label: "How It Works" },
-          { to: "/pricing", label: "Pricing" },
           { to: "/contact", label: "Contact" }
         ].map((item) => (
           <NavLink
@@ -62,7 +61,6 @@ export default function Navbar() {
         <div className="absolute top-16 left-0 w-full backdrop-blur-lg bg-slate-900/80 border-b border-slate-800/60 shadow-lg shadow-slate-900/20 z-50 flex flex-col items-center py-4 md:hidden animate-fade-in">
           <NavLink to="/" className="py-3 text-white w-full text-center hover:text-blue-300" onClick={() => setMenuOpen(false)}>Home</NavLink>
           <NavLink to="/how-it-works" className="py-3 text-white w-full text-center hover:text-blue-300" onClick={() => setMenuOpen(false)}>How It Works</NavLink>
-          <NavLink to="/pricing" className="py-3 text-white w-full text-center hover:text-blue-300" onClick={() => setMenuOpen(false)}>Pricing</NavLink>
           <NavLink to="/contact" className="py-3 text-white w-full text-center hover:text-blue-300" onClick={() => setMenuOpen(false)}>Contact</NavLink>
 
           <div className="py-4 w-full flex justify-center">
