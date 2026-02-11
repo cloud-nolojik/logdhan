@@ -1,8 +1,8 @@
 /**
- * Daily Picks Job — 9:09 AM IST
+ * Daily Picks Job — 8:45 AM IST
  *
  * Runs ChartInk scans, enriches, scores, saves, and notifies.
- * Schedule: Monday-Friday at 9:09 AM IST (6 min before market open).
+ * Schedule: Monday-Friday at 8:45 AM IST (before market open for clean OHLCV).
  */
 
 import Agenda from 'agenda';
@@ -125,12 +125,12 @@ class DailyPicksJob {
     try {
       await this.agenda.cancel({ name: 'daily-picks-scan' });
 
-      // 9:09 AM IST, Monday-Friday
-      await this.agenda.every('9 9 * * 1-5', 'daily-picks-scan', {}, {
+      // 8:45 AM IST, Monday-Friday (before market open for clean OHLCV)
+      await this.agenda.every('45 8 * * 1-5', 'daily-picks-scan', {}, {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log(`${LOG} Scheduled: 9:09 AM IST, Mon-Fri`);
+      console.log(`${LOG} Scheduled: 8:45 AM IST, Mon-Fri`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
       throw error;

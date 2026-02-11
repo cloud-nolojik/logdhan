@@ -13,6 +13,11 @@ export const DAILY_SCANS = {
   // ═══════════════════════════════════════════════════════════════
   // BULLISH SCANS — Stocks likely to move 2%+ UP today
   // ═══════════════════════════════════════════════════════════════
+  // 
+  // ⏰ TIMING: These scans run at 8:45 AM IST (pre-market)
+  // At 8:45 AM, Chartink's "latest" = yesterday's completed candle
+  // So we use: latest (=yesterday), 1 day ago (=2 days back), 2 days ago (=3 days back)
+  // ═══════════════════════════════════════════════════════════════
 
   // Scan 1: Volatility Compression Bullish
   // Range narrowing for 2 days in an uptrend = spring loaded for expansion
@@ -20,17 +25,17 @@ export const DAILY_SCANS = {
   compression_bullish: {
     type: 'bullish',
     query: `( {cash} (
+      latest high - latest low < 1 day ago high - 1 day ago low and
       1 day ago high - 1 day ago low < 2 days ago high - 2 days ago low and
-      2 days ago high - 2 days ago low < 3 days ago high - 3 days ago low and
-      1 day ago close > 1 day ago open and
-      1 day ago close > 1 day ago ema( close, 20 ) and
-      1 day ago ema( close, 20 ) > 1 day ago ema( close, 50 ) and
-      1 day ago close > 1 day ago sma( close, 200 ) and
-      1 day ago rsi( 14 ) > 45 and
-      1 day ago rsi( 14 ) < 65 and
+      latest close > latest open and
+      latest close > latest ema( close, 20 ) and
+      latest ema( close, 20 ) > latest ema( close, 50 ) and
+      latest close > latest sma( close, 200 ) and
+      latest rsi( 14 ) > 45 and
+      latest rsi( 14 ) < 65 and
+      latest high - latest low > latest close * 0.015 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -40,17 +45,17 @@ export const DAILY_SCANS = {
   pullback_at_support: {
     type: 'bullish',
     query: `( {cash} (
-      1 day ago low <= 1 day ago ema( close, 20 ) * 1.01 and
-      1 day ago close >= 1 day ago ema( close, 20 ) * 0.98 and
-      1 day ago close > 1 day ago sma( close, 200 ) and
-      1 day ago ema( close, 20 ) > 1 day ago ema( close, 50 ) and
-      1 day ago ema( close, 50 ) > 1 day ago sma( close, 200 ) and
-      1 day ago volume < 1 day ago sma( volume, 50 ) and
-      1 day ago rsi( 14 ) > 35 and
-      1 day ago rsi( 14 ) < 55 and
+      latest low <= latest ema( close, 20 ) * 1.01 and
+      latest close >= latest ema( close, 20 ) * 0.98 and
+      latest close > latest sma( close, 200 ) and
+      latest ema( close, 20 ) > latest ema( close, 50 ) and
+      latest ema( close, 50 ) > latest sma( close, 200 ) and
+      latest volume < latest sma( volume, 50 ) and
+      latest rsi( 14 ) > 35 and
+      latest rsi( 14 ) < 55 and
+      latest high - latest low > latest close * 0.015 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -60,17 +65,17 @@ export const DAILY_SCANS = {
   momentum_carry: {
     type: 'bullish',
     query: `( {cash} (
-      1 day ago close >= 1 day ago high * 0.98 and
-      1 day ago close > 1 day ago open and
-      1 day ago close > 2 days ago close * 1.01 and
-      1 day ago volume > 1 day ago sma( volume, 50 ) * 1.5 and
-      1 day ago rsi( 14 ) > 55 and
-      1 day ago rsi( 14 ) < 72 and
-      1 day ago ema( close, 20 ) > 1 day ago ema( close, 50 ) and
-      1 day ago close > 1 day ago sma( close, 200 ) and
+      latest close >= latest high * 0.98 and
+      latest close > latest open and
+      latest close > 1 day ago close * 1.01 and
+      latest volume > latest sma( volume, 50 ) * 1.5 and
+      latest rsi( 14 ) > 55 and
+      latest rsi( 14 ) < 72 and
+      latest ema( close, 20 ) > latest ema( close, 50 ) and
+      latest close > latest sma( close, 200 ) and
+      latest high - latest low > latest close * 0.015 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -80,15 +85,15 @@ export const DAILY_SCANS = {
   breakout_setup: {
     type: 'bullish',
     query: `( {cash} (
-      1 day ago close > 1 day ago max( 20, high ) * 0.97 and
-      1 day ago close <= 1 day ago max( 20, high ) and
-      1 day ago close > 1 day ago open and
-      1 day ago ema( close, 20 ) > 1 day ago ema( close, 50 ) and
-      1 day ago rsi( 14 ) > 50 and
-      1 day ago rsi( 14 ) < 68 and
+      latest close > max( 20, high ) * 0.97 and
+      latest close <= max( 20, high ) and
+      latest close > latest open and
+      latest ema( close, 20 ) > latest ema( close, 50 ) and
+      latest rsi( 14 ) > 50 and
+      latest rsi( 14 ) < 68 and
+      latest high - latest low > latest close * 0.015 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -102,16 +107,16 @@ export const DAILY_SCANS = {
   compression_bearish: {
     type: 'bearish',
     query: `( {cash} (
+      latest high - latest low < 1 day ago high - 1 day ago low and
       1 day ago high - 1 day ago low < 2 days ago high - 2 days ago low and
-      2 days ago high - 2 days ago low < 3 days ago high - 3 days ago low and
-      1 day ago close < 1 day ago open and
-      1 day ago close < 1 day ago ema( close, 20 ) and
-      1 day ago ema( close, 20 ) < 1 day ago ema( close, 50 ) and
-      1 day ago rsi( 14 ) > 35 and
-      1 day ago rsi( 14 ) < 50 and
+      latest close < latest open and
+      latest close < latest ema( close, 20 ) and
+      latest ema( close, 20 ) < latest ema( close, 50 ) and
+      latest rsi( 14 ) > 35 and
+      latest rsi( 14 ) < 50 and
+      latest high - latest low > latest close * 0.015 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -121,17 +126,17 @@ export const DAILY_SCANS = {
   failed_at_resistance: {
     type: 'bearish',
     query: `( {cash} (
-      1 day ago high >= 1 day ago ema( close, 20 ) * 0.99 and
-      1 day ago close <= 1 day ago ema( close, 20 ) * 1.01 and
-      1 day ago close < 1 day ago open and
-      1 day ago close < 1 day ago sma( close, 200 ) and
-      1 day ago ema( close, 20 ) < 1 day ago ema( close, 50 ) and
-      1 day ago volume < 1 day ago sma( volume, 50 ) and
-      1 day ago rsi( 14 ) > 40 and
-      1 day ago rsi( 14 ) < 55 and
+      latest high >= latest ema( close, 20 ) * 0.99 and
+      latest close <= latest ema( close, 20 ) * 1.01 and
+      latest close < latest open and
+      latest close < latest sma( close, 200 ) and
+      latest ema( close, 20 ) < latest ema( close, 50 ) and
+      latest volume < latest sma( volume, 50 ) and
+      latest rsi( 14 ) > 40 and
+      latest rsi( 14 ) < 55 and
+      latest high - latest low > latest close * 0.015 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -141,16 +146,16 @@ export const DAILY_SCANS = {
   momentum_carry_bearish: {
     type: 'bearish',
     query: `( {cash} (
-      1 day ago close <= 1 day ago low * 1.02 and
-      1 day ago close < 1 day ago open and
-      1 day ago close < 2 days ago close * 0.99 and
-      1 day ago volume > 1 day ago sma( volume, 50 ) * 1.5 and
-      1 day ago rsi( 14 ) > 28 and
-      1 day ago rsi( 14 ) < 45 and
-      1 day ago ema( close, 20 ) < 1 day ago ema( close, 50 ) and
+      latest close <= latest low * 1.02 and
+      latest close < latest open and
+      latest close < 1 day ago close * 0.99 and
+      latest volume > latest sma( volume, 50 ) * 1.5 and
+      latest rsi( 14 ) > 28 and
+      latest rsi( 14 ) < 45 and
+      latest ema( close, 20 ) < latest ema( close, 50 ) and
+      latest high - latest low > latest close * 0.015 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   },
@@ -160,14 +165,14 @@ export const DAILY_SCANS = {
   breakdown_setup: {
     type: 'bearish',
     query: `( {cash} (
-      1 day ago close < 1 day ago min( 20, low ) * 1.03 and
-      1 day ago close >= 1 day ago min( 20, low ) and
-      1 day ago close < 1 day ago open and
-      1 day ago ema( close, 20 ) < 1 day ago ema( close, 50 ) and
-      1 day ago rsi( 14 ) < 45 and
+      latest close < min( 20, low ) * 1.03 and
+      latest close >= min( 20, low ) and
+      latest close < latest open and
+      latest ema( close, 20 ) < latest ema( close, 50 ) and
+      latest rsi( 14 ) < 45 and
+      latest high - latest low > latest close * 0.015 and
       1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
       2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-      3 days ago high - 3 days ago low > 3 days ago close * 0.015 and
       market cap >= 1000
     ) )`
   }

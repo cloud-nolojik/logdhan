@@ -32,7 +32,6 @@ import { getISTMidnight, calculatePnl, updateDailyResults, round2, delay } from 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const MAX_DAILY_PICKS = 3;
-const CAPITAL_PER_SESSION = 100000;
 const TARGET_PCT = 2.0;
 const SCAN_DELAY_MS = 2000;
 const MIN_SCORE = 60;
@@ -733,19 +732,33 @@ async function placeEntryOrders(options = {}) {
     return { success: true, message: 'No pending picks', orders: 0 };
   }
 
-  const capitalPerPick = Math.floor(CAPITAL_PER_SESSION / pendingPicks.length);
+  // Score-weighted capital allocation with 45% max cap per pick
+  const MAX_WEIGHT = 0.45;
+  const balance = await kiteOrderService.getAvailableBalance();
+  console.log(`${LOG} Balance: ₹${balance.available}, Usable: ₹${balance.usable}`);
+
+  const totalScore = pendingPicks.reduce((sum, p) => sum + p.rank_score, 0);
+  const rawWeights = pendingPicks.map(p => Math.min(p.rank_score / totalScore, MAX_WEIGHT));
+  const weightSum = rawWeights.reduce((s, w) => s + w, 0);
+  const allocations = pendingPicks.map((pick, i) => ({
+    pick,
+    capital: Math.floor(balance.usable * (rawWeights[i] / weightSum))
+  }));
+
   let ordersPlaced = 0;
 
-  for (const pick of pendingPicks) {
-    const qty = Math.floor(capitalPerPick / pick.levels.entry);
+  for (const { pick, capital } of allocations) {
+    const orderAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
+    const qty = Math.floor(orderAmount / pick.levels.entry);
     if (qty <= 0) {
-      console.log(`${LOG} ${pick.symbol}: qty=0 (price ₹${pick.levels.entry} > capital ₹${capitalPerPick}) — skipping`);
+      console.log(`${LOG} ${pick.symbol}: qty=0 (price ₹${pick.levels.entry} > capital ₹${orderAmount}) — skipping`);
       pick.trade.status = 'SKIPPED';
       pick.kite.kite_status = 'failed';
       continue;
     }
 
-    console.log(`${LOG} ${pick.symbol}: Placing MIS LIMIT ${pick.direction === 'LONG' ? 'BUY' : 'SELL'} — qty=${qty} @ ₹${pick.levels.entry}`);
+    const pct = round2((capital / balance.usable) * 100);
+    console.log(`${LOG} ${pick.symbol}: score=${pick.rank_score} alloc=${pct}% ₹${capital} — MIS LIMIT ${pick.direction === 'LONG' ? 'BUY' : 'SELL'} qty=${qty} @ ₹${pick.levels.entry}`);
 
     if (dryRun) {
       console.log(`${LOG} [DRY RUN] Would place order for ${pick.symbol}`);
