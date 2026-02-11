@@ -96,24 +96,29 @@ async function runDailyPicks(options = {}) {
       return { success: true, picks: 0, doc };
     }
 
-    // Step 4: Score and select top picks
+    // Step 4: Score candidates (sorted by score descending, filtered by MIN_SCORE)
     const scored = scoreCandidates(enriched);
-    const topPicks = scored.slice(0, MAX_DAILY_PICKS);
-    console.log(`${LOG} Scored: ${scored.length} passed min (${MIN_SCORE}), selected top ${topPicks.length}`);
+    console.log(`${LOG} Scored: ${scored.length} candidates passed min (${MIN_SCORE})`);
 
-    if (topPicks.length === 0) {
+    if (scored.length === 0) {
       console.log(`${LOG} No picks above minimum score.`);
       const doc = await saveToDB(marketContext, [], scanResult);
       await sendNotification(marketContext, [], doc);
       return { success: true, picks: 0, doc };
     }
 
-    // Step 5: Calculate levels for each pick (engine may reject — null = dropped)
-    const picksWithLevels = topPicks.map(p => calculateLevels(p)).filter(Boolean);
-    console.log(`${LOG} After engine validation: ${picksWithLevels.length}/${topPicks.length} picks have viable levels`);
+    // Step 5: Waterfall — iterate through all qualified candidates until we find
+    // up to MAX_DAILY_PICKS with viable R:R, or exhaust the list.
+    const picksWithLevels = [];
+    for (const candidate of scored) {
+      if (picksWithLevels.length >= MAX_DAILY_PICKS) break;
+      const withLevels = calculateLevels(candidate);
+      if (withLevels) picksWithLevels.push(withLevels);
+    }
+    console.log(`${LOG} After engine validation: ${picksWithLevels.length}/${scored.length} candidates have viable levels`);
 
     if (picksWithLevels.length === 0) {
-      console.log(`${LOG} All picks rejected by engine (no viable R:R). Saving empty doc.`);
+      console.log(`${LOG} All ${scored.length} candidates rejected by engine (no viable R:R). Saving empty doc.`);
       const doc = await saveToDB(marketContext, [], scanResult);
       await sendNotification(marketContext, [], doc);
       return { success: true, picks: 0, doc };
