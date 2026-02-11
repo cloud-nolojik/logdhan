@@ -6,6 +6,7 @@ import StockAnalysis from '../models/stockAnalysis.js';
 import { getExactStock } from '../utils/stockDb.js';
 import priceCacheService from '../services/priceCache.service.js';
 import WeeklyWatchlist from '../models/weeklyWatchlist.js';
+import { buildDailyUpdateCardFromAnalysis } from './weeklyWatchlist.js';
 import { checkEntryZoneProximity } from '../engine/index.js';
 
 const router = express.Router();
@@ -516,6 +517,27 @@ router.get('/:instrument_key/position-analysis', auth, async (req, res) => {
       || analysis.analysis_data?.position_management
       || null;
 
+    // Build daily_update_card by looking up stock in WeeklyWatchlist
+    let dailyUpdateCard = null;
+    try {
+      const weeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
+      if (weeklyWatchlist) {
+        const stock = weeklyWatchlist.stocks.find(s => s.instrument_key === instrument_key);
+        if (stock) {
+          const dailyTrack = analysis.analysis_data?.daily_track || null;
+          const journeyStatus = stock.trade_simulation?.status || 'WAITING';
+          const trackingStatus = stock.tracking_status || 'WATCHING';
+          const trackingFlags = stock.tracking_flags || [];
+          const levels = stock.levels || {};
+          const snapshots = stock.daily_snapshots || [];
+          const lastSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+          dailyUpdateCard = buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+        }
+      }
+    } catch (err) {
+      console.warn('Error building daily_update_card:', err.message);
+    }
+
     res.json({
       success: true,
       has_analysis: true,
@@ -530,7 +552,9 @@ router.get('/:instrument_key/position-analysis', auth, async (req, res) => {
         || null,
       // Include trigger info for daily_track
       trigger: analysis.analysis_data?.trigger || null,
-      daily_snapshot: analysis.analysis_data?.daily_snapshot || null
+      daily_snapshot: analysis.analysis_data?.daily_snapshot || null,
+      // Pre-built daily update card for display
+      daily_update_card: dailyUpdateCard
     });
   } catch (error) {
     console.error('Error fetching position analysis:', error);

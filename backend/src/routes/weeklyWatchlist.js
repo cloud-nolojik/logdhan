@@ -1143,3 +1143,4 @@ router.post("/complete-week", auth, async (req, res) => {
 });
 
 export default router;
+export { buildDailyUpdateCardFromAnalysis };
