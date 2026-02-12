@@ -107,15 +107,38 @@ async function runDailyPicks(options = {}) {
       return { success: true, picks: 0, doc };
     }
 
-    // Step 5: Waterfall — iterate through all qualified candidates until we find
-    // up to MAX_DAILY_PICKS with viable R:R, or exhaust the list.
-    const picksWithLevels = [];
-    for (const candidate of scored) {
-      if (picksWithLevels.length >= MAX_DAILY_PICKS) break;
+    // Step 5: Evaluate ALL scored candidates through the levels engine,
+    // then select top MAX_DAILY_PICKS with scan-type diversity.
+    console.log(`${LOG} [Step 5] Evaluating all ${scored.length} scored candidates through levels engine...`);
+    const allViable = [];
+    let rejectedCount = 0;
+    const rejectionReasons = {};
+    for (let i = 0; i < scored.length; i++) {
+      const candidate = scored[i];
+      console.log(`${LOG} [Step 5] --- Candidate ${i + 1}/${scored.length}: ${candidate.symbol} (${candidate.scan_type}, score=${candidate.rank_score}) ---`);
       const withLevels = calculateLevels(candidate);
-      if (withLevels) picksWithLevels.push(withLevels);
+      if (withLevels) {
+        allViable.push(withLevels);
+        console.log(`${LOG} [Step 5] ${candidate.symbol}: VIABLE (${allViable.length} viable so far)`);
+      } else {
+        rejectedCount++;
+        const scanType = candidate.scan_type;
+        rejectionReasons[scanType] = (rejectionReasons[scanType] || 0) + 1;
+        console.log(`${LOG} [Step 5] ${candidate.symbol}: REJECTED (${rejectedCount} rejected so far)`);
+      }
     }
-    console.log(`${LOG} After engine validation: ${picksWithLevels.length}/${scored.length} candidates have viable levels`);
+    console.log(`${LOG} [Step 5] Engine results: ${allViable.length} viable, ${rejectedCount} rejected out of ${scored.length} scored`);
+    if (rejectedCount > 0) {
+      console.log(`${LOG} [Step 5] Rejections by scan type: ${Object.entries(rejectionReasons).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+    }
+    if (allViable.length > 0) {
+      console.log(`${LOG} [Step 5] Viable candidates: ${allViable.map(v => `${v.symbol}(${v.scan_type}:${v.rank_score})`).join(', ')}`);
+    }
+
+    // Select top picks with scan-type diversity:
+    // Pick the best from each scan type first, then fill remaining slots by score.
+    const picksWithLevels = selectDiversePicks(allViable, MAX_DAILY_PICKS);
+    console.log(`${LOG} Selected ${picksWithLevels.length} picks (diversity-weighted) from ${allViable.length} viable`);
 
     if (picksWithLevels.length === 0) {
       console.log(`${LOG} All ${scored.length} candidates rejected by engine (no viable R:R). Saving empty doc.`);
@@ -125,17 +148,27 @@ async function runDailyPicks(options = {}) {
     }
 
     // Step 6: Generate AI insights (non-fatal)
+    console.log(`${LOG} [Step 6] Generating AI insights for ${picksWithLevels.length} picks: ${picksWithLevels.map(p => p.symbol).join(', ')}`);
     const picksWithInsights = await generatePickInsights(picksWithLevels, marketContext);
+    console.log(`${LOG} [Step 6] AI insights done: ${picksWithInsights.filter(p => p.ai_generated).length}/${picksWithInsights.length} generated`);
 
     // Step 7: Save to DB
+    console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks`);
     const doc = await saveToDB(marketContext, picksWithInsights, scanResult);
-    console.log(`${LOG} Saved DailyPick doc: ${doc._id}`);
+    console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
 
     // Step 8: Send notification
+    console.log(`${LOG} [Step 8] Sending notification...`);
     await sendNotification(marketContext, picksWithInsights, doc);
 
     const elapsed = Date.now() - startTime;
-    console.log(`${LOG} ✅ Complete in ${elapsed}ms — ${picksWithInsights.length} picks saved`);
+    console.log(`${LOG} ════════════════════════════════════════`);
+    console.log(`${LOG} ✅ PIPELINE COMPLETE in ${elapsed}ms`);
+    console.log(`${LOG} Pipeline summary: ${scanResult.candidates.length} scanned → ${enriched.length} enriched → ${scored.length} scored → ${allViable.length} viable → ${picksWithInsights.length} final picks`);
+    for (const p of picksWithInsights) {
+      console.log(`${LOG} FINAL PICK: ${p.symbol} | ${p.scan_type} | ${p.direction} | score=${p.rank_score} | entry=₹${p.levels.entry} stop=₹${p.levels.stop} target=₹${p.levels.target} R:R=${p.levels.risk_reward}`);
+    }
+    console.log(`${LOG} ════════════════════════════════════════`);
 
     return { success: true, picks: picksWithInsights.length, doc };
 
@@ -212,8 +245,13 @@ async function runScans(marketContext) {
       const results = await runChartinkScan(scan.query);
       console.log(`${LOG} ${scanName}: ${results.length} results`);
 
+      let addedFromScan = 0;
+      let dupsFromScan = 0;
       for (const stock of results) {
-        if (seen.has(stock.nsecode)) continue;
+        if (seen.has(stock.nsecode)) {
+          dupsFromScan++;
+          continue;
+        }
         seen.add(stock.nsecode);
 
         candidates.push({
@@ -228,9 +266,11 @@ async function runScans(marketContext) {
           }
         });
 
+        addedFromScan++;
         if (scan.type === 'bullish') bullishCount++;
         else bearishCount++;
       }
+      console.log(`${LOG} ${scanName}: ${addedFromScan} added, ${dupsFromScan} dupes skipped (running total: ${candidates.length})`);
 
       // Delay between scans to avoid rate-limiting
       if (scanOrder.indexOf(scanName) < scanOrder.length - 1) {
@@ -258,6 +298,8 @@ async function enrichCandidates(candidates) {
 
   const symbols = candidates.map(c => c.symbol);
 
+  console.log(`${LOG} [Step 3] Requesting enrichment for symbols: ${symbols.join(', ')}`);
+
   let analysisData;
   try {
     analysisData = await getDailyAnalysisData(symbols);
@@ -266,9 +308,17 @@ async function enrichCandidates(candidates) {
     return [];
   }
 
+  console.log(`${LOG} [Step 3] getDailyAnalysisData returned ${analysisData.stocks?.length || 0} stocks`);
+
   const stockMap = {};
   for (const stock of analysisData.stocks) {
     stockMap[stock.symbol] = stock;
+  }
+
+  // Log which symbols are missing from enrichment
+  const missingSymbols = symbols.filter(s => !stockMap[s]);
+  if (missingSymbols.length > 0) {
+    console.log(`${LOG} [Step 3] Missing from enrichment (${missingSymbols.length}): ${missingSymbols.join(', ')}`);
   }
 
   const enriched = [];
@@ -299,7 +349,8 @@ async function enrichCandidates(candidates) {
     const candlePattern = detectCandlePattern(open, high, low, close, 0, prevHigh, prevLow, prevClose);
 
     const lastDailyClose = stock.last_daily_close || close;
-    console.log(`${LOG} [Enrich] ${candidate.symbol}: O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${stock.todays_volume} avgVol50=${stock.avg_volume_50d} rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
+    console.log(`${LOG} [Enrich] ${candidate.symbol} (${candidate.scan_type}): O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${stock.todays_volume} avgVol50=${stock.avg_volume_50d} rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
+    console.log(`${LOG} [Enrich] ${candidate.symbol} indicators: ema20=${stock.ema20 || 0} ema50=${stock.ema50 || 0} atr=${stock.atr || 0} h20D=${stock.high_20d || 0} l20D=${stock.low_20d || 0} h52W=${stock.high_52w || 0} wR1=${stock.weekly_r1 || 'null'} wR2=${stock.weekly_r2 || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'}`);
 
     enriched.push({
       ...candidate,
@@ -360,58 +411,75 @@ function scoreCandidates(enrichedCandidates) {
   for (const c of enrichedCandidates) {
     const s = c.scan_scores;
     let score = 0;
+    let cirPts = 0, volPts = 0, rsiPts = 0, atrPts = 0, candlePts = 0;
 
     // Close in range (25 pts) — higher = closed near high (bullish) / near low (bearish)
     const cir = c.direction === 'LONG' ? s.close_in_range_pct : (100 - s.close_in_range_pct);
-    if (cir > 90) score += 25;
-    else if (cir > 80) score += 20;
-    else if (cir > 70) score += 15;
-    else if (cir > 60) score += 10;
-    else score += 5;
+    if (cir > 90) cirPts = 25;
+    else if (cir > 80) cirPts = 20;
+    else if (cir > 70) cirPts = 15;
+    else if (cir > 60) cirPts = 10;
+    else cirPts = 5;
+    score += cirPts;
 
     // Volume ratio (25 pts)
-    if (s.volume_ratio > 3) score += 25;
-    else if (s.volume_ratio > 2) score += 20;
-    else if (s.volume_ratio > 1.5) score += 15;
-    else if (s.volume_ratio > 1.2) score += 10;
-    else score += 5;
+    if (s.volume_ratio > 3) volPts = 25;
+    else if (s.volume_ratio > 2) volPts = 20;
+    else if (s.volume_ratio > 1.5) volPts = 15;
+    else if (s.volume_ratio > 1.2) volPts = 10;
+    else volPts = 5;
+    score += volPts;
 
     // RSI positioning (20 pts)
     if (c.direction === 'LONG') {
-      if (s.rsi >= 55 && s.rsi <= 65) score += 20;
-      else if (s.rsi > 65 && s.rsi <= 72) score += 15;
-      else if (s.rsi >= 50 && s.rsi < 55) score += 10;
-      else score += 5;
+      if (s.rsi >= 55 && s.rsi <= 65) rsiPts = 20;
+      else if (s.rsi > 65 && s.rsi <= 72) rsiPts = 15;
+      else if (s.rsi >= 50 && s.rsi < 55) rsiPts = 10;
+      else rsiPts = 5;
     } else {
       // Bearish — mirror RSI logic
-      if (s.rsi >= 35 && s.rsi <= 45) score += 20;
-      else if (s.rsi >= 28 && s.rsi < 35) score += 15;
-      else if (s.rsi > 45 && s.rsi <= 50) score += 10;
-      else score += 5;
+      if (s.rsi >= 35 && s.rsi <= 45) rsiPts = 20;
+      else if (s.rsi >= 28 && s.rsi < 35) rsiPts = 15;
+      else if (s.rsi > 45 && s.rsi <= 50) rsiPts = 10;
+      else rsiPts = 5;
     }
+    score += rsiPts;
 
     // ATR tradability (15 pts)
-    if (s.atr_pct > 2.5) score += 15;
-    else if (s.atr_pct > 2.0) score += 10;
-    else if (s.atr_pct > 1.5) score += 5;
-    // else 0
+    if (s.atr_pct > 2.5) atrPts = 15;
+    else if (s.atr_pct > 2.0) atrPts = 10;
+    else if (s.atr_pct > 1.5) atrPts = 5;
+    else atrPts = 0;
+    score += atrPts;
 
     // Candle confirmation (15 pts)
-    if (s.candle_pattern?.includes('engulfing')) score += 15;
-    else if (s.candle_pattern === 'hammer') score += 12;
-    else if (s.candle_pattern === 'bullish_candle' || s.candle_pattern === 'bearish_candle') score += 10;
-    else score += 5;
+    if (s.candle_pattern?.includes('engulfing')) candlePts = 15;
+    else if (s.candle_pattern === 'hammer') candlePts = 12;
+    else if (s.candle_pattern === 'bullish_candle' || s.candle_pattern === 'bearish_candle') candlePts = 10;
+    else candlePts = 5;
+    score += candlePts;
 
     if (score >= MIN_SCORE) {
       scored.push({ ...c, rank_score: score });
-      console.log(`${LOG} ✅ ${c.symbol}: score=${score} (CIR:${round2(cir)} Vol:${s.volume_ratio}x RSI:${s.rsi} ATR:${s.atr_pct}% ${s.candle_pattern})`);
+      console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [CIR:${cirPts}/25(${round2(cir)}%) VOL:${volPts}/25(${s.volume_ratio}x) RSI:${rsiPts}/20(${s.rsi}) ATR:${atrPts}/15(${s.atr_pct}%) CANDLE:${candlePts}/15(${s.candle_pattern})]`);
     } else {
-      console.log(`${LOG} ❌ ${c.symbol}: score=${score} < ${MIN_SCORE} — filtered out`);
+      console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} < ${MIN_SCORE} [CIR:${cirPts} VOL:${volPts} RSI:${rsiPts} ATR:${atrPts} CANDLE:${candlePts}]`);
     }
   }
 
   // Sort descending by score
   scored.sort((a, b) => b.rank_score - a.rank_score);
+
+  // Log sorted order with scan-type distribution
+  if (scored.length > 0) {
+    const scanTypeDist = {};
+    for (const s of scored) {
+      scanTypeDist[s.scan_type] = (scanTypeDist[s.scan_type] || 0) + 1;
+    }
+    console.log(`${LOG} [Step 4] Scored list (sorted): ${scored.map(s => `${s.symbol}(${s.scan_type}:${s.rank_score})`).join(', ')}`);
+    console.log(`${LOG} [Step 4] Scan type distribution: ${Object.entries(scanTypeDist).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+  }
+
   return scored;
 }
 
@@ -431,9 +499,11 @@ function scoreCandidates(enrichedCandidates) {
 function calculateLevels(pick) {
   const { _ohlcv, direction, scan_type, symbol } = pick;
 
-  console.log(`${LOG} [Levels] ${symbol}: direction=${direction} scan=${scan_type}`);
-  console.log(`${LOG} [Levels] ${symbol}: OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close}}`);
-  console.log(`${LOG} [Levels] ${symbol}: ema20=${_ohlcv.ema20} atr=${_ohlcv.atr} high20D=${_ohlcv.high_20d} low20D=${_ohlcv.low_20d}`);
+  console.log(`${LOG} [Levels] ${symbol}: direction=${direction} scan=${scan_type} score=${pick.rank_score}`);
+  console.log(`${LOG} [Levels] ${symbol}: OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} prevC:${_ohlcv.prev_close}}`);
+  console.log(`${LOG} [Levels] ${symbol}: ema20=${_ohlcv.ema20} ema50=${_ohlcv.ema50} atr=${_ohlcv.atr}`);
+  console.log(`${LOG} [Levels] ${symbol}: h5D=${_ohlcv.high_5d} l5D=${_ohlcv.low_5d} h10D=${_ohlcv.high_10d} l10D=${_ohlcv.low_10d} h20D=${_ohlcv.high_20d} l20D=${_ohlcv.low_20d} h52W=${_ohlcv.high_52w}`);
+  console.log(`${LOG} [Levels] ${symbol}: pivots wR1=${_ohlcv.weekly_pivot_levels?.r1} wR2=${_ohlcv.weekly_pivot_levels?.r2} wS1=${_ohlcv.weekly_pivot_levels?.s1} wS2=${_ohlcv.weekly_pivot_levels?.s2} dR1=${_ohlcv.daily_pivot_levels?.r1} dS1=${_ohlcv.daily_pivot_levels?.s1}`);
 
   // Prepare data for scanLevels engine
   const scanData = {
@@ -477,10 +547,14 @@ function calculateLevels(pick) {
   console.log(`${LOG} [Levels] ${symbol}: scan_type="${scan_type}" → archetype="${archetype}"`);
 
   // Call scanLevels engine with the mapped archetype
+  console.log(`${LOG} [Levels] ${symbol}: calling scanLevels.calculateTradingLevels("${archetype}", scanData)`);
   const result = scanLevels.calculateTradingLevels(archetype, scanData);
+  console.log(`${LOG} [Levels] ${symbol}: engine returned valid=${result.valid} mode=${result.mode || 'N/A'} reason=${result.reason || 'N/A'}`);
 
   if (!result.valid) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED by scanLevels — ${result.reason}`);
+    if (result.currentRR) console.log(`${LOG} [Levels] ${symbol}: currentRR=${result.currentRR} suggestedTarget=${result.suggestedTarget || 'N/A'}`);
+    if (result.noData) console.log(`${LOG} [Levels] ${symbol}: noData=${result.noData} (missing indicator data)`);
     return null;
   }
 
@@ -499,7 +573,8 @@ function calculateLevels(pick) {
     return null;
   }
 
-  console.log(`${LOG} [Levels] ${symbol}: ${mode} entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} R:R=${riskReward}`);
+  console.log(`${LOG} [Levels] ${symbol}: ACCEPTED ${mode} entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} R:R=${round2(riskReward)} risk=${round2(riskPercent)}% reward=${round2(rewardPercent)}%`);
+  console.log(`${LOG} [Levels] ${symbol}: entryType=${result.entryType || 'N/A'} target1=${result.target1 ? round2(result.target1) : 'N/A'} target3=${result.target3 ? round2(result.target3) : 'N/A'}`);
 
   return {
     ...pick,
@@ -739,6 +814,8 @@ async function placeEntryOrders(options = {}) {
   const balance = await kiteOrderService.getAvailableBalance();
   console.log(`${LOG} Balance: ₹${balance.available}, Usable: ₹${balance.usable}`);
 
+  console.log(`${LOG} Pending picks for orders: ${pendingPicks.map(p => `${p.symbol}(score=${p.rank_score}, ${p.scan_type})`).join(', ')}`);
+
   const totalScore = pendingPicks.reduce((sum, p) => sum + p.rank_score, 0);
   const rawWeights = pendingPicks.map(p => Math.min(p.rank_score / totalScore, MAX_WEIGHT));
   const weightSum = rawWeights.reduce((s, w) => s + w, 0);
@@ -746,6 +823,11 @@ async function placeEntryOrders(options = {}) {
     pick,
     capital: Math.floor(balance.usable * (rawWeights[i] / weightSum))
   }));
+
+  console.log(`${LOG} Allocation math: totalScore=${totalScore} rawWeights=[${rawWeights.map(w => round2(w)).join(', ')}] weightSum=${round2(weightSum)}`);
+  for (const { pick, capital } of allocations) {
+    console.log(`${LOG} Allocation: ${pick.symbol} → ₹${capital} (${round2((capital / balance.usable) * 100)}% of usable)`);
+  }
 
   let ordersPlaced = 0;
 
@@ -812,6 +894,7 @@ async function placeEntryOrders(options = {}) {
         orderParams.trigger_price = triggerPrice;
       }
 
+      console.log(`${LOG} [Order] ${pick.symbol}: placing order — ${JSON.stringify(orderParams)}`);
       const result = await kiteOrderService.placeOrder(orderParams);
 
       if (result.success && result.orderId) {
@@ -868,10 +951,13 @@ async function checkFillsAndPlaceProtection(options = {}) {
     return { success: true, message: 'No orders to check' };
   }
 
+  console.log(`${LOG} Checking ${orderPlacedPicks.length} ORDER_PLACED picks: ${orderPlacedPicks.map(p => `${p.symbol}(orderId=${p.kite.entry_order_id})`).join(', ')}`);
+
   let filled = 0, skipped = 0;
 
   for (const pick of orderPlacedPicks) {
     try {
+      console.log(`${LOG} [FillCheck] ${pick.symbol}: fetching order ${pick.kite.entry_order_id}...`);
       const order = await kiteOrderService.getOrderDetails(pick.kite.entry_order_id);
 
       if (!order) {
@@ -883,6 +969,7 @@ async function checkFillsAndPlaceProtection(options = {}) {
       }
 
       const status = order.status?.toUpperCase();
+      console.log(`${LOG} [FillCheck] ${pick.symbol}: order status=${status} avg_price=${order.average_price || 'N/A'} filled_qty=${order.filled_quantity || 'N/A'} pending_qty=${order.pending_quantity || 'N/A'}`);
 
       if (status === 'COMPLETE') {
         // Entry filled
@@ -897,7 +984,8 @@ async function checkFillsAndPlaceProtection(options = {}) {
           : round2(entryPrice * (1 - TARGET_PCT / 100));
         pick.levels.target = target;
 
-        console.log(`${LOG} ✅ ${pick.symbol}: Filled @ ₹${entryPrice} — placing SL + Target`);
+        console.log(`${LOG} ✅ ${pick.symbol}: Filled @ ₹${entryPrice} (planned entry: ₹${pick.levels.entry}, slippage: ${round2(((entryPrice - pick.levels.entry) / pick.levels.entry) * 100)}%)`);
+        console.log(`${LOG} ${pick.symbol}: Recalculated target: ₹${target} (${TARGET_PCT}% from fill), SL: ₹${pick.levels.stop}`);
 
         if (!dryRun) {
           let slPlaced = false;
@@ -1071,6 +1159,8 @@ async function monitorDailyPickOrders(options = {}) {
     return { success: true, message: 'No active positions' };
   }
 
+  console.log(`${LOG} Monitoring ${enteredPicks.length} ENTERED picks: ${enteredPicks.map(p => `${p.symbol}(entry=₹${p.trade.entry_price}, SL=${p.kite.stop_order_id || 'none'}, TGT=${p.kite.target_order_id || 'none'})`).join(', ')}`);
+
   let statusChanged = false;
 
   for (const pick of enteredPicks) {
@@ -1080,6 +1170,7 @@ async function monitorDailyPickOrders(options = {}) {
     }
 
     try {
+      console.log(`${LOG} [Monitor] ${pick.symbol}: checking SL order=${pick.kite.stop_order_id || 'none'}, TGT order=${pick.kite.target_order_id || 'none'}`);
       const [stopOrder, targetOrder] = await Promise.all([
         pick.kite.stop_order_id ? kiteOrderService.getOrderDetails(pick.kite.stop_order_id) : null,
         pick.kite.target_order_id ? kiteOrderService.getOrderDetails(pick.kite.target_order_id) : null
@@ -1087,6 +1178,7 @@ async function monitorDailyPickOrders(options = {}) {
 
       const stopStatus = stopOrder?.status?.toUpperCase();
       const targetStatus = targetOrder?.status?.toUpperCase();
+      console.log(`${LOG} [Monitor] ${pick.symbol}: SL status=${stopStatus || 'N/A'} (avg_price=${stopOrder?.average_price || 'N/A'}), TGT status=${targetStatus || 'N/A'} (avg_price=${targetOrder?.average_price || 'N/A'})`);
 
       if (stopStatus === 'COMPLETE' && targetStatus === 'COMPLETE') {
         // Both filled — race condition: position is over-sold, place corrective order
@@ -1196,12 +1288,83 @@ async function monitorDailyPickOrders(options = {}) {
     }
   }
 
-  return { success: true, active: enteredPicks.filter(p => p.trade.status === 'ENTERED').length };
+  const stillEntered = enteredPicks.filter(p => p.trade.status === 'ENTERED').length;
+  const exited = enteredPicks.length - stillEntered;
+  console.log(`${LOG} Monitor complete: ${stillEntered} still active, ${exited} exited this cycle, statusChanged=${statusChanged}`);
+
+  return { success: true, active: stillEntered };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Select up to maxPicks from viable candidates with scan-type diversity.
+ * Round-robin: pick the best (highest score) from each scan type first,
+ * then fill remaining slots by score across all types.
+ */
+function selectDiversePicks(viable, maxPicks) {
+  console.log(`${LOG} [Diversity] Selecting ${maxPicks} from ${viable.length} viable candidates`);
+
+  if (viable.length <= maxPicks) {
+    console.log(`${LOG} [Diversity] Viable (${viable.length}) <= maxPicks (${maxPicks}), returning all`);
+    return viable;
+  }
+
+  // Group by scan_type, each group already sorted by rank_score (inherited from scored)
+  const byType = {};
+  for (const pick of viable) {
+    const key = pick.scan_type;
+    if (!byType[key]) byType[key] = [];
+    byType[key].push(pick);
+  }
+
+  console.log(`${LOG} [Diversity] Groups: ${Object.entries(byType).map(([k, v]) => `${k}(${v.length}): [${v.map(p => `${p.symbol}:${p.rank_score}`).join(', ')}]`).join(' | ')}`);
+
+  const selected = [];
+  const usedSymbols = new Set();
+
+  // Round 1: Best candidate from each scan type (ordered by highest top-score)
+  const typesByBest = Object.entries(byType)
+    .sort((a, b) => b[1][0].rank_score - a[1][0].rank_score);
+
+  console.log(`${LOG} [Diversity] Round 1 — one per scan type (${typesByBest.length} types, picking up to ${maxPicks}):`);
+  for (const [typeName, picks] of typesByBest) {
+    if (selected.length >= maxPicks) {
+      console.log(`${LOG} [Diversity] Round 1: slots full, skipping ${typeName}`);
+      break;
+    }
+    const best = picks.find(p => !usedSymbols.has(p.symbol));
+    if (best) {
+      selected.push(best);
+      usedSymbols.add(best.symbol);
+      console.log(`${LOG} [Diversity] Round 1: picked ${best.symbol} from ${typeName} (score=${best.rank_score}, slot ${selected.length}/${maxPicks})`);
+    }
+  }
+
+  // Round 2: Fill remaining slots by score across all types
+  if (selected.length < maxPicks) {
+    const remaining = viable.filter(p => !usedSymbols.has(p.symbol));
+    console.log(`${LOG} [Diversity] Round 2 — filling ${maxPicks - selected.length} remaining slots from ${remaining.length} candidates by score`);
+    for (const pick of remaining) {
+      if (selected.length >= maxPicks) break;
+      selected.push(pick);
+      usedSymbols.add(pick.symbol);
+      console.log(`${LOG} [Diversity] Round 2: picked ${pick.symbol} (${pick.scan_type}, score=${pick.rank_score}, slot ${selected.length}/${maxPicks})`);
+    }
+  }
+
+  // Log diversity breakdown
+  const typeCounts = {};
+  for (const p of selected) {
+    typeCounts[p.scan_type] = (typeCounts[p.scan_type] || 0) + 1;
+  }
+  console.log(`${LOG} [Diversity] Final picks: ${selected.map(s => `${s.symbol}(${s.scan_type}:${s.rank_score})`).join(', ')}`);
+  console.log(`${LOG} [Diversity] Type distribution: ${Object.entries(typeCounts).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+
+  return selected;
+}
 
 /**
  * Detect candle pattern from OHLC data
