@@ -325,12 +325,22 @@ async function enrichCandidates(candidates) {
         ema20: stock.ema20 || 0,
         ema50: stock.ema50 || 0,
         atr: stock.atr || 0,
+        // Swing levels (5D/10D for breakdown stops, 20D for momentum)
+        high_5d: stock.high_5d || 0,
+        low_5d: stock.low_5d || 0,
+        high_10d: stock.high_10d || 0,
+        low_10d: stock.low_10d || 0,
         high_20d: stock.high_20d || 0,
         low_20d: stock.low_20d || 0,
         high_52w: stock.high_52w || 0,
+        // Pivot levels for targets
         daily_pivot_levels: stock.daily_pivot_levels || null,
-        weekly_r1: stock.weekly_r1 || null,
-        weekly_r2: stock.weekly_r2 || null
+        weekly_pivot_levels: {
+          r1: stock.weekly_r1 || null,
+          r2: stock.weekly_r2 || null,
+          s1: stock.weekly_s1 || null,
+          s2: stock.weekly_s2 || null
+        }
       }
     });
   }
@@ -469,6 +479,18 @@ function calculateLevels(pick) {
 
   // Extract levels from scanLevels result
   const { entry, stop, target2: target, riskReward, riskPercent, rewardPercent, mode, reason } = result;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DAILY PICKS RISK CAP: 3% (stricter than swing's 8%)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Daily picks are intraday MIS positions that force-close at 3 PM.
+  // No time to recover from 5%+ stops. Cap at 3% for safety.
+  const DAILY_PICKS_MAX_RISK = 3.0;
+
+  if (riskPercent > DAILY_PICKS_MAX_RISK) {
+    console.log(`${LOG} [Levels] ${symbol}: REJECTED — Risk ${round2(riskPercent)}% exceeds daily picks cap (${DAILY_PICKS_MAX_RISK}%)`);
+    return null;
+  }
 
   console.log(`${LOG} [Levels] ${symbol}: ${mode} entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} R:R=${riskReward}`);
 
@@ -731,26 +753,59 @@ async function placeEntryOrders(options = {}) {
     }
 
     const pct = round2((capital / balance.usable) * 100);
-    console.log(`${LOG} ${pick.symbol}: score=${pick.rank_score} alloc=${pct}% ₹${capital} — MIS LIMIT ${pick.direction === 'LONG' ? 'BUY' : 'SELL'} qty=${qty} @ ₹${pick.levels.entry}`);
+
+    // Determine order type based on entry strategy
+    // buy_above (momentum) = SL (stop-loss trigger to buy on breakout)
+    // sell_below (breakdown) = SL-M (stop-loss market to sell on breakdown)
+    // limit (pullback) = LIMIT (buy at or below entry)
+    const entryType = pick.levels.entry_type || 'limit';
+    let orderType, triggerPrice, limitPrice;
+
+    if (entryType === 'buy_above') {
+      // LONG momentum: Buy when price crosses ABOVE entry (confirms continuation)
+      orderType = 'SL';
+      triggerPrice = pick.levels.entry;
+      limitPrice = round2(pick.levels.entry * 1.002); // 0.2% buffer for slippage
+      console.log(`${LOG} ${pick.symbol}: score=${pick.rank_score} alloc=${pct}% ₹${capital} — MIS SL-BUY (buy_above) qty=${qty} trigger=₹${triggerPrice} limit=₹${limitPrice}`);
+    } else if (entryType === 'sell_below') {
+      // SHORT breakdown: Sell when price crosses BELOW entry (confirms breakdown)
+      orderType = 'SL-M';
+      triggerPrice = pick.levels.entry;
+      limitPrice = 0; // Market order after trigger
+      console.log(`${LOG} ${pick.symbol}: score=${pick.rank_score} alloc=${pct}% ₹${capital} — MIS SL-M-SELL (sell_below) qty=${qty} trigger=₹${triggerPrice}`);
+    } else {
+      // Pullback: Buy/Sell at or better than entry price
+      orderType = 'LIMIT';
+      triggerPrice = 0;
+      limitPrice = pick.levels.entry;
+      console.log(`${LOG} ${pick.symbol}: score=${pick.rank_score} alloc=${pct}% ₹${capital} — MIS LIMIT ${pick.direction === 'LONG' ? 'BUY' : 'SELL'} (limit) qty=${qty} @ ₹${limitPrice}`);
+    }
 
     if (dryRun) {
-      console.log(`${LOG} [DRY RUN] Would place order for ${pick.symbol}`);
+      console.log(`${LOG} [DRY RUN] Would place ${orderType} order for ${pick.symbol}`);
       continue;
     }
 
     try {
-      const result = await kiteOrderService.placeOrder({
+      const orderParams = {
         tradingsymbol: pick.symbol,
         exchange: 'NSE',
         transaction_type: pick.direction === 'LONG' ? 'BUY' : 'SELL',
-        order_type: 'LIMIT',
+        order_type: orderType,
         product: 'MIS',
         quantity: qty,
-        price: pick.levels.entry,
+        price: limitPrice,
         simulation_id: `daily_pick_${pick.symbol}`,
         orderType: 'ENTRY',
         source: 'DAILY_PICKS'
-      });
+      };
+
+      // Add trigger_price for SL/SL-M orders
+      if (orderType === 'SL' || orderType === 'SL-M') {
+        orderParams.trigger_price = triggerPrice;
+      }
+
+      const result = await kiteOrderService.placeOrder(orderParams);
 
       if (result.success && result.orderId) {
         pick.trade.status = 'ORDER_PLACED';
