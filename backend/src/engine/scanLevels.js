@@ -437,6 +437,7 @@ export function calculateTradingLevels(scanType, data) {
       break;
 
     case 'momentum':
+    case 'momentum_carry':  // Alias for daily picks
       console.log(`🔍 [SCAN_LEVELS] Calling calculateMomentumLevels`);
       result = calculateMomentumLevels(data);
       break;
@@ -451,6 +452,30 @@ export function calculateTradingLevels(scanType, data) {
       // Similar to momentum but with stronger confirmation (near highs)
       console.log(`🔍 [SCAN_LEVELS] Calling calculateAPlusMomentumLevels`);
       result = calculateAPlusMomentumLevels(data);
+      break;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SHORT/BEARISH SCAN TYPES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    case 'breakdown_setup':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculateBreakdownLevels`);
+      result = calculateBreakdownLevels(data);
+      break;
+
+    case 'momentum_carry_bearish':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculateMomentumBearishLevels`);
+      result = calculateMomentumBearishLevels(data);
+      break;
+
+    case 'failed_at_resistance':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculateFailedResistanceLevels`);
+      result = calculateFailedResistanceLevels(data);
+      break;
+
+    case 'compression_bearish':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculateCompressionBearishLevels`);
+      result = calculateCompressionBearishLevels(data);
       break;
 
     default:
@@ -1104,6 +1129,9 @@ function calculateAPlusMomentumLevels(data) {
 function applyGuardrails(entry, stop, target, atr, scanType) {
   const adjustments = [];
 
+  // Detect if this is a SHORT trade based on scan type
+  const isShortTrade = ['breakdown_setup', 'momentum_carry_bearish', 'failed_at_resistance', 'compression_bearish'].includes(scanType);
+
   // ─────────────────────────────────────────────────────────────────────────
   // GUARD A: Sanity check - all values must be positive
   // ─────────────────────────────────────────────────────────────────────────
@@ -1124,31 +1152,55 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // GUARD B: Stop MUST be below entry (for BUY setups)
+  // GUARD B: Stop validation (direction-aware)
   // ─────────────────────────────────────────────────────────────────────────
-  if (stop >= entry) {
-    return {
-      valid: false,
-      reason: `Stop (${round2(stop)}) must be below entry (${round2(entry)})`,
-      debug: { entry, stop, target }
-    };
+  if (isShortTrade) {
+    // SHORT: Stop must be ABOVE entry
+    if (stop <= entry) {
+      return {
+        valid: false,
+        reason: `Stop (${round2(stop)}) must be above entry (${round2(entry)}) for SHORT trade`,
+        debug: { entry, stop, target }
+      };
+    }
+  } else {
+    // LONG: Stop must be BELOW entry
+    if (stop >= entry) {
+      return {
+        valid: false,
+        reason: `Stop (${round2(stop)}) must be below entry (${round2(entry)}) for LONG trade`,
+        debug: { entry, stop, target }
+      };
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // GUARD C: Target MUST be above entry (for BUY setups)
+  // GUARD C: Target validation (direction-aware)
   // ─────────────────────────────────────────────────────────────────────────
-  if (target <= entry) {
-    return {
-      valid: false,
-      reason: `Target (${round2(target)}) must be above entry (${round2(entry)})`,
-      debug: { entry, stop, target }
-    };
+  if (isShortTrade) {
+    // SHORT: Target must be BELOW entry
+    if (target >= entry) {
+      return {
+        valid: false,
+        reason: `Target (${round2(target)}) must be below entry (${round2(entry)}) for SHORT trade`,
+        debug: { entry, stop, target }
+      };
+    }
+  } else {
+    // LONG: Target must be ABOVE entry
+    if (target <= entry) {
+      return {
+        valid: false,
+        reason: `Target (${round2(target)}) must be above entry (${round2(entry)}) for LONG trade`,
+        debug: { entry, stop, target }
+      };
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // GUARD D: Maximum risk check (5%) - REJECT, don't adjust
+  // GUARD D: Maximum risk check (8%) - REJECT, don't adjust
   // ─────────────────────────────────────────────────────────────────────────
-  const risk = entry - stop;
+  const risk = isShortTrade ? (stop - entry) : (entry - stop);
   const riskPercent = (risk / entry) * 100;
   const MAX_RISK_PERCENT = 8.0;
 
@@ -1181,7 +1233,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   // GUARD F: Minimum target - worth the effort
   // Pullback targets are tighter (1.5%), momentum needs more room (2%)
   // ─────────────────────────────────────────────────────────────────────────
-  const reward = target - entry;
+  const reward = isShortTrade ? (entry - target) : (target - entry);
   const rewardPercent = (reward / entry) * 100;
   const MIN_TARGET_PERCENT = scanType === 'pullback' ? 1.5 : 2.0;
 
@@ -1202,7 +1254,9 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   let adjustedTarget = target;
 
   if (rewardPercent > MAX_TARGET_PERCENT) {
-    adjustedTarget = entry * (1 + MAX_TARGET_PERCENT / 100);
+    adjustedTarget = isShortTrade
+      ? entry * (1 - MAX_TARGET_PERCENT / 100)
+      : entry * (1 + MAX_TARGET_PERCENT / 100);
     adjustments.push(
       `Target capped from ${round2(rewardPercent)}% to ${MAX_TARGET_PERCENT}% ` +
       `(original structural target: ${round2(target)})`
@@ -1212,19 +1266,21 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   // ─────────────────────────────────────────────────────────────────────────
   // GUARD H: Risk-Reward ratio check (minimum 1.2:1)
   // ─────────────────────────────────────────────────────────────────────────
-  const adjustedReward = adjustedTarget - entry;
+  const adjustedReward = isShortTrade ? (entry - adjustedTarget) : (adjustedTarget - entry);
   const riskReward = adjustedReward / risk;
   const MIN_RR = 1.2;
 
   if (riskReward < MIN_RR) {
-    const minimumViableTarget = entry + (risk * 1.5);
+    const minimumViableTarget = isShortTrade
+      ? entry - (risk * 1.5)
+      : entry + (risk * 1.5);
     return {
       valid: false,
       reason: `R:R too low: ${round2(riskReward)}:1 (min ${MIN_RR}:1). ` +
               `Risk ${round2(riskPercent)}% vs Reward ${round2((adjustedReward / entry) * 100)}%`,
       currentRR: round2(riskReward),
       suggestedTarget: roundToTick(minimumViableTarget),
-      suggestedAction: `Need target >= ${round2(minimumViableTarget)} for viable trade`
+      suggestedAction: `Need target ${isShortTrade ? '<=' : '>='} ${round2(minimumViableTarget)} for viable trade`
     };
   }
 
@@ -1248,6 +1304,374 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
+ * SHORT TRADE SUPPORT - Bearish Setups
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+/**
+ * Find structural support levels for SHORT targets (downward ladder)
+ * Priority: Weekly S1 → Weekly S2 → 20D Low → ATR Extension → REJECT
+ *
+ * @param {Object} params - { entry, risk, weeklyS1, weeklyS2, low20D, atr, minRR }
+ * @returns {Object} { target2, target3, target2_basis, reason } or { rejected: true, reason }
+ */
+function findShortStructuralTarget(params) {
+  const { entry, risk, weeklyS1, weeklyS2, low20D, atr, minRR = 1.5 } = params;
+
+  // Guard: Invalid risk (stop <= entry for shorts)
+  if (!isNum(risk) || risk <= 0) {
+    return { rejected: true, reason: 'Invalid risk (stop <= entry)', noData: false };
+  }
+
+  // Guard: No structural data available
+  const hasAnyLevel = isNum(weeklyS1) || isNum(weeklyS2) || isNum(low20D);
+  const hasATR = isNum(atr) && atr > 0;
+  if (!hasAnyLevel && !hasATR) {
+    return {
+      rejected: true,
+      reason: 'No structural data available (pivot/20D low missing, no ATR)',
+      noData: true
+    };
+  }
+
+  // Try Weekly S1 first (primary support)
+  if (isNum(weeklyS1) && weeklyS1 < entry) {
+    const rrS1 = (entry - weeklyS1) / risk;
+    if (rrS1 >= minRR) {
+      return {
+        target2: weeklyS1,
+        target3: isNum(weeklyS2) && weeklyS2 < weeklyS1 ? weeklyS2 :
+                 isNum(low20D) && low20D < weeklyS1 ? low20D :
+                 roundToTick(entry - (3.0 * atr)),
+        target2_basis: 'weekly_s1',
+        reason: `Short to Weekly S1 support (${round2(weeklyS1)}), R:R ${round2(rrS1)}:1`
+      };
+    }
+  }
+
+  // Try Weekly S2 (secondary support)
+  if (isNum(weeklyS2) && weeklyS2 < entry) {
+    const rrS2 = (entry - weeklyS2) / risk;
+    if (rrS2 >= minRR) {
+      return {
+        target2: weeklyS2,
+        target3: isNum(low20D) && low20D < weeklyS2 ? low20D :
+                 roundToTick(entry - (3.0 * atr)),
+        target2_basis: 'weekly_s2',
+        reason: `Short to Weekly S2 support (${round2(weeklyS2)}), R:R ${round2(rrS2)}:1`
+      };
+    }
+  }
+
+  // Try 20D Low (structural support)
+  if (isNum(low20D) && low20D < entry) {
+    const rrLow = (entry - low20D) / risk;
+    if (rrLow >= minRR) {
+      return {
+        target2: low20D,
+        target3: hasATR ? roundToTick(entry - (3.0 * atr)) : null,
+        target2_basis: 'low_20d',
+        reason: `Short to 20D Low support (${round2(low20D)}), R:R ${round2(rrLow)}:1`
+      };
+    }
+  }
+
+  // Fallback: ATR extension (for breakdown-to-new-lows scenarios)
+  if (hasATR) {
+    const extensionTarget = entry - (2.0 * atr);
+    const extensionRR = (entry - extensionTarget) / risk;
+    if (extensionRR >= minRR) {
+      return {
+        target2: roundToTick(extensionTarget),
+        target3: roundToTick(entry - (3.5 * atr)),
+        target2_basis: 'atr_extension',
+        reason: `Breakdown to new lows, ATR extension target (${round2(extensionTarget)}), R:R ${round2(extensionRR)}:1`
+      };
+    }
+  }
+
+  // All levels failed R:R check — reject setup
+  return {
+    rejected: true,
+    reason: `All support levels (Weekly S1: ${isNum(weeklyS1) ? round2(weeklyS1) : 'N/A'}, ` +
+            `S2: ${isNum(weeklyS2) ? round2(weeklyS2) : 'N/A'}, ` +
+            `20D Low: ${isNum(low20D) ? round2(low20D) : 'N/A'}) ` +
+            `below entry ${round2(entry)} fail minimum R:R of ${minRR}:1`,
+    noData: false
+  };
+}
+
+/**
+ * BREAKDOWN SETUP (bearish version of breakout)
+ * Stock sitting just above 20D low, ready to break down
+ *
+ * Entry: Below Friday low (confirms breakdown)
+ * Stop: Recent swing high (5-10 day high), NOT 20D high (already moved)
+ * Target: Weekly S1 → S2 → 20D Low → ATR Extension
+ */
+function calculateBreakdownLevels(data) {
+  const { ema20, low20D, fridayLow, fridayClose, atr, high5D, high10D, weeklyS1, weeklyS2, dailyS1 } = data;
+
+  if (!isNum(fridayLow) || fridayLow <= 0) {
+    return { valid: false, reason: 'Friday low required for breakdown entry' };
+  }
+
+  // Entry: Below Friday low (breakdown confirmation)
+  const entry = fridayLow - (0.15 * atr);
+  const entryRange = [roundToTick(entry - 0.3 * atr), roundToTick(entry)];
+
+  // Stop: Recent swing high (5-10 day), NOT 20D high
+  // For stocks that already dropped 10-30%, the 20D high is way too far
+  let swingHigh = high5D || high10D || fridayClose * 1.03;
+
+  // Cap stop at 5% above entry (prevent runaway stops)
+  const maxStop = entry * 1.05;
+  let stop = Math.min(swingHigh + (0.3 * atr), maxStop);
+
+  const risk = stop - entry;
+
+  // Target: Structural support ladder
+  const targetResult = findShortStructuralTarget({
+    entry,
+    risk,
+    weeklyS1,
+    weeklyS2,
+    low20D,
+    atr,
+    minRR: 1.5
+  });
+
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,
+      reason: `Breakdown REJECTED: ${targetResult.reason}`
+    };
+  }
+
+  return {
+    valid: true,
+    mode: 'BREAKDOWN',
+    archetype: 'breakdown',
+    entry,
+    entry_basis: 'friday_low',
+    entryRange,
+    stop,
+    stop_basis: high5D ? 'swing_high_5d' : (high10D ? 'swing_high_10d' : 'fallback'),
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
+    dailyS1Check: isNum(dailyS1) ? dailyS1 : null,
+    entryType: 'sell_below',
+    reason: `Breakdown setup: Stock cracking support at ${round2(fridayLow)}. ` +
+            `Using swing high (${round2(swingHigh)}) for stop, not 20D high. ${targetResult.reason}`
+  };
+}
+
+/**
+ * MOMENTUM CARRY BEARISH (short version of momentum)
+ * Stock in downtrend, running below EMA20
+ *
+ * Entry: Below Friday low (confirms continued selling)
+ * Stop: Above EMA20 (momentum resistance), capped at 2 ATR
+ * Target: Weekly S1 → S2 → 20D Low
+ */
+function calculateMomentumBearishLevels(data) {
+  const { ema20, fridayLow, fridayClose, atr, weeklyS1, weeklyS2, low20D, dailyS1 } = data;
+
+  if (!isNum(fridayLow) || fridayLow <= 0) {
+    return { valid: false, reason: 'Friday low required for momentum bearish entry' };
+  }
+
+  if (!isNum(ema20) || ema20 <= 0) {
+    return { valid: false, reason: 'EMA20 required for momentum bearish stop' };
+  }
+
+  // Entry: Below Friday low (momentum continuation)
+  const entry = fridayLow - (0.1 * atr);
+  const entryRange = [roundToTick(entry - 0.2 * atr), roundToTick(entry)];
+
+  // Stop: Above EMA20 (momentum resistance), capped at 2 ATR from entry
+  const ema20Stop = ema20 + (0.3 * atr);
+  const maxStop = entry + (2.0 * atr);
+  const stop = Math.min(ema20Stop, maxStop);
+
+  const risk = stop - entry;
+
+  // Target: Structural support ladder
+  const targetResult = findShortStructuralTarget({
+    entry,
+    risk,
+    weeklyS1,
+    weeklyS2,
+    low20D,
+    atr,
+    minRR: 1.5
+  });
+
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,
+      reason: `Momentum Bearish REJECTED: ${targetResult.reason}`
+    };
+  }
+
+  return {
+    valid: true,
+    mode: 'MOMENTUM_BEARISH',
+    archetype: 'momentum',
+    entry,
+    entry_basis: 'friday_low',
+    entryRange,
+    stop,
+    stop_basis: 'ema20',
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
+    dailyS1Check: isNum(dailyS1) ? dailyS1 : null,
+    entryType: 'sell_below',
+    reason: `Momentum bearish: Stock running ${round2(((ema20 - fridayClose) / ema20) * 100)}% below EMA20. ` +
+            `Entry below Friday low (${round2(fridayLow)}) confirms continued selling. ${targetResult.reason}`
+  };
+}
+
+/**
+ * FAILED AT RESISTANCE (bearish version of pullback)
+ * Stock rejected at resistance, ready to fall back
+ *
+ * Entry: Below Friday low (confirms rejection)
+ * Stop: Above resistance (pattern invalidates if it breaks through)
+ * Target: Weekly S1 → S2 → 20D Low
+ */
+function calculateFailedResistanceLevels(data) {
+  const { ema20, high20D, fridayLow, fridayClose, atr, weeklyS1, weeklyS2, weeklyR1, low20D, dailyS1 } = data;
+
+  if (!isNum(fridayLow) || fridayLow <= 0) {
+    return { valid: false, reason: 'Friday low required for failed resistance entry' };
+  }
+
+  // Identify the resistance level (high20D or weeklyR1)
+  const resistance = isNum(high20D) && high20D > fridayClose ? high20D :
+                     isNum(weeklyR1) && weeklyR1 > fridayClose ? weeklyR1 :
+                     fridayClose * 1.05; // Fallback
+
+  // Entry: Below Friday low (confirms rejection)
+  const entry = fridayLow - (0.1 * atr);
+  const entryRange = [roundToTick(entry - 0.2 * atr), roundToTick(entry)];
+
+  // Stop: Above resistance (pattern fails if it breaks through)
+  const stop = resistance + (0.3 * atr);
+
+  const risk = stop - entry;
+
+  // Target: Structural support ladder
+  const targetResult = findShortStructuralTarget({
+    entry,
+    risk,
+    weeklyS1,
+    weeklyS2,
+    low20D,
+    atr,
+    minRR: 1.5
+  });
+
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,
+      reason: `Failed Resistance REJECTED: ${targetResult.reason}`
+    };
+  }
+
+  return {
+    valid: true,
+    mode: 'FAILED_RESISTANCE',
+    archetype: 'pullback',
+    entry,
+    entry_basis: 'friday_low',
+    entryRange,
+    stop,
+    stop_basis: 'resistance',
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
+    dailyS1Check: isNum(dailyS1) ? dailyS1 : null,
+    entryType: 'sell_below',
+    reason: `Failed resistance: Stock rejected at ${round2(resistance)}, falling back. ` +
+            `Entry below Friday low confirms rejection. ${targetResult.reason}`
+  };
+}
+
+/**
+ * COMPRESSION BEARISH (bearish version of consolidation breakout)
+ * Stock in tight range near lows, ready to break down
+ *
+ * Entry: Below consolidation range
+ * Stop: Above consolidation high (pattern fails if it breaks out upward)
+ * Target: Weekly S1 → S2 → 20D Low
+ */
+function calculateCompressionBearishLevels(data) {
+  const { fridayHigh, fridayLow, low10D, high10D, atr, weeklyS1, weeklyS2, low20D, dailyS1 } = data;
+
+  if (!isNum(fridayHigh) || !isNum(fridayLow) || fridayHigh <= 0 || fridayLow <= 0) {
+    return { valid: false, reason: 'Friday high/low required for compression bearish entry' };
+  }
+
+  // Entry: Below the tight range
+  const entry = fridayLow - (0.1 * atr);
+  const entryRange = [roundToTick(entry - 0.2 * atr), roundToTick(entry)];
+
+  // Stop: Above consolidation high (pattern fails if broken upward)
+  const has10DRange = isNum(high10D) && isNum(low10D) && high10D > low10D;
+  const consolidationHigh = has10DRange ? Math.max(high10D, fridayHigh) : fridayHigh;
+  const stop = consolidationHigh + (0.1 * atr);
+
+  const risk = stop - entry;
+
+  // Target: Structural support ladder
+  const targetResult = findShortStructuralTarget({
+    entry,
+    risk,
+    weeklyS1,
+    weeklyS2,
+    low20D,
+    atr,
+    minRR: 1.5
+  });
+
+  if (targetResult.rejected) {
+    return {
+      valid: false,
+      noData: targetResult.noData || false,
+      reason: `Compression Bearish REJECTED: ${targetResult.reason}`
+    };
+  }
+
+  const fridayRange = fridayHigh - fridayLow;
+
+  return {
+    valid: true,
+    mode: 'COMPRESSION_BEARISH',
+    archetype: 'breakdown',
+    entry,
+    entry_basis: 'friday_low',
+    entryRange,
+    stop,
+    stop_basis: 'consolidation_high',
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
+    dailyS1Check: isNum(dailyS1) ? dailyS1 : null,
+    entryType: 'sell_below',
+    reason: `Compression bearish: Tight range (${round2((fridayRange / fridayHigh) * 100)}%) near lows signals energy buildup. ` +
+            `${targetResult.reason}`
+  };
+}
+
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
  * EXPORTS
  * ═══════════════════════════════════════════════════════════════════════════
  */
@@ -1258,6 +1682,10 @@ export default {
   calculateMomentumLevels,
   calculateConsolidationLevels,
   calculateAPlusMomentumLevels,
+  calculateBreakdownLevels,
+  calculateMomentumBearishLevels,
+  calculateFailedResistanceLevels,
+  calculateCompressionBearishLevels,
   applyGuardrails,
   roundToTick
 };

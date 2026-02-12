@@ -26,6 +26,7 @@ import priceCacheService from '../priceCache.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import kiteConfig from '../../config/kite.config.js';
 import { getISTMidnight, calculatePnl, updateDailyResults, round2, delay } from './dailyPicksHelpers.js';
+import scanLevels from '../../engine/scanLevels.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -409,113 +410,85 @@ function scoreCandidates(enrichedCandidates) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Calculate entry/stop/target levels using scan-type-specific engine.
- * Returns null if the engine rejects the setup (no fallback — enforces discipline).
+ * Calculate entry/stop/target levels using scan-type-aware scanLevels engine.
+ *
+ * NOW USES scanLevels.js:
+ * - LONG picks: breakout, pullback, momentum, consolidation_breakout
+ * - SHORT picks: breakdown_setup, momentum_carry_bearish, failed_at_resistance, compression_bearish
+ *
+ * Returns null if the engine rejects the setup (enforces discipline).
  */
 function calculateLevels(pick) {
-  const { _ohlcv, direction, scan_type } = pick;
-  const lastClose = _ohlcv.last_daily_close || _ohlcv.close;
+  const { _ohlcv, direction, scan_type, symbol } = pick;
 
-  console.log(`${LOG} [Levels] ${pick.symbol}: direction=${direction} scan=${scan_type} OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} lastClose:${lastClose}} ema20=${_ohlcv.ema20} atr=${_ohlcv.atr} high20D=${_ohlcv.high_20d}`);
+  console.log(`${LOG} [Levels] ${symbol}: direction=${direction} scan=${scan_type}`);
+  console.log(`${LOG} [Levels] ${symbol}: OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close}}`);
+  console.log(`${LOG} [Levels] ${symbol}: ema20=${_ohlcv.ema20} atr=${_ohlcv.atr} high20D=${_ohlcv.high_20d} low20D=${_ohlcv.low_20d}`);
 
-  // ── SHORT picks: inline intraday formula ──
-  if (direction === 'SHORT') {
-    const entry = lastClose;
-    const atr = _ohlcv.atr;
-    const stop = atr > 0 ? round2(entry + 1.5 * atr) : _ohlcv.high;
-    const pivots = _ohlcv.daily_pivot_levels;
+  // Prepare data for scanLevels engine
+  const scanData = {
+    // Core price levels
+    fridayHigh: _ohlcv.high,
+    fridayLow: _ohlcv.low,
+    fridayClose: _ohlcv.close,
 
-    // Target: daily S1 (closest support below entry), then S2
-    const target = (pivots?.s1 && pivots.s1 < entry) ? round2(pivots.s1)
-                 : (pivots?.s2 && pivots.s2 < entry) ? round2(pivots.s2)
-                 : null;
+    // Indicators
+    ema20: _ohlcv.ema20,
+    atr: _ohlcv.atr || 0,
 
-    if (!target) {
-      console.log(`${LOG} [Levels] ${pick.symbol}: SHORT REJECTED — no pivot S1/S2 below entry ${entry}`);
-      return null;
-    }
+    // 20-day levels (for stops/targets)
+    high20D: _ohlcv.high_20d,
+    low20D: _ohlcv.low_20d,
 
-    const risk = stop - entry;
-    const reward = entry - target;
-    const riskReward = risk > 0 ? round2(reward / risk) : 0;
+    // 10-day/5-day levels (for consolidation/breakdown stops)
+    high10D: _ohlcv.high_10d || null,
+    low10D: _ohlcv.low_10d || null,
+    high5D: _ohlcv.high_5d || null,
 
-    if (risk <= 0 || riskReward < 1.2) {
-      console.log(`${LOG} [Levels] ${pick.symbol}: SHORT REJECTED — R:R ${riskReward}:1 < 1.2`);
-      return null;
-    }
+    // 52-week levels
+    high52W: _ohlcv.high_52w || null,
 
-    const riskPct = round2((risk / entry) * 100);
-    const rewardPct = round2((reward / entry) * 100);
+    // Weekly pivot levels (for structural targets)
+    weeklyR1: _ohlcv.weekly_pivot_levels?.r1 || null,
+    weeklyR2: _ohlcv.weekly_pivot_levels?.r2 || null,
+    weeklyS1: _ohlcv.weekly_pivot_levels?.s1 || null,
+    weeklyS2: _ohlcv.weekly_pivot_levels?.s2 || null,
 
-    console.log(`${LOG} [Levels] ${pick.symbol}: SHORT_STRUCTURAL entry=${entry} stop=${stop} target=${target} R:R=${riskReward}`);
+    // Daily pivot levels (for reference)
+    dailyR1: _ohlcv.daily_pivot_levels?.r1 || null,
+    dailyS1: _ohlcv.daily_pivot_levels?.s1 || null
+  };
 
-    return {
-      ...pick,
-      levels: {
-        entry: round2(entry),
-        stop: round2(stop),
-        target,
-        risk_pct: riskPct,
-        reward_pct: rewardPct,
-        risk_reward: riskReward,
-        mode: 'SHORT_STRUCTURAL',
-        reason: `Short via pivot ${pivots?.s1 && pivots.s1 < entry ? 'S1' : 'S2'}, ATR stop`
-      }
-    };
+  // Call scanLevels engine with the scan type
+  const result = scanLevels.calculateTradingLevels(scan_type, scanData);
+
+  if (!result.valid) {
+    console.log(`${LOG} [Levels] ${symbol}: REJECTED by scanLevels — ${result.reason}`);
+    return null;
   }
 
-  // ── LONG picks: simple intraday formula (mirror of SHORT) ──
-  // Entry at yesterday's close, ATR-based stop, pivot R1/R2 targets
-  // Positions MUST close same day by 3:30 PM
-  {
-    const entry = lastClose;
-    const atr = _ohlcv.atr;
-    const stop = atr > 0 ? round2(entry - 1.5 * atr) : _ohlcv.low;
-    const pivots = _ohlcv.daily_pivot_levels;
-    const yesterdayHigh = _ohlcv.high;
+  // Extract levels from scanLevels result
+  const { entry, stop, target2: target, riskReward, riskPercent, rewardPercent, mode, reason } = result;
 
-    // Target cascade: R1 → R2 → yesterdayHigh (first resistance above entry)
-    const target = (pivots?.r1 && pivots.r1 > entry) ? round2(pivots.r1)
-                 : (pivots?.r2 && pivots.r2 > entry) ? round2(pivots.r2)
-                 : (yesterdayHigh && yesterdayHigh > entry) ? round2(yesterdayHigh)
-                 : null;
+  console.log(`${LOG} [Levels] ${symbol}: ${mode} entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} R:R=${riskReward}`);
 
-    if (!target) {
-      console.log(`${LOG} [Levels] ${pick.symbol}: LONG REJECTED — no pivot R1/R2 or yesterdayHigh above entry ${entry}`);
-      return null;
+  return {
+    ...pick,
+    levels: {
+      entry: round2(entry),
+      stop: round2(stop),
+      target: round2(target),
+      risk_pct: round2(riskPercent),
+      reward_pct: round2(rewardPercent),
+      risk_reward: round2(riskReward),
+      mode,
+      reason,
+      // Additional context from scanLevels
+      entry_type: result.entryType,
+      target1: result.target1 ? round2(result.target1) : null,
+      target3: result.target3 ? round2(result.target3) : null
     }
-
-    const risk = entry - stop;
-    const reward = target - entry;
-    const riskReward = risk > 0 ? round2(reward / risk) : 0;
-
-    if (risk <= 0 || riskReward < 1.2) {
-      console.log(`${LOG} [Levels] ${pick.symbol}: LONG REJECTED — R:R ${riskReward}:1 < 1.2`);
-      return null;
-    }
-
-    const riskPct = round2((risk / entry) * 100);
-    const rewardPct = round2((reward / entry) * 100);
-    const targetLevel = (pivots?.r1 && pivots.r1 > entry) ? 'R1'
-                      : (pivots?.r2 && pivots.r2 > entry) ? 'R2'
-                      : 'yesterdayHigh';
-
-    console.log(`${LOG} [Levels] ${pick.symbol}: LONG_INTRADAY entry=${entry} stop=${stop} target=${target} (${targetLevel}) R:R=${riskReward}`);
-
-    return {
-      ...pick,
-      levels: {
-        entry: round2(entry),
-        stop: round2(stop),
-        target,
-        risk_pct: riskPct,
-        reward_pct: rewardPct,
-        risk_reward: riskReward,
-        mode: 'LONG_INTRADAY',
-        reason: `Long via pivot ${targetLevel}, ATR stop`
-      }
-    };
-  }
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -271,6 +271,20 @@ function calculateVolumeIndicators(closes, highs, lows, volumes, indicators) {
  * Calculate Swing Levels (High/Low over periods)
  */
 function calculateSwingLevels(candles, indicators) {
+  // 5-day swing levels (for tight breakdown stops)
+  if (candles.length >= 5) {
+    const recent5 = lastN(candles, 5);
+    indicators.high_5d = round2(max(recent5.map(c => c.high)));
+    indicators.low_5d = round2(min(recent5.map(c => c.low)));
+  }
+
+  // 10-day swing levels (for consolidation setups)
+  if (candles.length >= 10) {
+    const recent10 = lastN(candles, 10);
+    indicators.high_10d = round2(max(recent10.map(c => c.high)));
+    indicators.low_10d = round2(min(recent10.map(c => c.low)));
+  }
+
   // 20-day swing levels
   if (candles.length >= 20) {
     const recent20 = lastN(candles, 20);

@@ -1027,12 +1027,19 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       ema50: round2(dailyIndicators.ema50) || 0,
       sma200: round2(dailyIndicators.sma200) || 0,
       atr: round2(dailyIndicators.atr) || 0,
+      // Swing levels for scan-type-aware stops (5D/10D for breakdown, 20D for momentum)
+      high_5d: round2(dailyIndicators.high_5d) || 0,
+      low_5d: round2(dailyIndicators.low_5d) || 0,
+      high_10d: round2(dailyIndicators.high_10d) || 0,
+      low_10d: round2(dailyIndicators.low_10d) || 0,
       high_20d: round2(dailyIndicators.high_20d) || 0,
       low_20d: round2(dailyIndicators.low_20d) || 0,
       high_52w: round2(high52w) || 0,
       daily_pivot_levels: dailyPivot,
       weekly_r1: weeklyPivot?.r1 || null,
-      weekly_r2: weeklyPivot?.r2 || null
+      weekly_r2: weeklyPivot?.r2 || null,
+      weekly_s1: weeklyPivot?.s1 || null,
+      weekly_s2: weeklyPivot?.s2 || null
     };
   } catch (error) {
     console.error(`[DailyAnalysis] Error calculating data for ${symbol}:`, error.message);
