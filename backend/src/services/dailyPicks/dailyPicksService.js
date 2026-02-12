@@ -12,7 +12,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
 
-import { DAILY_SCANS, SCAN_LABELS, SCAN_ORDER_BY_REGIME } from './dailyPicksScans.js';
+import { DAILY_SCANS, SCAN_LABELS, SCAN_ORDER_BY_REGIME, SCAN_ARCHETYPE } from './dailyPicksScans.js';
 import { runChartinkScan } from '../chartinkService.js';
 import { getDailyAnalysisData } from '../technicalData.service.js';
 import { fetchAndCheckRegime } from '../../engine/regime.js';
@@ -466,11 +466,18 @@ function calculateLevels(pick) {
 
     // Daily pivot levels (for reference)
     dailyR1: _ohlcv.daily_pivot_levels?.r1 || null,
-    dailyS1: _ohlcv.daily_pivot_levels?.s1 || null
+    dailyS1: _ohlcv.daily_pivot_levels?.s1 || null,
+
+    // Daily picks use relaxed R:R (1.2:1 vs swing's 1.5:1)
+    minRR: 1.2
   };
 
-  // Call scanLevels engine with the scan type
-  const result = scanLevels.calculateTradingLevels(scan_type, scanData);
+  // Map daily picks scan type to engine archetype (e.g. breakout_setup → breakout)
+  const archetype = SCAN_ARCHETYPE[scan_type] || scan_type;
+  console.log(`${LOG} [Levels] ${symbol}: scan_type="${scan_type}" → archetype="${archetype}"`);
+
+  // Call scanLevels engine with the mapped archetype
+  const result = scanLevels.calculateTradingLevels(archetype, scanData);
 
   if (!result.valid) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED by scanLevels — ${result.reason}`);
@@ -481,11 +488,11 @@ function calculateLevels(pick) {
   const { entry, stop, target2: target, riskReward, riskPercent, rewardPercent, mode, reason } = result;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // DAILY PICKS RISK CAP: 3% (stricter than swing's 8%)
+  // DAILY PICKS RISK CAP: 4% (stricter than swing's 8%)
   // ═══════════════════════════════════════════════════════════════════════════
   // Daily picks are intraday MIS positions that force-close at 3 PM.
-  // No time to recover from 5%+ stops. Cap at 3% for safety.
-  const DAILY_PICKS_MAX_RISK = 3.0;
+  // No time to recover from 5%+ stops. Cap at 4% for safety.
+  const DAILY_PICKS_MAX_RISK = 4.0;
 
   if (riskPercent > DAILY_PICKS_MAX_RISK) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED — Risk ${round2(riskPercent)}% exceeds daily picks cap (${DAILY_PICKS_MAX_RISK}%)`);

@@ -630,7 +630,7 @@ function calculateBreakoutLevels(data) {
     weeklyR2,
     high52W,
     atr,
-    minRR: 1.5
+    minRR: data.minRR || 1.5
   });
 
   // If no structural target gives adequate R:R → REJECT this setup
@@ -791,7 +791,7 @@ function calculatePullbackLevels(data) {
     weeklyR1,
     weeklyR2,
     high52W,
-    minRR: 1.2  // Lower bar for pullbacks (shorter-term)
+    minRR: data.minRR || 1.2  // Lower bar for pullbacks (shorter-term)
   });
 
   // If no structural target gives adequate R:R → REJECT this setup
@@ -909,7 +909,7 @@ function calculateMomentumLevels(data) {
     weeklyR2,
     high52W,
     atr,
-    minRR: 1.5
+    minRR: data.minRR || 1.5
   });
 
   // If no structural target gives adequate R:R → REJECT this setup
@@ -988,7 +988,7 @@ function calculateConsolidationLevels(data) {
     weeklyR2,
     high52W,
     atr,
-    minRR: 1.5
+    minRR: data.minRR || 1.5
   });
 
   // If no structural target gives adequate R:R → REJECT this setup
@@ -1083,7 +1083,7 @@ function calculateAPlusMomentumLevels(data) {
     weeklyR2,
     high52W,
     atr,
-    minRR: 1.5
+    minRR: data.minRR || 1.5
   });
 
   // If no structural target gives adequate R:R → REJECT this setup
@@ -1438,7 +1438,7 @@ function calculateBreakdownLevels(data) {
     weeklyS2,
     low20D,
     atr,
-    minRR: 1.5
+    minRR: data.minRR || 1.5
   });
 
   if (targetResult.rejected) {
@@ -1506,7 +1506,7 @@ function calculateMomentumBearishLevels(data) {
     weeklyS2,
     low20D,
     atr,
-    minRR: 1.5
+    minRR: data.minRR || 1.5
   });
 
   if (targetResult.rejected) {
@@ -1573,7 +1573,7 @@ function calculateFailedResistanceLevels(data) {
     weeklyS2,
     low20D,
     atr,
-    minRR: 1.5
+    minRR: data.minRR || 1.5
   });
 
   if (targetResult.rejected) {
@@ -1637,7 +1637,7 @@ function calculateCompressionBearishLevels(data) {
     weeklyS2,
     low20D,
     atr,
-    minRR: 1.5
+    minRR: data.minRR || 1.5
   });
 
   if (targetResult.rejected) {
