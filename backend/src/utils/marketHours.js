@@ -870,12 +870,8 @@ class MarketHoursUtil {
     try {
       const now = new Date(); // Current time for checks
 
-      // Get stock symbol from instrument_key
-      const stockInfo = await Stock.getByInstrumentKey(instrumentKey);
-      const stockSymbol = stockInfo?.trading_symbol || instrumentKey;
-
-      // Get user and subscription
-      const user = await User.findById(userId);
+      // Use pre-loaded user from auth middleware if available (avoids redundant DB query)
+      const user = options.user || await User.findById(userId).lean();
       if (!user) {
         return {
           allowed: false,
@@ -889,7 +885,7 @@ class MarketHoursUtil {
       const stockLimit = 5;
 
       // Check 1: Watchlist Quota (can analyze if not filled)
-      const currentWatchlistCount = user.watchlist.length;
+      const currentWatchlistCount = user.watchlist?.length || 0;
 
       if (currentWatchlistCount < stockLimit) {
 
@@ -906,20 +902,25 @@ class MarketHoursUtil {
       }
 
       // Check 2: Daily Limit (if watchlist is full)
-
-      // Normalize stock symbol
+      // Parallelize stock lookup + quota window + usage aggregate
       const normalizeStockSymbol = (symbol) => {
         if (!symbol || typeof symbol !== 'string') return '';
         return symbol.replace(/[-\s]/g, '').toUpperCase();
       };
-      const normalizedSymbol = normalizeStockSymbol(stockSymbol);
 
       const userObjectId = mongoose.Types.ObjectId.isValid(userId) ?
       new mongoose.Types.ObjectId(userId) :
       userId;
 
-     
-      const { startUtc, endUtc, quotaDate } = await this.getQuotaWindowUTC();
+      // Run stock lookup and quota window calculation in parallel
+      const [stockInfo, quotaWindow] = await Promise.all([
+        Stock.getByInstrumentKey(instrumentKey),
+        this.getQuotaWindowUTC()
+      ]);
+
+      const stockSymbol = stockInfo?.trading_symbol || instrumentKey;
+      const normalizedSymbol = normalizeStockSymbol(stockSymbol);
+      const { startUtc, endUtc, quotaDate } = quotaWindow;
 
       // Query usage within quota window
       const usage = await UserAnalyticsUsage.aggregate([

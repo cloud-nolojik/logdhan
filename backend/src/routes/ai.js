@@ -6,11 +6,8 @@ import candleFetcherService from '../services/candleFetcher.service.js';
 import priceCacheService from '../services/priceCache.service.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
-import { Subscription } from '../models/subscription.js';
 import weeklyTrackAnalysisJob from '../services/weeklyPicks/weeklyTrackAnalysisJob.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
-import rateLimit from 'express-rate-limit';
-import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
 import { User } from '../models/user.js';
 
 const router = express.Router();
@@ -438,120 +435,66 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     const { instrumentKey } = req.params;
     let { analysis_type = 'swing', force_type } = req.query;
 
-    const userId = req.user.id;
-
-    // If force_type is specified, use that regardless of watchlist status
-    // This is used when opening from Weekly Discovery screen (always show swing)
+    // Determine analysis type from force_type or watchlist source
     if (force_type) {
       analysis_type = force_type;
-      console.log(`[BY-INSTRUMENT] force_type specified: ${force_type}`);
     } else {
-      // Check if stock is in user's watchlist with weekly_track source
-      // If so, return position_management analysis instead of swing
       const watchlistItem = req.user.watchlist?.find(item => item.instrument_key === instrumentKey);
-      const isWeeklyTrack = watchlistItem?.added_source === 'weekly_track';
-
-      if (isWeeklyTrack && analysis_type === 'swing') {
-        // For weekly_track stocks, return position_management analysis
+      if (watchlistItem?.added_source === 'weekly_track' && analysis_type === 'swing') {
         analysis_type = 'position_management';
-        console.log(`[BY-INSTRUMENT] Stock is weekly_track, switching to position_management analysis`);
       }
     }
 
-    console.log(`[BY-INSTRUMENT] Request for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
-
-    // ⚡ Check user limits using service method (watchlist quota + daily limit)
-    const limitsCheck = await aiReviewService.checkAnalysisLimits(userId, instrumentKey);
-
-    if (!limitsCheck.allowed) {
-
-      return res.status(200).json({
-        success: true,
-        status: 'limit_reached',
-        error: limitsCheck.reason,
-        message: limitsCheck.message,
-        limitInfo: limitsCheck.limitInfo,
-        can_analyze_manually: false
-      });
-    }
-
-    // First check for any analysis (completed or in progress)
-    // Use .lean() to get plain JavaScript object without Mongoose internals
-    const anyAnalysis = await StockAnalysis.findOne({
+    // Single DB query — fetch most recent analysis
+    const analysis = await StockAnalysis.findOne({
       instrument_key: instrumentKey,
       analysis_type: analysis_type
-    }).sort({ created_at: -1 }).lean(); // Get most recent analysis as plain object
+    }).sort({ created_at: -1 }).lean();
 
-    if (!anyAnalysis) {
-      console.log(`[BY-INSTRUMENT] ❌ No analysis found for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
-
-      // For position_management (weekly_track stocks) - always allow manual analysis
-      if (analysis_type === 'position_management') {
-        return res.status(200).json({
-          success: true,
-          status: 'not_analyzed',
-          error: 'position_analysis_pending',
-          message: 'No position analysis available yet.',
-          call_to_action: 'Analyze Position',
-          is_weekly_track: true,
-          can_analyze_manually: true
-        });
-      }
-
-      const messageToUser = 'This stock has not been analyzed yet';
-      const callToActionToUser = 'Click "Analyze This Stock" to get AI strategies';
-
-      return res.status(200).json({
+    // Not found → app shows "Analyze Stock" button
+    if (!analysis) {
+      return res.json({
         success: true,
         status: 'not_analyzed',
-        error: 'not_analyzed',
-        message: messageToUser,
-        call_to_action: callToActionToUser,
+        error: analysis_type === 'position_management' ? 'position_analysis_pending' : 'not_analyzed',
+        message: analysis_type === 'position_management'
+          ? 'No position analysis available yet.'
+          : 'This stock has not been analyzed yet',
+        call_to_action: analysis_type === 'position_management' ? 'Analyze Position' : 'Click "Analyze This Stock" to get AI strategies',
+        is_weekly_track: analysis_type === 'position_management',
         can_analyze_manually: true
       });
     }
 
-    console.log(`[BY-INSTRUMENT] ✅ Found analysis: ${anyAnalysis._id}, status: ${anyAnalysis.status}, symbol: ${anyAnalysis.stock_symbol}`);
+    // Failed → stop polling
+    if (analysis.status === 'failed') {
+      return res.status(404).json({
+        success: false,
+        error: 'Analysis failed',
+        message: 'Analysis failed or timed out'
+      });
+    }
 
-    // If analysis is not completed, return in_progress status (unless failed)
-    // Valid completed statuses: 'completed', 'in_position', 'exited', 'expired'
+    // Still in progress → return progress info
     const completedStatuses = ['completed', 'in_position', 'exited', 'expired'];
-    if (!completedStatuses.includes(anyAnalysis.status)) {
-      // If analysis failed, return 404 to stop polling
-      if (anyAnalysis.status === 'failed') {
-
-        return res.status(404).json({
-          success: false,
-          error: 'Analysis failed',
-          message: 'Analysis failed or timed out'
-        });
-      }
-
-      // Get progress information for user feedback
-      const progressInfo = anyAnalysis.progress || {
+    if (!completedStatuses.includes(analysis.status)) {
+      const progressInfo = analysis.progress || {
         current_step: 'Starting analysis...',
         percentage: 0,
         steps_completed: 0,
         total_steps: 6,
-        estimated_time_remaining: 300 // 5 minutes default
+        estimated_time_remaining: 300
       };
+      const elapsedSeconds = Math.floor((Date.now() - new Date(analysis.created_at).getTime()) / 1000);
+      const estimatedMinutes = Math.ceil(Math.max(0, 300 - elapsedSeconds) / 60);
 
-      // Calculate estimated completion time
-      const createdAt = new Date(anyAnalysis.created_at);
-      const now = new Date();
-      const elapsedSeconds = Math.floor((now - createdAt) / 1000);
-      const estimatedTotalTime = 300; // 5 minutes average
-      const remainingSeconds = Math.max(0, estimatedTotalTime - elapsedSeconds);
-      const estimatedMinutes = Math.ceil(remainingSeconds / 60);
-
-      // Return background processing message
       return res.status(202).json({
         success: true,
         status: 'background_processing',
         message: 'Analysis is happening in the background. We will notify you once it\'s complete.',
-        stock_name: anyAnalysis.stock_name,
-        stock_symbol: anyAnalysis.stock_symbol,
-        instrument_key: anyAnalysis.instrument_key,
+        stock_name: analysis.stock_name,
+        stock_symbol: analysis.stock_symbol,
+        instrument_key: analysis.instrument_key,
         progress: {
           current_step: progressInfo.current_step,
           percentage: progressInfo.percentage,
@@ -560,54 +503,29 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
           estimated_time_remaining: `~${estimatedMinutes} min`
         },
         notification_enabled: true,
-        created_at: anyAnalysis.created_at
+        created_at: analysis.created_at
       });
     }
 
-    // Handle intraday analysis separately (different schema)
+    // ─── Completed analysis — build response ───
+    const currentPrice = getLatestPrice(analysis.instrument_key, analysis.current_price);
+    const now = new Date();
+    const isExpired = analysis.valid_until
+      ? now > new Date(analysis.valid_until)
+      : (analysis.created_at ? (now.getTime() - new Date(analysis.created_at).getTime() > 7 * 24 * 60 * 60 * 1000) : false);
+
+    // Intraday — patch missing fields for old cached data
     if (analysis_type === 'intraday') {
-      const analysis = anyAnalysis;
-
-      console.log(`\n========== [INTRADAY BY-INSTRUMENT] DEBUG ==========`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Found analysis for: ${instrumentKey}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] analysis._id: ${analysis._id}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] analysis.stock_symbol: ${analysis.stock_symbol}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] analysis.status: ${analysis.status}`);
-
-      // Convert Mongoose document to plain object to properly access nested fields
-      const rawAnalysisData = analysis.analysis_data?.toObject ? analysis.analysis_data.toObject() : (analysis.analysis_data || {});
-      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data keys: ${Object.keys(rawAnalysisData).join(', ')}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data.symbol: ${rawAnalysisData.symbol}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Raw analysis_data.analysis_type: ${rawAnalysisData.analysis_type}`);
-
-      // Create a mutable copy for modifications
-      const analysisData = { ...rawAnalysisData };
-
-      // Add symbol and analysis_type to top level if missing (for old cached data)
-      if (!analysisData.symbol) {
-        console.log(`[INTRADAY BY-INSTRUMENT] FIXING: Adding missing symbol from stock_symbol`);
-        analysisData.symbol = analysis.stock_symbol;
-      }
-      if (!analysisData.analysis_type) {
-        console.log(`[INTRADAY BY-INSTRUMENT] FIXING: Adding missing analysis_type`);
-        analysisData.analysis_type = 'intraday';
-      }
-      if (!analysisData.generated_at_ist) {
-        console.log(`[INTRADAY BY-INSTRUMENT] FIXING: Adding missing generated_at_ist`);
-        analysisData.generated_at_ist = analysis.created_at?.toISOString() || new Date().toISOString();
-      }
-
-      // For intraday, map intraday sentiment to overall_sentiment if missing
+      const rawData = analysis.analysis_data?.toObject ? analysis.analysis_data.toObject() : (analysis.analysis_data || {});
+      const analysisData = { ...rawData };
+      if (!analysisData.symbol) analysisData.symbol = analysis.stock_symbol;
+      if (!analysisData.analysis_type) analysisData.analysis_type = 'intraday';
+      if (!analysisData.generated_at_ist) analysisData.generated_at_ist = analysis.created_at?.toISOString() || now.toISOString();
       if (!analysisData.overall_sentiment && analysisData.intraday?.aggregate_sentiment) {
-        console.log(`[INTRADAY BY-INSTRUMENT] FIXING: Adding missing overall_sentiment from intraday`);
         analysisData.overall_sentiment = analysisData.intraday.aggregate_sentiment;
       }
 
-      console.log(`[INTRADAY BY-INSTRUMENT] Final analysisData.symbol: ${analysisData.symbol}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Final analysisData.analysis_type: ${analysisData.analysis_type}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Final analysisData keys: ${Object.keys(analysisData).join(', ')}`);
-
-      const responsePayload = {
+      return res.json({
         success: true,
         data: {
           _id: analysis._id,
@@ -615,7 +533,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
           stock_name: analysis.stock_name,
           stock_symbol: analysis.stock_symbol,
           analysis_type: 'intraday',
-          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
+          current_price: currentPrice,
           analysis_data: analysisData,
           status: analysis.status,
           valid_until: analysis.valid_until,
@@ -625,80 +543,14 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         analysis_id: analysis._id.toString(),
         error: null,
         message: null
-      };
-
-      console.log(`[INTRADAY BY-INSTRUMENT] Response analysis_data.symbol: ${responsePayload.data.analysis_data.symbol}`);
-      console.log(`[INTRADAY BY-INSTRUMENT] Response analysis_data.analysis_type: ${responsePayload.data.analysis_data.analysis_type}`);
-      console.log(`========== [INTRADAY BY-INSTRUMENT] END ==========\n`);
-
-      return res.json(responsePayload);
+      });
     }
 
-    // Handle position_management analysis (for weekly_track stocks)
+    // Position management — wrap in expected structure
     if (analysis_type === 'position_management') {
-      const analysis = anyAnalysis;
-
-      console.log(`[POSITION-MGMT BY-INSTRUMENT] Found analysis for: ${instrumentKey}`);
-
-      // Check if analysis is expired
-      const now = new Date();
-      const isExpired = analysis.valid_until ? now > new Date(analysis.valid_until) : false;
-
-      // Extract position management data
       const positionData = analysis.analysis_data?.position_management || analysis.analysis_data || {};
 
-      // Fix: Ensure current_price is never null (app fails to parse null)
-      let currentPrice = analysis.current_price;
-      if (currentPrice === null || currentPrice === undefined) {
-        console.log(`[POSITION-MGMT BY-INSTRUMENT] ⚠️ current_price is null, fetching from cache/candles...`);
-
-        // Try price cache first
-        try {
-          currentPrice = priceCacheService.getPrice(instrumentKey);
-          console.log(`[POSITION-MGMT BY-INSTRUMENT] Price from cache: ${currentPrice}`);
-        } catch (e) {
-          console.warn(`[POSITION-MGMT BY-INSTRUMENT] Price cache error: ${e.message}`);
-        }
-
-        // If still null, try from candle data
-        if (!currentPrice) {
-          try {
-            const yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            const candles = await candleFetcherService.fetchCandlesFromAPI(
-              instrumentKey,
-              '1d',
-              yesterday,
-              new Date(),
-              false
-            );
-            if (candles && candles.length > 0) {
-              currentPrice = candles[candles.length - 1].close;
-              console.log(`[POSITION-MGMT BY-INSTRUMENT] Price from candles: ${currentPrice}`);
-            }
-          } catch (e) {
-            console.warn(`[POSITION-MGMT BY-INSTRUMENT] Candle fetch error: ${e.message}`);
-          }
-        }
-
-        // Fallback to original_levels entry price or market_summary
-        if (!currentPrice) {
-          currentPrice = analysis.analysis_data?.original_levels?.entry
-            || analysis.analysis_data?.market_summary?.last
-            || 0;
-          console.log(`[POSITION-MGMT BY-INSTRUMENT] Price from fallback: ${currentPrice}`);
-        }
-
-        // Update the cached analysis with the correct price (async, don't wait)
-        if (currentPrice && currentPrice !== 0) {
-          StockAnalysis.updateOne(
-            { _id: analysis._id },
-            { $set: { current_price: currentPrice } }
-          ).catch(err => console.warn(`[POSITION-MGMT] Failed to update price: ${err.message}`));
-        }
-      }
-
-      const responsePayload = {
+      return res.json({
         success: true,
         data: {
           _id: analysis._id,
@@ -711,8 +563,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
             schema_version: '1.0',
             symbol: analysis.stock_symbol,
             analysis_type: 'position_management',
-            generated_at_ist: analysis.created_at?.toISOString() || new Date().toISOString(),
-            // Wrap position data in position_management key (app expects this structure)
+            generated_at_ist: analysis.created_at?.toISOString() || now.toISOString(),
             position_management: positionData,
             original_levels: analysis.analysis_data?.original_levels || null,
             original_swing_analysis_id: analysis.analysis_data?.original_swing_analysis_id || null
@@ -727,99 +578,62 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
         is_weekly_track: true,
         error: null,
         message: isExpired ? 'Position analysis expired. New analysis runs at 4:00 PM.' : null
-      };
-
-      console.log(`[POSITION-MGMT BY-INSTRUMENT] Returning position_management for ${analysis.stock_symbol}, current_price: ${currentPrice}`);
-      return res.json(responsePayload);
+      });
     }
 
-    // Validate required fields exist for completed SWING analysis
-    // Support both old schema (market_summary + strategies) and new schema (setup_score + verdict + trading_plan)
-    const hasOldSchemaData = anyAnalysis.analysis_data?.market_summary?.last &&
-      anyAnalysis.analysis_data?.market_summary?.trend;
-    const hasNewSchemaData = anyAnalysis.analysis_data?.setup_score &&
-      anyAnalysis.analysis_data?.verdict;
+    // Swing analysis — check if data is complete
+    const hasOldSchema = analysis.analysis_data?.market_summary?.last && analysis.analysis_data?.market_summary?.trend;
+    const hasNewSchema = analysis.analysis_data?.setup_score && analysis.analysis_data?.verdict;
 
-    if (!hasOldSchemaData && !hasNewSchemaData) {
-      // Create minimal analysis_data structure with required fields for incomplete analysis
-      const defaultAnalysisData = {
-        ...anyAnalysis.analysis_data,
-        generated_at_ist: new Date().toISOString(), // Required field
-        market_summary: {
-          last: getLatestPrice(anyAnalysis.instrument_key, anyAnalysis.current_price),
-          trend: "NEUTRAL",
-          volatility: "MEDIUM",
-          volume: "AVERAGE"
-        },
-        overall_sentiment: "NEUTRAL",
-        strategies: [],
-        disclaimer: "Analysis data incomplete - still processing..."
-      };
-
-      return res.status(200).json({
+    if (!hasOldSchema && !hasNewSchema) {
+      return res.json({
         success: true,
         data: {
-          _id: anyAnalysis._id,
-          instrument_key: anyAnalysis.instrument_key,
-          stock_name: anyAnalysis.stock_name,
-          stock_symbol: anyAnalysis.stock_symbol,
-          analysis_type: anyAnalysis.analysis_type,
-          current_price: getLatestPrice(anyAnalysis.instrument_key, anyAnalysis.current_price),
-          analysis_data: defaultAnalysisData,
-          status: 'in_progress', // Treat incomplete as in_progress
-          progress: anyAnalysis.progress,
-          created_at: anyAnalysis.created_at,
-          expires_at: anyAnalysis.expires_at
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: analysis.analysis_type,
+          current_price: currentPrice,
+          analysis_data: {
+            ...analysis.analysis_data,
+            generated_at_ist: now.toISOString(),
+            market_summary: { last: currentPrice, trend: "NEUTRAL", volatility: "MEDIUM", volume: "AVERAGE" },
+            overall_sentiment: "NEUTRAL",
+            strategies: [],
+            disclaimer: "Analysis data incomplete - still processing..."
+          },
+          status: 'in_progress',
+          progress: analysis.progress,
+          created_at: analysis.created_at,
+          expires_at: analysis.expires_at
         },
         cached: false,
-        analysis_id: anyAnalysis._id.toString(),
+        analysis_id: analysis._id.toString(),
         error: null,
         message: 'Analysis data incomplete - still processing'
       });
     }
 
-    const analysis = anyAnalysis; // Use the found analysis
-
-    // Check if analysis is expired:
-    // - If valid_until is set, check if it has passed
-    // - If valid_until is null (on-demand analysis), expire after 7 days
-    const now = new Date();
-    const isExpired = (() => {
-      if (analysis.valid_until) return now > new Date(analysis.valid_until);
-      if (analysis.created_at) {
-        const ageMs = now.getTime() - new Date(analysis.created_at).getTime();
-        return ageMs > 7 * 24 * 60 * 60 * 1000;
-      }
-      return false;
-    })();
-
-    // Generate expiry message for users
-    let expiryMessage = null;
-    if (isExpired) {
-      expiryMessage = 'This analysis has expired. Click "Analyze This Stock" for a fresh analysis.';
-    }
-
-    // Format response to match AnalysisApiResponse structure
-    const formattedResponse = {
-      _id: analysis._id,
-      instrument_key: analysis.instrument_key,
-      stock_name: analysis.stock_name,
-      stock_symbol: analysis.stock_symbol,
-      analysis_type: analysis.analysis_type,
-      current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
-      analysis_data: analysis.analysis_data,
-      status: analysis.status,
-      created_at: analysis.created_at,
-      valid_until: analysis.valid_until,
-      expires_at: analysis.expires_at,
-      is_expired: isExpired,
-      expiry_message: expiryMessage
-    };
-
+    // Complete swing analysis
     res.json({
       success: true,
-      data: formattedResponse,
-      cached: true, // This is from DB, so it's cached
+      data: {
+        _id: analysis._id,
+        instrument_key: analysis.instrument_key,
+        stock_name: analysis.stock_name,
+        stock_symbol: analysis.stock_symbol,
+        analysis_type: analysis.analysis_type,
+        current_price: currentPrice,
+        analysis_data: analysis.analysis_data,
+        status: analysis.status,
+        created_at: analysis.created_at,
+        valid_until: analysis.valid_until,
+        expires_at: analysis.expires_at,
+        is_expired: isExpired,
+        expiry_message: isExpired ? 'This analysis has expired. Click "Analyze This Stock" for a fresh analysis.' : null
+      },
+      cached: true,
       analysis_id: analysis._id.toString(),
       error: null,
       message: null
