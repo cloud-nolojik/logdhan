@@ -7,6 +7,10 @@ const API_KEY = process.env.UPSTOX_API_KEY || '5d2c7442-7ce9-44b3-a0df-19c110d72
 const stockCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// Cache for getDailyCandles — data changes at most once per trading day
+const _dailyCandleCache = new Map();
+const DAILY_CANDLE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // Helper: Match scoring logic for better search results
 function calculateMatchScore(searchTerm, stock) {
   const term = searchTerm.toLowerCase().replace(/\s+/g, '');
@@ -185,6 +189,12 @@ export async function validateStock(instrumentKey) {
 // @param {string} instrumentKey - The instrument key to fetch price for
 // @returns {Object|null} { previousClose, todayOpen, todayHigh, todayLow, todayClose } or null
 export async function getDailyCandles(instrumentKey) {
+  // Check cache first — daily candle data rarely changes
+  const cached = _dailyCandleCache.get(instrumentKey);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.value;
+  }
+
   // Use IST date for API call (Upstox uses IST dates)
   const now = new Date();
   const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
@@ -198,7 +208,6 @@ export async function getDailyCandles(instrumentKey) {
   previousDay.setDate(istNow.getDate() - 10);
   const previousDayFormattedDate = previousDay.toISOString().split('T')[0];
 
-  // URL-encode the instrument key (| needs to be encoded as %7C)
   const encodedInstrumentKey = encodeURIComponent(instrumentKey);
 
   const axiosConfig = {
@@ -210,72 +219,30 @@ export async function getDailyCandles(instrumentKey) {
   };
 
   try {
-    // Use daily candles API - this gives us one candle per trading day
-    // Note: v3 API uses "days" (plural), not "day"
     const url = `https://api.upstox.com/v3/historical-candle/${encodedInstrumentKey}/days/1/${currentDayFormattedDate}/${previousDayFormattedDate}`;
 
-    console.log(`\n========== [getDailyCandles] API CALL ==========`);
-    console.log(`[getDailyCandles] Instrument Key: ${instrumentKey}`);
-    console.log(`[getDailyCandles] URL: ${url}`);
-    console.log(`[getDailyCandles] Headers:`, JSON.stringify(axiosConfig.headers));
-    console.log(`[getDailyCandles] Date Range: ${previousDayFormattedDate} to ${currentDayFormattedDate}`);
-
     const response = await rateLimitedGet(url, axiosConfig, { caller: 'stockDb' });
-
-    console.log(`[getDailyCandles] Response Status: ${response.status}`);
-    console.log(`[getDailyCandles] Response Headers:`, JSON.stringify(response.headers));
-    console.log(`[getDailyCandles] Response Data:`, JSON.stringify(response.data));
-    console.log(`================================================\n`);
-
     const candles = response.data?.data?.candles || [];
-    console.log(`[getDailyCandles] Candles count: ${candles.length}`);
 
     if (candles.length >= 1) {
-      // Candles are in reverse chronological order: [most recent, previous, ...]
-      // Candle format: [timestamp, open, high, low, close, volume, ...]
-
-      // Get today's date in IST (trading day)
-      const now = new Date();
-      const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
-      const istNow = new Date(now.getTime() + istOffset);
-      const todayISTDate = istNow.toISOString().split('T')[0]; // "YYYY-MM-DD"
-
-      // Check if the first candle is from today
+      const todayISTDate = currentDayFormattedDate;
       const firstCandleDate = new Date(candles[0][0]);
       const firstCandleDateIST = new Date(firstCandleDate.getTime() + istOffset);
       const firstCandleDateStr = firstCandleDateIST.toISOString().split('T')[0];
 
-      console.log(`[getDailyCandles] Today IST date: ${todayISTDate}`);
-      console.log(`[getDailyCandles] First candle date: ${firstCandleDateStr}`);
-
-      // Log all candles for debugging
-      candles.slice(0, 3).forEach((candle, idx) => {
-        const candleDate = new Date(candle[0]);
-        const candleDateIST = new Date(candleDate.getTime() + istOffset);
-        console.log(`[getDailyCandles] Candle[${idx}]: date=${candleDateIST.toISOString().split('T')[0]}, O=${candle[1]}, C=${candle[4]}`);
-      });
-
       let todayCandle, previousDayCandle;
 
       if (firstCandleDateStr === todayISTDate) {
-        // First candle IS today's candle - use normal logic
         todayCandle = candles[0];
         previousDayCandle = candles.length >= 2 ? candles[1] : null;
-        console.log(`[getDailyCandles] Today's candle found at index 0`);
       } else {
-        // First candle is NOT today (market open, today's daily candle doesn't exist yet)
-        // First candle is actually the PREVIOUS trading day's close (what we need!)
-        todayCandle = null; // No today candle yet
-        previousDayCandle = candles[0]; // This is the previous day's close
-        console.log(`[getDailyCandles] Today's candle NOT found - using candles[0] as previous day close`);
+        todayCandle = null;
+        previousDayCandle = candles[0];
       }
 
       if (previousDayCandle) {
-        const previousClose = previousDayCandle[4];
-        console.log(`[getDailyCandles] Using previousClose=${previousClose} for change calculation`);
-
-        return {
-          previousClose: previousClose, // Close price of previous trading day
+        const result = {
+          previousClose: previousDayCandle[4],
           todayOpen: todayCandle ? todayCandle[1] : null,
           todayHigh: todayCandle ? todayCandle[2] : null,
           todayLow: todayCandle ? todayCandle[3] : null,
@@ -284,24 +251,17 @@ export async function getDailyCandles(instrumentKey) {
           candleDate: todayCandle ? todayCandle[0] : null,
           previousCandleDate: previousDayCandle[0]
         };
+
+        // Cache the result
+        _dailyCandleCache.set(instrumentKey, { value: result, expiry: Date.now() + DAILY_CANDLE_CACHE_TTL });
+
+        return result;
       }
     }
 
-    console.log(`[getDailyCandles] No candles found for ${instrumentKey}`);
     return null;
   } catch (error) {
-    console.error(`\n========== [getDailyCandles] API ERROR ==========`);
-    console.error(`[getDailyCandles] Instrument Key: ${instrumentKey}`);
-    console.error(`[getDailyCandles] Error Message: ${error.message}`);
-    if (error.response) {
-      console.error(`[getDailyCandles] Response Status: ${error.response.status}`);
-      console.error(`[getDailyCandles] Response Headers:`, JSON.stringify(error.response.headers));
-      console.error(`[getDailyCandles] Response Data:`, JSON.stringify(error.response.data));
-    }
-    if (error.request) {
-      console.error(`[getDailyCandles] Request was made but no response received`);
-    }
-    console.error(`=================================================\n`);
+    console.error(`[getDailyCandles] Error for ${instrumentKey}: ${error.message}`);
     return null;
   }
 }
@@ -347,66 +307,29 @@ export async function getCurrentPrice(instrumentKey, sendCandles = false) {
       url: `https://api.upstox.com/v3/historical-candle/${encodedInstrumentKey}/days/1/${currentDayFormattedDate}/${previousDayFormattedDate}`
     }];
 
-    console.log(`\n========== [getCurrentPrice] API CALL ==========`);
-    console.log(`[getCurrentPrice] Instrument Key: ${instrumentKey}`);
-    console.log(`[getCurrentPrice] Send Candles: ${sendCandles}`);
-    console.log(`[getCurrentPrice] Headers:`, JSON.stringify(axiosConfig.headers));
-
     for (const format of apiFormats) {
       try {
-        console.log(`[getCurrentPrice] Trying: ${format.name}`);
-        console.log(`[getCurrentPrice] URL: ${format.url}`);
-
         const response = await rateLimitedGet(format.url, axiosConfig, { caller: 'getCurrentPrice' });
-
-        console.log(`[getCurrentPrice] Response Status: ${response.status}`);
-        console.log(`[getCurrentPrice] Response Data:`, JSON.stringify(response.data).substring(0, 1000));
-
         const candles = response.data?.data?.candles || [];
-        console.log(`[getCurrentPrice] Candles count: ${candles.length}`);
 
         if (candles.length > 0) {
-          console.log(`[getCurrentPrice] SUCCESS with ${format.name}`);
-          console.log(`================================================\n`);
           if (sendCandles) {
-            // Return full candle array for market route and other use cases
             return candles;
           } else {
-            // Return only price for simple price queries
-            const latest = candles[0]; // most recent candle
-            const currentPrice = latest ? latest[4] : null; // close price
-            console.log(`[getCurrentPrice] Returning price: ${currentPrice}`);
-            return currentPrice;
+            const latest = candles[0];
+            return latest ? latest[4] : null; // close price
           }
         }
-        console.log(`[getCurrentPrice] No candles from ${format.name}, trying next...`);
       } catch (apiError) {
-        console.log(`[getCurrentPrice] ${format.name} failed: ${apiError.message}`);
-        if (apiError.response) {
-          console.log(`[getCurrentPrice] Error Response Status: ${apiError.response.status}`);
-          console.log(`[getCurrentPrice] Error Response Data:`, JSON.stringify(apiError.response.data));
-        }
-        // Continue to next format on error
         continue;
       }
     }
 
-    console.log(`[getCurrentPrice] All API formats failed for ${instrumentKey}`);
-    console.log(`================================================\n`);
+    console.warn(`[getCurrentPrice] All API formats failed for ${instrumentKey}`);
     return null;
 
   } catch (error) {
-    console.error(`\n========== [getCurrentPrice] API ERROR ==========`);
-    console.error(`[getCurrentPrice] Instrument Key: ${instrumentKey}`);
-    console.error(`[getCurrentPrice] Error Message: ${error.message}`);
-    if (error.code === 'ECONNABORTED') {
-      console.error(`[getCurrentPrice] Request timeout for ${instrumentKey}`);
-    }
-    if (error.response) {
-      console.error(`[getCurrentPrice] Response Status: ${error.response.status}`);
-      console.error(`[getCurrentPrice] Response Data:`, JSON.stringify(error.response.data));
-    }
-    console.error(`=================================================\n`);
+    console.error(`[getCurrentPrice] Error for ${instrumentKey}: ${error.message}`);
     return null;
   }
 }

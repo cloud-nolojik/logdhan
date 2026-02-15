@@ -107,8 +107,8 @@ class MarketHoursUtil {
   static async isMarketOpen(date = new Date()) {
     const istDate = this.toIST(date);
 
-    // Check if it's a trading day
-    const isTradingDay = await this.isTradingDay(istDate);
+    // Check if it's a trading day (pass original date — isTradingDay converts to IST internally)
+    const isTradingDay = await this.isTradingDay(date);
 
     if (!isTradingDay) {
       return false;
@@ -196,10 +196,11 @@ class MarketHoursUtil {
     }
 
     // Market is closed - find last trading day
+    // Use original date for isTradingDay (it converts to IST internally)
+    const isTodayTradingDay = await this.isTradingDay(date);
+
     let lastTradingDay = new Date(nowIST);
     lastTradingDay.setHours(0, 0, 0, 0);
-
-    const isTodayTradingDay = await this.isTradingDay(lastTradingDay);
 
     // If today is not a trading day, find the last trading day (go back max 5 days)
     if (!isTodayTradingDay) {
@@ -266,7 +267,8 @@ class MarketHoursUtil {
   static async getTradingSession(date = new Date()) {
     const istDate = this.toIST(date);
 
-    const isTradingDay = await this.isTradingDay(istDate);
+    // Pass original date — isTradingDay converts to IST internally
+    const isTradingDay = await this.isTradingDay(date);
     if (!isTradingDay) {
       return { session: 'closed', reason: 'non-trading day' };
     }
@@ -724,18 +726,18 @@ class MarketHoursUtil {
       if (totalMinutes >= 16 * 60) {
         // If today is a trading day, quota_date is today
         // Otherwise, quota_date is last trading day
-        const isTodayTrading = await this.isTradingDay(istNow);
+        const isTodayTrading = await this.isTradingDay(now);
         if (isTodayTrading) {
           return this.formatDateIST(istNow);
         } else {
-          const lastTradingDay = await this.getLastTradingDay(istNow);
+          const lastTradingDay = await this.getLastTradingDay(now);
           return this.formatDateIST(lastTradingDay);
         }
       }
 
       // Before 4:00 PM (< 16:00)
       // Quota_date is last trading day
-      const lastTradingDay = await this.getLastTradingDay(istNow);
+      const lastTradingDay = await this.getLastTradingDay(now);
       return this.formatDateIST(lastTradingDay);
 
     } catch (error) {
@@ -997,7 +999,7 @@ class MarketHoursUtil {
         const isTodayTradingDay = await this.isTradingDay(todayDateStr);
 
         // Calculate next analysis time
-        const nextTradingDay = await this.getNextTradingDay(istNow);
+        const nextTradingDay = await this.getNextTradingDay(now);
         const nextTradingDayStr = this.formatDateIST(nextTradingDay);
 
         // Check if we're in downtime (4:00-5:00 PM)

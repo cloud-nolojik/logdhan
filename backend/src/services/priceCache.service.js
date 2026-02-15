@@ -787,7 +787,7 @@ class PriceCacheService {
     // Check if today is a trading day (not weekend/holiday)
     let isTradingDay = true;
     try {
-      isTradingDay = await MarketHoursUtil.isTradingDay(istNow);
+      isTradingDay = await MarketHoursUtil.isTradingDay(now);
     } catch (error) {
       console.warn(`⚠️ [PRICES] Could not check trading day: ${error.message}`);
     }
@@ -1043,7 +1043,7 @@ class PriceCacheService {
     // Check if today is a trading day (not weekend/holiday)
     let isTradingDay = true;
     try {
-      isTradingDay = await MarketHoursUtil.isTradingDay(istNow);
+      isTradingDay = await MarketHoursUtil.isTradingDay(now);
     } catch (error) {
       console.warn(`⚠️ [PRICES WITH CHANGE] Could not check trading day: ${error.message}`);
     }
