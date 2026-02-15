@@ -1,9 +1,7 @@
 import express from 'express';
 // Use database version instead of JSON file version
-import { searchStocks, getExactStock, getCurrentPrice } from '../utils/stockDb.js';
-import { User } from '../models/user.js';
+import { searchStocks, getExactStock } from '../utils/stockDb.js';
 import { auth } from '../middleware/auth.js';
-import LatestPrice from '../models/latestPrice.js';
 import priceCacheService from '../services/priceCache.service.js';
 
 const router = express.Router();
@@ -17,9 +15,7 @@ router.get('/search', auth, async (req, res) => {
     }
 
     const { allMatches } = await searchStocks(q);
-    //now we need iwht use rwatchlist if it already added then we need to remove it from the allMatches
-    const user = await User.findById(req.user.id);
-    const watchlist = user.watchlist;
+    const watchlist = req.user.watchlist || [];
     allMatches.forEach((stock) => {
       if (watchlist.some((item) => item.instrument_key === stock.instrument_key)) {
         stock.isInWatchlist = true;
@@ -58,57 +54,30 @@ router.get('/:instrument_key', auth, async (req, res) => {
       return res.status(404).json({ error: 'Stock not found' });
     }
 
-    // Get current price using the same price cache service as watchlist (DB → Memory → API fallback)
-    // This ensures consistent pricing across watchlist and AI analysis screens
-    let currentPrice = null;
+    // Get current price — try in-memory cache first (0ms), then API fallback
+    let currentPrice = priceCacheService.getPrice(instrument_key);
     let netChange = 0;
     let percentChange = 0;
-    try {
-      const priceDataMap = await priceCacheService.getLatestPricesWithChange([instrument_key]);
-      const priceData = priceDataMap[instrument_key];
-      if (priceData) {
-        currentPrice = priceData.price;
-        netChange = priceData.change || 0;
-        percentChange = priceData.change_percent || 0;
-        console.log(`[STOCK-DETAILS] Using price cache for ${stock.tradingsymbol || stock.trading_symbol}: ₹${currentPrice}`);
-      }
-    } catch (priceError) {
-      console.warn('Error getting price from cache service:', priceError.message);
-    }
 
-    // Fallback: Try direct API call if cache service fails
     if (!currentPrice) {
+      // Cache miss — fetch from API (populates cache for next time)
       try {
-        currentPrice = await getCurrentPrice(instrument_key);
-        console.log(`[STOCK-DETAILS] Using direct API price for ${stock.tradingsymbol || stock.trading_symbol}: ₹${currentPrice}`);
-      } catch (apiError) {
-        console.warn('Direct API price fetch also failed:', apiError.message);
-      }
-    }
-
-    // Final fallback: Try LatestPrice collection
-    if (!currentPrice) {
-      try {
-        const priceDoc = await LatestPrice.findOne({ instrument_key });
-        currentPrice = priceDoc?.last_traded_price || priceDoc?.close || null;
-        if (currentPrice) {
-          console.log(`[STOCK-DETAILS] Using LatestPrice collection for ${stock.tradingsymbol || stock.trading_symbol}: ₹${currentPrice}`);
+        const priceDataMap = await priceCacheService.getLatestPricesWithChange([instrument_key]);
+        const priceData = priceDataMap[instrument_key];
+        if (priceData) {
+          currentPrice = priceData.price;
+          netChange = priceData.change || 0;
+          percentChange = priceData.change_percent || 0;
         }
-      } catch (fallbackError) {
-        console.warn('LatestPrice fallback also failed:', fallbackError.message);
+      } catch (priceError) {
+        console.warn('[STOCK-DETAILS] Price fetch failed:', priceError.message);
       }
     }
 
-    // Check if stock is in user's watchlist
-    let isInWatchlist = false;
-    try {
-      const user = await User.findById(req.user.id);
-      if (user && user.watchlist) {
-        isInWatchlist = user.watchlist.some((item) => item.instrument_key === instrument_key);
-      }
-    } catch (watchlistError) {
-      console.warn('Error checking watchlist:', watchlistError);
-    }
+    // Check watchlist from auth-loaded user (no DB query needed)
+    const isInWatchlist = (req.user.watchlist || []).some(
+      (item) => item.instrument_key === instrument_key
+    );
 
     res.status(200).json({
       success: true,
