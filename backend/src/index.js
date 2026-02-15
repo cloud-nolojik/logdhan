@@ -80,63 +80,19 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging middleware - logs URL, body, and auth token for all API requests
+// API response time logger — highlights slow requests
 app.use((req, res, next) => {
-  // Only log API requests (skip static files, health checks)
-  if (req.path.startsWith('/api/')) {
-    const timestamp = new Date().toISOString();
-    const authHeader = req.headers.authorization;
-    const tokenPreview = authHeader ? `${authHeader.substring(0, 20)}...` : 'NO_TOKEN';
+  if (!req.path.startsWith('/api/')) return next();
 
-    // Log request details
-    console.log(`\n📥 [API REQUEST] ${timestamp}`);
-    console.log(`   Method: ${req.method}`);
-    console.log(`   URL: ${req.originalUrl}`);
-    console.log(`   Auth: ${tokenPreview}`);
+  const start = process.hrtime.bigint();
 
-    // Log body for POST/PUT/PATCH (exclude sensitive fields)
-    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
-      const safeBody = { ...req.body };
-      // Mask sensitive fields
-      if (safeBody.password) safeBody.password = '***';
-      if (safeBody.access_token) safeBody.access_token = '***';
-      if (safeBody.refresh_token) safeBody.refresh_token = '***';
-      console.log(`   Body: ${JSON.stringify(safeBody)}`);
-    }
+  res.on('finish', () => {
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    const rounded = Math.round(ms * 100) / 100;
+    const icon = rounded > 100 ? '🐢' : rounded > 30 ? '🟡' : '⚡';
+    console.log(`${icon} ${req.method} ${req.originalUrl} ${res.statusCode} — ${rounded}ms`);
+  });
 
-    // Log query params if present
-    if (Object.keys(req.query).length > 0) {
-      console.log(`   Query: ${JSON.stringify(req.query)}`);
-    }
-
-    // Log response status and body when done
-    const originalSend = res.send;
-    res.send = function(body) {
-      const responseTime = Date.now() - req._startTime;
-      console.log(`📤 [API RESPONSE] ${req.method} ${req.originalUrl} - Status: ${res.statusCode} (${responseTime}ms)`);
-
-      // Log response body (truncated for large responses)
-      try {
-        let responseBody = body;
-        if (typeof body === 'string') {
-          // Try to parse JSON for better formatting
-          try {
-            responseBody = JSON.parse(body);
-          } catch (e) {
-            // Not JSON, use as-is
-          }
-        }
-        const bodyStr = typeof responseBody === 'object' ? JSON.stringify(responseBody) : String(responseBody);
-        const truncatedBody = bodyStr.length > 1000 ? bodyStr.substring(0, 1000) + '... [TRUNCATED]' : bodyStr;
-        console.log(`   Response: ${truncatedBody}`);
-      } catch (e) {
-        console.log(`   Response: [Unable to log response body]`);
-      }
-
-      return originalSend.call(this, body);
-    };
-    req._startTime = Date.now();
-  }
   next();
 });
 
