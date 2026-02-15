@@ -193,10 +193,6 @@ router.get('/profile', auth, async (req, res) => {
   try {
     const user = req.user;
 
-    // Get actual credits from subscription table
-    const subscription = await Subscription.findActiveForUser(req.user.id);
-    const bonusCredits = subscription?.credits?.bonusCredits || 0;
-
     // Prepare comprehensive profile data
     const profileData = {
       _id: user._id?.toString() || user.id?.toString(),
@@ -209,10 +205,10 @@ router.get('/profile', auth, async (req, res) => {
       isOnboarded: user.isOnboarded,
       experienceAssessmentComplete: user.assessmentHistory?.quickQuiz?.completed || false,
       deepDiagnosticComplete: user.assessmentHistory?.deepDiagnostic?.completed || false,
-      chatOnboardingComplete: user.isOnboarded || false, // Assuming onboarded means chat complete
+      chatOnboardingComplete: user.isOnboarded || false,
       tradingExperienceLevel: user.experience?.level || 'intermediate',
       badge: user.assessmentHistory?.deepDiagnostic?.badge || null,
-      bonusCredits: bonusCredits,
+      bonusCredits: 0,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     };
