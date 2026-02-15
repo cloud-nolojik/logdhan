@@ -264,6 +264,18 @@ router.post('/track-weekly', auth, async (req, res) => {
   }
 });
 
+// Check if a stock is in user's watchlist (lightweight — no DB queries, uses auth-loaded user)
+router.get('/check/:instrument_key', auth, (req, res) => {
+  const { instrument_key } = req.params;
+  const watchlist = req.user.watchlist || [];
+  const item = watchlist.find(w => w.instrument_key === instrument_key);
+
+  res.json({
+    success: true,
+    data: item ? [{ instrument_key: item.instrument_key, trading_symbol: item.trading_symbol, name: item.name }] : []
+  });
+});
+
 // Get user's watchlist
 router.get('/', auth, async (req, res) => {
   try {
