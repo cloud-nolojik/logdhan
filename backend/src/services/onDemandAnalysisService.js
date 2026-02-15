@@ -607,6 +607,9 @@ export async function analyze(instrumentKey, userId, options = {}) {
 
     console.log(`[ON-DEMAND] [${requestId}] Indicators: Price=₹${indicators.price}, RSI=${indicators.rsi}, WeeklyRSI=${indicators.weeklyRsi}`);
 
+    // Calculate valid_until (next Friday 3:29:59 PM IST) so analysis expires properly
+    const validUntil = await MarketHoursUtil.getWeeklyValidUntilTime();
+
     // ═══════════════════════════════════════════════════════════════════════════
     // STEP 4: Classify the stock
     // ═══════════════════════════════════════════════════════════════════════════
@@ -642,7 +645,7 @@ export async function analyze(instrumentKey, userId, options = {}) {
             strategies: []
           },
           analysis_meta: { data_as_of_ist: dataAsOf, source: 'on_demand_deterministic' },
-          valid_until: null,
+          valid_until: validUntil,
           last_validated_at: new Date(),
           progress: {
             percentage: 100,
@@ -761,7 +764,7 @@ export async function analyze(instrumentKey, userId, options = {}) {
         status: 'completed',
         analysis_data: analysisData,
         analysis_meta: { data_as_of_ist: dataAsOf, source: 'on_demand_deterministic' },
-        valid_until: null,
+        valid_until: validUntil,
         last_validated_at: new Date(),
         progress: {
           percentage: 100,
