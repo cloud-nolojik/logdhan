@@ -85,12 +85,32 @@ router.get('/today', auth, async (req, res) => {
       };
     });
 
+    // Fetch live Nifty 50 price + change instead of stale Gift Nifty
+    const marketContext = { ...doc.market_context };
+    console.log(`[DAILY-PICKS-API] DB market_context: regime=${doc.market_context?.regime}, gift_nifty_pct=${doc.market_context?.gift_nifty_pct}, nifty_prev_close=${doc.market_context?.nifty_prev_close}, decided_at=${doc.market_context?.decided_at}`);
+    try {
+      const niftyKey = 'NSE_INDEX|Nifty 50';
+      const niftyDataMap = await priceCacheService.getLatestPricesWithChange([niftyKey]);
+      const niftyData = niftyDataMap[niftyKey];
+      console.log(`[DAILY-PICKS-API] Live Nifty 50: price=${niftyData?.price}, prevClose=${niftyData?.previous_close}, change=${niftyData?.change}, changePct=${niftyData?.change_percent}`);
+      if (niftyData) {
+        marketContext.nifty_price = niftyData.price;
+        marketContext.nifty_change = niftyData.change || 0;
+        marketContext.nifty_change_pct = niftyData.change_percent || 0;
+      }
+    } catch (err) {
+      console.warn('[DAILY-PICKS-API] Nifty price fetch failed:', err.message);
+    }
+    // Remove stale Gift Nifty fields
+    delete marketContext.gift_nifty_pct;
+    delete marketContext.gift_nifty_status;
+
     res.json({
       success: true,
       data: {
         trading_date: doc.trading_date,
         scan_date: doc.scan_date,
-        market_context: doc.market_context,
+        market_context: marketContext,
         picks: enrichedPicks,
         summary: {
           ...doc.summary,
