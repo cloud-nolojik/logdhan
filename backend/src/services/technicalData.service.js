@@ -845,6 +845,80 @@ async function fetchLiveIntradayData(instrumentKey) {
 }
 
 /**
+ * Fetch 1H candles from Upstox V3 and compute 1H + 4H pivot levels.
+ * Used for multi-timeframe confluence scoring in daily picks.
+ *
+ * @param {string} instrumentKey - Upstox instrument key (e.g. NSE_EQ|INE002A01018)
+ * @param {string} tradingDateStr - Timestamp from latestDailyCandle[0] (handles weekends/holidays)
+ * @returns {{ hourly_1h_pivots: object|null, hourly_4h_pivots: object|null }}
+ */
+async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
+  const EMPTY = { hourly_1h_pivots: null, hourly_4h_pivots: null };
+
+  if (!instrumentKey || !tradingDateStr) return EMPTY;
+
+  try {
+    // Parse trading date — handles "2026-02-13T00:00:00+05:30" or "2026-02-13"
+    const tradingDate = tradingDateStr.split('T')[0];
+    // toDate = next calendar day (to catch all IST candles from trading day)
+    const nextDay = new Date(tradingDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const toDate = nextDay.toISOString().split('T')[0];
+
+    const encodedKey = encodeURIComponent(instrumentKey);
+    const url = `https://api.upstox.com/v3/historical-candle/${encodedKey}/hours/1/${toDate}/${tradingDate}`;
+
+    console.log(`[HourlyPivots] Fetching 1H candles: ${instrumentKey} date=${tradingDate}`);
+
+    const response = await rateLimitedGet(url, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      timeout: 10000
+    }, { caller: 'fetchHourlyPivots' });
+
+    const allCandles = response.data?.data?.candles || [];
+
+    // Filter to only the trading date (candles may include next day if market was open)
+    const candles = allCandles.filter(c => c[0]?.startsWith(tradingDate));
+
+    if (candles.length === 0) {
+      console.log(`[HourlyPivots] No candles for ${tradingDate} — skipping`);
+      return EMPTY;
+    }
+
+    // Candles come newest-first from API. Sort oldest-first for aggregation.
+    candles.sort((a, b) => new Date(a[0]) - new Date(b[0]));
+
+    console.log(`[HourlyPivots] Got ${candles.length} candles for ${tradingDate} (${candles[0][0]} → ${candles[candles.length - 1][0]})`);
+
+    // Candle format: [timestamp, open, high, low, close, volume, oi]
+    // 1H pivot: from the LAST hourly candle
+    const lastCandle = candles[candles.length - 1];
+    const hourly1hPivots = calcClassicPivots(lastCandle[2], lastCandle[3], lastCandle[4]);
+
+    // 4H pivot: aggregate last N candles (4 if available, all if 2-3, skip if < 2)
+    let hourly4hPivots = null;
+    if (candles.length >= 2) {
+      const n = Math.min(4, candles.length);
+      const slice = candles.slice(-n);
+      const aggHigh = Math.max(...slice.map(c => c[2]));
+      const aggLow = Math.min(...slice.map(c => c[3]));
+      const aggClose = slice[slice.length - 1][4];
+      hourly4hPivots = calcClassicPivots(aggHigh, aggLow, aggClose);
+    }
+
+    console.log(`[HourlyPivots] 1H pivot=${hourly1hPivots ? round2(hourly1hPivots.pivot) : 'N/A'} R1=${hourly1hPivots ? round2(hourly1hPivots.r1) : 'N/A'} S1=${hourly1hPivots ? round2(hourly1hPivots.s1) : 'N/A'} | 4H pivot=${hourly4hPivots ? round2(hourly4hPivots.pivot) : 'N/A'} R1=${hourly4hPivots ? round2(hourly4hPivots.r1) : 'N/A'} S1=${hourly4hPivots ? round2(hourly4hPivots.s1) : 'N/A'}`);
+
+    return { hourly_1h_pivots: hourly1hPivots, hourly_4h_pivots: hourly4hPivots };
+  } catch (error) {
+    console.error(`[HourlyPivots] Error fetching hourly pivots for ${instrumentKey}:`, error.message);
+    return EMPTY;
+  }
+}
+
+/**
  * Calculate daily analysis data for a single stock
  * Uses LIVE intraday data for current prices + historical daily data for indicators
  *
@@ -879,7 +953,9 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
         daily_s1: 0,
         daily_r1: 0,
         todays_volume: 0,
-        avg_volume_50d: 0
+        avg_volume_50d: 0,
+        hourly_1h_pivots: null,
+        hourly_4h_pivots: null
       };
     }
 
@@ -1004,6 +1080,10 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       weeklyPivot = calcClassicPivots(prevWeek[2], prevWeek[3], prevWeek[4]);
     }
 
+    // Fetch hourly pivots for intraday confluence scoring
+    // Pass latestDailyCandle[0] (the trading date timestamp) — handles weekends/holidays
+    const hourlyPivots = await fetchHourlyPivots(instrumentKey, latestDailyCandle[0]);
+
     return {
       symbol,
       instrument_key: instrumentKey,
@@ -1039,7 +1119,9 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       weekly_r1: weeklyPivot?.r1 || null,
       weekly_r2: weeklyPivot?.r2 || null,
       weekly_s1: weeklyPivot?.s1 || null,
-      weekly_s2: weeklyPivot?.s2 || null
+      weekly_s2: weeklyPivot?.s2 || null,
+      hourly_1h_pivots: hourlyPivots.hourly_1h_pivots,
+      hourly_4h_pivots: hourlyPivots.hourly_4h_pivots
     };
   } catch (error) {
     console.error(`[DailyAnalysis] Error calculating data for ${symbol}:`, error.message);
@@ -1056,7 +1138,9 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       daily_s1: 0,
       daily_r1: 0,
       todays_volume: 0,
-      avg_volume_50d: 0
+      avg_volume_50d: 0,
+      hourly_1h_pivots: null,
+      hourly_4h_pivots: null
     };
   }
 }

@@ -353,6 +353,7 @@ async function enrichCandidates(candidates) {
     const lastDailyClose = stock.last_daily_close || close;
     console.log(`${LOG} [Enrich] ${candidate.symbol} (${candidate.scan_type}): O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${stock.todays_volume} avgVol50=${stock.avg_volume_50d} rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
     console.log(`${LOG} [Enrich] ${candidate.symbol} indicators: ema20=${stock.ema20 || 0} ema50=${stock.ema50 || 0} atr=${stock.atr || 0} h20D=${stock.high_20d || 0} l20D=${stock.low_20d || 0} h52W=${stock.high_52w || 0} wR1=${stock.weekly_r1 || 'null'} wR2=${stock.weekly_r2 || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'}`);
+    console.log(`${LOG} [Enrich] ${candidate.symbol} pivots: dP=${stock.daily_pivot_levels?.pivot || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'} dS1=${stock.daily_pivot_levels?.s1 || 'null'} | 1H_R1=${stock.hourly_1h_pivots?.r1 || 'null'} 1H_S1=${stock.hourly_1h_pivots?.s1 || 'null'} | 4H_R1=${stock.hourly_4h_pivots?.r1 || 'null'} 4H_S1=${stock.hourly_4h_pivots?.s1 || 'null'}`);
 
     enriched.push({
       ...candidate,
@@ -393,7 +394,10 @@ async function enrichCandidates(candidates) {
           r2: stock.weekly_r2 || null,
           s1: stock.weekly_s1 || null,
           s2: stock.weekly_s2 || null
-        }
+        },
+        // Hourly pivots for multi-timeframe confluence scoring
+        hourly_1h_pivots: stock.hourly_1h_pivots || null,
+        hourly_4h_pivots: stock.hourly_4h_pivots || null
       }
     });
   }
@@ -404,6 +408,76 @@ async function enrichCandidates(candidates) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4: SCORE CANDIDATES
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Multi-timeframe pivot confluence bonus.
+ * Checks if 1H and/or 4H pivot levels cluster near daily pivot levels.
+ * LONG: compares 1H_R1 / 4H_R1 against Daily_R1
+ * SHORT: compares 1H_S1 / 4H_S1 against Daily_S1
+ *
+ * @returns {{ bonus: number, detail: string }}
+ */
+function calculateConfluence(candidate) {
+  const THRESHOLD = 0.005; // 0.5% cluster distance
+  const PTS_PER_TF = 7.5;
+  const sym = candidate.symbol;
+
+  const ohlcv = candidate._ohlcv;
+  if (!ohlcv) return { bonus: 0, detail: 'no ohlcv' };
+
+  const dailyPivots = ohlcv.daily_pivot_levels;
+  const h1 = ohlcv.hourly_1h_pivots;
+  const h4 = ohlcv.hourly_4h_pivots;
+
+  if (!dailyPivots) {
+    console.log(`${LOG} [Confluence] ${sym}: skip — no daily pivots`);
+    return { bonus: 0, detail: 'no daily pivots' };
+  }
+  if (!h1 && !h4) {
+    console.log(`${LOG} [Confluence] ${sym}: skip — no hourly pivots (1H=${h1 ? 'yes' : 'null'} 4H=${h4 ? 'yes' : 'null'})`);
+    return { bonus: 0, detail: 'no hourly pivots' };
+  }
+
+  const isLong = candidate.direction === 'LONG';
+  const dailyLevel = isLong ? dailyPivots.r1 : dailyPivots.s1;
+  const levelLabel = isLong ? 'R1' : 'S1';
+
+  if (!dailyLevel || dailyLevel <= 0) return { bonus: 0, detail: `no daily ${levelLabel}` };
+
+  let bonus = 0;
+  const matches = [];
+
+  // Check 1H pivot proximity
+  const h1Level = isLong ? h1?.r1 : h1?.s1;
+  if (h1Level && h1Level > 0) {
+    const dist = Math.abs(h1Level - dailyLevel) / dailyLevel;
+    console.log(`${LOG} [Confluence] ${sym}: 1H ${levelLabel}=${round2(h1Level)} vs Daily ${levelLabel}=${round2(dailyLevel)} → dist=${round2(dist * 100)}% (threshold=0.5%)`);
+    if (dist <= THRESHOLD) {
+      bonus += PTS_PER_TF;
+      matches.push(`1H ${levelLabel} ${round2(dist * 100)}%`);
+    }
+  }
+
+  // Check 4H pivot proximity
+  const h4Level = isLong ? h4?.r1 : h4?.s1;
+  if (h4Level && h4Level > 0) {
+    const dist = Math.abs(h4Level - dailyLevel) / dailyLevel;
+    console.log(`${LOG} [Confluence] ${sym}: 4H ${levelLabel}=${round2(h4Level)} vs Daily ${levelLabel}=${round2(dailyLevel)} → dist=${round2(dist * 100)}% (threshold=0.5%)`);
+    if (dist <= THRESHOLD) {
+      bonus += PTS_PER_TF;
+      matches.push(`4H ${levelLabel} ${round2(dist * 100)}%`);
+    }
+  }
+
+  if (bonus === 0) {
+    console.log(`${LOG} [Confluence] ${sym}: no confluence — distances exceed 0.5% threshold`);
+    return { bonus: 0, detail: 'no confluence' };
+  }
+
+  const detail = `${matches.join('+')} cluster near Daily ${levelLabel}=${round2(dailyLevel)}`;
+  console.log(`${LOG} [Confluence] ${sym}: ✅ +${round2(bonus)} pts — ${detail}`);
+  return { bonus: round2(bonus), detail };
+}
 
 function scoreCandidates(enrichedCandidates) {
   console.log(`${LOG} [Step 4] Scoring ${enrichedCandidates.length} candidates...`);
@@ -464,6 +538,16 @@ function scoreCandidates(enrichedCandidates) {
     if (score >= MIN_SCORE) {
       scored.push({ ...c, rank_score: score });
       console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [CIR:${cirPts}/25(${round2(cir)}%) VOL:${volPts}/25(${s.volume_ratio}x) RSI:${rsiPts}/20(${s.rsi}) ATR:${atrPts}/15(${s.atr_pct}%) CANDLE:${candlePts}/15(${s.candle_pattern})]`);
+
+      // Confluence bonus: cluster detection across Daily / 1H / 4H pivots
+      // Applied AFTER MIN_SCORE check — additive only (never reduces score)
+      const confluenceResult = calculateConfluence(c);
+      if (confluenceResult.bonus > 0) {
+        scored[scored.length - 1].rank_score += confluenceResult.bonus;
+        scored[scored.length - 1].confluence_score = confluenceResult.bonus;
+        scored[scored.length - 1].confluence_detail = confluenceResult.detail;
+        console.log(`${LOG}   ↳ Confluence: +${confluenceResult.bonus} pts (${confluenceResult.detail})`);
+      }
     } else {
       console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} < ${MIN_SCORE} [CIR:${cirPts} VOL:${volPts} RSI:${rsiPts} ATR:${atrPts} CANDLE:${candlePts}]`);
     }
@@ -505,7 +589,7 @@ function calculateLevels(pick) {
   console.log(`${LOG} [Levels] ${symbol}: OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} prevC:${_ohlcv.prev_close}}`);
   console.log(`${LOG} [Levels] ${symbol}: ema20=${_ohlcv.ema20} ema50=${_ohlcv.ema50} atr=${_ohlcv.atr}`);
   console.log(`${LOG} [Levels] ${symbol}: h5D=${_ohlcv.high_5d} l5D=${_ohlcv.low_5d} h10D=${_ohlcv.high_10d} l10D=${_ohlcv.low_10d} h20D=${_ohlcv.high_20d} l20D=${_ohlcv.low_20d} h52W=${_ohlcv.high_52w}`);
-  console.log(`${LOG} [Levels] ${symbol}: pivots wR1=${_ohlcv.weekly_pivot_levels?.r1} wR2=${_ohlcv.weekly_pivot_levels?.r2} wS1=${_ohlcv.weekly_pivot_levels?.s1} wS2=${_ohlcv.weekly_pivot_levels?.s2} dR1=${_ohlcv.daily_pivot_levels?.r1} dS1=${_ohlcv.daily_pivot_levels?.s1}`);
+  console.log(`${LOG} [Levels] ${symbol}: pivots wR1=${_ohlcv.weekly_pivot_levels?.r1} wR2=${_ohlcv.weekly_pivot_levels?.r2} wS1=${_ohlcv.weekly_pivot_levels?.s1} wS2=${_ohlcv.weekly_pivot_levels?.s2} dP=${_ohlcv.daily_pivot_levels?.pivot} dR1=${_ohlcv.daily_pivot_levels?.r1} dR2=${_ohlcv.daily_pivot_levels?.r2} dS1=${_ohlcv.daily_pivot_levels?.s1} dS2=${_ohlcv.daily_pivot_levels?.s2}`);
 
   // Prepare data for scanLevels engine
   const scanData = {
@@ -536,11 +620,22 @@ function calculateLevels(pick) {
     weeklyS1: _ohlcv.weekly_pivot_levels?.s1 || null,
     weeklyS2: _ohlcv.weekly_pivot_levels?.s2 || null,
 
-    // Daily pivot levels (for reference)
+    // Daily pivot levels (primary targets for intraday MIS trades)
     dailyR1: _ohlcv.daily_pivot_levels?.r1 || null,
+    dailyR2: _ohlcv.daily_pivot_levels?.r2 || null,
     dailyS1: _ohlcv.daily_pivot_levels?.s1 || null,
+    dailyS2: _ohlcv.daily_pivot_levels?.s2 || null,
+    dailyPivot: _ohlcv.daily_pivot_levels?.pivot || null,
 
-    // Daily picks use relaxed R:R (1.2:1 vs swing's 1.5:1)
+    // Previous day high/low — explicit names for intraday target fallback
+    // (fridayHigh/fridayLow are the same values but named for swing context)
+    previousDayHigh: _ohlcv.high,
+    previousDayLow: _ohlcv.low,
+
+    // Intraday flag — signals scanLevels to use daily pivots instead of weekly
+    isIntraday: true,
+
+    // Daily picks use relaxed R:R (1.2:1 vs swing's 1.5:1 for multi-day holds)
     minRR: 1.2
   };
 
@@ -720,6 +815,8 @@ async function saveToDB(marketContext, picks, scanResult) {
     direction: p.direction,
     scan_scores: p.scan_scores,
     rank_score: p.rank_score,
+    confluence_score: p.confluence_score || 0,
+    confluence_detail: p.confluence_detail || null,
     levels: p.levels,
     trade: { status: 'PENDING' },
     kite: { kite_status: 'pending' },
@@ -1023,7 +1120,21 @@ async function validateAndPlaceEntries(options = {}) {
         pick.kite.entry_order_id = result.orderId;
         pick.kite.kite_status = 'order_placed';
         ordersPlaced++;
-        console.log(`${LOG} ✅ ${pick.symbol}: Entry order placed — orderId=${result.orderId}`);
+
+        // ── TRADE CARD: Entry Order Placed ──
+        const riskPerShare = Math.abs(pick.levels.entry - pick.levels.stop);
+        const maxLoss = round2(riskPerShare * qty);
+        const rewardPerShare = Math.abs(pick.levels.target - pick.levels.entry);
+        const maxProfit = round2(rewardPerShare * qty);
+        console.log(`${LOG} ┌── TRADE: ${pick.symbol} ──────────────────────────────`);
+        console.log(`${LOG} │ Direction: ${pick.direction} | Scan: ${pick.scan_type} | Mode: ${pick.levels.mode}`);
+        console.log(`${LOG} │ Analysis → Entry: ₹${pick.levels.entry} | Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target}`);
+        console.log(`${LOG} │ T1 (partial): ${pick.levels.target1 ? '₹' + pick.levels.target1 : 'N/A'} | T3 (stretch): ${pick.levels.target3 ? '₹' + pick.levels.target3 : 'N/A'}`);
+        console.log(`${LOG} │ R:R=${pick.levels.risk_reward} | Risk=${pick.levels.risk_pct}% | Reward=${pick.levels.reward_pct}%`);
+        console.log(`${LOG} │ Order → ${orderType} qty=${qty} price=₹${limitPrice || triggerPrice} orderId=${result.orderId}`);
+        console.log(`${LOG} │ Capital: ₹${orderAmount} | Max Loss: ₹${maxLoss} | Max Profit: ₹${maxProfit}`);
+        console.log(`${LOG} │ Reason: ${pick.levels.reason}`);
+        console.log(`${LOG} └─────────────────────────────────────────────────────`);
       } else {
         pick.trade.status = 'FAILED';
         pick.kite.kite_status = 'failed';
@@ -1121,6 +1232,22 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
 
   if (slPlaced && tgtPlaced) {
     pick.kite.kite_status = 'sl_target_placed';
+
+    // ── TRADE CARD: Position Live ──
+    const riskPerShare = Math.abs(entryPrice - pick.levels.stop);
+    const maxLoss = round2(riskPerShare * pick.trade.qty);
+    const rewardPerShare = Math.abs(target - entryPrice);
+    const maxProfit = round2(rewardPerShare * pick.trade.qty);
+    const capital = round2(entryPrice * pick.trade.qty);
+    const slippage = round2(entryPrice - pick.levels.entry);
+    console.log(`${LOG} ┌── POSITION LIVE: ${pick.symbol} ────────────────────────`);
+    console.log(`${LOG} │ Direction: ${pick.direction} | Scan: ${pick.scan_type}`);
+    console.log(`${LOG} │ Planned Entry: ₹${pick.levels.entry} → Actual Fill: ₹${entryPrice} (slippage: ${slippage >= 0 ? '+' : ''}₹${slippage})`);
+    console.log(`${LOG} │ Stop: ₹${pick.levels.stop} (SL-M orderId=${pick.kite.stop_order_id})`);
+    console.log(`${LOG} │ Target: ₹${target} (LIMIT orderId=${pick.kite.target_order_id})`);
+    console.log(`${LOG} │ Qty: ${pick.trade.qty} | Capital Deployed: ₹${capital}`);
+    console.log(`${LOG} │ Max Loss: ₹${maxLoss} (${round2((riskPerShare / entryPrice) * 100)}%) | Max Profit: ₹${maxProfit} (${round2((rewardPerShare / entryPrice) * 100)}%)`);
+    console.log(`${LOG} └─────────────────────────────────────────────────────`);
   } else if (!slPlaced) {
     // CRITICAL: No stop-loss — emergency market exit
     console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} SL-M failed — emergency market exit`);
