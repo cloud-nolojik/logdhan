@@ -4,13 +4,15 @@ import { auth } from '../middleware/auth.js';
 import priceCacheService from '../services/priceCache.service.js';
 import LatestPrice from '../models/latestPrice.js';
 import { getCurrentPrice, getDailyCandles } from '../utils/stockDb.js';
+import MarketHoursUtil from '../utils/marketHours.js';
 
 const router = express.Router();
 
-// Cache for market data (1 minute cache)
-let marketDataCache = null;
-let cacheTimestamp = 0;
-const CACHE_DURATION = 60 * 1000; // 1 minute
+// In-memory cache for /indices response
+let _indicesCache = null;
+let _indicesCacheExpiry = 0;
+const CACHE_TTL_MARKET_OPEN = 60 * 1000;      // 60s during market hours
+const CACHE_TTL_MARKET_CLOSED = 5 * 60 * 1000; // 5 min outside market hours
 
 // Market indices data - using Upstox API or fallback data
 const MARKET_INDICES = {
@@ -256,17 +258,29 @@ async function fetchMarketDataFromCache() {
 // Route to get market indices
 router.get('/indices', auth, async (req, res) => {
   try {
-    // Fetch data from in-memory cache service (indices are always pre-cached)
+    const now = Date.now();
 
+    // Return cached response if still valid
+    if (_indicesCache && now < _indicesCacheExpiry) {
+      return res.status(200).json(_indicesCache);
+    }
+
+    // Fetch fresh data
     const indices = await fetchMarketDataFromCache();
 
-    res.status(200).json({
+    // Determine TTL based on market hours
+    const isOpen = await MarketHoursUtil.isMarketOpen();
+    const ttl = isOpen ? CACHE_TTL_MARKET_OPEN : CACHE_TTL_MARKET_CLOSED;
+
+    // Build and cache the response
+    _indicesCache = {
       success: true,
-      data: {
-        indices: indices
-      },
+      data: { indices },
       message: 'Market data retrieved successfully (from cache)'
-    });
+    };
+    _indicesCacheExpiry = now + ttl;
+
+    res.status(200).json(_indicesCache);
 
   } catch (error) {
     console.error('❌ [MARKET] Error in /market/indices:', error);
