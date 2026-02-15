@@ -100,8 +100,7 @@ const fineTuneDataSchema = new mongoose.Schema({
     // Timestamps
     created_at: {
         type: Date,
-        default: Date.now,
-        index: true
+        default: Date.now
     }
 }, {
     timestamps: true

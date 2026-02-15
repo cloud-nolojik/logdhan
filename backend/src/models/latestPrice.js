@@ -21,8 +21,7 @@ const latestPriceSchema = new mongoose.Schema({
   },
   stock_symbol: {
     type: String,
-    required: true,
-    index: true
+    required: true
   },
   stock_name: {
     type: String
@@ -86,8 +85,7 @@ const latestPriceSchema = new mongoose.Schema({
   },
   updated_at: {
     type: Date,
-    default: Date.now,
-    index: true
+    default: Date.now
   },
   data_source: {
     type: String,

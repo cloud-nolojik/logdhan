@@ -129,7 +129,9 @@ const stockLogSchema = new mongoose.Schema({
 
 // Add compound index for faster queries
 stockLogSchema.index({ user: 1, 'stock.instrument_key': 1, createdAt: -1 });
-stockLogSchema.index({ user: 1, needsReview: 1, reviewStatus: 1 }); // Index for finding reviews
+stockLogSchema.index({ user: 1, createdAt: -1 });
+stockLogSchema.index({ user: 1, executedAt: -1 });
+stockLogSchema.index({ user: 1, needsReview: 1, reviewStatus: 1 });
 
 const StockLog = mongoose.model('StockLog', stockLogSchema);
 

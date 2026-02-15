@@ -51,6 +51,62 @@ function trackDailyAdd(user, instrumentKey) {
   }
 }
 
+// Extract analysis enrichment data from a StockAnalysis document
+function extractAnalysisFields(analysis) {
+  if (!analysis) return { has_analysis: false, analysis_status: null, ai_confidence: null, strategy_type: null, simple_verdict: null };
+
+  let ai_confidence = null;
+  let strategy_type = null;
+  let simple_verdict = null;
+
+  if (analysis.analysis_data) {
+    const data = analysis.analysis_data;
+
+    if (data.verdict && data.setup_score) {
+      ai_confidence = data.verdict.confidence || null;
+      strategy_type = data.verdict.action || null;
+      const action = data.verdict.action || 'N/A';
+      const score = data.setup_score.total || 0;
+      const grade = data.setup_score.grade || '';
+      simple_verdict = `${action} • ${score}/100 (${grade})`;
+    } else if (data.position_management?.recommendation) {
+      const pm = data.position_management;
+      ai_confidence = pm.recommendation.confidence || null;
+      strategy_type = pm.recommendation.for_holders || null;
+      const statusLabel = pm.status?.label || 'TRACKING';
+      const statusColor = pm.status?.color || 'YELLOW';
+      const colorEmoji = statusColor === 'GREEN' ? '🟢' : statusColor === 'RED' ? '🔴' : '🟡';
+      simple_verdict = `${colorEmoji} ${statusLabel}`;
+    } else if (data.strategies?.length > 0) {
+      const strategies = data.strategies;
+      const confidences = strategies.filter(s => s.confidence != null).map(s => s.confidence);
+      if (confidences.length > 0) {
+        ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
+      }
+      strategy_type = strategies[0]?.type || null;
+      simple_verdict = strategies[0]?.entry?.simple_verdict || null;
+    }
+  }
+
+  // Check if expired (valid_until or 7-day age fallback)
+  const isExpired = (() => {
+    if (analysis.valid_until) return new Date() > new Date(analysis.valid_until);
+    if (analysis.created_at) {
+      const ageMs = Date.now() - new Date(analysis.created_at).getTime();
+      return ageMs > 7 * 24 * 60 * 60 * 1000;
+    }
+    return false;
+  })();
+
+  return {
+    has_analysis: !isExpired,
+    analysis_status: isExpired ? 'expired' : (analysis.status || null),
+    ai_confidence: isExpired ? null : ai_confidence,
+    strategy_type: isExpired ? null : strategy_type,
+    simple_verdict: isExpired ? null : simple_verdict
+  };
+}
+
 // Add stock to watchlist
 router.post('/', auth, async (req, res) => {
   try {
@@ -211,141 +267,67 @@ router.post('/track-weekly', auth, async (req, res) => {
 // Get user's watchlist
 router.get('/', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = req.user;
     const watchlist = user.watchlist || [];
 
-    const startTime = Date.now();
+    // Collect all instrument keys upfront for batch queries
+    const userInstrumentKeys = watchlist.map(item => item.instrument_key);
 
-    // Bulk analysis downtime notifications disabled
-    const isInScheduledWindow = false;
-    
+    // Fetch weekly watchlist and batch analysis query in parallel
+    const [weeklyWatchlist, allAnalyses] = await Promise.all([
+      WeeklyWatchlist.getCurrentWeek().catch(() => null),
+      // Single batch query replaces N+1 per-stock StockAnalysis.findOne() calls
+      StockAnalysis.find({
+        instrument_key: { $in: userInstrumentKeys }
+      }).sort({ created_at: -1 }).lean()
+    ]);
 
-    // ⚡ OPTIMIZATION: Fetch prices with change data using triple-fallback pattern (DB → Memory → API)
-    const instrumentKeys = watchlist.map((item) => item.instrument_key);
-    const priceDataMap = await priceCacheService.getLatestPricesWithChange(instrumentKeys);
+    // Build analysis map: instrument_key -> latest analysis
+    const analysisMap = {};
+    for (const a of allAnalyses) {
+      if (!analysisMap[a.instrument_key]) analysisMap[a.instrument_key] = a;
+    }
 
-    // Process watchlist items in parallel (for analysis and monitoring data)
-    const watchlistWithPrices = await Promise.all(
-      watchlist.map(async (item) => {
-        try {
-          // Get price and change data from database
-          const priceData = priceDataMap[item.instrument_key] || null;
-          const current_price = priceData?.price || null;
-          const net_change = priceData?.change || 0;
-          const percent_change = priceData?.change_percent || 0;
-
-          // Fetch analysis status for this stock (hide if in scheduled window)
-          let analysis = null;
-          if (!isInScheduledWindow) {
-            analysis = await StockAnalysis.findOne({
-              instrument_key: item.instrument_key
-            }).sort({ created_at: -1 }).lean();
-          }
-
-          // Calculate AI confidence and get strategy type/simple_verdict
-          // Support: new schema v1.5 (verdict/setup_score), position_management, old schema (strategies)
-          let ai_confidence = null;
-          let strategy_type = null; // BUY, SELL, HOLD, NO_TRADE, WAIT, SKIP, TRAIL_STOP
-          let simple_verdict = null;
-
-          if (analysis && analysis.analysis_data) {
-            const data = analysis.analysis_data;
-
-            // Check for new schema v1.5 (verdict + setup_score)
-            if (data.verdict && data.setup_score) {
-              // New schema v1.5 - extract from verdict
-              ai_confidence = data.verdict.confidence || null;
-              strategy_type = data.verdict.action || null; // BUY, WAIT, SKIP
-
-              // Build simple_verdict for display
-              const action = data.verdict.action || 'N/A';
-              const score = data.setup_score.total || 0;
-              const grade = data.setup_score.grade || '';
-              simple_verdict = `${action} • ${score}/100 (${grade})`;
-            }
-            // Check for position_management analysis (weekly_track stocks)
-            else if (data.position_management && data.position_management.recommendation) {
-              const pm = data.position_management;
-              ai_confidence = pm.recommendation.confidence || null;
-              // Get recommendation for holders (TRAIL_STOP, HOLD, EXIT, etc.)
-              strategy_type = pm.recommendation.for_holders || null;
-
-              // Build simple_verdict from status
-              const statusLabel = pm.status?.label || 'TRACKING';
-              const statusColor = pm.status?.color || 'YELLOW';
-              const colorEmoji = statusColor === 'GREEN' ? '🟢' : statusColor === 'RED' ? '🔴' : '🟡';
-              simple_verdict = `${colorEmoji} ${statusLabel}`;
-            }
-            // Check for old schema (strategies array)
-            else if (data.strategies && data.strategies.length > 0) {
-              const strategies = data.strategies;
-              // Get average confidence from all strategies
-              const confidences = strategies
-                .filter((s) => s.confidence != null)
-                .map((s) => s.confidence);
-              if (confidences.length > 0) {
-                ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
-              }
-
-              // Get the strategy type from the first/best strategy
-              strategy_type = strategies[0]?.type || null;
-              simple_verdict = strategies[0]?.entry?.simple_verdict || null;
-            }
-          }
-
-          // Check if analysis is expired:
-          // - If valid_until is set, check if it has passed
-          // - If valid_until is null (on-demand analysis), expire after 7 days
-          const isAnalysisExpired = (() => {
-            if (!analysis) return false;
-            if (analysis.valid_until) return new Date() > new Date(analysis.valid_until);
-            if (analysis.created_at) {
-              const ageMs = Date.now() - new Date(analysis.created_at).getTime();
-              return ageMs > 7 * 24 * 60 * 60 * 1000;
-            }
-            return false;
-          })();
-
-          return {
-            instrument_key: item.instrument_key,
-            trading_symbol: item.trading_symbol,
-            name: item.name,
-            exchange: item.exchange,
-            addedAt: item.addedAt,
-            added_source: item.added_source || 'manual', // Default to manual if missing
-            current_price,
-            net_change,
-            percent_change,
-            // Analysis status fields — mark expired analyses so app doesn't show stale "Analyzed" badge
-            has_analysis: !!analysis && !isAnalysisExpired,
-            analysis_status: isAnalysisExpired ? 'expired' : (analysis?.status || null),
-            ai_confidence: isAnalysisExpired ? null : ai_confidence,
-            strategy_type: isAnalysisExpired ? null : strategy_type,
-            simple_verdict: isAnalysisExpired ? null : simple_verdict
-          };
-        } catch (err) {
-          console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
-          return {
-            instrument_key: item.instrument_key,
-            trading_symbol: item.trading_symbol,
-            name: item.name,
-            exchange: item.exchange,
-            addedAt: item.addedAt,
-            added_source: item.added_source || 'manual',
-            current_price: null,
-            net_change: 0,
-            percent_change: 0,
-            has_analysis: false,
-            analysis_status: null,
-            ai_confidence: null,
-            strategy_type: null,
-            simple_verdict: null
-          };
-        }
-      })
+    // Collect weekly instrument keys for combined price fetch
+    const weeklyStocks = (weeklyWatchlist?.stocks || []).filter(
+      stock => ['WATCHING', 'APPROACHING', 'TRIGGERED'].includes(stock.status)
     );
+    const weeklyInstrumentKeys = weeklyStocks.map(s => s.instrument_key);
 
-    const endTime = Date.now();
+    // Deduplicate and fetch ALL prices in a single call
+    const allInstrumentKeys = [...new Set([...userInstrumentKeys, ...weeklyInstrumentKeys])];
+    const allPriceDataMap = await priceCacheService.getLatestPricesWithChange(allInstrumentKeys);
+
+    // If weekly watchlist has stocks not covered by the batch analysis query, fetch them too
+    const missingWeeklyKeys = weeklyInstrumentKeys.filter(k => !analysisMap[k]);
+    if (missingWeeklyKeys.length > 0) {
+      const weeklyAnalyses = await StockAnalysis.find({
+        instrument_key: { $in: missingWeeklyKeys }
+      }).sort({ created_at: -1 }).lean();
+      for (const a of weeklyAnalyses) {
+        if (!analysisMap[a.instrument_key]) analysisMap[a.instrument_key] = a;
+      }
+    }
+
+    // Process user watchlist items (no more per-item DB queries)
+    const watchlistWithPrices = watchlist.map(item => {
+      const priceData = allPriceDataMap[item.instrument_key] || null;
+      const analysis = analysisMap[item.instrument_key] || null;
+      const analysisFields = extractAnalysisFields(analysis);
+
+      return {
+        instrument_key: item.instrument_key,
+        trading_symbol: item.trading_symbol,
+        name: item.name,
+        exchange: item.exchange,
+        addedAt: item.addedAt,
+        added_source: item.added_source || 'manual',
+        current_price: priceData?.price || null,
+        net_change: priceData?.change || 0,
+        percent_change: priceData?.change_percent || 0,
+        ...analysisFields
+      };
+    });
 
     // Get daily add limit info
     const today = getTodayISTDateString();
@@ -361,132 +343,55 @@ router.get('/', auth, async (req, res) => {
     // Get cache statistics for last update time
     const cacheStats = priceCacheService.getStats();
 
-    // Fetch WeeklyWatchlist (global ChartInk-screened stocks)
+    // Enrich weekly watchlist stocks (no more per-item DB queries)
     let weeklyWatchlistData = null;
-    try {
-      const weeklyWatchlist = await WeeklyWatchlist.getCurrentWeek();
-      if (weeklyWatchlist && weeklyWatchlist.stocks?.length > 0) {
-        // Get prices with change data for weekly watchlist stocks
-        const weeklyInstrumentKeys = weeklyWatchlist.stocks.map(s => s.instrument_key);
-        const weeklyPriceDataMap = await priceCacheService.getLatestPricesWithChange(weeklyInstrumentKeys);
+    if (weeklyWatchlist && weeklyStocks.length > 0) {
+      const enrichedWeeklyStocks = weeklyStocks.map(stock => {
+        const weeklyPriceData = allPriceDataMap[stock.instrument_key] || null;
+        const currentPrice = weeklyPriceData?.price || null;
 
-        // Enrich weekly watchlist stocks
-        const enrichedWeeklyStocks = await Promise.all(
-          weeklyWatchlist.stocks
-            .filter(stock => ['WATCHING', 'APPROACHING', 'TRIGGERED'].includes(stock.status))
-            .map(async (stock) => {
-              const weeklyPriceData = weeklyPriceDataMap[stock.instrument_key] || null;
-              const currentPrice = weeklyPriceData?.price || null;
-              const net_change = weeklyPriceData?.change || 0;
-              const percent_change = weeklyPriceData?.change_percent || 0;
+        let zoneStatus = null;
+        if (currentPrice && stock.entry_zone) {
+          zoneStatus = checkEntryZoneProximity(currentPrice, stock.entry_zone);
+        }
 
-              // Check entry zone proximity
-              let zoneStatus = null;
-              if (currentPrice && stock.entry_zone) {
-                zoneStatus = checkEntryZoneProximity(currentPrice, stock.entry_zone);
-              }
+        const analysis = analysisMap[stock.instrument_key] || null;
+        const analysisFields = extractAnalysisFields(analysis);
 
-              // Fetch latest analysis for this stock
-              let analysis = null;
-              if (!isInScheduledWindow) {
-                analysis = await StockAnalysis.findOne({
-                  instrument_key: stock.instrument_key
-                }).sort({ created_at: -1 }).lean();
-              }
-
-              // Calculate AI confidence - support new schema v1.5, position_management, and old schema
-              let ai_confidence = null;
-              let strategy_type = null;
-              let simple_verdict = null;
-
-              if (analysis?.analysis_data) {
-                const data = analysis.analysis_data;
-
-                // Check for new schema v1.5 (verdict + setup_score)
-                if (data.verdict && data.setup_score) {
-                  ai_confidence = data.verdict.confidence || null;
-                  strategy_type = data.verdict.action || null;
-                  const action = data.verdict.action || 'N/A';
-                  const score = data.setup_score.total || 0;
-                  const grade = data.setup_score.grade || '';
-                  simple_verdict = `${action} • ${score}/100 (${grade})`;
-                }
-                // Check for position_management analysis (weekly_track stocks)
-                else if (data.position_management && data.position_management.recommendation) {
-                  const pm = data.position_management;
-                  ai_confidence = pm.recommendation.confidence || null;
-                  strategy_type = pm.recommendation.for_holders || null;
-                  const statusLabel = pm.status?.label || 'TRACKING';
-                  const statusColor = pm.status?.color || 'YELLOW';
-                  const colorEmoji = statusColor === 'GREEN' ? '🟢' : statusColor === 'RED' ? '🔴' : '🟡';
-                  simple_verdict = `${colorEmoji} ${statusLabel}`;
-                }
-                // Check for old schema (strategies array)
-                else if (data.strategies?.length > 0) {
-                  const strategies = data.strategies;
-                  const confidences = strategies.filter(s => s.confidence != null).map(s => s.confidence);
-                  if (confidences.length > 0) {
-                    ai_confidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
-                  }
-                  strategy_type = strategies[0]?.type || null;
-                  simple_verdict = strategies[0]?.entry?.simple_verdict || null;
-                }
-              }
-
-              // Check if analysis is expired (valid_until or 7-day age fallback)
-              const isExpired = (() => {
-                if (!analysis) return false;
-                if (analysis.valid_until) return new Date() > new Date(analysis.valid_until);
-                if (analysis.created_at) {
-                  const ageMs = Date.now() - new Date(analysis.created_at).getTime();
-                  return ageMs > 7 * 24 * 60 * 60 * 1000;
-                }
-                return false;
-              })();
-
-              return {
-                _id: stock._id,
-                instrument_key: stock.instrument_key,
-                trading_symbol: stock.symbol,
-                name: stock.stock_name,
-                addedAt: stock.added_at,
-                added_source: 'chartink',
-                scan_type: stock.scan_type,
-                setup_score: stock.setup_score,
-                grade: stock.grade,
-                entry_zone: stock.entry_zone,
-                zone_status: zoneStatus,
-                current_price: currentPrice,
-                net_change,
-                percent_change,
-                status: stock.status,
-                // Analysis fields
-                has_analysis: !!analysis && !isExpired,
-                analysis_status: isExpired ? 'expired' : (analysis?.status || null),
-                ai_confidence: isExpired ? null : ai_confidence,
-                strategy_type: isExpired ? null : strategy_type,
-                simple_verdict: isExpired ? null : simple_verdict
-              };
-            })
-        );
-
-        weeklyWatchlistData = {
-          week_start: weeklyWatchlist.week_start,
-          week_end: weeklyWatchlist.week_end,
-          screening_run_at: weeklyWatchlist.screening_run_at,
-          stocks: enrichedWeeklyStocks,
-          total_count: enrichedWeeklyStocks.length
+        return {
+          _id: stock._id,
+          instrument_key: stock.instrument_key,
+          trading_symbol: stock.symbol,
+          name: stock.stock_name,
+          addedAt: stock.added_at,
+          added_source: 'chartink',
+          scan_type: stock.scan_type,
+          setup_score: stock.setup_score,
+          grade: stock.grade,
+          entry_zone: stock.entry_zone,
+          zone_status: zoneStatus,
+          current_price: currentPrice,
+          net_change: weeklyPriceData?.change || 0,
+          percent_change: weeklyPriceData?.change_percent || 0,
+          status: stock.status,
+          ...analysisFields
         };
-      }
-    } catch (weeklyError) {
-      console.warn('Error fetching weekly watchlist:', weeklyError.message);
+      });
+
+      weeklyWatchlistData = {
+        week_start: weeklyWatchlist.week_start,
+        week_end: weeklyWatchlist.week_end,
+        screening_run_at: weeklyWatchlist.screening_run_at,
+        stocks: enrichedWeeklyStocks,
+        total_count: enrichedWeeklyStocks.length
+      };
     }
 
     res.json({
       data: watchlistWithPrices,
       weeklyWatchlist: weeklyWatchlistData,
       stockLimitInfo,
-      isInScheduledWindow,
+      isInScheduledWindow: false,
       priceUpdate: {
         lastUpdated: cacheStats.lastFetchTime,
         cacheAge: cacheStats.cacheAge,

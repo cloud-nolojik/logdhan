@@ -734,9 +734,25 @@ router.get("/", auth, async (req, res) => {
       });
     }
 
-    // Fetch all prices from DB (no external API calls - prices updated by background job every 5 mins)
+    // Fetch prices, analyses, and orders in parallel (all independent queries)
     const instrumentKeys = watchlist.stocks.map(stock => stock.instrument_key);
-    const latestPrices = await LatestPrice.getPricesForInstruments(instrumentKeys);
+    const tradingSymbols = watchlist.stocks.map(s => s.symbol);
+    const now = new Date();
+
+    const [latestPrices, dailyTrackAnalyses, activeKiteOrders] = await Promise.all([
+      LatestPrice.getPricesForInstruments(instrumentKeys),
+      StockAnalysis.find({
+        instrument_key: { $in: instrumentKeys },
+        analysis_type: 'daily_track',
+        status: 'completed',
+        valid_until: { $gt: now }
+      }).sort({ created_at: -1 }).lean(),
+      KiteOrder.find({
+        trading_symbol: { $in: tradingSymbols },
+        is_gtt: true,
+        gtt_status: { $in: ['active', 'triggered'] }
+      }).sort({ created_at: -1 }).lean()
+    ]);
 
     // Build price map from DB results
     const priceDataMap = {};
@@ -757,16 +773,6 @@ router.get("/", auth, async (req, res) => {
       }
     });
 
-    // Fetch latest daily_track analysis for each stock (batch query)
-    // Only include analyses that haven't expired (valid_until > now)
-    const now = new Date();
-    const dailyTrackAnalyses = await StockAnalysis.find({
-      instrument_key: { $in: instrumentKeys },
-      analysis_type: 'daily_track',
-      status: 'completed',
-      valid_until: { $gt: now }  // Filter out expired analyses
-    }).sort({ created_at: -1 });
-
     // Build a map of instrument_key -> latest daily_track analysis
     const dailyTrackMap = {};
     for (const analysis of dailyTrackAnalyses) {
@@ -775,14 +781,6 @@ router.get("/", auth, async (req, res) => {
         dailyTrackMap[analysis.instrument_key] = analysis;
       }
     }
-
-    // Fetch active Kite GTT orders for all watchlist stocks (single batch query)
-    const tradingSymbols = watchlist.stocks.map(s => s.symbol);
-    const activeKiteOrders = await KiteOrder.find({
-      trading_symbol: { $in: tradingSymbols },
-      is_gtt: true,
-      gtt_status: { $in: ['active', 'triggered'] }
-    }).sort({ created_at: -1 }).lean();
 
     // Build map: trading_symbol -> array of active orders (most recent first)
     const kiteOrderMap = {};

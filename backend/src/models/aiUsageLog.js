@@ -60,8 +60,7 @@ const aiUsageLogSchema = new mongoose.Schema({
   // Timestamp
   created_at: {
     type: Date,
-    default: Date.now,
-    index: true
+    default: Date.now
   }
 });
 

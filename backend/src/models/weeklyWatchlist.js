@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
 
+// In-memory cache for getCurrentWeek() — avoids DB query on every request
+let _currentWeekCache = { data: null, expiry: 0 };
+const CURRENT_WEEK_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 const watchlistStockSchema = new mongoose.Schema({
   instrument_key: { type: String, required: true },
   symbol: { type: String, required: true },
@@ -352,6 +356,22 @@ function getWeekBoundaries(date, forScreening = false) {
 // On weekends: returns the most recently completed week (so users can still see stocks)
 //              OR returns next week if it has stocks (after weekend screening runs)
 weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
+  // Return cached result if still valid
+  if (_currentWeekCache.data !== undefined && Date.now() < _currentWeekCache.expiry) {
+    return _currentWeekCache.data;
+  }
+
+  const result = await this._getCurrentWeekUncached();
+  _currentWeekCache = { data: result, expiry: Date.now() + CURRENT_WEEK_CACHE_TTL };
+  return result;
+};
+
+// Invalidate cache (call after screening or stock updates)
+weeklyWatchlistSchema.statics.invalidateCurrentWeekCache = function() {
+  _currentWeekCache = { data: null, expiry: 0 };
+};
+
+weeklyWatchlistSchema.statics._getCurrentWeekUncached = async function() {
   const now = new Date();
 
   // Convert to IST to determine day of week (IST = UTC + 5:30)
@@ -359,30 +379,17 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
   const nowIST = new Date(now.getTime() + istOffset);
   const dayOfWeekIST = nowIST.getUTCDay(); // Use getUTCDay since we manually added IST offset
 
-  console.log(`[getCurrentWeek] Called at UTC: ${now.toISOString()}`);
-  console.log(`[getCurrentWeek] IST time: ${nowIST.toISOString().replace('Z', ' IST')}`);
-  console.log(`[getCurrentWeek] Day of week (IST): ${dayOfWeekIST} (0=Sun, 1=Mon, 5=Fri, 6=Sat)`);
-
   // On weekdays (Mon-Fri) in IST, use strict week boundaries
   if (dayOfWeekIST >= 1 && dayOfWeekIST <= 5) {
-    console.log(`[getCurrentWeek] Weekday (IST) - querying for week containing now`);
-    const result = await this.findOne({
+    return await this.findOne({
       week_start: { $lte: now },
       week_end: { $gte: now },
       status: "ACTIVE"
     });
-    console.log(`[getCurrentWeek] Query result: ${result ? result.week_label : 'null'}`);
-    if (result) {
-      console.log(`[getCurrentWeek] Found: week_start=${result.week_start?.toISOString()}, week_end=${result.week_end?.toISOString()}`);
-    }
-    return result;
   }
 
   // On weekends (Sat/Sun) in IST:
-  console.log(`[getCurrentWeek] Weekend (IST) - checking for next week's watchlist`);
-
   // Calculate next Monday in IST
-  // If Saturday (6), next Monday is +2 days; if Sunday (0), next Monday is +1 day
   const daysUntilMonday = dayOfWeekIST === 0 ? 1 : (8 - dayOfWeekIST);
 
   // Create IST date for next Monday midnight
@@ -393,10 +400,6 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
   // Convert IST midnight to UTC (subtract 5:30)
   const nextWeekStart = new Date(nextMondayIST.getTime() - istOffset);
 
-  console.log(`[getCurrentWeek] Days until Monday: ${daysUntilMonday}`);
-  console.log(`[getCurrentWeek] Next Monday IST: ${nextMondayIST.toISOString()}`);
-  console.log(`[getCurrentWeek] Next week start (UTC): ${nextWeekStart.toISOString()}`);
-
   const nextWeekWatchlist = await this.findOne({
     week_start: nextWeekStart,
     status: "ACTIVE"
@@ -404,13 +407,10 @@ weeklyWatchlistSchema.statics.getCurrentWeek = async function() {
 
   // If screening completed (even with 0 stocks), show next week's watchlist
   if (nextWeekWatchlist && nextWeekWatchlist.screening_completed) {
-    console.log(`[getCurrentWeek] Returning next week's watchlist: ${nextWeekWatchlist.week_label}`);
     return nextWeekWatchlist;
   }
 
-  // 2. Otherwise (screening hasn't run yet for next week)
-  //    Don't show expired watchlist - return null until new screening runs
-  console.log(`[getCurrentWeek] No next week watchlist yet - returning null (week ended)`);
+  // Screening hasn't run yet for next week - return null
   return null;
 };
 
@@ -651,6 +651,14 @@ weeklyWatchlistSchema.methods.completeWeek = async function() {
   await this.save();
   return this;
 };
+
+// Invalidate getCurrentWeek cache on any save or update
+weeklyWatchlistSchema.post('save', function() {
+  _currentWeekCache = { data: null, expiry: 0 };
+});
+weeklyWatchlistSchema.post('findOneAndUpdate', function() {
+  _currentWeekCache = { data: null, expiry: 0 };
+});
 
 const WeeklyWatchlist = mongoose.model("WeeklyWatchlist", weeklyWatchlistSchema);
 

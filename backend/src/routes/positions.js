@@ -19,29 +19,16 @@ router.get("/", auth, async (req, res) => {
   try {
     const positions = await UserPosition.findAllOpenPositions(req.user._id);
 
-    // Fetch current prices for all positions
-    const positionsWithPnL = await Promise.all(positions.map(async (p) => {
-      let current_price = p.actual_entry; // Default to entry price
+    // Batch fetch all prices in a single query instead of N+1
+    const instrumentKeys = positions.map(p => p.instrument_key);
+    const priceDocs = await LatestPrice.getPricesForInstruments(instrumentKeys);
+    const priceMap = {};
+    for (const doc of priceDocs) {
+      priceMap[doc.instrument_key] = doc.last_traded_price || doc.close || null;
+    }
 
-      try {
-        // Try to get fresh price from market data service
-        const marketData = await candleFetcherService.getMarketDataForTriggers(p.instrument_key);
-        if (marketData?.ltp) {
-          current_price = marketData.ltp;
-        } else {
-          // Fallback to LatestPrice collection
-          const priceDoc = await LatestPrice.findOne({ instrument_key: p.instrument_key });
-          if (priceDoc?.last_traded_price) {
-            current_price = priceDoc.last_traded_price;
-          } else if (priceDoc?.close) {
-            current_price = priceDoc.close;
-          }
-        }
-      } catch (priceError) {
-        console.warn(`Could not fetch price for ${p.symbol}:`, priceError.message);
-      }
-
-      // Calculate unrealized P&L
+    const positionsWithPnL = positions.map(p => {
+      const current_price = priceMap[p.instrument_key] || p.actual_entry;
       const pnl = p.calculateUnrealizedPnl(current_price);
 
       return {
@@ -63,7 +50,7 @@ router.get("/", auth, async (req, res) => {
         sl_trail_count: p.sl_trail_history.length,
         pnl: pnl
       };
-    }));
+    });
 
     res.json({
       success: true,
@@ -321,33 +308,29 @@ router.get("/alerts", auth, async (req, res) => {
       });
     }
 
-    // Enrich alerts with current price (for overnight gap detection)
-    const enrichedAlerts = await Promise.all(alerts.map(async (alert) => {
-      let currentPrice = alert.price_at_scan;
+    // Batch fetch all alert prices in a single query
+    const alertInstrumentKeys = [...new Set(alerts.map(a => a.instrument_key))];
+    const alertPriceDocs = await LatestPrice.getPricesForInstruments(alertInstrumentKeys);
+    const alertPriceMap = {};
+    for (const doc of alertPriceDocs) {
+      alertPriceMap[doc.instrument_key] = doc.last_traded_price || doc.close || null;
+    }
+
+    // Enrich alerts with current price and check overnight gaps
+    const overrideUpdates = [];
+    const enrichedAlerts = alerts.map(alert => {
+      let currentPrice = alertPriceMap[alert.instrument_key] || alert.price_at_scan;
       let wasOverridden = alert.was_overridden || false;
       let overrideReason = alert.override_reason || null;
 
-      try {
-        // Get fresh price
-        const marketData = await candleFetcherService.getMarketDataForTriggers(alert.instrument_key);
-        if (marketData?.ltp || marketData?.current_price) {
-          currentPrice = marketData.ltp || marketData.current_price;
-
-          // Check for overnight gap (SL breached after scan)
-          if (currentPrice < alert.sl_at_scan && alert.alert_status !== 'ACTION_NEEDED') {
-            wasOverridden = true;
-            overrideReason = 'SL breached (overnight/premarket gap)';
-
-            // Update alert in DB
-            await PositionAlert.findByIdAndUpdate(alert._id, {
-              was_overridden: true,
-              override_reason: overrideReason
-            });
-          }
-        }
-      } catch (priceError) {
-        // Use scan-time price as fallback
-        console.warn(`Could not fetch price for ${alert.symbol}:`, priceError.message);
+      // Check for overnight gap (SL breached after scan)
+      if (currentPrice < alert.sl_at_scan && alert.alert_status !== 'ACTION_NEEDED' && !wasOverridden) {
+        wasOverridden = true;
+        overrideReason = 'SL breached (overnight/premarket gap)';
+        overrideUpdates.push(PositionAlert.findByIdAndUpdate(alert._id, {
+          was_overridden: true,
+          override_reason: overrideReason
+        }));
       }
 
       return {
@@ -369,7 +352,12 @@ router.get("/alerts", auth, async (req, res) => {
         user_viewed: alert.user_viewed,
         was_overridden: wasOverridden
       };
-    }));
+    });
+
+    // Fire all override updates in parallel (non-blocking)
+    if (overrideUpdates.length > 0) {
+      Promise.all(overrideUpdates).catch(err => console.warn('Error updating alert overrides:', err.message));
+    }
 
     res.json({
       success: true,

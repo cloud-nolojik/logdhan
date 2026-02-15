@@ -262,7 +262,7 @@ userSchema.pre('save', function (next) {
 });
 
 // Add index for faster watchlist queries
-userSchema.index({ 'watchlist.stock': 1 });
+userSchema.index({ 'watchlist.instrument_key': 1 });
 
 // Generate JWT token
 userSchema.methods.generateAuthToken = function () {

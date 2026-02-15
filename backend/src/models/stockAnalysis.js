@@ -384,8 +384,7 @@ const stockAnalysisSchema = new mongoose.Schema({
   },
   created_at: {
     type: Date,
-    default: Date.now,
-    index: true
+    default: Date.now
   },
   // Release time for scheduled analyses (only visible after this time)
   scheduled_release_time: {
@@ -459,12 +458,16 @@ stockAnalysisSchema.set('toJSON', {
 
 stockAnalysisSchema.set('toObject', { virtuals: true });
 
-// Compound index for efficient queries - shared across all users
+// Compound index for efficient queries - covers most query patterns (status filter + sort)
 stockAnalysisSchema.index({
   instrument_key: 1,
   analysis_type: 1,
-  created_at: 1
+  status: 1,
+  created_at: -1
 });
+
+// Index for by-symbol lookups
+stockAnalysisSchema.index({ stock_symbol: 1, created_at: -1 });
 
 // TTL index - auto-delete documents when valid_until expires
 stockAnalysisSchema.index({ valid_until: 1 }, { expireAfterSeconds: 0 });

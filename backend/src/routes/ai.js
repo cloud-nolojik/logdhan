@@ -7,6 +7,7 @@ import priceCacheService from '../services/priceCache.service.js';
 import StockAnalysis from '../models/stockAnalysis.js';
 import Stock from '../models/stock.js';
 import { Subscription } from '../models/subscription.js';
+import weeklyTrackAnalysisJob from '../services/weeklyPicks/weeklyTrackAnalysisJob.js';
 import { auth as authenticateToken } from '../middleware/auth.js';
 import rateLimit from 'express-rate-limit';
 import upstoxMarketTimingService from '../services/upstoxMarketTiming.service.js';
@@ -96,7 +97,6 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
     // Get current price from cache (faster than API call)
     let current_price = null;
     try {
-      const priceCacheService = (await import('../services/priceCache.service.js')).default;
       current_price = priceCacheService.getPrice(instrument_key);
 
       if (current_price) {
@@ -123,7 +123,6 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
         if (!current_price) {
           console.log(`[AI ROUTE] 🎯 Step 1.5: No cached price, fetching from candles...`);
           try {
-            const candleFetcherService = (await import('../services/candleFetcher.service.js')).default;
             const yesterday = new Date();
             yesterday.setDate(yesterday.getDate() - 1);
             const candles = await candleFetcherService.fetchCandlesFromAPI(
@@ -141,9 +140,6 @@ router.post('/analyze-stock', authenticateToken, /* analysisRateLimit, */async (
             console.warn(`[AI ROUTE] ⚠️ Could not fetch price: ${priceError.message}`);
           }
         }
-
-        console.log(`[AI ROUTE] 🎯 Step 2: Importing weeklyTrackAnalysisJob...`);
-        const weeklyTrackAnalysisJob = (await import('../services/weeklyPicks/weeklyTrackAnalysisJob.js')).default;
 
         console.log(`[AI ROUTE] 🎯 Step 3: Calling analyzeStock with:`, {
           instrument_key,
@@ -452,8 +448,7 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     } else {
       // Check if stock is in user's watchlist with weekly_track source
       // If so, return position_management analysis instead of swing
-      const user = await User.findById(userId).select('watchlist').lean();
-      const watchlistItem = user?.watchlist?.find(item => item.instrument_key === instrumentKey);
+      const watchlistItem = req.user.watchlist?.find(item => item.instrument_key === instrumentKey);
       const isWeeklyTrack = watchlistItem?.added_source === 'weekly_track';
 
       if (isWeeklyTrack && analysis_type === 'swing') {
@@ -464,8 +459,6 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
     }
 
     console.log(`[BY-INSTRUMENT] Request for instrumentKey: "${instrumentKey}", analysis_type: "${analysis_type}"`);
-
-    const analysisPermission = await StockAnalysis.isBulkAnalysisAllowed();
 
     // ⚡ Check user limits using service method (watchlist quota + daily limit)
     const limitsCheck = await aiReviewService.checkAnalysisLimits(userId, instrumentKey);
@@ -661,7 +654,6 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
 
         // Try price cache first
         try {
-          const priceCacheService = (await import('../services/priceCache.service.js')).default;
           currentPrice = priceCacheService.getPrice(instrumentKey);
           console.log(`[POSITION-MGMT BY-INSTRUMENT] Price from cache: ${currentPrice}`);
         } catch (e) {

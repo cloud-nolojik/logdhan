@@ -5,6 +5,7 @@ import { User } from '../models/user.js';
 import jwt from 'jsonwebtoken';
 import { messagingService } from '../services/messaging/messaging.service.js';
 import TokenBlacklist from '../models/tokenBlacklist.js';
+import { Subscription } from '../models/subscription.js';
 
 const router = express.Router();
 
@@ -142,7 +143,6 @@ router.post('/verify-otp', async (req, res) => {
 
     // Check if user needs subscription setup (both new and migrated users)
     const { subscriptionService } = await import('../services/subscription/subscriptionService.js');
-    const { Subscription } = await import('../models/subscription.js');
 
     const existingSubscription = await Subscription.findOne({ userId: user._id });
 
@@ -191,10 +191,9 @@ router.post('/verify-otp', async (req, res) => {
 // GET /auth/profile - Get user profile with comprehensive trading experience data
 router.get('/profile', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-otp -otpExpiry');
+    const user = req.user;
 
     // Get actual credits from subscription table
-    const { Subscription } = await import('../models/subscription.js');
     const subscription = await Subscription.findActiveForUser(req.user.id);
     const bonusCredits = subscription?.credits?.bonusCredits || 0;
 
@@ -406,8 +405,6 @@ router.post('/complete-assessment', auth, async (req, res) => {
     // Award bonus credits for assessment completion (only for first time)
     if (shouldAwardCredits) {
       try {
-        const { Subscription } = await import('../models/subscription.js');
-
         // Find user's active subscription and add bonus credits (7-day expiry, advanced analysis)
         const subscription = await Subscription.findActiveForUser(user._id);
         if (subscription) {
@@ -601,8 +598,6 @@ router.post('/complete-deep-diagnostic', auth, async (req, res) => {
     // Award bonus credits for deep diagnostic completion (only for first time)
     if (shouldAwardCredits) {
       try {
-        const { Subscription } = await import('../models/subscription.js');
-
         // Find user's active subscription and add bonus credits (7-day expiry, advanced analysis)
         const subscription = await Subscription.findActiveForUser(user._id);
         if (subscription) {

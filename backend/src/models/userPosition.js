@@ -84,7 +84,7 @@ const userPositionSchema = new mongoose.Schema({
 
 // Indexes
 userPositionSchema.index({ user_id: 1, instrument_key: 1, status: 1 });
-userPositionSchema.index({ user_id: 1, status: 1 });
+userPositionSchema.index({ user_id: 1, status: 1, closed_at: -1 });
 userPositionSchema.index({ status: 1, entered_at: -1 });
 
 // Static: Find open position for a stock

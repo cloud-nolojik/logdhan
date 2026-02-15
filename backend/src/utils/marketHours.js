@@ -3,6 +3,17 @@
  * Handles Indian stock market trading hours and holidays
  */
 
+import mongoose from 'mongoose';
+import MarketTiming from '../models/marketTiming.js';
+import { User } from '../models/user.js';
+import { Subscription } from '../models/subscription.js';
+import Stock from '../models/stock.js';
+import UserAnalyticsUsage from '../models/userAnalyticsUsage.js';
+
+// In-memory cache for isTradingDay() — keyed by date string, 60s TTL
+const _tradingDayCache = new Map();
+const TRADING_DAY_CACHE_TTL = 60 * 1000; // 60 seconds
+
 // Indian Stock Market Hours (IST)
 const MARKET_HOURS = {
   // Regular trading hours
@@ -45,35 +56,42 @@ class MarketHoursUtil {
    */
   static async isTradingDay(date = new Date()) {
     try {
-      // Dynamic import to avoid circular dependency
-      const MarketTiming = (await import('../models/marketTiming.js')).default;
-
       // Convert to IST first, then get date string
-      // This ensures we get the correct IST date, not UTC date
       const istDate = this.toIST(date);
-      // Format as YYYY-MM-DD in IST timezone
       const year = istDate.getFullYear();
       const month = String(istDate.getMonth() + 1).padStart(2, '0');
       const day = String(istDate.getDate()).padStart(2, '0');
       const dateStr = `${year}-${month}-${day}`;
 
+      // Check in-memory cache first
+      const cached = _tradingDayCache.get(dateStr);
+      if (cached && Date.now() < cached.expiry) {
+        return cached.value;
+      }
+
       const marketTiming = await MarketTiming.findOne({ date: dateStr });
 
-      // If we have cached data in DB, use it
+      let result;
       if (marketTiming) {
-        return marketTiming.isMarketOpen;
+        result = marketTiming.isMarketOpen;
+      } else {
+        // No cached data - check if weekend (use IST day, not UTC)
+        const dayOfWeek = istDate.getDay();
+        result = dayOfWeek !== 0 && dayOfWeek !== 6;
       }
 
-      // No cached data - check if weekend (use IST day, not UTC)
-      const dayOfWeek = istDate.getDay(); // 0=Sunday, 6=Saturday
-      if (dayOfWeek === 0 || dayOfWeek === 6) {
-        return false;
+      // Cache the result
+      _tradingDayCache.set(dateStr, { value: result, expiry: Date.now() + TRADING_DAY_CACHE_TTL });
+
+      // Prune old entries periodically (keep map small)
+      if (_tradingDayCache.size > 30) {
+        const now = Date.now();
+        for (const [key, entry] of _tradingDayCache) {
+          if (now >= entry.expiry) _tradingDayCache.delete(key);
+        }
       }
 
-      // It's a weekday with no cached data - assume trading day
-      // (holidays will be handled once market timing data is populated)
-      return true;
-
+      return result;
     } catch (error) {
       console.error(`❌ [MARKET HOURS] Error checking trading day:`, error);
       throw error;
@@ -849,13 +867,6 @@ class MarketHoursUtil {
   static async checkUserAnalysisLimits(userId, instrumentKey, options = {}) {
     try {
       const now = new Date(); // Current time for checks
-
-      const mongoose = (await import('mongoose')).default;
-      const { User } = await import('../models/user.js');
-      const { Subscription } = await import('../models/subscription.js');
-      const { default: Stock } = await import('../models/stock.js');
-      const UserAnalyticsUsageModule = await import('../models/userAnalyticsUsage.js');
-      const UserAnalyticsUsage = UserAnalyticsUsageModule.default;
 
       // Get stock symbol from instrument_key
       const stockInfo = await Stock.getByInstrumentKey(instrumentKey);

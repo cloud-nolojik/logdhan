@@ -181,8 +181,7 @@ const kiteAuditLogSchema = new mongoose.Schema({
 
   created_at: {
     type: Date,
-    default: Date.now,
-    index: true
+    default: Date.now
   }
 });
 

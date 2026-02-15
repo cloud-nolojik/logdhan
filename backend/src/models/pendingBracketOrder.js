@@ -4,8 +4,7 @@ const pendingBracketOrderSchema = new mongoose.Schema({
   order_id: {
     type: String,
     required: true,
-    unique: true,
-    index: true
+    unique: true
   },
   user_id: {
     type: mongoose.Schema.Types.ObjectId,
@@ -82,8 +81,7 @@ const pendingBracketOrderSchema = new mongoose.Schema({
   // Audit fields
   created_at: {
     type: Date,
-    default: Date.now,
-    index: true
+    default: Date.now
   },
   updated_at: {
     type: Date,
@@ -91,16 +89,14 @@ const pendingBracketOrderSchema = new mongoose.Schema({
   },
   expires_at: {
     type: Date,
-    default: () => new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from creation
-    index: true
+    default: () => new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours from creation
   }
 });
 
 // Indexes for efficient queries
-pendingBracketOrderSchema.index({ order_id: 1 });
+// order_id already indexed via unique: true on the field definition
 pendingBracketOrderSchema.index({ user_id: 1, status: 1 });
 pendingBracketOrderSchema.index({ status: 1, expires_at: 1 });
-pendingBracketOrderSchema.index({ created_at: 1 });
 
 // TTL index to automatically clean up expired records
 pendingBracketOrderSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 });
