@@ -788,15 +788,23 @@ router.get('/analysis/by-instrument/:instrumentKey', authenticateToken, async (r
 
     const analysis = anyAnalysis; // Use the found analysis
 
-    // Check if analysis is expired (for weekly watchlist stocks)
-    // valid_until is null for on-demand deterministic analysis — never expired
+    // Check if analysis is expired:
+    // - If valid_until is set, check if it has passed
+    // - If valid_until is null (on-demand analysis), expire after 7 days
     const now = new Date();
-    const isExpired = analysis.valid_until ? now > new Date(analysis.valid_until) : false;
+    const isExpired = (() => {
+      if (analysis.valid_until) return now > new Date(analysis.valid_until);
+      if (analysis.created_at) {
+        const ageMs = now.getTime() - new Date(analysis.created_at).getTime();
+        return ageMs > 7 * 24 * 60 * 60 * 1000;
+      }
+      return false;
+    })();
 
     // Generate expiry message for users
     let expiryMessage = null;
     if (isExpired) {
-      expiryMessage = 'New weekly analysis will be available from Saturday 6 PM';
+      expiryMessage = 'This analysis has expired. Click "Analyze This Stock" for a fresh analysis.';
     }
 
     // Format response to match AnalysisApiResponse structure

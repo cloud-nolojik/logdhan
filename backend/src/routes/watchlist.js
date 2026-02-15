@@ -293,8 +293,18 @@ router.get('/', auth, async (req, res) => {
             }
           }
 
-          // Check if analysis is expired (valid_until has passed)
-          const isAnalysisExpired = analysis?.valid_until ? new Date() > new Date(analysis.valid_until) : false;
+          // Check if analysis is expired:
+          // - If valid_until is set, check if it has passed
+          // - If valid_until is null (on-demand analysis), expire after 7 days
+          const isAnalysisExpired = (() => {
+            if (!analysis) return false;
+            if (analysis.valid_until) return new Date() > new Date(analysis.valid_until);
+            if (analysis.created_at) {
+              const ageMs = Date.now() - new Date(analysis.created_at).getTime();
+              return ageMs > 7 * 24 * 60 * 60 * 1000;
+            }
+            return false;
+          })();
 
           return {
             instrument_key: item.instrument_key,
@@ -423,8 +433,16 @@ router.get('/', auth, async (req, res) => {
                 }
               }
 
-              // Check if analysis is expired
-              const isExpired = analysis?.valid_until ? new Date() > new Date(analysis.valid_until) : false;
+              // Check if analysis is expired (valid_until or 7-day age fallback)
+              const isExpired = (() => {
+                if (!analysis) return false;
+                if (analysis.valid_until) return new Date() > new Date(analysis.valid_until);
+                if (analysis.created_at) {
+                  const ageMs = Date.now() - new Date(analysis.created_at).getTime();
+                  return ageMs > 7 * 24 * 60 * 60 * 1000;
+                }
+                return false;
+              })();
 
               return {
                 _id: stock._id,
