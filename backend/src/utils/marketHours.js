@@ -6,7 +6,7 @@
 import mongoose from 'mongoose';
 import MarketTiming from '../models/marketTiming.js';
 import { User } from '../models/user.js';
-import { Subscription } from '../models/subscription.js';
+
 import Stock from '../models/stock.js';
 import UserAnalyticsUsage from '../models/userAnalyticsUsage.js';
 
@@ -885,28 +885,8 @@ class MarketHoursUtil {
         };
       }
 
-      const subscription = await Subscription.findActiveForUser(userId);
-      if (!subscription) {
-        return {
-          allowed: true,
-          reason: null,
-          message: 'No active subscription - analysis allowed',
-          limitInfo: {}
-        };
-      }
-
-      const stockLimit = Number.isFinite(subscription.stockLimit) ?
-      subscription.stockLimit :
-      Number(subscription.stockLimit) || 0;
-
-      if (stockLimit <= 0) {
-        return {
-          allowed: true,
-          reason: null,
-          message: 'No stock limit configured',
-          limitInfo: { stockLimit: 0 }
-        };
-      }
+      // Free plan — fixed limit of 5 stocks per day for all users
+      const stockLimit = 5;
 
       // Check 1: Watchlist Quota (can analyze if not filled)
       const currentWatchlistCount = user.watchlist.length;

@@ -51,90 +51,64 @@ router.get('/plans', async (req, res) => {
 /**
  * Get user's current subscription
  * GET /api/v1/subscriptions/current
+ *
+ * All users are on the free plan — fetches plan details from DB.
  */
 router.get('/current', auth, async (req, res) => {
   try {
-    const subscription = await subscriptionService.getUserActiveSubscription(req.user.id);
+    const plan = await subscriptionService.getPlanById('free_plan');
 
-    if (!subscription) {
-      return res.json({
-        success: true,
-        data: null,
-        message: 'No active subscription found'
-      });
+    if (!plan) {
+      return res.status(500).json({ success: false, message: 'Free plan not found in database' });
     }
 
-    const plan = await subscriptionService.getPlanById(subscription.planId);
-
-    // Handle trial and paid plan expiry logic
-    let daysRemaining, isExpired, isExpiringSoon, subscriptionStatus;
-
-    if (subscription.planId === 'trial_free') {
-      // For trial plans, check trial expiry
-      const trialDaysRemaining = subscription.trialExpiryDate ?
-      Math.ceil((subscription.trialExpiryDate - new Date()) / (1000 * 60 * 60 * 24)) : 0;
-      daysRemaining = Math.max(0, trialDaysRemaining);
-      isExpired = daysRemaining <= 0 || subscription.isTrialExpired;
-      isExpiringSoon = daysRemaining <= 3 && daysRemaining > 0;
-      subscriptionStatus = isExpired ? 'EXPIRED' : 'ACTIVE';
-    } else {
-      // For paid plans, check billing end date
-      daysRemaining = Math.ceil((subscription.billing.endDate - new Date()) / (1000 * 60 * 60 * 24));
-      isExpired = daysRemaining <= 0;
-      isExpiringSoon = daysRemaining <= 7 && daysRemaining > 0;
-      subscriptionStatus = isExpired ? 'EXPIRED' : subscription.status;
-    }
+    const now = new Date();
+    const farFuture = new Date(now);
+    farFuture.setFullYear(farFuture.getFullYear() + 10);
 
     res.json({
       success: true,
       data: {
-        id: subscription.subscriptionId,
-        planId: subscription.planId,
-        planName: subscription.planName,
-        status: subscriptionStatus,
-        pricing: subscription.pricing,
-        stockLimit: subscription.stockLimit,
-        // COMMENTED OUT - No credits concept
-        // credits: {
-        //   total: subscription.credits.total,
-        //   used: subscription.credits.used,
-        //   remaining: subscription.credits.remaining,
-        //   rollover: subscription.credits.rollover,
-        //   earnedCredits: subscription.credits.earnedCredits || 0,
-        //   bonusCredits: subscription.credits.bonusCredits || 0,
-        //   bonusCreditsExpiry: subscription.credits.bonusCreditsExpiry,
-        //   rewardedCredits: subscription.credits.rewardedCredits || 0,
-        //   available: subscription.getTotalAvailableCredits(),
-        //   usagePercentage: subscription.creditUsagePercentage
-        // },
+        id: plan.planId,
+        planId: plan.planId,
+        planName: plan.name,
+        status: 'ACTIVE',
+        pricing: { amount: plan.price, stockLimit: plan.stockLimit, billingCycle: plan.billingCycle },
+        stockLimit: plan.stockLimit,
         billing: {
-          startDate: subscription.billing.startDate,
-          endDate: subscription.billing.endDate,
-          nextBillingDate: subscription.billing.nextBillingDate,
-          daysRemaining: Math.max(0, daysRemaining)
+          startDate: now.toISOString(),
+          endDate: farFuture.toISOString(),
+          nextBillingDate: null,
+          daysRemaining: 9999
         },
-        // Trial specific fields
-        trialExpiryDate: subscription.trialExpiryDate,
-        isTrialExpired: subscription.isTrialExpired,
-        restrictions: subscription.restrictions,
-        features: plan?.features || [],
-        // Cashfree integration fields - CRITICAL for refresh button functionality
-        cashfreeSubscriptionId: subscription.cashfreeSubscriptionId,
-        cashfreeSessionId: subscription.cashfreeSessionId,
-        canUpgrade: subscription.planId !== 'premium_monthly',
-        canDowngrade: false, // No downgrade concept in new model
-        isExpired: isExpired,
-        isExpiringSoon: isExpiringSoon,
-        needsUpgrade: subscription.planId === 'trial_free' && isExpired // Suggest upgrade for expired trial users
+        trialExpiryDate: null,
+        isTrialExpired: false,
+        restrictions: plan.restrictions || null,
+        features: plan.features || [],
+        cashfreeSubscriptionId: null,
+        cashfreeSessionId: null,
+        canUpgrade: false,
+        canDowngrade: false,
+        isExpired: false,
+        isExpiringSoon: false,
+        needsUpgrade: false
       }
     });
   } catch (error) {
     console.error('Error fetching current subscription:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch subscription details'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch subscription details' });
   }
+});
+
+/**
+ * Ad status — no ad tracking yet, stub to prevent 404
+ * GET /api/v1/subscriptions/ad-status
+ */
+router.get('/ad-status', auth, (req, res) => {
+  res.json({
+    success: true,
+    data: { canWatchAd: false, rewardedCredits: 0, nextAdAvailableAt: null }
+  });
 });
 
 /**
