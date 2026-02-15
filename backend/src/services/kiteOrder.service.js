@@ -28,18 +28,22 @@ class KiteOrderService {
       const margins = await this.kiteService.getMargins();
       const equity = margins.data?.equity || {};
 
+      // Use equity.net — real available margin after all utilisation.
+      // Apply MIS leverage factor (2x) to reflect intraday buying power.
+      const availableMargin = equity.net || 0;
       const availableCash = equity.available?.cash || 0;
-      const usableAmount = availableCash * kiteConfig.CAPITAL_USAGE_PERCENT;
+      const leveragedMargin = availableMargin * (kiteConfig.MIS_LEVERAGE_FACTOR || 1);
+      const usableAmount = leveragedMargin * kiteConfig.CAPITAL_USAGE_PERCENT;
 
       await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.BALANCE_CHECK, {
         status: 'SUCCESS',
-        response: { availableCash, usableAmount },
+        response: { availableMargin, availableCash, leveragedMargin, usableAmount },
         source: 'AUTO'
       });
 
       return {
         total: equity.net || 0,
-        available: availableCash,
+        available: availableMargin,
         usable: usableAmount,
         used: equity.utilised?.debits || 0
       };

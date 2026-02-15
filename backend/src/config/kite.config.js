@@ -25,7 +25,8 @@ const kiteConfig = {
   ADMIN_USER_ID: process.env.KITE_ADMIN_USER_ID,
 
   // Capital management
-  CAPITAL_USAGE_PERCENT: 0.90,  // Use only 90% of available balance
+  CAPITAL_USAGE_PERCENT: 0.50,  // Use only 50% of available balance
+  MIS_LEVERAGE_FACTOR: 2,       // MIS leverage multiplier (Zerodha allows ~5x, using 2x conservatively)
   MAX_ORDER_VALUE: 100000,      // ₹1 lakh max per order
   MAX_DAILY_ORDERS: 10,         // Max orders per day
 
