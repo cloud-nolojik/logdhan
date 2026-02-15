@@ -85,7 +85,7 @@ router.get('/today', auth, async (req, res) => {
       };
     });
 
-    // Fetch live Nifty 50 price + change instead of stale Gift Nifty
+    // Fetch live Nifty 50 price + change
     const marketContext = { ...doc.market_context };
     try {
       const niftyKey = 'NSE_INDEX|Nifty 50';
@@ -106,8 +106,8 @@ router.get('/today', auth, async (req, res) => {
     res.json({
       success: true,
       data: {
-        trading_date: doc.trading_date,
-        scan_date: doc.scan_date,
+        trading_date: doc.trading_date ? new Date(new Date(doc.trading_date).getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0] : null,
+        scan_date: doc.scan_date ? new Date(new Date(doc.scan_date).getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0] : null,
         market_context: marketContext,
         picks: enrichedPicks,
         summary: {
