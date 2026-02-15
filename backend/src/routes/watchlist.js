@@ -293,6 +293,9 @@ router.get('/', auth, async (req, res) => {
             }
           }
 
+          // Check if analysis is expired (valid_until has passed)
+          const isAnalysisExpired = analysis?.valid_until ? new Date() > new Date(analysis.valid_until) : false;
+
           return {
             instrument_key: item.instrument_key,
             trading_symbol: item.trading_symbol,
@@ -303,12 +306,12 @@ router.get('/', auth, async (req, res) => {
             current_price,
             net_change,
             percent_change,
-            // Analysis status fields
-            has_analysis: !!analysis,
-            analysis_status: analysis?.status || null,
-            ai_confidence,
-            strategy_type, // BUY, SELL, HOLD, NO_TRADE, WAIT, SKIP
-            simple_verdict // Human-friendly verdict for display
+            // Analysis status fields — mark expired analyses so app doesn't show stale "Analyzed" badge
+            has_analysis: !!analysis && !isAnalysisExpired,
+            analysis_status: isAnalysisExpired ? 'expired' : (analysis?.status || null),
+            ai_confidence: isAnalysisExpired ? null : ai_confidence,
+            strategy_type: isAnalysisExpired ? null : strategy_type,
+            simple_verdict: isAnalysisExpired ? null : simple_verdict
           };
         } catch (err) {
           console.warn(`Error fetching data for ${item.trading_symbol} (${item.instrument_key}):`, err.message);
@@ -420,6 +423,9 @@ router.get('/', auth, async (req, res) => {
                 }
               }
 
+              // Check if analysis is expired
+              const isExpired = analysis?.valid_until ? new Date() > new Date(analysis.valid_until) : false;
+
               return {
                 _id: stock._id,
                 instrument_key: stock.instrument_key,
@@ -437,11 +443,11 @@ router.get('/', auth, async (req, res) => {
                 percent_change,
                 status: stock.status,
                 // Analysis fields
-                has_analysis: !!analysis,
-                analysis_status: analysis?.status || null,
-                ai_confidence,
-                strategy_type,
-                simple_verdict
+                has_analysis: !!analysis && !isExpired,
+                analysis_status: isExpired ? 'expired' : (analysis?.status || null),
+                ai_confidence: isExpired ? null : ai_confidence,
+                strategy_type: isExpired ? null : strategy_type,
+                simple_verdict: isExpired ? null : simple_verdict
               };
             })
         );
