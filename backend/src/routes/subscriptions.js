@@ -8,6 +8,9 @@ import mongoose from 'mongoose';
 
 const router = express.Router();
 
+// Cache the free plan from DB — it never changes at runtime
+let _freePlanCache = null;
+
 /**
  * Get all available subscription plans
  * GET /api/v1/subscriptions/plans
@@ -56,7 +59,10 @@ router.get('/plans', async (req, res) => {
  */
 router.get('/current', auth, async (req, res) => {
   try {
-    const plan = await subscriptionService.getPlanById('free_plan');
+    if (!_freePlanCache) {
+      _freePlanCache = await subscriptionService.getPlanById('free_plan');
+    }
+    const plan = _freePlanCache;
 
     if (!plan) {
       return res.status(500).json({ success: false, message: 'Free plan not found in database' });
