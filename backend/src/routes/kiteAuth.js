@@ -4,6 +4,7 @@ import { manualRefresh, isRunning } from '../services/jobs/kiteTokenRefreshJob.j
 import KiteSession from '../models/kiteSession.js';
 import KiteAuditLog from '../models/kiteAuditLog.js';
 import kiteConfig from '../config/kite.config.js';
+import kiteOrderEvents from '../services/kiteOrderEvents.js';
 import { simpleAdminAuth } from '../middleware/simpleAdminAuth.js';
 
 const router = express.Router();
@@ -381,6 +382,16 @@ router.post('/postback', async (req, res) => {
         tag: postback.tag,
         source: 'KITE_POSTBACK'
       });
+
+      // Emit event for listeners (daily picks fill listener, etc.)
+      const status = postback.status?.toUpperCase();
+      if (status === 'COMPLETE') {
+        kiteOrderEvents.emit('order:complete', postback);
+      } else if (status === 'REJECTED') {
+        kiteOrderEvents.emit('order:rejected', postback);
+      } else if (status === 'CANCELLED') {
+        kiteOrderEvents.emit('order:cancelled', postback);
+      }
     }
   } catch (error) {
     console.error('[KITE POSTBACK] Error processing postback:', error.message);

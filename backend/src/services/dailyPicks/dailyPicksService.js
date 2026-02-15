@@ -20,12 +20,14 @@ import DailyPick from '../../models/dailyPick.js';
 import MarketSentiment from '../../models/marketSentiment.js';
 import ApiUsage from '../../models/apiUsage.js';
 import kiteOrderService from '../kiteOrder.service.js';
+import kiteOrderEvents from '../kiteOrderEvents.js';
 import { isKiteIntegrationEnabled } from '../kiteTradeIntegration.service.js';
 import { firebaseService } from '../firebase/firebase.service.js';
 import priceCacheService from '../priceCache.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import kiteConfig from '../../config/kite.config.js';
 import { getISTMidnight, calculatePnl, updateDailyResults, round2, delay } from './dailyPicksHelpers.js';
+import { collectOpeningRange, validatePicks } from './orbValidationService.js';
 import scanLevels from '../../engine/scanLevels.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -796,22 +798,86 @@ async function sendNotification(marketContext, picks, doc) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENTRY PLACEMENT — 9:15 AM
+// v2: ORB COLLECTION — 9:15 AM
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Place MIS LIMIT BUY orders for today's picks.
- * Called at 9:15 AM (market open).
+ * Start ORB (Opening Range Breakout) data collection.
+ * Called at 9:15 AM — polls LTP every 8s for 15 min (until 9:30 AM).
+ * Stores ORB data on each pick's `orb` field and marks status as COLLECTING_ORB.
  */
-async function placeEntryOrders(options = {}) {
-  const { dryRun = false } = options;
-
+async function startOrbCollection(options = {}) {
   console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} Placing entry orders${dryRun ? ' [DRY RUN]' : ''}`);
+  console.log(`${LOG} Starting ORB collection`);
   console.log(`${LOG} ════════════════════════════════════════`);
 
   if (!isKiteIntegrationEnabled()) {
-    console.log(`${LOG} Kite not enabled — skipping order placement`);
+    console.log(`${LOG} Kite not enabled — skipping ORB collection`);
+    return { success: true, message: 'Kite not enabled' };
+  }
+
+  const doc = await DailyPick.findToday();
+  if (!doc) {
+    console.log(`${LOG} No DailyPick doc for today — nothing to collect`);
+    return { success: true, message: 'No picks today' };
+  }
+
+  const pendingPicks = doc.picks.filter(p => p.trade.status === 'PENDING');
+  if (pendingPicks.length === 0) {
+    console.log(`${LOG} No PENDING picks — skipping ORB collection`);
+    return { success: true, message: 'No pending picks' };
+  }
+
+  // Mark picks as COLLECTING_ORB
+  for (const pick of pendingPicks) {
+    pick.trade.status = 'COLLECTING_ORB';
+    pick.kite.kite_status = 'collecting_orb';
+  }
+  await doc.save();
+
+  // Collect ORB data (blocks for ~15 min)
+  const symbols = pendingPicks.map(p => p.symbol);
+  console.log(`${LOG} Collecting ORB for: ${symbols.join(', ')}`);
+
+  const orbData = await collectOpeningRange(symbols, pendingPicks);
+
+  // Store ORB data on each pick
+  for (const pick of pendingPicks) {
+    const orb = orbData[pick.symbol];
+    if (orb) {
+      pick.orb = {
+        high: orb.high,
+        low: orb.low,
+        opening_price: orb.opening_price,
+        gap_percent: orb.gap_percent,
+        orb_direction: orb.orb_direction,
+        nifty_orb_direction: orbData['_NIFTY']?.orb_direction || 'NEUTRAL'
+      };
+    }
+  }
+  await doc.save();
+
+  console.log(`${LOG} ORB collection complete — data stored for ${Object.keys(orbData).filter(k => k !== '_NIFTY').length} symbols`);
+  return { success: true, symbolsCollected: Object.keys(orbData).length };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v2: VALIDATE + PLACE ENTRIES — 9:30 AM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Validate picks against ORB data and place entries for validated picks.
+ * Called at 9:30 AM after ORB collection completes.
+ */
+async function validateAndPlaceEntries(options = {}) {
+  const { dryRun = false } = options;
+
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} Validating picks + placing entries${dryRun ? ' [DRY RUN]' : ''}`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+
+  if (!isKiteIntegrationEnabled()) {
+    console.log(`${LOG} Kite not enabled — skipping`);
     return { success: true, message: 'Kite not enabled', orders: 0 };
   }
 
@@ -821,31 +887,72 @@ async function placeEntryOrders(options = {}) {
     return { success: true, message: 'No picks today', orders: 0 };
   }
 
-  const pendingPicks = doc.picks.filter(p => p.trade.status === 'PENDING');
-  if (pendingPicks.length === 0) {
-    console.log(`${LOG} No PENDING picks — skipping`);
-    return { success: true, message: 'No pending picks', orders: 0 };
+  // Accept both COLLECTING_ORB (normal flow) and PENDING (if ORB collection was skipped/manual)
+  const eligiblePicks = doc.picks.filter(p =>
+    p.trade.status === 'COLLECTING_ORB' || p.trade.status === 'PENDING'
+  );
+  if (eligiblePicks.length === 0) {
+    console.log(`${LOG} No eligible picks for validation — skipping`);
+    return { success: true, message: 'No eligible picks', orders: 0 };
   }
 
-  // Score-weighted capital allocation with 45% max cap per pick
+  // Step 1: Validate against ORB data
+  // Build orbData from stored pick.orb fields (already collected by startOrbCollection)
+  const orbData = {};
+  for (const pick of eligiblePicks) {
+    if (pick.orb?.high) {
+      orbData[pick.symbol] = {
+        high: pick.orb.high,
+        low: pick.orb.low,
+        opening_price: pick.orb.opening_price,
+        gap_percent: pick.orb.gap_percent,
+        orb_direction: pick.orb.orb_direction
+      };
+    }
+  }
+  // Reconstruct NIFTY ORB from first pick that has it
+  const niftyDir = eligiblePicks.find(p => p.orb?.nifty_orb_direction)?.orb?.nifty_orb_direction;
+  if (niftyDir) {
+    orbData['_NIFTY'] = { orb_direction: niftyDir };
+  }
+
+  validatePicks(eligiblePicks, orbData);
+
+  // Step 2: Separate validated vs skipped
+  const validatedPicks = eligiblePicks.filter(p => p.validation?.passed);
+  const skippedPicks = eligiblePicks.filter(p => !p.validation?.passed);
+
+  for (const pick of skippedPicks) {
+    pick.trade.status = 'SKIPPED';
+    pick.trade.exit_reason = `validation_failed: ${pick.validation?.skip_reason || 'unknown'}`;
+    pick.kite.kite_status = 'skipped';
+    console.log(`${LOG} ${pick.symbol}: SKIPPED — ${pick.validation?.skip_reason}`);
+  }
+
+  if (validatedPicks.length === 0) {
+    console.log(`${LOG} All picks failed validation — no orders to place`);
+    await doc.save();
+    return { success: true, message: 'All picks failed validation', orders: 0 };
+  }
+
+  // Mark as VALIDATED
+  for (const pick of validatedPicks) {
+    pick.trade.status = 'VALIDATED';
+    pick.kite.kite_status = 'validated';
+  }
+
+  // Step 3: Capital allocation + order placement (same logic as v1)
   const MAX_WEIGHT = 0.45;
   const balance = await kiteOrderService.getAvailableBalance();
   console.log(`${LOG} Balance: ₹${balance.available}, Usable: ₹${balance.usable}`);
 
-  console.log(`${LOG} Pending picks for orders: ${pendingPicks.map(p => `${p.symbol}(score=${p.rank_score}, ${p.scan_type})`).join(', ')}`);
-
-  const totalScore = pendingPicks.reduce((sum, p) => sum + p.rank_score, 0);
-  const rawWeights = pendingPicks.map(p => Math.min(p.rank_score / totalScore, MAX_WEIGHT));
+  const totalScore = validatedPicks.reduce((sum, p) => sum + p.rank_score, 0);
+  const rawWeights = validatedPicks.map(p => Math.min(p.rank_score / totalScore, MAX_WEIGHT));
   const weightSum = rawWeights.reduce((s, w) => s + w, 0);
-  const allocations = pendingPicks.map((pick, i) => ({
+  const allocations = validatedPicks.map((pick, i) => ({
     pick,
     capital: Math.floor(balance.usable * (rawWeights[i] / weightSum))
   }));
-
-  console.log(`${LOG} Allocation math: totalScore=${totalScore} rawWeights=[${rawWeights.map(w => round2(w)).join(', ')}] weightSum=${round2(weightSum)}`);
-  for (const { pick, capital } of allocations) {
-    console.log(`${LOG} Allocation: ${pick.symbol} → ₹${capital} (${round2((capital / balance.usable) * 100)}% of usable)`);
-  }
 
   let ordersPlaced = 0;
 
@@ -855,38 +962,28 @@ async function placeEntryOrders(options = {}) {
     if (qty <= 0) {
       console.log(`${LOG} ${pick.symbol}: qty=0 (price ₹${pick.levels.entry} > capital ₹${orderAmount}) — skipping`);
       pick.trade.status = 'SKIPPED';
-      pick.kite.kite_status = 'failed';
+      pick.kite.kite_status = 'skipped';
       continue;
     }
 
-    const pct = round2((capital / balance.usable) * 100);
-
-    // Determine order type based on entry strategy
-    // buy_above (momentum) = SL (stop-loss trigger to buy on breakout)
-    // sell_below (breakdown) = SL-M (stop-loss market to sell on breakdown)
-    // limit (pullback) = LIMIT (buy at or below entry)
     const entryType = pick.levels.entry_type || 'limit';
     let orderType, triggerPrice, limitPrice;
 
     if (entryType === 'buy_above') {
-      // LONG momentum: Buy when price crosses ABOVE entry (confirms continuation)
       orderType = 'SL';
       triggerPrice = pick.levels.entry;
-      limitPrice = round2(pick.levels.entry * 1.002); // 0.2% buffer for slippage
-      console.log(`${LOG} ${pick.symbol}: score=${pick.rank_score} alloc=${pct}% ₹${capital} — MIS SL-BUY (buy_above) qty=${qty} trigger=₹${triggerPrice} limit=₹${limitPrice}`);
+      limitPrice = round2(pick.levels.entry * 1.002);
     } else if (entryType === 'sell_below') {
-      // SHORT breakdown: Sell when price crosses BELOW entry (confirms breakdown)
       orderType = 'SL-M';
       triggerPrice = pick.levels.entry;
-      limitPrice = 0; // Market order after trigger
-      console.log(`${LOG} ${pick.symbol}: score=${pick.rank_score} alloc=${pct}% ₹${capital} — MIS SL-M-SELL (sell_below) qty=${qty} trigger=₹${triggerPrice}`);
+      limitPrice = 0;
     } else {
-      // Pullback: Buy/Sell at or better than entry price
       orderType = 'LIMIT';
       triggerPrice = 0;
       limitPrice = pick.levels.entry;
-      console.log(`${LOG} ${pick.symbol}: score=${pick.rank_score} alloc=${pct}% ₹${capital} — MIS LIMIT ${pick.direction === 'LONG' ? 'BUY' : 'SELL'} (limit) qty=${qty} @ ₹${limitPrice}`);
     }
+
+    console.log(`${LOG} ${pick.symbol}: ${orderType} ${pick.direction} qty=${qty} entry=₹${pick.levels.entry} (validated, ${pick.validation?.levels_recalculated ? 'recalculated' : 'original'} levels)`);
 
     if (dryRun) {
       console.log(`${LOG} [DRY RUN] Would place ${orderType} order for ${pick.symbol}`);
@@ -907,14 +1004,11 @@ async function placeEntryOrders(options = {}) {
         source: 'DAILY_PICKS'
       };
 
-      // Add trigger_price for SL/SL-M orders
       if (orderType === 'SL' || orderType === 'SL-M') {
         orderParams.trigger_price = triggerPrice;
       }
 
-      console.log(`${LOG} [Order] ${pick.symbol}: placing order — ${JSON.stringify(orderParams)}`);
       const result = await kiteOrderService.placeOrder(orderParams);
-      console.log(`${LOG} [Order] ${pick.symbol}: placeOrder result — ${JSON.stringify(result)}`);
 
       if (result.success && result.orderId) {
         pick.trade.status = 'ORDER_PLACED';
@@ -932,242 +1026,284 @@ async function placeEntryOrders(options = {}) {
       pick.trade.status = 'FAILED';
       pick.kite.kite_status = 'failed';
       console.error(`${LOG} ❌ ${pick.symbol}: Order error —`, err.message);
-      if (err.response) {
-        console.error(`${LOG} ❌ ${pick.symbol}: Kite API response — status=${err.response.status} data=${JSON.stringify(err.response.data)}`);
-      }
     }
   }
 
   await doc.save();
-  console.log(`${LOG} Entry orders: ${ordersPlaced}/${pendingPicks.length} placed`);
+  console.log(`${LOG} Validation+entry: ${validatedPicks.length} validated, ${skippedPicks.length} skipped, ${ordersPlaced} orders placed`);
 
-  return { success: true, orders: ordersPlaced };
+  return { success: true, validated: validatedPicks.length, skipped: skippedPicks.length, orders: ordersPlaced };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FILL CHECK + SL + TARGET — 9:45 AM
+// v2: FILL LISTENER — Instant SL+Target on postback fill
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Check if entry orders filled, place SL-M stop + LIMIT SELL target.
- * Cancel unfilled entries. Called at 9:45 AM.
+ * Place SL-M stop + LIMIT target immediately after entry fill.
+ * Shared by both postback listener and polling fallback.
+ * Idempotency: checks kite_status !== 'sl_target_placed' before acting.
  */
-async function checkFillsAndPlaceProtection(options = {}) {
-  const { dryRun = false } = options;
-
-  console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} Checking fills + placing protection${dryRun ? ' [DRY RUN]' : ''}`);
-  console.log(`${LOG} ════════════════════════════════════════`);
-
-  if (!isKiteIntegrationEnabled()) {
-    console.log(`${LOG} Kite not enabled — skipping`);
-    return { success: true, message: 'Kite not enabled' };
+async function placeSLAndTarget(pick, doc, entryPrice) {
+  // Idempotency guard — prevent double-placement
+  if (pick.kite.kite_status === 'sl_target_placed' || pick.trade.status !== 'ORDER_PLACED') {
+    console.log(`${LOG} ${pick.symbol}: SL+target already placed or status changed — skipping`);
+    return;
   }
+
+  pick.trade.status = 'ENTERED';
+  pick.trade.entry_price = entryPrice;
+  pick.trade.entry_time = new Date();
+
+  // Recalculate target from actual fill
+  const target = pick.direction === 'LONG'
+    ? round2(entryPrice * (1 + TARGET_PCT / 100))
+    : round2(entryPrice * (1 - TARGET_PCT / 100));
+  pick.levels.target = target;
+
+  console.log(`${LOG} ✅ ${pick.symbol}: Filled @ ₹${entryPrice} — placing SL @ ₹${pick.levels.stop} + target @ ₹${target}`);
+
+  let slPlaced = false;
+  let tgtPlaced = false;
+
+  // Place SL-M stop order
+  try {
+    const slResult = await kiteOrderService.placeOrder({
+      tradingsymbol: pick.symbol,
+      exchange: 'NSE',
+      transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
+      order_type: 'SL-M',
+      trigger_price: pick.levels.stop,
+      product: 'MIS',
+      quantity: pick.trade.qty,
+      simulationId: `daily_pick_sl_${pick.symbol}`,
+      orderType: 'STOP_LOSS',
+      source: 'DAILY_PICKS'
+    });
+    if (slResult.success) {
+      pick.kite.stop_order_id = slResult.orderId;
+      slPlaced = true;
+      console.log(`${LOG} ${pick.symbol}: SL-M placed @ ₹${pick.levels.stop} — orderId=${slResult.orderId}`);
+    }
+  } catch (err) {
+    console.error(`${LOG} ${pick.symbol}: SL-M error:`, err.message);
+  }
+
+  // Place LIMIT target order
+  try {
+    const tgtResult = await kiteOrderService.placeOrder({
+      tradingsymbol: pick.symbol,
+      exchange: 'NSE',
+      transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
+      order_type: 'LIMIT',
+      price: target,
+      product: 'MIS',
+      quantity: pick.trade.qty,
+      simulationId: `daily_pick_tgt_${pick.symbol}`,
+      orderType: 'TARGET',
+      source: 'DAILY_PICKS'
+    });
+    if (tgtResult.success) {
+      pick.kite.target_order_id = tgtResult.orderId;
+      tgtPlaced = true;
+      console.log(`${LOG} ${pick.symbol}: Target LIMIT placed @ ₹${target} — orderId=${tgtResult.orderId}`);
+    }
+  } catch (err) {
+    console.error(`${LOG} ${pick.symbol}: Target error:`, err.message);
+  }
+
+  if (slPlaced && tgtPlaced) {
+    pick.kite.kite_status = 'sl_target_placed';
+  } else if (!slPlaced) {
+    // CRITICAL: No stop-loss — emergency market exit
+    console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} SL-M failed — emergency market exit`);
+    try {
+      await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
+        'CRITICAL: SL Failed — Emergency Exit',
+        `${pick.symbol} SL-M placement failed. Emergency market exit attempted.`,
+        { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
+      );
+    } catch (_) { /* ignore */ }
+
+    try {
+      if (tgtPlaced && pick.kite.target_order_id) {
+        await kiteOrderService.cancelOrder(pick.kite.target_order_id);
+      }
+      const exitResult = await kiteOrderService.placeOrder({
+        tradingsymbol: pick.symbol,
+        exchange: 'NSE',
+        transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
+        order_type: 'MARKET',
+        product: 'MIS',
+        quantity: pick.trade.qty,
+        simulationId: `daily_pick_emergency_${pick.symbol}`,
+        orderType: 'EMERGENCY_EXIT',
+        source: 'DAILY_PICKS'
+      });
+      if (exitResult.success) {
+        await delay(3000);
+        try {
+          const exitOrder = await kiteOrderService.getOrderDetails(exitResult.orderId);
+          pick.trade.exit_price = exitOrder?.average_price || pick.trade.entry_price;
+          pick.trade.exit_price_source = exitOrder?.average_price ? 'order_fill' : 'ltp_approximate';
+        } catch (_) {
+          pick.trade.exit_price = pick.trade.entry_price;
+          pick.trade.exit_price_source = 'ltp_approximate';
+        }
+      } else {
+        pick.trade.exit_price = pick.trade.entry_price;
+        pick.trade.exit_price_source = 'ltp_approximate';
+      }
+    } catch (exitErr) {
+      console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} emergency exit also failed:`, exitErr.message);
+      pick.trade.exit_price = pick.trade.entry_price;
+      pick.trade.exit_price_source = 'ltp_approximate';
+    }
+    pick.trade.status = 'FAILED';
+    pick.trade.exit_time = new Date();
+    pick.trade.exit_reason = 'sl_placement_failed_emergency_exit';
+    calculatePnl(pick);
+    pick.kite.kite_status = 'failed';
+  } else {
+    // Target failed but SL is in place — acceptable
+    console.error(`${LOG} ⚠️ ${pick.symbol}: Target placement failed — SL active, will rely on stop or 3 PM exit`);
+    pick.kite.kite_status = 'sl_target_placed';
+  }
+
+  await doc.save();
+}
+
+/**
+ * Initialize fill listener — subscribes to postback events for instant SL+target.
+ * Called once on server startup.
+ */
+function initFillListener() {
+  console.log(`${LOG} Initializing fill listener (postback → instant SL+target)`);
+
+  kiteOrderEvents.on('order:complete', async (postback) => {
+    try {
+      const doc = await DailyPick.findToday();
+      if (!doc) return;
+
+      const pick = doc.picks.find(p =>
+        p.kite.entry_order_id === postback.order_id &&
+        p.trade.status === 'ORDER_PLACED' &&
+        p.kite.kite_status !== 'sl_target_placed'
+      );
+      if (!pick) return; // Not a daily pick entry, or already handled
+
+      console.log(`${LOG} [FILL-LISTENER] ${pick.symbol}: Entry fill detected via postback — orderId=${postback.order_id} price=₹${postback.average_price}`);
+      await placeSLAndTarget(pick, doc, parseFloat(postback.average_price));
+    } catch (err) {
+      console.error(`${LOG} [FILL-LISTENER] Error processing fill:`, err.message);
+    }
+  });
+
+  console.log(`${LOG} Fill listener active`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v2: FILL CHECK FALLBACK — Polling backup (every 2 min, 9:30-10:30)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Polling fallback for fill detection. Postback handles most fills instantly,
+ * but this catches any that slip through (e.g. postback delayed or missed).
+ * Idempotency: skips picks where SL+target already placed by postback listener.
+ */
+async function checkFillsFallback(options = {}) {
+  if (!isKiteIntegrationEnabled()) return { success: true, message: 'Kite not enabled' };
+
+  const doc = await DailyPick.findToday();
+  if (!doc) return { success: true, message: 'No picks today' };
+
+  const orderPlacedPicks = doc.picks.filter(p =>
+    p.trade.status === 'ORDER_PLACED' && p.kite.kite_status !== 'sl_target_placed'
+  );
+  if (orderPlacedPicks.length === 0) return { success: true, message: 'No pending fills' };
+
+  console.log(`${LOG} [FILL-FALLBACK] Checking ${orderPlacedPicks.length} picks: ${orderPlacedPicks.map(p => p.symbol).join(', ')}`);
+
+  let filled = 0;
+
+  for (const pick of orderPlacedPicks) {
+    try {
+      const order = await kiteOrderService.getOrderDetails(pick.kite.entry_order_id);
+      if (!order) continue;
+
+      const status = order.status?.toUpperCase();
+      if (status === 'COMPLETE') {
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Fill detected via polling — placing SL+target`);
+        await placeSLAndTarget(pick, doc, order.average_price || pick.levels.entry);
+        filled++;
+      } else if (status === 'CANCELLED' || status === 'REJECTED') {
+        pick.trade.status = 'SKIPPED';
+        pick.kite.kite_status = 'skipped';
+        await doc.save();
+      }
+    } catch (err) {
+      console.error(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Error —`, err.message);
+    }
+  }
+
+  return { success: true, filled };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v2: CANCEL EXPIRED ENTRIES — 10:30 AM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Cancel unfilled entry orders at 10:30 AM. Setup has expired.
+ */
+async function cancelExpiredEntries(options = {}) {
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} Cancelling expired entry orders (10:30 AM cutoff)`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+
+  if (!isKiteIntegrationEnabled()) return { success: true, message: 'Kite not enabled' };
 
   const doc = await DailyPick.findToday();
   if (!doc) return { success: true, message: 'No picks today' };
 
   const orderPlacedPicks = doc.picks.filter(p => p.trade.status === 'ORDER_PLACED');
   if (orderPlacedPicks.length === 0) {
-    console.log(`${LOG} No ORDER_PLACED picks — skipping`);
-    return { success: true, message: 'No orders to check' };
+    console.log(`${LOG} No ORDER_PLACED picks to cancel`);
+    return { success: true, cancelled: 0 };
   }
 
-  console.log(`${LOG} Checking ${orderPlacedPicks.length} ORDER_PLACED picks: ${orderPlacedPicks.map(p => `${p.symbol}(orderId=${p.kite.entry_order_id})`).join(', ')}`);
-
-  let filled = 0, skipped = 0;
-
+  let cancelled = 0;
   for (const pick of orderPlacedPicks) {
     try {
-      console.log(`${LOG} [FillCheck] ${pick.symbol}: fetching order ${pick.kite.entry_order_id}...`);
-      const order = await kiteOrderService.getOrderDetails(pick.kite.entry_order_id);
-
-      if (!order) {
-        console.log(`${LOG} ${pick.symbol}: Order not found — marking SKIPPED`);
-        pick.trade.status = 'SKIPPED';
-        pick.kite.kite_status = 'failed';
-        skipped++;
-        continue;
-      }
-
-      const status = order.status?.toUpperCase();
-      console.log(`${LOG} [FillCheck] ${pick.symbol}: order status=${status} avg_price=${order.average_price || 'N/A'} filled_qty=${order.filled_quantity || 'N/A'} pending_qty=${order.pending_quantity || 'N/A'}`);
-
-      if (status === 'COMPLETE') {
-        // Entry filled
-        const entryPrice = order.average_price || pick.levels.entry;
-        pick.trade.status = 'ENTERED';
-        pick.trade.entry_price = entryPrice;
-        pick.trade.entry_time = new Date();
-
-        // Recalculate target from actual fill
-        const target = pick.direction === 'LONG'
-          ? round2(entryPrice * (1 + TARGET_PCT / 100))
-          : round2(entryPrice * (1 - TARGET_PCT / 100));
-        pick.levels.target = target;
-
-        console.log(`${LOG} ✅ ${pick.symbol}: Filled @ ₹${entryPrice} (planned entry: ₹${pick.levels.entry}, slippage: ${round2(((entryPrice - pick.levels.entry) / pick.levels.entry) * 100)}%)`);
-        console.log(`${LOG} ${pick.symbol}: Recalculated target: ₹${target} (${TARGET_PCT}% from fill), SL: ₹${pick.levels.stop}`);
-
-        if (!dryRun) {
-          let slPlaced = false;
-          let tgtPlaced = false;
-
-          // Place SL-M stop order
-          try {
-            const slResult = await kiteOrderService.placeOrder({
-              tradingsymbol: pick.symbol,
-              exchange: 'NSE',
-              transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
-              order_type: 'SL-M',
-              trigger_price: pick.levels.stop,
-              product: 'MIS',
-              quantity: pick.trade.qty,
-              simulationId: `daily_pick_sl_${pick.symbol}`,
-              orderType: 'STOP_LOSS',
-              source: 'DAILY_PICKS'
-            });
-            console.log(`${LOG} [Order] ${pick.symbol}: SL-M placeOrder result — ${JSON.stringify(slResult)}`);
-            if (slResult.success) {
-              pick.kite.stop_order_id = slResult.orderId;
-              slPlaced = true;
-              console.log(`${LOG} ${pick.symbol}: SL-M placed @ ₹${pick.levels.stop} — orderId=${slResult.orderId}`);
-            }
-          } catch (err) {
-            console.error(`${LOG} ${pick.symbol}: SL-M error:`, err.message);
-            if (err.response) console.error(`${LOG} ${pick.symbol}: SL-M Kite API — status=${err.response.status} data=${JSON.stringify(err.response.data)}`);
-          }
-
-          // Place LIMIT SELL target order
-          try {
-            const tgtResult = await kiteOrderService.placeOrder({
-              tradingsymbol: pick.symbol,
-              exchange: 'NSE',
-              transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
-              order_type: 'LIMIT',
-              price: target,
-              product: 'MIS',
-              quantity: pick.trade.qty,
-              simulationId: `daily_pick_tgt_${pick.symbol}`,
-              orderType: 'TARGET',
-              source: 'DAILY_PICKS'
-            });
-            console.log(`${LOG} [Order] ${pick.symbol}: Target placeOrder result — ${JSON.stringify(tgtResult)}`);
-            if (tgtResult.success) {
-              pick.kite.target_order_id = tgtResult.orderId;
-              tgtPlaced = true;
-              console.log(`${LOG} ${pick.symbol}: Target LIMIT placed @ ₹${target} — orderId=${tgtResult.orderId}`);
-            }
-          } catch (err) {
-            console.error(`${LOG} ${pick.symbol}: Target error:`, err.message);
-            if (err.response) console.error(`${LOG} ${pick.symbol}: Target Kite API — status=${err.response.status} data=${JSON.stringify(err.response.data)}`);
-          }
-
-          if (slPlaced && tgtPlaced) {
-            pick.kite.kite_status = 'sl_target_placed';
-          } else if (!slPlaced) {
-            // CRITICAL: No stop-loss — market-exit immediately for safety
-            console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} SL-M failed — market-exiting position for safety`);
-            try {
-              await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
-                'CRITICAL: SL Failed — Emergency Exit',
-                `${pick.symbol} SL-M placement failed. Emergency market exit attempted.`,
-                { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
-              );
-            } catch (notifErr) { /* ignore */ }
-
-            try {
-              // Cancel the target order if it was placed
-              if (tgtPlaced && pick.kite.target_order_id) {
-                await kiteOrderService.cancelOrder(pick.kite.target_order_id);
-              }
-              // Market-exit the position
-              const exitResult = await kiteOrderService.placeOrder({
-                tradingsymbol: pick.symbol,
-                exchange: 'NSE',
-                transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
-                order_type: 'MARKET',
-                product: 'MIS',
-                quantity: pick.trade.qty,
-                simulationId: `daily_pick_emergency_exit_${pick.symbol}`,
-                orderType: 'EMERGENCY_EXIT',
-                source: 'DAILY_PICKS'
-              });
-              if (exitResult.success) {
-                console.log(`${LOG} ${pick.symbol}: Emergency market exit placed — orderId=${exitResult.orderId}`);
-                await delay(3000);
-                try {
-                  const exitOrder = await kiteOrderService.getOrderDetails(exitResult.orderId);
-                  pick.trade.exit_price = exitOrder?.average_price || pick.trade.entry_price;
-                  pick.trade.exit_price_source = exitOrder?.average_price ? 'order_fill' : 'ltp_approximate';
-                } catch (_) {
-                  pick.trade.exit_price = pick.trade.entry_price;
-                  pick.trade.exit_price_source = 'ltp_approximate';
-                }
-              } else {
-                pick.trade.exit_price = pick.trade.entry_price;
-                pick.trade.exit_price_source = 'ltp_approximate';
-              }
-            } catch (exitErr) {
-              console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} emergency exit also failed:`, exitErr.message);
-              pick.trade.exit_price = pick.trade.entry_price;
-              pick.trade.exit_price_source = 'ltp_approximate';
-            }
-            pick.trade.status = 'STOPPED_OUT';
-            pick.trade.exit_time = new Date();
-            pick.trade.exit_reason = 'sl_placement_failed_emergency_exit';
-            calculatePnl(pick);
-            pick.kite.kite_status = 'completed';
-          } else {
-            // Target failed but SL is in place — acceptable, will exit at stop or 3 PM
-            console.error(`${LOG} ⚠️ ${pick.symbol}: Target placement failed — SL active, will rely on stop or 3 PM exit`);
-            pick.kite.kite_status = 'sl_target_placed'; // SL is the critical one
-          }
-        }
-
-        filled++;
-
-      } else if (status === 'CANCELLED' || status === 'REJECTED') {
-        pick.trade.status = 'SKIPPED';
-        pick.kite.kite_status = 'failed';
-        skipped++;
-        console.log(`${LOG} ${pick.symbol}: Entry ${status} — marking SKIPPED`);
-
-      } else {
-        // Still OPEN — not filled by 9:45 AM, cancel it
-        console.log(`${LOG} ${pick.symbol}: Entry not filled (status=${status}) — cancelling`);
-        if (!dryRun) {
-          try {
-            await kiteOrderService.cancelOrder(pick.kite.entry_order_id);
-          } catch (err) {
-            console.error(`${LOG} ${pick.symbol}: Cancel failed:`, err.message);
-          }
-        }
-        pick.trade.status = 'SKIPPED';
-        pick.kite.kite_status = 'failed';
-        skipped++;
-      }
+      console.log(`${LOG} ${pick.symbol}: Cancelling expired entry order ${pick.kite.entry_order_id}`);
+      await kiteOrderService.cancelOrder(pick.kite.entry_order_id);
     } catch (err) {
-      console.error(`${LOG} ${pick.symbol}: Fill check error —`, err.message);
-      pick.trade.status = 'SKIPPED';
-      pick.kite.kite_status = 'failed';
-      skipped++;
+      console.error(`${LOG} ${pick.symbol}: Cancel failed:`, err.message);
     }
+    pick.trade.status = 'SKIPPED';
+    pick.trade.exit_reason = 'setup_expired_1030';
+    pick.kite.kite_status = 'skipped';
+    cancelled++;
   }
 
   await doc.save();
-  console.log(`${LOG} Fill check: ${filled} filled, ${skipped} skipped`);
-
-  return { success: true, filled, skipped };
+  console.log(`${LOG} Cancelled ${cancelled} expired entries`);
+  return { success: true, cancelled };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ORDER MONITORING — Every 15 min (10:00 AM - 2:45 PM)
+// v2: ORDER MONITORING — Every 3 min (10:00 AM - 2:59 PM) + Trailing Stops
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Trailing stop config
+const TRAIL_MIN_PROFIT_PCT = 1.5; // Start trailing after 1.5% profit
+const TRAIL_LOCK_RATIO = 0.4;     // Lock 40% of profit as new stop
+const TRAIL_START_HOUR = 12;       // Only trail after 12:00 PM IST
+
 /**
- * Monitor entered picks for stop/target fills.
+ * Monitor entered picks for stop/target fills + trailing stops.
  * When one fills, cancel the counterpart order.
+ * After 12 PM, trail stops upward for profitable positions.
  */
 async function monitorDailyPickOrders(options = {}) {
   const { dryRun = false } = options;
@@ -1185,7 +1321,7 @@ async function monitorDailyPickOrders(options = {}) {
     return { success: true, message: 'No active positions' };
   }
 
-  console.log(`${LOG} Monitoring ${enteredPicks.length} ENTERED picks: ${enteredPicks.map(p => `${p.symbol}(entry=₹${p.trade.entry_price}, SL=${p.kite.stop_order_id || 'none'}, TGT=${p.kite.target_order_id || 'none'})`).join(', ')}`);
+  console.log(`${LOG} Monitoring ${enteredPicks.length} ENTERED picks`);
 
   let statusChanged = false;
 
@@ -1196,7 +1332,6 @@ async function monitorDailyPickOrders(options = {}) {
     }
 
     try {
-      console.log(`${LOG} [Monitor] ${pick.symbol}: checking SL order=${pick.kite.stop_order_id || 'none'}, TGT order=${pick.kite.target_order_id || 'none'}`);
       const [stopOrder, targetOrder] = await Promise.all([
         pick.kite.stop_order_id ? kiteOrderService.getOrderDetails(pick.kite.stop_order_id) : null,
         pick.kite.target_order_id ? kiteOrderService.getOrderDetails(pick.kite.target_order_id) : null
@@ -1204,15 +1339,11 @@ async function monitorDailyPickOrders(options = {}) {
 
       const stopStatus = stopOrder?.status?.toUpperCase();
       const targetStatus = targetOrder?.status?.toUpperCase();
-      console.log(`${LOG} [Monitor] ${pick.symbol}: SL status=${stopStatus || 'N/A'} (avg_price=${stopOrder?.average_price || 'N/A'}), TGT status=${targetStatus || 'N/A'} (avg_price=${targetOrder?.average_price || 'N/A'})`);
 
       if (stopStatus === 'COMPLETE' && targetStatus === 'COMPLETE') {
-        // Both filled — race condition: position is over-sold, place corrective order
-        console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} — BOTH stop and target filled (over-sold)!`);
+        // Both filled — race condition
+        console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} — BOTH stop and target filled!`);
 
-        // Place corrective order to neutralize the extra position
-        // If LONG: entry BUY X, stop SELL X, target SELL X → net SHORT X → need BUY X
-        // If SHORT: entry SELL X, stop BUY X, target BUY X → net LONG X → need SELL X
         const correctiveSide = pick.direction === 'LONG' ? 'BUY' : 'SELL';
         if (!dryRun) {
           try {
@@ -1228,19 +1359,16 @@ async function monitorDailyPickOrders(options = {}) {
               source: 'DAILY_PICKS'
             });
             if (correctiveResult.success) {
-              console.log(`${LOG} ✅ ${pick.symbol}: Corrective ${correctiveSide} placed — orderId=${correctiveResult.orderId}`);
-            } else {
-              console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} corrective order FAILED — manual fix needed!`);
+              console.log(`${LOG} ✅ ${pick.symbol}: Corrective ${correctiveSide} placed`);
             }
           } catch (corrErr) {
             console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} corrective order error:`, corrErr.message);
           }
 
-          // Send admin alert
           try {
             await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
               'CRITICAL: Both SL+Target Filled',
-              `${pick.symbol}: Both stop and target filled (over-sold). Corrective ${correctiveSide} order placed. Verify position.`,
+              `${pick.symbol}: Race condition. Corrective order placed.`,
               { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
             );
           } catch (_) { /* ignore */ }
@@ -1256,7 +1384,6 @@ async function monitorDailyPickOrders(options = {}) {
         statusChanged = true;
 
       } else if (stopStatus === 'COMPLETE') {
-        // Stop hit — cancel target
         console.log(`${LOG} ${pick.symbol}: STOP HIT @ ₹${stopOrder.average_price}`);
         if (!dryRun && pick.kite.target_order_id) {
           try { await kiteOrderService.cancelOrder(pick.kite.target_order_id); }
@@ -1270,10 +1397,9 @@ async function monitorDailyPickOrders(options = {}) {
         calculatePnl(pick);
         pick.kite.kite_status = 'completed';
         statusChanged = true;
-        console.log(`${LOG} ${pick.symbol}: Stopped out — PnL: ₹${pick.trade.pnl} (${pick.trade.return_pct}%)`);
+        console.log(`${LOG} ${pick.symbol}: PnL: ₹${pick.trade.pnl} (${pick.trade.return_pct}%)`);
 
       } else if (targetStatus === 'COMPLETE') {
-        // Target hit — cancel stop
         console.log(`${LOG} ${pick.symbol}: TARGET HIT @ ₹${targetOrder.average_price}`);
         if (!dryRun && pick.kite.stop_order_id) {
           try { await kiteOrderService.cancelOrder(pick.kite.stop_order_id); }
@@ -1287,13 +1413,68 @@ async function monitorDailyPickOrders(options = {}) {
         calculatePnl(pick);
         pick.kite.kite_status = 'completed';
         statusChanged = true;
-        console.log(`${LOG} ${pick.symbol}: Target hit — PnL: ₹${pick.trade.pnl} (${pick.trade.return_pct}%)`);
-
-      } else {
-        console.log(`${LOG} ${pick.symbol}: Both orders open (SL:${stopStatus}, TGT:${targetStatus}) — continuing to monitor`);
+        console.log(`${LOG} ${pick.symbol}: PnL: ₹${pick.trade.pnl} (${pick.trade.return_pct}%)`);
       }
     } catch (err) {
       console.error(`${LOG} ${pick.symbol}: Monitor error —`, err.message);
+    }
+  }
+
+  // Trailing stops — only after 12:00 PM IST, only for picks still ENTERED
+  const istHour = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
+  const stillEnteredPicks = doc.picks.filter(p => p.trade.status === 'ENTERED' && p.kite.stop_order_id);
+
+  if (istHour >= TRAIL_START_HOUR && stillEnteredPicks.length > 0 && !dryRun) {
+    console.log(`${LOG} [TRAILING] Checking trailing stops for ${stillEnteredPicks.length} positions (after 12 PM)`);
+
+    // Fetch fresh LTP via Kite API (NOT priceCacheService — 5-min cache too stale for SL decisions)
+    const symbols = stillEnteredPicks.map(p => `NSE:${p.symbol}`);
+    try {
+      const ltpData = await kiteOrderService.getLTP(symbols);
+
+      for (const pick of stillEnteredPicks) {
+        const currentPrice = ltpData[`NSE:${pick.symbol}`]?.last_price;
+        if (!currentPrice || !pick.trade.entry_price) continue;
+
+        const profitPct = ((currentPrice - pick.trade.entry_price) / pick.trade.entry_price) * 100 *
+          (pick.direction === 'LONG' ? 1 : -1);
+
+        if (profitPct >= TRAIL_MIN_PROFIT_PCT) {
+          const profitPerShare = Math.abs(currentPrice - pick.trade.entry_price);
+          const newStop = pick.direction === 'LONG'
+            ? round2(pick.trade.entry_price + profitPerShare * TRAIL_LOCK_RATIO)
+            : round2(pick.trade.entry_price - profitPerShare * TRAIL_LOCK_RATIO);
+
+          // Get current stop level
+          const currentStop = pick.levels.stop;
+          const shouldTrail = pick.direction === 'LONG' ? newStop > currentStop : newStop < currentStop;
+
+          if (shouldTrail) {
+            try {
+              await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
+                trigger_price: newStop
+              });
+
+              // Log trail history
+              if (!pick.trailing_history) pick.trailing_history = [];
+              pick.trailing_history.push({
+                timestamp: new Date(),
+                old_stop: currentStop,
+                new_stop: newStop,
+                price_at_trail: currentPrice
+              });
+              pick.levels.stop = newStop;
+              statusChanged = true;
+
+              console.log(`${LOG} [TRAILING] ${pick.symbol}: Stop trailed ₹${currentStop} → ₹${newStop} (price=₹${currentPrice}, profit=${round2(profitPct)}%)`);
+            } catch (err) {
+              console.error(`${LOG} [TRAILING] ${pick.symbol}: modifyOrder failed:`, err.message);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`${LOG} [TRAILING] LTP fetch failed:`, err.message);
     }
   }
 
@@ -1307,7 +1488,7 @@ async function monitorDailyPickOrders(options = {}) {
       try {
         await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
           'CRITICAL: Trade State Save Failed',
-          `Monitor detected status changes but doc.save() failed. Trade state may be inconsistent.`,
+          `Monitor detected status changes but doc.save() failed.`,
           { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
         );
       } catch (_) { /* ignore */ }
@@ -1316,9 +1497,95 @@ async function monitorDailyPickOrders(options = {}) {
 
   const stillEntered = enteredPicks.filter(p => p.trade.status === 'ENTERED').length;
   const exited = enteredPicks.length - stillEntered;
-  console.log(`${LOG} Monitor complete: ${stillEntered} still active, ${exited} exited this cycle, statusChanged=${statusChanged}`);
+  console.log(`${LOG} Monitor complete: ${stillEntered} active, ${exited} exited`);
 
   return { success: true, active: stillEntered };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v2: 2:00 PM STOP TIGHTENING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Tighten stops to breakeven for profitable positions at 2:00 PM.
+ * For positions in profit → move stop to entry price (breakeven).
+ * For positions at loss → keep original SL.
+ */
+async function tightenStops(options = {}) {
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} 2:00 PM stop tightening`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+
+  if (!isKiteIntegrationEnabled()) return { success: true, message: 'Kite not enabled' };
+
+  const doc = await DailyPick.findToday();
+  if (!doc) return { success: true, message: 'No picks today' };
+
+  const enteredPicks = doc.picks.filter(p => p.trade.status === 'ENTERED' && p.kite.stop_order_id);
+  if (enteredPicks.length === 0) {
+    console.log(`${LOG} No ENTERED picks with stops to tighten`);
+    return { success: true, tightened: 0 };
+  }
+
+  // Fetch fresh LTP via Kite API (NOT priceCacheService — 5-min cache too stale for SL decisions)
+  const symbols = enteredPicks.map(p => `NSE:${p.symbol}`);
+  let ltpData;
+  try {
+    ltpData = await kiteOrderService.getLTP(symbols);
+  } catch (err) {
+    console.error(`${LOG} LTP fetch failed for tightening:`, err.message);
+    return { success: false, error: err.message };
+  }
+
+  let tightened = 0;
+
+  for (const pick of enteredPicks) {
+    const currentPrice = ltpData[`NSE:${pick.symbol}`]?.last_price;
+    if (!currentPrice || !pick.trade.entry_price) continue;
+
+    const profitPct = ((currentPrice - pick.trade.entry_price) / pick.trade.entry_price) * 100 *
+      (pick.direction === 'LONG' ? 1 : -1);
+
+    if (profitPct > 0) {
+      // In profit → tighten to breakeven
+      const newStop = pick.trade.entry_price;
+      const currentStop = pick.levels.stop;
+      const shouldTighten = pick.direction === 'LONG' ? newStop > currentStop : newStop < currentStop;
+
+      if (shouldTighten) {
+        try {
+          await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
+            trigger_price: newStop
+          });
+
+          if (!pick.trailing_history) pick.trailing_history = [];
+          pick.trailing_history.push({
+            timestamp: new Date(),
+            old_stop: currentStop,
+            new_stop: newStop,
+            price_at_trail: currentPrice
+          });
+          pick.levels.stop = newStop;
+          tightened++;
+
+          console.log(`${LOG} ${pick.symbol}: Stop tightened to breakeven ₹${newStop} (was ₹${currentStop}, profit=${round2(profitPct)}%)`);
+        } catch (err) {
+          console.error(`${LOG} ${pick.symbol}: modifyOrder failed for tightening:`, err.message);
+        }
+      } else {
+        console.log(`${LOG} ${pick.symbol}: Stop already at/above breakeven (₹${currentStop} vs entry ₹${pick.trade.entry_price})`);
+      }
+    } else {
+      console.log(`${LOG} ${pick.symbol}: At loss (${round2(profitPct)}%) — keeping original SL ₹${pick.levels.stop}`);
+    }
+  }
+
+  if (tightened > 0) {
+    await doc.save();
+  }
+
+  console.log(`${LOG} Tightened ${tightened}/${enteredPicks.length} stops to breakeven`);
+  return { success: true, tightened };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1457,18 +1724,26 @@ async function logApiUsage(requestId, response, responseTime, success, context) 
 
 export {
   runDailyPicks,
-  placeEntryOrders,
-  checkFillsAndPlaceProtection,
+  startOrbCollection,
+  validateAndPlaceEntries,
+  checkFillsFallback,
+  cancelExpiredEntries,
+  initFillListener,
   monitorDailyPickOrders,
+  tightenStops,
   getMarketContext,
   detectCandlePattern
 };
 
 export default {
   runDailyPicks,
-  placeEntryOrders,
-  checkFillsAndPlaceProtection,
+  startOrbCollection,
+  validateAndPlaceEntries,
+  checkFillsFallback,
+  cancelExpiredEntries,
+  initFillListener,
   monitorDailyPickOrders,
+  tightenStops,
   getMarketContext,
   detectCandlePattern
 };

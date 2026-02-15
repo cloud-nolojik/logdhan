@@ -51,7 +51,7 @@ const pickSchema = new mongoose.Schema({
   trade: {
     status: {
       type: String,
-      enum: ['PENDING', 'ORDER_PLACED', 'ENTERED', 'TARGET_HIT', 'STOPPED_OUT', 'TIME_EXIT', 'SKIPPED', 'FAILED'],
+      enum: ['PENDING', 'COLLECTING_ORB', 'VALIDATED', 'ORDER_PLACED', 'ENTERED', 'TARGET_HIT', 'STOPPED_OUT', 'TIME_EXIT', 'SKIPPED', 'FAILED'],
       default: 'PENDING'
     },
     entry_price: Number,          // Actual fill price from Kite
@@ -75,10 +75,43 @@ const pickSchema = new mongoose.Schema({
     target_order_id: String,      // LIMIT SELL order ID (+2% target)
     kite_status: {
       type: String,
-      enum: ['pending', 'order_placed', 'entered', 'sl_target_placed', 'completed', 'failed'],
+      enum: ['pending', 'collecting_orb', 'validated', 'order_placed', 'entered', 'sl_target_placed', 'completed', 'failed', 'skipped'],
       default: 'pending'
     }
   },
+
+  // ORB (Opening Range Breakout) data — collected 9:15-9:30 AM
+  orb: {
+    high: Number,
+    low: Number,
+    opening_price: Number,
+    gap_percent: Number,
+    orb_direction: { type: String, enum: ['UP', 'DOWN', 'NEUTRAL'] },
+    nifty_orb_direction: { type: String, enum: ['UP', 'DOWN', 'NEUTRAL'] }
+  },
+
+  // Validation gate — checked at 9:30 AM before placing entry
+  validation: {
+    passed: Boolean,
+    checks: {
+      gap_check: { passed: Boolean, value: Number },
+      orb_alignment: { passed: Boolean, scan_bias: String, orb_dir: String },
+      nifty_alignment: { passed: Boolean, nifty_dir: String },
+      entry_still_valid: { passed: Boolean, distance_percent: Number },
+      volume_check: { passed: Boolean, ratio: Number }
+    },
+    skip_reason: String,
+    levels_recalculated: Boolean,
+    original_levels: { entry: Number, stop: Number, target: Number }
+  },
+
+  // Trailing stop history — log of each SL modification
+  trailing_history: [{
+    timestamp: Date,
+    old_stop: Number,
+    new_stop: Number,
+    price_at_trail: Number
+  }],
 
   // AI insight (optional, generated for top 3 picks)
   ai_insight: { type: String, default: null },

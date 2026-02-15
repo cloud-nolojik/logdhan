@@ -22,7 +22,7 @@ const JOB_REGISTRY = [
   { key: 'dailyTracking', name: 'daily-tracking', description: 'Phase 1 status + Phase 2 AI', schedule: '4:00 PM Mon-Fri', collection: 'daily_tracking_jobs', singleton: dailyTrackingJob },
   { key: 'kiteOrderSync', name: 'kite-order-sync', description: 'GTT fill detection + OCO', schedule: '*/30 9:00-15:30 Mon-Fri', collection: 'kite_order_sync_jobs', singleton: kiteOrderSyncJob },
   { key: 'dailyPicksScan', name: 'daily-picks-scan', description: 'Scan + enrich + score picks', schedule: '9:09 AM Mon-Fri', collection: 'daily_picks_jobs', singleton: dailyPicksJob },
-  { key: 'dailyEntry', name: 'daily-picks-entry', description: 'MIS orders + fill check + monitor', schedule: '9:15/9:45/*/15 Mon-Fri', collection: 'daily_entry_jobs', singleton: dailyEntryJob },
+  { key: 'dailyEntry', name: 'daily-picks-entry', description: 'ORB validate + entry + trailing + tighten', schedule: '9:15/9:30/*/3/14:00 Mon-Fri', collection: 'daily_entry_jobs', singleton: dailyEntryJob },
   { key: 'dailyExit', name: 'daily-exit', description: 'Force-exit open positions', schedule: '3:00 PM Mon-Fri', collection: null, singleton: dailyExitJob }, // node-cron — no MongoDB collection (was Agenda 'daily_exit_jobs', switched after missed 3 PM exit on Feb 10)
   { key: 'kiteTokenRefresh', name: 'kite-token-refresh', description: 'Refresh Kite access token', schedule: '6:00 AM Daily', collection: 'kite_token_jobs', singleton: kiteTokenRefreshJob },
   { key: 'priceCache', name: 'price-cache', description: 'In-memory price polling (5 min)', schedule: '*/5 during market hours', collection: null, singleton: priceCacheService },

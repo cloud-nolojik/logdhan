@@ -60,6 +60,9 @@ const kiteConfig = {
     // GTT
     GTT_TRIGGERS: '/gtt/triggers',
 
+    // Quotes
+    QUOTE_LTP: '/quote/ltp',
+
     // Portfolio
     HOLDINGS: '/portfolio/holdings',
     POSITIONS: '/portfolio/positions',

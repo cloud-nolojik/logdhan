@@ -32,7 +32,8 @@ import weekendScreeningJob from './services/weeklyPicks/weekendScreeningJob.js';
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
 import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-picks-scan (8:45 AM Mon-Fri)
-import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // daily-picks-entry (9:15 AM), fill-check (9:45 AM), monitor (*/15 10-14)
+import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // v2: ORB 9:15, validate+entry 9:30, monitor */3, tighten 14:00
+import { initFillListener } from './services/dailyPicks/dailyPicksService.js'; // Postback → instant SL+target
 import dailyExitJob from './services/jobs/dailyExitJob.js'; // daily-exit (3:00 PM Mon-Fri)
 
 import authRoutes from './routes/auth.js';
@@ -205,6 +206,7 @@ app.use('/api/v1/usage', apiUsageRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/app-feedback', appFeedbackRoutes);
 app.use('/api/kite/auth', kiteAuthRoutes);
+app.use('/api/kite/orders', kiteAuthRoutes); // Zerodha postback URL: /api/kite/orders/postback
 app.use('/api/admin/kite', kiteAdminRoutes);
 app.use('/api/v1/daily-picks', dailyPicksRoutes);
 app.use('/api/v1/job-monitor', jobMonitorRoutes);
@@ -306,10 +308,11 @@ async function initializeDailyPicksJob() {
   }
 }
 
-// Initialize daily entry job (9:15 AM entry, 9:45 AM fill-check, */15 10-14 monitor)
+// Initialize daily entry job (v2: ORB 9:15, validate+entry 9:30, monitor */3, tighten 14:00)
 async function initializeDailyEntryJob() {
   try {
     await dailyEntryJob.initialize();
+    initFillListener(); // Start listening for postback fills → instant SL+target
   } catch (error) {
     console.error('Failed to initialize daily entry job:', error);
   }

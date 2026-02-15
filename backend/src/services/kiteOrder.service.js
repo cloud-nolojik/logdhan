@@ -439,6 +439,94 @@ class KiteOrderService {
   }
 
   /**
+   * Modify a regular order (e.g. trailing stop — update trigger_price)
+   * Kite API: PUT /orders/regular/{orderId}
+   *
+   * @param {string} orderId — Kite order ID to modify
+   * @param {Object} params — Fields to update: { order_type, quantity, price, trigger_price, validity }
+   */
+  async modifyOrder(orderId, params = {}) {
+    const startTime = Date.now();
+
+    try {
+      console.log(`[KITE ORDER] Modifying order ${orderId}:`, params);
+
+      const response = await this.kiteService.makeRequest(
+        'PUT',
+        `${kiteConfig.ENDPOINTS.REGULAR_ORDER}/${orderId}`,
+        params
+      );
+
+      const durationMs = Date.now() - startTime;
+
+      // Update order record in DB
+      const updateFields = { modified_at: new Date() };
+      if (params.trigger_price) updateFields.trigger_price = params.trigger_price;
+      if (params.price) updateFields.price = params.price;
+      if (params.quantity) updateFields.quantity = params.quantity;
+
+      await KiteOrder.findOneAndUpdate(
+        { order_id: orderId },
+        updateFields
+      );
+
+      // Log to audit
+      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_MODIFIED, {
+        orderId,
+        modifications: params,
+        status: 'SUCCESS',
+        response,
+        durationMs,
+        source: params.source || 'AUTO'
+      });
+
+      console.log(`[KITE ORDER] Order modified successfully: ${orderId}`);
+
+      return { success: true, orderId, response };
+
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+
+      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_MODIFIED, {
+        orderId,
+        modifications: params,
+        status: 'FAILED',
+        error: error.message,
+        durationMs,
+        source: params.source || 'AUTO'
+      });
+
+      console.error(`[KITE ORDER] Order modification failed for ${orderId}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get LTP (Last Traded Price) for one or more instruments.
+   * Kite API: GET /quote/ltp?i=NSE:SYMBOL1&i=NSE:SYMBOL2
+   *
+   * @param {string[]} instruments — Array of "EXCHANGE:SYMBOL" strings (e.g. ["NSE:RELIANCE", "NSE:TCS"])
+   * @returns {Object} — { "NSE:RELIANCE": { instrument_token, last_price }, ... }
+   */
+  async getLTP(instruments) {
+    try {
+      // Kite expects repeated 'i' query params: ?i=NSE:SYM1&i=NSE:SYM2
+      // Build query string manually since axios default serializes arrays with brackets
+      const queryString = instruments.map(i => `i=${encodeURIComponent(i)}`).join('&');
+      const response = await this.kiteService.makeRequest(
+        'GET',
+        `${kiteConfig.ENDPOINTS.QUOTE_LTP}?${queryString}`
+      );
+
+      return response.data || {};
+
+    } catch (error) {
+      console.error('[KITE ORDER] LTP fetch failed:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get order details from Kite
    */
   async getOrderDetails(orderId) {

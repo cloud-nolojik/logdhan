@@ -149,7 +149,7 @@ async function runDailyExit(options = {}) {
           order_type: 'MARKET',
           product: 'MIS',
           quantity: pick.trade.qty,
-          simulation_id: `daily_pick_exit_${pick.symbol}`,
+          simulationId: `daily_pick_exit_${pick.symbol}`,
           orderType: 'TIME_EXIT',
           source: 'DAILY_PICKS'
         });
@@ -173,7 +173,7 @@ async function runDailyExit(options = {}) {
             order_type: 'MARKET',
             product: 'MIS',
             quantity: pick.trade.qty,
-            simulation_id: `daily_pick_exit_retry_${pick.symbol}`,
+            simulationId: `daily_pick_exit_retry_${pick.symbol}`,
             orderType: 'TIME_EXIT',
             source: 'DAILY_PICKS'
           });
