@@ -386,11 +386,16 @@ router.post('/postback', async (req, res) => {
       // Emit event for listeners (daily picks fill listener, etc.)
       const status = postback.status?.toUpperCase();
       if (status === 'COMPLETE') {
+        console.log(`[KITE POSTBACK] Emitting order:complete for ${postback.tradingsymbol} orderId=${postback.order_id} avg_price=${postback.average_price}`);
         kiteOrderEvents.emit('order:complete', postback);
       } else if (status === 'REJECTED') {
+        console.log(`[KITE POSTBACK] Emitting order:rejected for ${postback.tradingsymbol} orderId=${postback.order_id} reason=${postback.status_message}`);
         kiteOrderEvents.emit('order:rejected', postback);
       } else if (status === 'CANCELLED') {
+        console.log(`[KITE POSTBACK] Emitting order:cancelled for ${postback.tradingsymbol} orderId=${postback.order_id}`);
         kiteOrderEvents.emit('order:cancelled', postback);
+      } else {
+        console.log(`[KITE POSTBACK] Non-terminal status=${status} for ${postback.tradingsymbol} orderId=${postback.order_id} — no event emitted`);
       }
     }
   } catch (error) {

@@ -25,6 +25,7 @@ class KiteOrderService {
    */
   async getAvailableBalance() {
     try {
+      console.log('[KITE ORDER] Fetching available balance...');
       const margins = await this.kiteService.getMargins();
       const equity = margins.data?.equity || {};
 
@@ -34,6 +35,8 @@ class KiteOrderService {
       const availableCash = equity.available?.cash || 0;
       const leveragedMargin = availableMargin * (kiteConfig.MIS_LEVERAGE_FACTOR || 1);
       const usableAmount = leveragedMargin * kiteConfig.CAPITAL_USAGE_PERCENT;
+
+      console.log(`[KITE ORDER] Balance: net=₹${availableMargin} cash=₹${availableCash} leveraged=₹${leveragedMargin} (${kiteConfig.MIS_LEVERAGE_FACTOR}x) usable=₹${usableAmount} (${kiteConfig.CAPITAL_USAGE_PERCENT * 100}%) utilised=₹${equity.utilised?.debits || 0}`);
 
       await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.BALANCE_CHECK, {
         status: 'SUCCESS',
@@ -48,6 +51,7 @@ class KiteOrderService {
         used: equity.utilised?.debits || 0
       };
     } catch (error) {
+      console.error('[KITE ORDER] Balance fetch failed:', error.message);
       await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.BALANCE_CHECK, {
         status: 'FAILED',
         error: error.message,
@@ -514,6 +518,7 @@ class KiteOrderService {
    */
   async getLTP(instruments) {
     try {
+      console.log(`[KITE ORDER] Fetching LTP for ${instruments.length} instruments: ${instruments.join(', ')}`);
       // Kite expects repeated 'i' query params: ?i=NSE:SYM1&i=NSE:SYM2
       // Build query string manually since axios default serializes arrays with brackets
       const queryString = instruments.map(i => `i=${encodeURIComponent(i)}`).join('&');
@@ -522,7 +527,11 @@ class KiteOrderService {
         `${kiteConfig.ENDPOINTS.QUOTE_LTP}?${queryString}`
       );
 
-      return response.data || {};
+      const data = response.data || {};
+      const prices = Object.entries(data).map(([k, v]) => `${k}=${v.last_price}`).join(', ');
+      console.log(`[KITE ORDER] LTP response: ${prices || 'empty'}`);
+
+      return data;
 
     } catch (error) {
       console.error('[KITE ORDER] LTP fetch failed:', error.message);
@@ -534,8 +543,15 @@ class KiteOrderService {
    * Get order details from Kite
    */
   async getOrderDetails(orderId) {
+    console.log(`[KITE ORDER] Fetching order details for orderId=${orderId}`);
     const orders = await this.kiteService.getOrders();
-    return orders.data?.find(o => o.order_id === orderId);
+    const order = orders.data?.find(o => o.order_id === orderId);
+    if (order) {
+      console.log(`[KITE ORDER] Order ${orderId}: status=${order.status} symbol=${order.tradingsymbol} avg_price=${order.average_price} filled_qty=${order.filled_quantity}`);
+    } else {
+      console.log(`[KITE ORDER] Order ${orderId}: NOT FOUND in ${orders.data?.length || 0} orders`);
+    }
+    return order;
   }
 
   /**

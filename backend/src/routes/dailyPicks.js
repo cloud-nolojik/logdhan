@@ -12,7 +12,7 @@ import express from 'express';
 import { auth, adminAuth } from '../middleware/auth.js';
 import DailyPick from '../models/dailyPick.js';
 import { SCAN_LABELS } from '../services/dailyPicks/dailyPicksScans.js';
-import { runDailyPicks, placeEntryOrders } from '../services/dailyPicks/dailyPicksService.js';
+import { runDailyPicks, validateAndPlaceEntries } from '../services/dailyPicks/dailyPicksService.js';
 import { runDailyExit } from '../services/dailyPicks/dailyPicksExitService.js';
 import priceCacheService from '../services/priceCache.service.js';
 import { getIstDayRange } from '../utils/tradingDay.js';
@@ -193,7 +193,7 @@ router.post('/trigger-entry', adminAuth, async (req, res) => {
     const { dryRun = false } = req.body;
     console.log(`[DAILY-PICKS-API] Manual entry trigger (dryRun=${dryRun})`);
 
-    const result = await placeEntryOrders({ dryRun });
+    const result = await validateAndPlaceEntries({ dryRun });
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('[DAILY-PICKS-API] Trigger entry error:', error.message);

@@ -48,11 +48,15 @@ async function runDailyExit(options = {}) {
     return { success: true, message: 'No open positions', exited: 0 };
   }
 
-  console.log(`${LOG} ${enteredPicks.length} open position(s) to exit`);
+  console.log(`${LOG} ${enteredPicks.length} open position(s) to exit:`);
+  for (const pick of enteredPicks) {
+    console.log(`${LOG}   ${pick.symbol}: entry=₹${pick.trade.entry_price} qty=${pick.trade.qty} stop=₹${pick.levels.stop} target=₹${pick.levels.target} SL_id=${pick.kite.stop_order_id || 'none'} TGT_id=${pick.kite.target_order_id || 'none'}`);
+  }
   let exited = 0;
 
   for (const pick of enteredPicks) {
     try {
+      console.log(`${LOG} --- Processing ${pick.symbol} ---`);
       // Step 2: Check if protective orders already triggered
       let alreadyExited = false;
 
@@ -247,10 +251,19 @@ async function runDailyExit(options = {}) {
   }
 
   // Step 7: Update daily results and save
+  console.log(`${LOG} [Step 7] Updating daily results and saving...`);
   updateDailyResults(doc);
   await doc.save();
 
+  if (doc.results) {
+    console.log(`${LOG} [Step 7] Results: total_pnl=₹${doc.results.total_pnl} winners=${doc.results.winners} losers=${doc.results.losers} avg_return=${doc.results.avg_return_pct}%`);
+    for (const pick of doc.picks.filter(p => ['TARGET_HIT', 'STOPPED_OUT', 'TIME_EXIT'].includes(p.trade.status))) {
+      console.log(`${LOG}   ${pick.symbol}: ${pick.trade.status} entry=₹${pick.trade.entry_price} exit=₹${pick.trade.exit_price} pnl=₹${pick.trade.pnl} (${pick.trade.return_pct}%)`);
+    }
+  }
+
   // Step 8: Send notification
+  console.log(`${LOG} [Step 8] Sending exit notification...`);
   await sendExitNotification(doc);
 
   console.log(`${LOG} ✅ Exit complete — ${exited} positions closed`);

@@ -55,21 +55,31 @@ async function collectOpeningRange(symbols, picks) {
   const startTime = Date.now();
   let pollCount = 0;
 
+  console.log(`${LOG} Instruments to poll: ${instruments.join(', ')}`);
+  console.log(`${LOG} Poll interval: ${POLL_INTERVAL_MS}ms, Duration: ${COLLECTION_DURATION_MS / 1000}s`);
+
   while (Date.now() - startTime < COLLECTION_DURATION_MS) {
     try {
       const ltpData = await kiteOrderService.getLTP(instruments);
       pollCount++;
 
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const prices = [];
+
       for (const sym of symbols) {
         const key = `NSE:${sym}`;
         const ltp = ltpData[key]?.last_price;
-        if (!ltp) continue;
+        if (!ltp) {
+          prices.push(`${sym}=N/A`);
+          continue;
+        }
 
         const d = orbData[sym];
         if (d.opening_price === null) d.opening_price = ltp;
         if (ltp > d.high) d.high = ltp;
         if (ltp < d.low) d.low = ltp;
         d.last_price = ltp;
+        prices.push(`${sym}=${ltp}`);
       }
 
       // Track NIFTY
@@ -80,6 +90,12 @@ async function collectOpeningRange(symbols, picks) {
         if (niftyLtp > nd.high) nd.high = niftyLtp;
         if (niftyLtp < nd.low) nd.low = niftyLtp;
         nd.last_price = niftyLtp;
+        prices.push(`NIFTY=${niftyLtp}`);
+      }
+
+      // Log every 5th poll to avoid spam, plus first and last
+      if (pollCount === 1 || pollCount % 5 === 0 || Date.now() - startTime + POLL_INTERVAL_MS >= COLLECTION_DURATION_MS) {
+        console.log(`${LOG} Poll #${pollCount} (${elapsed}s): ${prices.join(', ')}`);
       }
 
     } catch (err) {
@@ -94,7 +110,8 @@ async function collectOpeningRange(symbols, picks) {
     }
   }
 
-  console.log(`${LOG} ORB collection done — ${pollCount} polls completed`);
+  const totalDuration = Math.round((Date.now() - startTime) / 1000);
+  console.log(`${LOG} ORB collection done — ${pollCount} polls in ${totalDuration}s`);
 
   // Calculate derived fields
   const result = {};
@@ -279,7 +296,8 @@ function validatePicks(picks, orbData) {
       original_levels: originalLevels
     };
 
-    console.log(`${LOG} ${pick.symbol}: ${finalPassed ? 'PASSED' : 'FAILED'} — ${skipReason || 'all checks passed'}`);
+    console.log(`${LOG} ${pick.symbol}: ${finalPassed ? 'PASSED' : 'FAILED'} — gap=${checks.gap_check.passed ? 'OK' : 'FAIL'}(${orb.gap_percent}%) orb=${checks.orb_alignment.passed ? 'OK' : 'FAIL'}(${orb.orb_direction}) nifty=${checks.nifty_alignment.passed ? 'OK' : 'FAIL'}(${niftyDir}) entry=${checks.entry_still_valid.passed ? 'OK' : 'FAIL'}(${distPct}%) vol=AUTO${levelsRecalculated ? ' [RECALCULATED]' : ''}`);
+    if (!finalPassed) console.log(`${LOG} ${pick.symbol}: skip_reason=${skipReason}`);
   }
 
   return picks;

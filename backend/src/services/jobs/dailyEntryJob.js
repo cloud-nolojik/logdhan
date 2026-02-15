@@ -1,15 +1,15 @@
 /**
  * Daily Entry Job — v2: ORB Validation + Instant Protection + Trailing
  *
- * Five scheduled runs (Mon-Fri IST):
- * 1. 9:15 AM  — Start ORB collection (poll LTP for 15 min)
- * 2. 9:30 AM  — Validate picks against ORB, place entries for validated picks
- * 3. 10:30 AM — Cancel unfilled entry orders (setup expired)
- * 4. */3 10-14 — Monitor stop/target fills + trailing stops (every 3 min)
- * 5. 14:00     — Tighten stops to breakeven for profitable positions
+ * Six scheduled runs (Mon-Fri IST):
+ * 1. 9:15 AM    — Start ORB collection (poll LTP for 15 min)
+ * 2. 9:30 AM    — Validate picks against ORB, place entries for validated picks
+ * 3. 10:30 AM   — Cancel unfilled entry orders (setup expired)
+ * 4. Every 3 min (10-14) — Monitor stop/target fills + trailing stops
+ * 5. 14:00      — Tighten stops to breakeven for profitable positions
  *
  * Polling fallback for fill detection:
- * - */2 9-10 — Check fills for ORDER_PLACED picks (postback handles most, this is backup)
+ * - Every 2 min (9-10) — Check fills for ORDER_PLACED picks (postback handles most, this is backup)
  *
  * Manual triggers available for each step via API.
  */
@@ -93,10 +93,12 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
+        console.log(`${LOG} [ORB-COLLECT] Calling startOrbCollection()...`);
         const result = await startOrbCollection();
         this.stats.orbCollections++;
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
+        console.log(`${LOG} [ORB-COLLECT] Completed:`, JSON.stringify(result));
         return result;
       } catch (error) {
         console.error(`${LOG} ORB collection failed:`, error);
@@ -122,10 +124,12 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
+        console.log(`${LOG} [VALIDATE-ENTRY] Calling validateAndPlaceEntries()...`);
         const result = await validateAndPlaceEntries();
         this.stats.entriesValidated++;
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
+        console.log(`${LOG} [VALIDATE-ENTRY] Completed: validated=${result.validated} skipped=${result.skipped} orders=${result.orders}`);
         return result;
       } catch (error) {
         console.error(`${LOG} Validate+entry failed:`, error);
@@ -151,9 +155,11 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
+        console.log(`${LOG} [CANCEL-EXPIRED] Calling cancelExpiredEntries()...`);
         const result = await cancelExpiredEntries();
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
+        console.log(`${LOG} [CANCEL-EXPIRED] Completed: cancelled=${result.cancelled}`);
         return result;
       } catch (error) {
         console.error(`${LOG} Cancel-expired failed:`, error);
@@ -176,9 +182,11 @@ class DailyEntryJob {
         const isTradingDay = await MarketHoursUtil.isTradingDay();
         if (!isTradingDay) return { skipped: true, reason: 'not_trading_day' };
 
+        console.log(`${LOG} [FILL-FALLBACK] Calling checkFillsFallback()...`);
         const result = await checkFillsFallback();
         this.stats.fillsChecked++;
         this.stats.lastRunAt = new Date();
+        console.log(`${LOG} [FILL-FALLBACK] Completed: filled=${result.filled ?? result.message}`);
         return result;
       } catch (error) {
         console.error(`${LOG} Fill fallback failed:`, error);
@@ -204,9 +212,11 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
+        console.log(`${LOG} [MONITOR] Calling monitorDailyPickOrders()...`);
         const result = await monitorDailyPickOrders();
         this.stats.monitorRuns++;
         this.stats.lastRunAt = new Date();
+        console.log(`${LOG} [MONITOR] Completed: active=${result.active ?? result.message}`);
         return result;
       } catch (error) {
         console.error(`${LOG} Monitor failed:`, error);
@@ -232,10 +242,12 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
+        console.log(`${LOG} [TIGHTEN] Calling tightenStops()...`);
         const result = await tightenStops();
         this.stats.tightenRuns++;
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
+        console.log(`${LOG} [TIGHTEN] Completed: tightened=${result.tightened ?? result.message}`);
         return result;
       } catch (error) {
         console.error(`${LOG} Tighten failed:`, error);

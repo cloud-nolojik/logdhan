@@ -954,6 +954,13 @@ async function validateAndPlaceEntries(options = {}) {
     capital: Math.floor(balance.usable * (rawWeights[i] / weightSum))
   }));
 
+  console.log(`${LOG} Capital allocation: totalScore=${totalScore} usable=₹${balance.usable}`);
+  for (const { pick, capital } of allocations) {
+    const cappedAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
+    const estQty = Math.floor(cappedAmount / pick.levels.entry);
+    console.log(`${LOG}   ${pick.symbol}: weight=${round2(rawWeights[validatedPicks.indexOf(pick)] / weightSum * 100)}% capital=₹${capital} capped=₹${cappedAmount} estQty=${estQty} entry=₹${pick.levels.entry}`);
+  }
+
   let ordersPlaced = 0;
 
   for (const { pick, capital } of allocations) {
@@ -1182,20 +1189,29 @@ function initFillListener() {
 
   kiteOrderEvents.on('order:complete', async (postback) => {
     try {
+      console.log(`${LOG} [FILL-LISTENER] Received order:complete — orderId=${postback.order_id} symbol=${postback.tradingsymbol} avg_price=${postback.average_price}`);
+
       const doc = await DailyPick.findToday();
-      if (!doc) return;
+      if (!doc) {
+        console.log(`${LOG} [FILL-LISTENER] No DailyPick doc today — ignoring postback`);
+        return;
+      }
 
       const pick = doc.picks.find(p =>
         p.kite.entry_order_id === postback.order_id &&
         p.trade.status === 'ORDER_PLACED' &&
         p.kite.kite_status !== 'sl_target_placed'
       );
-      if (!pick) return; // Not a daily pick entry, or already handled
+      if (!pick) {
+        console.log(`${LOG} [FILL-LISTENER] orderId=${postback.order_id} not matched to any ORDER_PLACED daily pick — ignoring (may be swing/manual order)`);
+        return;
+      }
 
-      console.log(`${LOG} [FILL-LISTENER] ${pick.symbol}: Entry fill detected via postback — orderId=${postback.order_id} price=₹${postback.average_price}`);
+      console.log(`${LOG} [FILL-LISTENER] ${pick.symbol}: Entry fill detected via postback — orderId=${postback.order_id} price=₹${postback.average_price} qty=${postback.filled_quantity}`);
       await placeSLAndTarget(pick, doc, parseFloat(postback.average_price));
+      console.log(`${LOG} [FILL-LISTENER] ${pick.symbol}: SL+target placement complete — kite_status=${pick.kite.kite_status}`);
     } catch (err) {
-      console.error(`${LOG} [FILL-LISTENER] Error processing fill:`, err.message);
+      console.error(`${LOG} [FILL-LISTENER] Error processing fill:`, err.message, err.stack);
     }
   });
 
@@ -1228,18 +1244,27 @@ async function checkFillsFallback(options = {}) {
 
   for (const pick of orderPlacedPicks) {
     try {
+      console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Checking entry order ${pick.kite.entry_order_id}...`);
       const order = await kiteOrderService.getOrderDetails(pick.kite.entry_order_id);
-      if (!order) continue;
+      if (!order) {
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order not found — skipping`);
+        continue;
+      }
 
       const status = order.status?.toUpperCase();
+      console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order status=${status} avg_price=${order.average_price} filled_qty=${order.filled_quantity}`);
+
       if (status === 'COMPLETE') {
-        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Fill detected via polling — placing SL+target`);
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Fill detected via polling @ ₹${order.average_price} — placing SL+target`);
         await placeSLAndTarget(pick, doc, order.average_price || pick.levels.entry);
         filled++;
       } else if (status === 'CANCELLED' || status === 'REJECTED') {
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order ${status} — marking as SKIPPED`);
         pick.trade.status = 'SKIPPED';
         pick.kite.kite_status = 'skipped';
         await doc.save();
+      } else {
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Still pending (status=${status}) — will check next poll`);
       }
     } catch (err) {
       console.error(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Error —`, err.message);
@@ -1332,6 +1357,8 @@ async function monitorDailyPickOrders(options = {}) {
     }
 
     try {
+      console.log(`${LOG} ${pick.symbol}: Checking SL=${pick.kite.stop_order_id || 'none'} TGT=${pick.kite.target_order_id || 'none'} (entry=₹${pick.trade.entry_price} stop=₹${pick.levels.stop} target=₹${pick.levels.target})`);
+
       const [stopOrder, targetOrder] = await Promise.all([
         pick.kite.stop_order_id ? kiteOrderService.getOrderDetails(pick.kite.stop_order_id) : null,
         pick.kite.target_order_id ? kiteOrderService.getOrderDetails(pick.kite.target_order_id) : null
@@ -1339,6 +1366,7 @@ async function monitorDailyPickOrders(options = {}) {
 
       const stopStatus = stopOrder?.status?.toUpperCase();
       const targetStatus = targetOrder?.status?.toUpperCase();
+      console.log(`${LOG} ${pick.symbol}: SL status=${stopStatus || 'N/A'} TGT status=${targetStatus || 'N/A'}`);
 
       if (stopStatus === 'COMPLETE' && targetStatus === 'COMPLETE') {
         // Both filled — race condition
