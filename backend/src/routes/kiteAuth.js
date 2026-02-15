@@ -341,4 +341,54 @@ router.post('/test-login', simpleAdminAuth, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/kite/auth/postback
+ * Kite Connect order postback handler.
+ * Kite sends order status updates here as application/x-www-form-urlencoded.
+ * Postback URL must be configured in the Kite Connect developer console.
+ *
+ * Kite postback fields:
+ *   order_id, exchange_order_id, placed_by, status, status_message,
+ *   tradingsymbol, exchange, order_type, transaction_type, validity,
+ *   product, quantity, price, trigger_price, average_price,
+ *   filled_quantity, pending_quantity, cancelled_quantity,
+ *   tag, guid, checksum
+ */
+router.post('/postback', async (req, res) => {
+  try {
+    const postback = req.body;
+
+    console.log(`[KITE POSTBACK] Received: order_id=${postback.order_id} symbol=${postback.tradingsymbol} status=${postback.status} avg_price=${postback.average_price} filled_qty=${postback.filled_quantity} type=${postback.order_type} txn=${postback.transaction_type} tag=${postback.tag || 'none'}`);
+    console.log(`[KITE POSTBACK] Full body: ${JSON.stringify(postback)}`);
+
+    // Acknowledge immediately (Kite expects 200 within 5 seconds)
+    res.status(200).json({ received: true });
+
+    // Log to audit trail for visibility
+    if (postback.order_id) {
+      await KiteAuditLog.logAction('ORDER_POSTBACK', {
+        orderId: postback.order_id,
+        symbol: postback.tradingsymbol,
+        exchange: postback.exchange,
+        status: postback.status,
+        statusMessage: postback.status_message,
+        averagePrice: postback.average_price,
+        filledQuantity: postback.filled_quantity,
+        pendingQuantity: postback.pending_quantity,
+        orderType: postback.order_type,
+        transactionType: postback.transaction_type,
+        product: postback.product,
+        tag: postback.tag,
+        source: 'KITE_POSTBACK'
+      });
+    }
+  } catch (error) {
+    console.error('[KITE POSTBACK] Error processing postback:', error.message);
+    // Always return 200 to prevent Kite from retrying
+    if (!res.headersSent) {
+      res.status(200).json({ received: true, error: true });
+    }
+  }
+});
+
 export default router;

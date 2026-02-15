@@ -497,7 +497,7 @@ function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
         ? `Needs daily CLOSE above ₹${entryZoneLow.toFixed(2)}`
         : 'Waiting for close-based confirmation';
     } else if (entryConfirmation === 'touch_bounce') {
-      entryZoneText = `Needs price to touch ₹${entry.toFixed(2)} and close above (touch + bounce)`;
+      entryZoneText = `Needs price to touch ₹${entryZoneLow.toFixed(2)} and close above (touch + bounce)`;
     } else {
       // touch or limit entry
       entryZoneText = entryZoneLow && entryZoneHigh

@@ -39,7 +39,12 @@ const pickSchema = new mongoose.Schema({
     target: Number,               // Entry * 1.02 (recalculated from actual fill)
     risk_pct: Number,             // Distance to stop %
     reward_pct: Number,           // Always 2%
-    risk_reward: Number           // reward / risk
+    risk_reward: Number,          // reward / risk
+    mode: String,                 // scanLevels mode (e.g. 'structural', 'atr_fallback')
+    reason: String,               // scanLevels reason
+    entry_type: String,           // 'buy_above', 'sell_below', or 'limit'
+    target1: Number,              // Conservative target
+    target3: Number               // Aggressive target
   },
 
   // Trade execution

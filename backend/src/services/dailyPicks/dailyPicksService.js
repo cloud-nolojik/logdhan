@@ -687,10 +687,28 @@ Generate 1-2 sentence insights for each pick.`
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function saveToDB(marketContext, picks, scanResult) {
-  const today = getISTMidnight();
+  // Determine scan_date and trading_date based on when we're running:
+  // - 8:45 AM scheduled run: scan_date = yesterday, trading_date = today
+  // - Manual evening run:    scan_date = today,     trading_date = next trading day
+  const now = new Date();
+  const istHour = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
+  const todayMidnight = getISTMidnight();
 
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
+  let scanDate, tradingDate;
+  if (istHour < 15) {
+    // Before market close (scheduled 8:45 AM run or manual pre-market)
+    // ChartInk "latest" = yesterday's candle, we trade today
+    scanDate = new Date(todayMidnight);
+    scanDate.setDate(scanDate.getDate() - 1);
+    tradingDate = todayMidnight;
+  } else {
+    // After market close (manual evening run)
+    // ChartInk "latest" = today's completed candle, we trade next trading day
+    scanDate = todayMidnight;
+    tradingDate = await MarketHoursUtil.getNextTradingDay(todayMidnight);
+  }
+
+  console.log(`${LOG} [Step 7] Run at ${istHour}:xx IST → scanDate=${scanDate.toISOString()} tradingDate=${tradingDate.toISOString()}`);
 
   const pickDocs = picks.map(p => ({
     symbol: p.symbol,
@@ -709,11 +727,11 @@ async function saveToDB(marketContext, picks, scanResult) {
 
   // Upsert: one document per trading day
   const doc = await DailyPick.findOneAndUpdate(
-    { trading_date: today },
+    { trading_date: tradingDate },
     {
       $set: {
-        trading_date: today,
-        scan_date: yesterday,
+        trading_date: tradingDate,
+        scan_date: scanDate,
         market_context: marketContext,
         picks: pickDocs,
         summary: {
@@ -884,7 +902,7 @@ async function placeEntryOrders(options = {}) {
         product: 'MIS',
         quantity: qty,
         price: limitPrice,
-        simulation_id: `daily_pick_${pick.symbol}`,
+        simulationId: `daily_pick_${pick.symbol}`,
         orderType: 'ENTRY',
         source: 'DAILY_PICKS'
       };
@@ -896,6 +914,7 @@ async function placeEntryOrders(options = {}) {
 
       console.log(`${LOG} [Order] ${pick.symbol}: placing order — ${JSON.stringify(orderParams)}`);
       const result = await kiteOrderService.placeOrder(orderParams);
+      console.log(`${LOG} [Order] ${pick.symbol}: placeOrder result — ${JSON.stringify(result)}`);
 
       if (result.success && result.orderId) {
         pick.trade.status = 'ORDER_PLACED';
@@ -913,6 +932,9 @@ async function placeEntryOrders(options = {}) {
       pick.trade.status = 'FAILED';
       pick.kite.kite_status = 'failed';
       console.error(`${LOG} ❌ ${pick.symbol}: Order error —`, err.message);
+      if (err.response) {
+        console.error(`${LOG} ❌ ${pick.symbol}: Kite API response — status=${err.response.status} data=${JSON.stringify(err.response.data)}`);
+      }
     }
   }
 
@@ -1001,10 +1023,11 @@ async function checkFillsAndPlaceProtection(options = {}) {
               trigger_price: pick.levels.stop,
               product: 'MIS',
               quantity: pick.trade.qty,
-              simulation_id: `daily_pick_sl_${pick.symbol}`,
+              simulationId: `daily_pick_sl_${pick.symbol}`,
               orderType: 'STOP_LOSS',
               source: 'DAILY_PICKS'
             });
+            console.log(`${LOG} [Order] ${pick.symbol}: SL-M placeOrder result — ${JSON.stringify(slResult)}`);
             if (slResult.success) {
               pick.kite.stop_order_id = slResult.orderId;
               slPlaced = true;
@@ -1012,6 +1035,7 @@ async function checkFillsAndPlaceProtection(options = {}) {
             }
           } catch (err) {
             console.error(`${LOG} ${pick.symbol}: SL-M error:`, err.message);
+            if (err.response) console.error(`${LOG} ${pick.symbol}: SL-M Kite API — status=${err.response.status} data=${JSON.stringify(err.response.data)}`);
           }
 
           // Place LIMIT SELL target order
@@ -1024,10 +1048,11 @@ async function checkFillsAndPlaceProtection(options = {}) {
               price: target,
               product: 'MIS',
               quantity: pick.trade.qty,
-              simulation_id: `daily_pick_tgt_${pick.symbol}`,
+              simulationId: `daily_pick_tgt_${pick.symbol}`,
               orderType: 'TARGET',
               source: 'DAILY_PICKS'
             });
+            console.log(`${LOG} [Order] ${pick.symbol}: Target placeOrder result — ${JSON.stringify(tgtResult)}`);
             if (tgtResult.success) {
               pick.kite.target_order_id = tgtResult.orderId;
               tgtPlaced = true;
@@ -1035,6 +1060,7 @@ async function checkFillsAndPlaceProtection(options = {}) {
             }
           } catch (err) {
             console.error(`${LOG} ${pick.symbol}: Target error:`, err.message);
+            if (err.response) console.error(`${LOG} ${pick.symbol}: Target Kite API — status=${err.response.status} data=${JSON.stringify(err.response.data)}`);
           }
 
           if (slPlaced && tgtPlaced) {
@@ -1063,7 +1089,7 @@ async function checkFillsAndPlaceProtection(options = {}) {
                 order_type: 'MARKET',
                 product: 'MIS',
                 quantity: pick.trade.qty,
-                simulation_id: `daily_pick_emergency_exit_${pick.symbol}`,
+                simulationId: `daily_pick_emergency_exit_${pick.symbol}`,
                 orderType: 'EMERGENCY_EXIT',
                 source: 'DAILY_PICKS'
               });
@@ -1197,7 +1223,7 @@ async function monitorDailyPickOrders(options = {}) {
               order_type: 'MARKET',
               product: 'MIS',
               quantity: pick.trade.qty,
-              simulation_id: `daily_pick_corrective_${pick.symbol}`,
+              simulationId: `daily_pick_corrective_${pick.symbol}`,
               orderType: 'CORRECTIVE',
               source: 'DAILY_PICKS'
             });

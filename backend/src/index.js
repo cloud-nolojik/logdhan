@@ -77,6 +77,7 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Request logging middleware - logs URL, body, and auth token for all API requests
 app.use((req, res, next) => {
