@@ -859,6 +859,12 @@ function find1HSwingLevels(candles) {
     return { swingHighs: [], swingLows: [], resistanceZones: [], supportZones: [] };
   }
 
+  const firstDate = candles[0][0]?.split('T')[0];
+  const lastDate = candles[candles.length - 1][0]?.split('T')[0];
+  const firstTime = candles[0][0]?.split('T')[1]?.split('+')[0] || '';
+  const lastTime = candles[candles.length - 1][0]?.split('T')[1]?.split('+')[0] || '';
+  console.log(`[SwingLevels] Using ${candles.length} candles from ${firstDate} ${firstTime} to ${lastDate} ${lastTime}`);
+
   const swingHighs = [];
   const swingLows = [];
 
@@ -967,12 +973,15 @@ async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
     // Candles come newest-first from API. Sort oldest-first for aggregation.
     allCandles.sort((a, b) => new Date(a[0]) - new Date(b[0]));
 
+    // Compute 1H swing levels from ALL candles (7 trading days) — must run before the trading date filter
+    const swingLevels = allCandles.length > 0 ? find1HSwingLevels(allCandles) : null;
+
     // Filter trading date candles for 1H/4H pivot calculation (original behavior)
     const tradingDateCandles = allCandles.filter(c => c[0]?.startsWith(tradingDate));
 
     if (tradingDateCandles.length === 0) {
-      console.log(`[HourlyPivots] No candles for ${tradingDate} — skipping`);
-      return { ...EMPTY, swing_levels_1h: null };
+      console.log(`[HourlyPivots] No candles for ${tradingDate} (pre-market or holiday) — pivots skipped, swing levels from ${allCandles.length} candles`);
+      return { hourly_1h_pivots: null, hourly_4h_pivots: null, swing_levels_1h: swingLevels };
     }
 
     console.log(`[HourlyPivots] Got ${allCandles.length} total candles (${allCandles[0][0]} → ${allCandles[allCandles.length - 1][0]}), ${tradingDateCandles.length} for trading date`);
@@ -994,9 +1003,6 @@ async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
     }
 
     console.log(`[HourlyPivots] 1H pivot=${hourly1hPivots ? round2(hourly1hPivots.pivot) : 'N/A'} R1=${hourly1hPivots ? round2(hourly1hPivots.r1) : 'N/A'} S1=${hourly1hPivots ? round2(hourly1hPivots.s1) : 'N/A'} | 4H pivot=${hourly4hPivots ? round2(hourly4hPivots.pivot) : 'N/A'} R1=${hourly4hPivots ? round2(hourly4hPivots.r1) : 'N/A'} S1=${hourly4hPivots ? round2(hourly4hPivots.s1) : 'N/A'}`);
-
-    // Compute 1H swing levels from all candles (7 trading days)
-    const swingLevels = find1HSwingLevels(allCandles);
 
     return { hourly_1h_pivots: hourly1hPivots, hourly_4h_pivots: hourly4hPivots, swing_levels_1h: swingLevels };
   } catch (error) {
