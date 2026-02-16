@@ -143,7 +143,7 @@ function getTimeRules(archetype, entryType) {
  *
  * Level 0 exists because stocks at NEW 52-week highs have NO overhead resistance.
  * The a_plus_momentum scan finds stocks that just broke their 252-day high,
- * so high52W ≈ fridayHigh ≈ entry, making Level 3 dead code for those stocks.
+ * so high52W ≈ prevHigh ≈ entry, making Level 3 dead code for those stocks.
  * ATR extension targets are well-proven for breakout continuation trades.
  *
  * Inside Level 0, we still check Weekly R1/R2 first — if pivots happen to be
@@ -575,6 +575,78 @@ function findDailyShortTarget(params) {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
+ * 1H SWING-BASED TARGET FINDER (for intraday daily picks)
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Replaces daily pivot targets (R1/S1) with real 1H swing structure.
+ * Looks for nearest resistance/support zone within 5% of entry.
+ *
+ * LONG: target = nearest resistanceZone midpoint above entry (within 5%)
+ * SHORT: target = nearest supportZone midpoint below entry (within 5%)
+ *
+ * @param {Object} params - { entry, risk, resistanceZones, supportZones, isShort, minRR }
+ * @returns {Object} { target2, target2_basis, reason } or { rejected: true, reason }
+ */
+function find1HSwingTarget(params) {
+  const { entry, risk, resistanceZones = [], supportZones = [], isShort = false, minRR = 1.2 } = params;
+
+  if (!isNum(risk) || risk <= 0) {
+    return { rejected: true, reason: 'Invalid risk', noData: false };
+  }
+
+  if (isShort) {
+    // SHORT: find nearest support zone midpoint below entry, within 5%
+    const zone = supportZones.find(z => z.midpoint < entry && z.midpoint >= entry * 0.95);
+    if (zone) {
+      const rr = (entry - zone.midpoint) / risk;
+      if (rr >= minRR) {
+        return {
+          target2: zone.midpoint,
+          target3: null,
+          target2_basis: '1h_swing_support',
+          reason: `1H swing support at ${round2(zone.midpoint)}, R:R ${round2(rr)}:1`
+        };
+      }
+      return {
+        rejected: true,
+        noData: false,
+        reason: `1H swing support at ${round2(zone.midpoint)} too close, R:R ${round2((entry - zone.midpoint) / risk)}:1 < ${minRR}:1`
+      };
+    }
+    return {
+      rejected: true,
+      noData: supportZones.length === 0,
+      reason: `No 1H structural target found (no support zone within 5% below entry ${round2(entry)})`
+    };
+  } else {
+    // LONG: find nearest resistance zone midpoint above entry, within 5%
+    const zone = resistanceZones.find(z => z.midpoint > entry && z.midpoint <= entry * 1.05);
+    if (zone) {
+      const rr = (zone.midpoint - entry) / risk;
+      if (rr >= minRR) {
+        return {
+          target2: zone.midpoint,
+          target3: null,
+          target2_basis: '1h_swing_resistance',
+          reason: `1H swing resistance at ${round2(zone.midpoint)}, R:R ${round2(rr)}:1`
+        };
+      }
+      return {
+        rejected: true,
+        noData: false,
+        reason: `1H swing resistance at ${round2(zone.midpoint)} too close, R:R ${round2((zone.midpoint - entry) / risk)}:1 < ${minRR}:1`
+      };
+    }
+    return {
+      rejected: true,
+      noData: resistanceZones.length === 0,
+      reason: `No 1H structural target found (no resistance zone within 5% above entry ${round2(entry)})`
+    };
+  }
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
  * MAIN FUNCTION
  * ═══════════════════════════════════════════════════════════════════════════
  *
@@ -741,7 +813,7 @@ function validateData(data) {
     return { valid: false, reason: 'No data provided' };
   }
 
-  const { atr, ema20, fridayClose } = data;
+  const { atr, ema20, prevClose } = data;
 
   if (!isNum(atr) || atr <= 0) {
     return { valid: false, reason: 'ATR missing or invalid' };
@@ -751,8 +823,8 @@ function validateData(data) {
     return { valid: false, reason: 'EMA20 missing or invalid' };
   }
 
-  if (!isNum(fridayClose) || fridayClose <= 0) {
-    return { valid: false, reason: 'Friday close missing or invalid' };
+  if (!isNum(prevClose) || prevClose <= 0) {
+    return { valid: false, reason: 'Previous candle close missing or invalid' };
   }
 
   return { valid: true };
@@ -773,10 +845,10 @@ function validateData(data) {
  * Target: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
  */
 function calculateBreakoutLevels(data) {
-  const { ema20, high20D, fridayHigh, fridayClose, atr, weeklyR1, weeklyR2, high52W, dailyR1, dailyR2, isIntraday, previousDayHigh } = data;
+  const { ema20, high20D, prevHigh, prevLow, prevClose, atr, weeklyR1, weeklyR2, high52W, dailyR1, dailyR2, isIntraday, previousDayHigh, resistanceZones } = data;
 
-  // Use 20D high if available, otherwise Friday high
-  const resistanceLevel = isNum(high20D) && high20D > 0 ? high20D : fridayHigh;
+  // Use 20D high if available, otherwise prev high
+  const resistanceLevel = isNum(high20D) && high20D > 0 ? high20D : prevHigh;
 
   if (!isNum(resistanceLevel) || resistanceLevel <= 0) {
     return { valid: false, reason: 'No resistance level available for breakout' };
@@ -785,43 +857,47 @@ function calculateBreakoutLevels(data) {
   // Entry: Above resistance with buffer for confirmation (0.2 ATR)
   const entry = resistanceLevel + (0.2 * atr);
 
-  // Stop: Below breakout zone or EMA20, whichever is higher (tighter)
-  // This protects against failed breakouts
-  const breakoutZoneBottom = resistanceLevel * 0.97;
-  const stopBase = Math.max(ema20, breakoutZoneBottom);
-  const stop = stopBase - (0.1 * atr);
+  // Stop: PDL − 0.15% buffer (intraday) or ATR-based (swing)
+  let stop;
+  if (isIntraday) {
+    stop = roundToTick(prevLow * (1 - 0.0015));
+    // Fallback: if risk > 3%, use EMA20 as tighter stop
+    const riskPct = ((entry - stop) / entry) * 100;
+    if (riskPct > 3.0 && isNum(ema20) && ema20 > 0 && ema20 < entry) {
+      stop = roundToTick(ema20 * (1 - 0.0015));
+      console.log(`  [Breakout] PDL stop risk ${round2(riskPct)}% > 3%, using EMA20 stop: ${round2(stop)}`);
+    }
+  } else {
+    const breakoutZoneBottom = resistanceLevel * 0.97;
+    const stopBase = Math.max(ema20, breakoutZoneBottom);
+    stop = stopBase - (0.1 * atr);
+  }
 
-  // Calculate risk first
+  // Calculate risk
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday (MIS) → Daily R1 → R2 → Prev Day High
-  //         Swing          → Weekly R1 → R2 → 52W High
-  // Graceful fallback: if daily pivots null (API failure), use weekly
+  // TARGET: Intraday → 1H swing resistance zones
+  //         Swing    → Weekly R1 → R2 → 52W High
   // ═══════════════════════════════════════════════════════════════════════════
   const targetResult = isIntraday
-    ? (findDailyLongTarget({
-        entry, risk, dailyR1, dailyR2, previousDayHigh,
-        minRR: data.minRR || 1.2   // Intraday: 1.2:1 (tighter targets, shorter hold)
-      }) || findStructuralTarget({
-        entry, risk, weeklyR1, weeklyR2, high52W, atr,
+    ? find1HSwingTarget({
+        entry, risk, resistanceZones, isShort: false,
         minRR: data.minRR || 1.2
-      }))
+      })
     : findStructuralTarget({
         entry, risk, weeklyR1, weeklyR2, high52W, atr,
-        minRR: data.minRR || 1.5   // Swing: 1.5:1 (wider targets, multi-day hold)
+        minRR: data.minRR || 1.5
       });
 
-  // If no structural target gives adequate R:R → REJECT this setup
   if (targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      noData: targetResult.noData || false,
       reason: `Breakout REJECTED: ${targetResult.reason}`
     };
   }
 
-  // Entry range for slippage (0.3 ATR above entry)
   const entryRange = [roundToTick(entry), roundToTick(entry + 0.3 * atr)];
 
   return {
@@ -863,10 +939,12 @@ function calculateBreakoutLevels(data) {
 function calculatePullbackLevels(data) {
   const {
     ema20,
+    ema50,
     high20D,
-    fridayHigh,
-    fridayClose,
-    fridayVolume,
+    prevHigh,
+    prevLow,
+    prevClose,
+    prevVolume,
     avgVolume20,
     atr,
     rsi,
@@ -874,7 +952,9 @@ function calculatePullbackLevels(data) {
     weeklyR2,
     dailyR1,
     dailyR2,
-    high52W
+    high52W,
+    isIntraday,
+    resistanceZones
   } = data;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -883,17 +963,17 @@ function calculatePullbackLevels(data) {
 
   // Rule 1: Distance from EMA20 (most important)
   // If price is within 0.4 ATR of EMA20, it's respecting support
-  const distanceATR = Math.abs(fridayClose - ema20) / atr;
+  const distanceATR = Math.abs(prevClose - ema20) / atr;
 
   // Rule 2: Volume behavior (if available)
   // Low volume pullback = controlled profit-taking (good)
   // High volume pullback = institutional selling (bad)
-  const hasVolumeData = isNum(fridayVolume) && isNum(avgVolume20) && avgVolume20 > 0;
-  const volumeRatio = hasVolumeData ? fridayVolume / avgVolume20 : 1.0;
+  const hasVolumeData = isNum(prevVolume) && isNum(avgVolume20) && avgVolume20 > 0;
+  const volumeRatio = hasVolumeData ? prevVolume / avgVolume20 : 1.0;
 
   // Rule 3: Price position relative to EMA20
   // Close above EMA20 = buyers still in control
-  const aboveEMA = fridayClose >= ema20;
+  const aboveEMA = prevClose >= ema20;
 
   // Rule 4: RSI behavior (if available)
   // RSI 45-55 = controlled cooldown
@@ -925,9 +1005,6 @@ function calculatePullbackLevels(data) {
     const pullbackSpread = Math.min(entry * 0.005, 0.2 * atr);
     entryRange = [roundToTick(entry - pullbackSpread), roundToTick(entry + pullbackSpread)];
 
-    // Stop: Below EMA20 support
-    stop = ema20 - (0.6 * atr);
-
     entryType = 'limit';
     mode = 'PULLBACK_AGGRESSIVE';
     reason = 'Healthy pullback: Price respecting EMA20, RSI cooled, low volume. ' +
@@ -937,47 +1014,56 @@ function calculatePullbackLevels(data) {
     // CONSERVATIVE MODE: Wait for confirmation
     // ─────────────────────────────────────────────────────────────────────
 
-    if (!isNum(fridayHigh) || fridayHigh <= 0) {
-      return { valid: false, reason: 'Friday high required for conservative pullback entry' };
+    if (!isNum(prevHigh) || prevHigh <= 0) {
+      return { valid: false, reason: 'Previous candle high required for conservative pullback entry' };
     }
 
-    // Entry: Above Friday high = bounce confirmed
-    entry = fridayHigh + (0.1 * atr);
+    // Entry: Above prev high = bounce confirmed
+    entry = prevHigh + (0.1 * atr);
 
     // Entry range for slippage (buy_above: entry to entry + 0.2*ATR)
     entryRange = [roundToTick(entry), roundToTick(entry + 0.2 * atr)];
 
-    // Stop: Below EMA20 support
-    stop = ema20 - (0.6 * atr);
-
     entryType = 'buy_above';
     mode = 'PULLBACK_CONSERVATIVE';
-    reason = buildConservativeReason(distanceATR, rsi, fridayClose, ema20, volumeRatio);
+    reason = buildConservativeReason(distanceATR, rsi, prevClose, ema20, volumeRatio);
+  }
+
+  // Stop: min(EMA50, PDL) − 0.15% buffer (intraday) or ATR-based (swing)
+  if (isIntraday) {
+    const ema50Val = isNum(ema50) && ema50 > 0 ? ema50 : Infinity;
+    const pdl = isNum(prevLow) && prevLow > 0 ? prevLow : Infinity;
+    const stopBase = Math.min(ema50Val, pdl);
+    if (!isFinite(stopBase)) {
+      stop = ema20 - (0.6 * atr); // fallback if neither available
+    } else {
+      stop = roundToTick(stopBase * (1 - 0.0015));
+    }
+  } else {
+    stop = ema20 - (0.6 * atr);
   }
 
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: STRUCTURAL LADDER for pullbacks
-  // Daily R1 → Daily R2 → Weekly R1 → Weekly R2 → 52W High → REJECT
-  // Pullbacks are shorter-term, so daily pivots have higher priority
+  // TARGET: Intraday → 1H swing resistance zones
+  //         Swing    → Daily R1 → R2 → Weekly R1 → R2 → 52W High
   // ═══════════════════════════════════════════════════════════════════════════
-  const targetResult = findPullbackTarget({
-    entry,
-    risk,
-    dailyR1,
-    dailyR2,
-    weeklyR1,
-    weeklyR2,
-    high52W,
-    minRR: data.minRR || 1.2  // Lower bar for pullbacks (shorter-term)
-  });
+  const targetResult = isIntraday
+    ? find1HSwingTarget({
+        entry, risk, resistanceZones, isShort: false,
+        minRR: data.minRR || 1.2
+      })
+    : findPullbackTarget({
+        entry, risk, dailyR1, dailyR2, weeklyR1, weeklyR2, high52W,
+        minRR: data.minRR || 1.2
+      });
 
   // If no structural target gives adequate R:R → REJECT this setup
   if (targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      noData: targetResult.noData || false,
       reason: `Pullback REJECTED: ${targetResult.reason}`
     };
   }
@@ -987,7 +1073,7 @@ function calculatePullbackLevels(data) {
     mode,
     archetype: 'pullback',
     entry,
-    entry_basis: mode === 'PULLBACK_AGGRESSIVE' ? 'ema20' : 'friday_high',
+    entry_basis: mode === 'PULLBACK_AGGRESSIVE' ? 'ema20' : 'prev_high',
     entryRange,
     stop,
     target: targetResult.target2,
@@ -1023,7 +1109,7 @@ function buildConservativeReason(distanceATR, rsi, close, ema20, volumeRatio) {
   }
 
   return 'Conservative entry: ' + reasons.join('. ') + '. ' +
-         'Entry triggers above Friday high for safety.';
+         'Entry triggers above prev high for safety.';
 }
 
 
@@ -1042,15 +1128,15 @@ function buildConservativeReason(distanceATR, rsi, close, ema20, volumeRatio) {
  * NOTE: If already within 2% of 20D high, treat as BREAKOUT instead
  */
 function calculateMomentumLevels(data) {
-  const { ema20, high20D, fridayHigh, fridayClose, atr, weeklyR1, weeklyR2, high52W, dailyR1, dailyR2, isIntraday, previousDayHigh } = data;
+  const { ema20, high20D, prevHigh, prevLow, prevClose, atr, weeklyR1, weeklyR2, high52W, dailyR1, dailyR2, isIntraday, previousDayHigh, resistanceZones } = data;
 
-  if (!isNum(fridayHigh) || fridayHigh <= 0) {
-    return { valid: false, reason: 'Friday high required for momentum entry' };
+  if (!isNum(prevHigh) || prevHigh <= 0) {
+    return { valid: false, reason: 'Previous candle high required for momentum entry' };
   }
 
   // Edge case: If close is within 2% of 20D high, this is more breakout than momentum
   // Note: nearBreakout redirect passes full `data` which includes isIntraday/dailyR2
-  const nearBreakout = isNum(high20D) && fridayClose >= high20D * 0.98;
+  const nearBreakout = isNum(high20D) && prevClose >= high20D * 0.98;
 
   if (nearBreakout) {
     // Redirect to breakout logic with modified reason
@@ -1063,42 +1149,47 @@ function calculateMomentumLevels(data) {
     return breakoutLevels;
   }
 
-  // Entry: Above Friday high for continuation (don't chase)
-  const entry = fridayHigh + (0.15 * atr);
+  // Entry: Above prev high for continuation (don't chase)
+  const entry = prevHigh + (0.15 * atr);
 
   // Entry range for slippage
   const entryRange = [roundToTick(entry), roundToTick(entry + 0.3 * atr)];
 
-  // Stop: Back to EMA20 means momentum lost
-  // But also cap at 1.2 ATR from entry (for high-ATR stocks)
-  const ema20Stop = ema20 - (0.1 * atr);
-  const atrStop = entry - (1.2 * atr);
-  const stop = Math.max(ema20Stop, atrStop);
+  // Stop: PDL − 0.15% buffer (intraday) or ATR-based (swing)
+  let stop;
+  if (isIntraday) {
+    stop = roundToTick(prevLow * (1 - 0.0015));
+    // Fallback: if risk > 3%, use midpoint(entry, PDL) as stop
+    const riskPct = ((entry - stop) / entry) * 100;
+    if (riskPct > 3.0) {
+      stop = roundToTick((entry + prevLow) / 2);
+      console.log(`  [Momentum] PDL stop risk ${round2(riskPct)}% > 3%, using midpoint stop: ${round2(stop)}`);
+    }
+  } else {
+    const ema20Stop = ema20 - (0.1 * atr);
+    const atrStop = entry - (1.2 * atr);
+    stop = Math.max(ema20Stop, atrStop);
+  }
 
-  // Calculate risk first
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday → Daily R1 → R2 → Prev Day High; Swing → Weekly ladder
+  // TARGET: Intraday → 1H swing resistance zones; Swing → Weekly ladder
   // ═══════════════════════════════════════════════════════════════════════════
   const targetResult = isIntraday
-    ? (findDailyLongTarget({
-        entry, risk, dailyR1, dailyR2, previousDayHigh,
+    ? find1HSwingTarget({
+        entry, risk, resistanceZones, isShort: false,
         minRR: data.minRR || 1.2
-      }) || findStructuralTarget({
-        entry, risk, weeklyR1, weeklyR2, high52W, atr,
-        minRR: data.minRR || 1.2
-      }))
+      })
     : findStructuralTarget({
         entry, risk, weeklyR1, weeklyR2, high52W, atr,
         minRR: data.minRR || 1.5
       });
 
-  // If no structural target gives adequate R:R → REJECT this setup
   if (targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      noData: targetResult.noData || false,
       reason: `Momentum REJECTED: ${targetResult.reason}`
     };
   }
@@ -1108,7 +1199,7 @@ function calculateMomentumLevels(data) {
     mode: 'MOMENTUM',
     archetype: 'trend-follow',
     entry,
-    entry_basis: 'friday_high',
+    entry_basis: 'prev_high',
     entryRange,
     stop,
     target: targetResult.target2,
@@ -1116,8 +1207,8 @@ function calculateMomentumLevels(data) {
     target2_basis: targetResult.target2_basis,
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
-    reason: `Momentum continuation: Stock running ${round2(((fridayClose - ema20) / ema20) * 100)}% above EMA20. ` +
-            `Entry above Friday high (${round2(fridayHigh)}) confirms continued buying. ${targetResult.reason}`
+    reason: `Momentum continuation: Stock running ${round2(((prevClose - ema20) / ema20) * 100)}% above EMA20. ` +
+            `Entry above prev high (${round2(prevHigh)}) confirms continued buying. ${targetResult.reason}`
   };
 }
 
@@ -1136,50 +1227,49 @@ function calculateMomentumLevels(data) {
  * Target: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
  */
 function calculateConsolidationLevels(data) {
-  const { ema20, high10D, low10D, fridayHigh, fridayLow, atr, weeklyR1, weeklyR2, high52W, dailyR1, dailyR2, isIntraday, previousDayHigh } = data;
+  const { prevHigh, prevLow, high10D, low10D, atr, weeklyR1, weeklyR2, high52W, dailyR1, isIntraday, resistanceZones } = data;
 
-  if (!isNum(fridayHigh) || !isNum(fridayLow) || fridayHigh <= 0 || fridayLow <= 0) {
-    return { valid: false, reason: 'Friday high/low required for consolidation entry' };
+  if (!isNum(prevHigh) || !isNum(prevLow) || prevHigh <= 0 || prevLow <= 0) {
+    return { valid: false, reason: 'Previous candle high/low required for consolidation entry' };
   }
 
-  const fridayRange = fridayHigh - fridayLow;
-
-  // Use 10-day range if available, otherwise use Friday range
-  const has10DRange = isNum(high10D) && isNum(low10D) && high10D > low10D;
+  const prevRange = prevHigh - prevLow;
 
   // Entry: Just above the tight range (small buffer since range is already tight)
-  const entry = fridayHigh + (0.1 * atr);
+  const entry = prevHigh + (0.1 * atr);
 
   // Entry range for slippage
   const entryRange = [roundToTick(entry), roundToTick(entry + 0.2 * atr)];
 
-  // Stop: Below the consolidation range (pattern fails if broken)
-  const consolidationLow = has10DRange ? Math.min(low10D, fridayLow) : fridayLow;
-  const stop = consolidationLow - (0.1 * atr);
+  // Stop: PDL − 0.15% buffer (intraday) or consolidation-based (swing)
+  let stop;
+  if (isIntraday) {
+    stop = roundToTick(prevLow * (1 - 0.0015));
+  } else {
+    const has10DRange = isNum(high10D) && isNum(low10D) && high10D > low10D;
+    const consolidationLow = has10DRange ? Math.min(low10D, prevLow) : prevLow;
+    stop = consolidationLow - (0.1 * atr);
+  }
 
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday → Daily R1 → R2 → Prev Day High; Swing → Weekly ladder
+  // TARGET: Intraday → 1H swing resistance zones; Swing → Weekly ladder
   // ═══════════════════════════════════════════════════════════════════════════
   const targetResult = isIntraday
-    ? (findDailyLongTarget({
-        entry, risk, dailyR1, dailyR2, previousDayHigh,
+    ? find1HSwingTarget({
+        entry, risk, resistanceZones, isShort: false,
         minRR: data.minRR || 1.2
-      }) || findStructuralTarget({
-        entry, risk, weeklyR1, weeklyR2, high52W, atr,
-        minRR: data.minRR || 1.2
-      }))
+      })
     : findStructuralTarget({
         entry, risk, weeklyR1, weeklyR2, high52W, atr,
         minRR: data.minRR || 1.5
       });
 
-  // If no structural target gives adequate R:R → REJECT this setup
   if (targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      noData: targetResult.noData || false,
       reason: `Consolidation REJECTED: ${targetResult.reason}`
     };
   }
@@ -1189,7 +1279,7 @@ function calculateConsolidationLevels(data) {
     mode: 'CONSOLIDATION_BREAKOUT',
     archetype: 'breakout',
     entry,
-    entry_basis: 'friday_high',
+    entry_basis: 'prev_high',
     entryRange,
     stop,
     target: targetResult.target2,
@@ -1197,7 +1287,7 @@ function calculateConsolidationLevels(data) {
     target2_basis: targetResult.target2_basis,
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
-    reason: `Consolidation breakout: Tight range (${round2((fridayRange / fridayHigh) * 100)}%) near highs signals energy buildup. ` +
+    reason: `Consolidation breakout: Tight range (${round2((prevRange / prevHigh) * 100)}%) near highs signals energy buildup. ` +
             `${targetResult.reason}`
   };
 }
@@ -1220,69 +1310,76 @@ function calculateConsolidationLevels(data) {
  * Key insight: These stocks just made NEW 52-WEEK HIGHS.
  * There is NO overhead resistance — the 52W high IS today's price.
  * The standard structural ladder (Weekly R1 → R2 → 52W High) may fail because
- * high_52w ≈ fridayHigh, so entry > high_52w always.
+ * high_52w ≈ prevHigh, so entry > high_52w always.
  * Level 0 in findStructuralTarget handles this with ATR extension targets.
  *
  * Strategy: Buy the breakout continuation
- * - Entry: Above Friday high (confirms breakout holds on Monday)
+ * - Entry: Above prev high (confirms breakout holds on Monday)
  * - Stop: Below EMA20 (momentum support, capped at 1.5 ATR)
  * - Target: STRUCTURAL LADDER with 52W breakout extension fallback
  *   Weekly R1/R2 may still work if they're above the new high.
  *   If not → ATR extension target (2.5 ATR from entry) since there's no overhead structure.
  */
 function calculateAPlusMomentumLevels(data) {
-  const { ema20, fridayHigh, fridayClose, atr, weeklyR1, weeklyR2, high52W, dailyR1, dailyR2, isIntraday, previousDayHigh } = data;
+  const { ema20, prevHigh, prevLow, prevClose, atr, weeklyR1, weeklyR2, high52W, dailyR1, isIntraday, resistanceZones } = data;
 
-  if (!isNum(fridayHigh) || fridayHigh <= 0) {
-    return { valid: false, reason: 'Friday high required for A+ momentum entry' };
+  if (!isNum(prevHigh) || prevHigh <= 0) {
+    return { valid: false, reason: 'Previous candle high required for A+ momentum entry' };
   }
 
   if (!isNum(ema20) || ema20 <= 0) {
     return { valid: false, reason: 'EMA20 required for A+ momentum stop' };
   }
 
-  // ENTRY: Above Friday high + small buffer for confirmation
-  const entry = fridayHigh + (0.15 * atr);
+  // ENTRY: Above prev high + small buffer for confirmation
+  const entry = prevHigh + (0.15 * atr);
 
   // Entry range for slippage
   const entryRange = [roundToTick(entry), roundToTick(entry + 0.3 * atr)];
 
-  // STOP: Below EMA20 (momentum support), capped at 1.5 ATR from entry
-  const ema20Stop = ema20 - (0.2 * atr);
-  const maxStop = entry - (1.5 * atr);
-  const stop = Math.max(ema20Stop, maxStop);
+  // STOP: PDL − 0.15% buffer (intraday) or EMA20-based (swing)
+  let stop;
+  if (isIntraday) {
+    stop = roundToTick(prevLow * (1 - 0.0015));
+    // Fallback: if risk > 3%, use EMA20 as tighter stop
+    const riskPct = ((entry - stop) / entry) * 100;
+    if (riskPct > 3.0 && isNum(ema20) && ema20 > 0 && ema20 < entry) {
+      stop = roundToTick(ema20 * (1 - 0.0015));
+      console.log(`  [APlusMomentum] PDL stop risk ${round2(riskPct)}% > 3%, using EMA20 stop: ${round2(stop)}`);
+    }
+  } else {
+    const ema20Stop = ema20 - (0.2 * atr);
+    const maxStop = entry - (1.5 * atr);
+    stop = Math.max(ema20Stop, maxStop);
+  }
 
   // RISK calculation
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday → Daily R1 → R2 → Prev Day High (no ATR extension for intraday)
+  // TARGET: Intraday → 1H swing resistance zones
   //         Swing → Weekly ladder with 52W breakout ATR extension fallback
   // ═══════════════════════════════════════════════════════════════════════════
   const targetResult = isIntraday
-    ? (findDailyLongTarget({
-        entry, risk, dailyR1, dailyR2, previousDayHigh,
+    ? find1HSwingTarget({
+        entry, risk, resistanceZones, isShort: false,
         minRR: data.minRR || 1.2
-      }) || findStructuralTarget({
-        entry, risk, weeklyR1, weeklyR2, high52W, atr,
-        minRR: data.minRR || 1.2
-      }))
+      })
     : findStructuralTarget({
         entry, risk, weeklyR1, weeklyR2, high52W, atr,
         minRR: data.minRR || 1.5
       });
 
-  // If no structural target gives adequate R:R → REJECT this setup
   if (targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,  // Distinguish missing data from bad R:R
+      noData: targetResult.noData || false,
       reason: `A+ Momentum REJECTED: ${targetResult.reason}`
     };
   }
 
   // Calculate distance from EMA20 for context
-  const distanceFromEMA = ((fridayClose - ema20) / ema20) * 100;
+  const distanceFromEMA = ((prevClose - ema20) / ema20) * 100;
 
   return {
     valid: true,
@@ -1292,14 +1389,14 @@ function calculateAPlusMomentumLevels(data) {
     entry_basis: '52w_high',
     entryRange,
     stop,
-    target: targetResult.target2,         // T2 (main target — from structural ladder or ATR extension)
-    target3: targetResult.target3,        // T3 (extension — for trailing, optional)
-    target2_basis: targetResult.target2_basis, // 'weekly_r1', 'weekly_r2', '52w_high', or 'atr_extension_52w_breakout'
-    dailyR1Check: isNum(dailyR1) ? dailyR1 : null,  // Momentum checkpoint (not a target)
+    target: targetResult.target2,
+    target3: targetResult.target3,
+    target2_basis: targetResult.target2_basis,
+    dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
     reason: `A+ Momentum (52W Breakout): Stock ${round2(distanceFromEMA)}% above EMA20, ` +
             `broke 252-day high with 1.5x+ volume. ` +
-            `Entry above ${round2(fridayHigh)} confirms breakout holds. ${targetResult.reason}`
+            `Entry above ${round2(prevHigh)} confirms breakout holds. ${targetResult.reason}`
   };
 }
 
@@ -1388,7 +1485,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   // ─────────────────────────────────────────────────────────────────────────
   const risk = isShortTrade ? (stop - entry) : (entry - stop);
   const riskPercent = (risk / entry) * 100;
-  const MAX_RISK_PERCENT = 8.0;
+  const MAX_RISK_PERCENT = 3.0;
 
   if (riskPercent > MAX_RISK_PERCENT) {
     return {
@@ -1591,46 +1688,48 @@ function findShortStructuralTarget(params) {
  * BREAKDOWN SETUP (bearish version of breakout)
  * Stock sitting just above 20D low, ready to break down
  *
- * Entry: Below Friday low (confirms breakdown)
+ * Entry: Below prev low (confirms breakdown)
  * Stop: Recent swing high (5-10 day high), NOT 20D high (already moved)
  * Target: Weekly S1 → S2 → 20D Low → ATR Extension
  */
 function calculateBreakdownLevels(data) {
-  const { ema20, low20D, fridayLow, fridayClose, atr, high5D, high10D, weeklyS1, weeklyS2, dailyS1, dailyS2, isIntraday, previousDayLow } = data;
+  const { ema20, low20D, prevHigh, prevLow, prevClose, atr, high5D, high10D, weeklyS1, weeklyS2, dailyS1, isIntraday, supportZones } = data;
 
-  if (!isNum(fridayLow) || fridayLow <= 0) {
-    return { valid: false, reason: 'Friday low required for breakdown entry' };
+  if (!isNum(prevLow) || prevLow <= 0) {
+    return { valid: false, reason: 'Previous candle low required for breakdown entry' };
   }
 
-  // Entry: Below Friday low (breakdown confirmation)
-  const entry = fridayLow - (0.15 * atr);
+  // Entry: Below prev low (breakdown confirmation)
+  const entry = prevLow - (0.15 * atr);
   const entryRange = [roundToTick(entry - 0.3 * atr), roundToTick(entry)];
 
-  // Stop: Recent swing high (5-10 day), NOT 20D high
-  // For stocks that already dropped 10-30%, the 20D high is way too far
-  let swingHigh = high5D || high10D || fridayClose * 1.03;
-
-  // Cap stop at 5% above entry (prevent runaway stops)
-  const maxStop = entry * 1.05;
-  let stop = Math.min(swingHigh + (0.3 * atr), maxStop);
+  // Stop: PDH + 0.15% buffer (intraday) or swing-high based (swing)
+  let stop;
+  if (isIntraday) {
+    stop = roundToTick(prevHigh * (1 + 0.0015));
+    // Fallback: if risk > 3%, use EMA20 as tighter stop
+    const riskPct = ((stop - entry) / entry) * 100;
+    if (riskPct > 3.0 && isNum(ema20) && ema20 > 0 && ema20 > entry) {
+      stop = roundToTick(ema20 * (1 + 0.0015));
+      console.log(`  [Breakdown] PDH stop risk ${round2(riskPct)}% > 3%, using EMA20 stop: ${round2(stop)}`);
+    }
+  } else {
+    let swingHigh = high5D || high10D || prevClose * 1.03;
+    const maxStop = entry * 1.05;
+    stop = Math.min(swingHigh + (0.3 * atr), maxStop);
+  }
 
   const risk = stop - entry;
 
-  // Target: Structural support ladder
-  // Intraday (MIS): use daily pivots (Daily S1 → S2 → Prev Day Low)
-  // Swing: use weekly pivots (Weekly S1 → S2 → 20D Low)
-  // Graceful fallback: if daily pivots null (API failure), fall through to weekly
+  // Target: Intraday → 1H swing support zones; Swing → Weekly support ladder
   const targetResult = isIntraday
-    ? (findDailyShortTarget({
-        entry, risk, dailyS1, dailyS2, previousDayLow,
-        minRR: data.minRR || 1.2   // Intraday: 1.2:1 (tighter targets, shorter hold)
-      }) || findShortStructuralTarget({
-        entry, risk, weeklyS1, weeklyS2, low20D, atr,
+    ? find1HSwingTarget({
+        entry, risk, supportZones, isShort: true,
         minRR: data.minRR || 1.2
-      }))
+      })
     : findShortStructuralTarget({
         entry, risk, weeklyS1, weeklyS2, low20D, atr,
-        minRR: data.minRR || 1.5   // Swing: 1.5:1 (wider targets, multi-day hold)
+        minRR: data.minRR || 1.5
       });
 
   if (targetResult.rejected) {
@@ -1646,17 +1745,16 @@ function calculateBreakdownLevels(data) {
     mode: 'BREAKDOWN',
     archetype: 'breakdown',
     entry,
-    entry_basis: 'friday_low',
+    entry_basis: 'prev_low',
     entryRange,
     stop,
-    stop_basis: high5D ? 'swing_high_5d' : (high10D ? 'swing_high_10d' : 'fallback'),
     target: targetResult.target2,
     target3: targetResult.target3,
     target2_basis: targetResult.target2_basis,
     dailyS1Check: isNum(dailyS1) ? dailyS1 : null,
     entryType: 'sell_below',
-    reason: `Breakdown setup: Stock cracking support at ${round2(fridayLow)}. ` +
-            `Using swing high (${round2(swingHigh)}) for stop, not 20D high. ${targetResult.reason}`
+    reason: `Breakdown setup: Stock cracking support at ${round2(prevLow)}. ` +
+            `Stop at PDH ${round2(prevHigh)}. ${targetResult.reason}`
   };
 }
 
@@ -1664,47 +1762,52 @@ function calculateBreakdownLevels(data) {
  * MOMENTUM CARRY BEARISH (short version of momentum)
  * Stock in downtrend, running below EMA20
  *
- * Entry: Below Friday low (confirms continued selling)
+ * Entry: Below prev low (confirms continued selling)
  * Stop: Above EMA20 (momentum resistance), capped at 2 ATR
  * Target: Weekly S1 → S2 → 20D Low
  */
 function calculateMomentumBearishLevels(data) {
-  const { ema20, fridayLow, fridayClose, atr, weeklyS1, weeklyS2, low20D, dailyS1, dailyS2, isIntraday, previousDayLow } = data;
+  const { ema20, prevHigh, prevLow, prevClose, atr, weeklyS1, weeklyS2, low20D, dailyS1, isIntraday, supportZones } = data;
 
-  if (!isNum(fridayLow) || fridayLow <= 0) {
-    return { valid: false, reason: 'Friday low required for momentum bearish entry' };
+  if (!isNum(prevLow) || prevLow <= 0) {
+    return { valid: false, reason: 'Previous candle low required for momentum bearish entry' };
   }
 
   if (!isNum(ema20) || ema20 <= 0) {
     return { valid: false, reason: 'EMA20 required for momentum bearish stop' };
   }
 
-  // Entry: Below Friday low (momentum continuation)
-  const entry = fridayLow - (0.1 * atr);
+  // Entry: Below prev low (momentum continuation)
+  const entry = prevLow - (0.1 * atr);
   const entryRange = [roundToTick(entry - 0.2 * atr), roundToTick(entry)];
 
-  // Stop: Above EMA20 (momentum resistance), capped at 2 ATR from entry
-  const ema20Stop = ema20 + (0.3 * atr);
-  const maxStop = entry + (2.0 * atr);
-  const stop = Math.min(ema20Stop, maxStop);
+  // Stop: PDH + 0.15% buffer (intraday) or EMA20-based (swing)
+  let stop;
+  if (isIntraday) {
+    stop = roundToTick(prevHigh * (1 + 0.0015));
+    // Fallback: if risk > 3%, use midpoint(entry, PDH) as stop
+    const riskPct = ((stop - entry) / entry) * 100;
+    if (riskPct > 3.0) {
+      stop = roundToTick((entry + prevHigh) / 2);
+      console.log(`  [MomentumBearish] PDH stop risk ${round2(riskPct)}% > 3%, using midpoint stop: ${round2(stop)}`);
+    }
+  } else {
+    const ema20Stop = ema20 + (0.3 * atr);
+    const maxStop = entry + (2.0 * atr);
+    stop = Math.min(ema20Stop, maxStop);
+  }
 
   const risk = stop - entry;
 
-  // Target: Structural support ladder
-  // Intraday (MIS): use daily pivots (Daily S1 → S2 → Prev Day Low)
-  // Swing: use weekly pivots (Weekly S1 → S2 → 20D Low)
-  // Graceful fallback: if daily pivots null (API failure), fall through to weekly
+  // Target: Intraday → 1H swing support zones; Swing → Weekly support ladder
   const targetResult = isIntraday
-    ? (findDailyShortTarget({
-        entry, risk, dailyS1, dailyS2, previousDayLow,
-        minRR: data.minRR || 1.2   // Intraday: 1.2:1 (tighter targets, shorter hold)
-      }) || findShortStructuralTarget({
-        entry, risk, weeklyS1, weeklyS2, low20D, atr,
+    ? find1HSwingTarget({
+        entry, risk, supportZones, isShort: true,
         minRR: data.minRR || 1.2
-      }))
+      })
     : findShortStructuralTarget({
         entry, risk, weeklyS1, weeklyS2, low20D, atr,
-        minRR: data.minRR || 1.5   // Swing: 1.5:1 (wider targets, multi-day hold)
+        minRR: data.minRR || 1.5
       });
 
   if (targetResult.rejected) {
@@ -1720,17 +1823,16 @@ function calculateMomentumBearishLevels(data) {
     mode: 'MOMENTUM_BEARISH',
     archetype: 'momentum',
     entry,
-    entry_basis: 'friday_low',
+    entry_basis: 'prev_low',
     entryRange,
     stop,
-    stop_basis: 'ema20',
     target: targetResult.target2,
     target3: targetResult.target3,
     target2_basis: targetResult.target2_basis,
     dailyS1Check: isNum(dailyS1) ? dailyS1 : null,
     entryType: 'sell_below',
-    reason: `Momentum bearish: Stock running ${round2(((ema20 - fridayClose) / ema20) * 100)}% below EMA20. ` +
-            `Entry below Friday low (${round2(fridayLow)}) confirms continued selling. ${targetResult.reason}`
+    reason: `Momentum bearish: Stock running ${round2(((ema20 - prevClose) / ema20) * 100)}% below EMA20. ` +
+            `Entry below prev low (${round2(prevLow)}) confirms continued selling. ${targetResult.reason}`
   };
 }
 
@@ -1738,46 +1840,45 @@ function calculateMomentumBearishLevels(data) {
  * FAILED AT RESISTANCE (bearish version of pullback)
  * Stock rejected at resistance, ready to fall back
  *
- * Entry: Below Friday low (confirms rejection)
+ * Entry: Below prev low (confirms rejection)
  * Stop: Above resistance (pattern invalidates if it breaks through)
  * Target: Weekly S1 → S2 → 20D Low
  */
 function calculateFailedResistanceLevels(data) {
-  const { ema20, high20D, fridayLow, fridayClose, atr, weeklyS1, weeklyS2, weeklyR1, low20D, dailyS1, dailyS2, isIntraday, previousDayLow } = data;
+  const { high20D, prevHigh, prevLow, prevClose, atr, weeklyS1, weeklyS2, weeklyR1, low20D, dailyS1, isIntraday, supportZones } = data;
 
-  if (!isNum(fridayLow) || fridayLow <= 0) {
-    return { valid: false, reason: 'Friday low required for failed resistance entry' };
+  if (!isNum(prevLow) || prevLow <= 0) {
+    return { valid: false, reason: 'Previous candle low required for failed resistance entry' };
   }
 
-  // Identify the resistance level (high20D or weeklyR1)
-  const resistance = isNum(high20D) && high20D > fridayClose ? high20D :
-                     isNum(weeklyR1) && weeklyR1 > fridayClose ? weeklyR1 :
-                     fridayClose * 1.05; // Fallback
+  // Identify the resistance level (high20D or weeklyR1) — used for logging only now
+  const resistance = isNum(high20D) && high20D > prevClose ? high20D :
+                     isNum(weeklyR1) && weeklyR1 > prevClose ? weeklyR1 :
+                     prevClose * 1.05;
 
-  // Entry: Below Friday low (confirms rejection)
-  const entry = fridayLow - (0.1 * atr);
+  // Entry: Below prev low (confirms rejection)
+  const entry = prevLow - (0.1 * atr);
   const entryRange = [roundToTick(entry - 0.2 * atr), roundToTick(entry)];
 
-  // Stop: Above resistance (pattern fails if it breaks through)
-  const stop = resistance + (0.3 * atr);
+  // Stop: PDH + 0.15% buffer (intraday) or resistance-based (swing)
+  let stop;
+  if (isIntraday) {
+    stop = roundToTick(prevHigh * (1 + 0.0015));
+  } else {
+    stop = resistance + (0.3 * atr);
+  }
 
   const risk = stop - entry;
 
-  // Target: Structural support ladder
-  // Intraday (MIS): use daily pivots (Daily S1 → S2 → Prev Day Low)
-  // Swing: use weekly pivots (Weekly S1 → S2 → 20D Low)
-  // Graceful fallback: if daily pivots null (API failure), fall through to weekly
+  // Target: Intraday → 1H swing support zones; Swing → Weekly support ladder
   const targetResult = isIntraday
-    ? (findDailyShortTarget({
-        entry, risk, dailyS1, dailyS2, previousDayLow,
-        minRR: data.minRR || 1.2   // Intraday: 1.2:1 (tighter targets, shorter hold)
-      }) || findShortStructuralTarget({
-        entry, risk, weeklyS1, weeklyS2, low20D, atr,
+    ? find1HSwingTarget({
+        entry, risk, supportZones, isShort: true,
         minRR: data.minRR || 1.2
-      }))
+      })
     : findShortStructuralTarget({
         entry, risk, weeklyS1, weeklyS2, low20D, atr,
-        minRR: data.minRR || 1.5   // Swing: 1.5:1 (wider targets, multi-day hold)
+        minRR: data.minRR || 1.5
       });
 
   if (targetResult.rejected) {
@@ -1793,17 +1894,17 @@ function calculateFailedResistanceLevels(data) {
     mode: 'FAILED_RESISTANCE',
     archetype: 'pullback',
     entry,
-    entry_basis: 'friday_low',
+    entry_basis: 'prev_low',
     entryRange,
     stop,
-    stop_basis: 'resistance',
+    stop_basis: 'prev_high',
     target: targetResult.target2,
     target3: targetResult.target3,
     target2_basis: targetResult.target2_basis,
     dailyS1Check: isNum(dailyS1) ? dailyS1 : null,
     entryType: 'sell_below',
     reason: `Failed resistance: Stock rejected at ${round2(resistance)}, falling back. ` +
-            `Entry below Friday low confirms rejection. ${targetResult.reason}`
+            `Entry below prev low confirms rejection. ${targetResult.reason}`
   };
 }
 
@@ -1816,38 +1917,37 @@ function calculateFailedResistanceLevels(data) {
  * Target: Weekly S1 → S2 → 20D Low
  */
 function calculateCompressionBearishLevels(data) {
-  const { fridayHigh, fridayLow, low10D, high10D, atr, weeklyS1, weeklyS2, low20D, dailyS1, dailyS2, isIntraday, previousDayLow } = data;
+  const { prevHigh, prevLow, low10D, high10D, atr, weeklyS1, weeklyS2, low20D, dailyS1, isIntraday, supportZones } = data;
 
-  if (!isNum(fridayHigh) || !isNum(fridayLow) || fridayHigh <= 0 || fridayLow <= 0) {
-    return { valid: false, reason: 'Friday high/low required for compression bearish entry' };
+  if (!isNum(prevHigh) || !isNum(prevLow) || prevHigh <= 0 || prevLow <= 0) {
+    return { valid: false, reason: 'Previous candle high/low required for compression bearish entry' };
   }
 
   // Entry: Below the tight range
-  const entry = fridayLow - (0.1 * atr);
+  const entry = prevLow - (0.1 * atr);
   const entryRange = [roundToTick(entry - 0.2 * atr), roundToTick(entry)];
 
-  // Stop: Above consolidation high (pattern fails if broken upward)
-  const has10DRange = isNum(high10D) && isNum(low10D) && high10D > low10D;
-  const consolidationHigh = has10DRange ? Math.max(high10D, fridayHigh) : fridayHigh;
-  const stop = consolidationHigh + (0.1 * atr);
+  // Stop: PDH + 0.15% buffer (intraday) or consolidation-based (swing)
+  let stop;
+  if (isIntraday) {
+    stop = roundToTick(prevHigh * (1 + 0.0015));
+  } else {
+    const has10DRange = isNum(high10D) && isNum(low10D) && high10D > low10D;
+    const consolidationHigh = has10DRange ? Math.max(high10D, prevHigh) : prevHigh;
+    stop = consolidationHigh + (0.1 * atr);
+  }
 
   const risk = stop - entry;
 
-  // Target: Structural support ladder
-  // Intraday (MIS): use daily pivots (Daily S1 → S2 → Prev Day Low)
-  // Swing: use weekly pivots (Weekly S1 → S2 → 20D Low)
-  // Graceful fallback: if daily pivots null (API failure), fall through to weekly
+  // Target: Intraday → 1H swing support zones; Swing → Weekly support ladder
   const targetResult = isIntraday
-    ? (findDailyShortTarget({
-        entry, risk, dailyS1, dailyS2, previousDayLow,
-        minRR: data.minRR || 1.2   // Intraday: 1.2:1 (tighter targets, shorter hold)
-      }) || findShortStructuralTarget({
-        entry, risk, weeklyS1, weeklyS2, low20D, atr,
+    ? find1HSwingTarget({
+        entry, risk, supportZones, isShort: true,
         minRR: data.minRR || 1.2
-      }))
+      })
     : findShortStructuralTarget({
         entry, risk, weeklyS1, weeklyS2, low20D, atr,
-        minRR: data.minRR || 1.5   // Swing: 1.5:1 (wider targets, multi-day hold)
+        minRR: data.minRR || 1.5
       });
 
   if (targetResult.rejected) {
@@ -1858,23 +1958,23 @@ function calculateCompressionBearishLevels(data) {
     };
   }
 
-  const fridayRange = fridayHigh - fridayLow;
+  const prevRange = prevHigh - prevLow;
 
   return {
     valid: true,
     mode: 'COMPRESSION_BEARISH',
     archetype: 'breakdown',
     entry,
-    entry_basis: 'friday_low',
+    entry_basis: 'prev_low',
     entryRange,
     stop,
-    stop_basis: 'consolidation_high',
+    stop_basis: 'prev_high',
     target: targetResult.target2,
     target3: targetResult.target3,
     target2_basis: targetResult.target2_basis,
     dailyS1Check: isNum(dailyS1) ? dailyS1 : null,
     entryType: 'sell_below',
-    reason: `Compression bearish: Tight range (${round2((fridayRange / fridayHigh) * 100)}%) near lows signals energy buildup. ` +
+    reason: `Compression bearish: Tight range (${round2((prevRange / prevHigh) * 100)}%) near lows signals energy buildup. ` +
             `${targetResult.reason}`
   };
 }

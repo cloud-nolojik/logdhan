@@ -209,12 +209,14 @@ export const SCAN_ORDER_BY_REGIME = {
  * Only LONG picks use the engine; SHORT picks use mirrored pivot logic.
  */
 export const SCAN_ARCHETYPE = {
+  // LONG — map to generic archetypes
   compression_bullish: 'consolidation_breakout',
   pullback_at_support: 'pullback',
   momentum_carry: 'momentum',
   breakout_setup: 'breakout',
-  compression_bearish: 'consolidation_breakout',
-  failed_at_resistance: 'pullback',
-  momentum_carry_bearish: 'momentum',
-  breakdown_setup: 'breakout'
+  // SHORT — pass through to dedicated calculators in scanLevels.js
+  compression_bearish: 'compression_bearish',
+  failed_at_resistance: 'failed_at_resistance',
+  momentum_carry_bearish: 'momentum_carry_bearish',
+  breakdown_setup: 'breakdown_setup'
 };

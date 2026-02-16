@@ -2685,9 +2685,9 @@ STRICT JSON RETURN (schema v1.4 — include ALL fields exactly as named):
     const levelsData = {
       ema20: trendMomentum.ema20_1D,
       atr: trendMomentum.atr14_1D,
-      fridayHigh: swingContext.prevSession?.high || priceContext.high,
-      fridayClose: swingContext.prevSession?.close || priceContext.close,
-      fridayLow: swingContext.prevSession?.low || priceContext.low,
+      prevHigh: swingContext.prevSession?.high || priceContext.high,
+      prevClose: swingContext.prevSession?.close || priceContext.close,
+      prevLow: swingContext.prevSession?.low || priceContext.low,
       high20D: swingContext.swingLevels?.recent20?.high
     };
 

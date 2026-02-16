@@ -77,9 +77,9 @@ export function analyzeStock(candles, options = {}) {
     const levelsData = {
       ema20: ind.ema20,
       atr: ind.atr,
-      fridayHigh: ind.prev_high || ind.high,
-      fridayClose: ind.prev_close || ind.close,
-      fridayLow: ind.prev_low || ind.low,
+      prevHigh: ind.prev_high || ind.high,
+      prevClose: ind.prev_close || ind.close,
+      prevLow: ind.prev_low || ind.low,
       high20D: ind.high_20d,
       high52W: ind.high_52w || null,     // For structural ladder (last resort before rejection)
       // Pivot levels for target anchoring - STRUCTURAL LADDER
@@ -240,9 +240,9 @@ export function enrichStock(stock, candles, niftyReturn1M = 0, scanType = null) 
     const levelsData = {
       ema20: ind.ema20,
       atr: ind.atr,
-      fridayHigh: ind.prev_high || ind.high,
-      fridayClose: ind.prev_close || ind.close,
-      fridayLow: ind.prev_low || ind.low,
+      prevHigh: ind.prev_high || ind.high,
+      prevClose: ind.prev_close || ind.close,
+      prevLow: ind.prev_low || ind.low,
       high20D: ind.high_20d,
       high52W: ind.high_52w || null,     // For structural ladder
       // Pivot levels for target anchoring - STRUCTURAL LADDER

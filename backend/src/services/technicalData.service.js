@@ -845,6 +845,85 @@ async function fetchLiveIntradayData(instrumentKey) {
 }
 
 /**
+ * Detect 1H swing highs/lows from hourly candles and cluster into zones.
+ * A swing high is a candle whose high is higher than the 3 candles before and after it.
+ * A swing low is a candle whose low is lower than the 3 candles before and after it.
+ * Nearby levels within 0.5% are clustered into zones with a midpoint.
+ *
+ * @param {Array} candles - Sorted oldest-first 1H candles [timestamp, open, high, low, close, volume, oi]
+ * @returns {{ swingHighs: number[], swingLows: number[], resistanceZones: Array<{levels: number[], midpoint: number}>, supportZones: Array<{levels: number[], midpoint: number}> }}
+ */
+function find1HSwingLevels(candles) {
+  if (!candles || candles.length < 7) {
+    console.log(`[SwingLevels] Not enough candles (${candles?.length || 0}) for swing detection — need at least 7`);
+    return { swingHighs: [], swingLows: [], resistanceZones: [], supportZones: [] };
+  }
+
+  const swingHighs = [];
+  const swingLows = [];
+
+  // Detect swings: 3-bar lookback, 3-bar lookahead (inclusive bounds)
+  for (let i = 3; i <= candles.length - 4; i++) {
+    const high = candles[i][2];
+    const low = candles[i][3];
+
+    // Check swing high: candle[i] high > all 3 before and 3 after
+    let isSwingHigh = true;
+    for (let j = 1; j <= 3; j++) {
+      if (high <= candles[i - j][2] || high <= candles[i + j][2]) {
+        isSwingHigh = false;
+        break;
+      }
+    }
+    if (isSwingHigh) swingHighs.push(round2(high));
+
+    // Check swing low: candle[i] low < all 3 before and 3 after
+    let isSwingLow = true;
+    for (let j = 1; j <= 3; j++) {
+      if (low >= candles[i - j][3] || low >= candles[i + j][3]) {
+        isSwingLow = false;
+        break;
+      }
+    }
+    if (isSwingLow) swingLows.push(round2(low));
+  }
+
+  // Cluster nearby levels within 0.5% into zones
+  const clusterLevels = (levels) => {
+    if (levels.length === 0) return [];
+    const sorted = [...levels].sort((a, b) => a - b);
+    const zones = [];
+    let currentZone = [sorted[0]];
+
+    for (let i = 1; i < sorted.length; i++) {
+      const zoneMid = currentZone.reduce((a, b) => a + b, 0) / currentZone.length;
+      // Within 0.5% of zone midpoint → same zone
+      if (Math.abs(sorted[i] - zoneMid) / zoneMid <= 0.005) {
+        currentZone.push(sorted[i]);
+      } else {
+        zones.push({ levels: currentZone, midpoint: round2(currentZone.reduce((a, b) => a + b, 0) / currentZone.length) });
+        currentZone = [sorted[i]];
+      }
+    }
+    zones.push({ levels: currentZone, midpoint: round2(currentZone.reduce((a, b) => a + b, 0) / currentZone.length) });
+    return zones;
+  };
+
+  const resistanceZones = clusterLevels(swingHighs);
+  const supportZones = clusterLevels(swingLows);
+
+  console.log(`[SwingLevels] Found ${swingHighs.length} swing highs → ${resistanceZones.length} resistance zones, ${swingLows.length} swing lows → ${supportZones.length} support zones`);
+  if (resistanceZones.length > 0) {
+    console.log(`[SwingLevels] Resistance zones: ${resistanceZones.map(z => z.midpoint).join(', ')}`);
+  }
+  if (supportZones.length > 0) {
+    console.log(`[SwingLevels] Support zones: ${supportZones.map(z => z.midpoint).join(', ')}`);
+  }
+
+  return { swingHighs, swingLows, resistanceZones, supportZones };
+}
+
+/**
  * Fetch 1H candles from Upstox V3 and compute 1H + 4H pivot levels.
  * Used for multi-timeframe confluence scoring in daily picks.
  *
@@ -853,7 +932,7 @@ async function fetchLiveIntradayData(instrumentKey) {
  * @returns {{ hourly_1h_pivots: object|null, hourly_4h_pivots: object|null }}
  */
 async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
-  const EMPTY = { hourly_1h_pivots: null, hourly_4h_pivots: null };
+  const EMPTY = { hourly_1h_pivots: null, hourly_4h_pivots: null, swing_levels_1h: null };
 
   if (!instrumentKey || !tradingDateStr) return EMPTY;
 
@@ -865,10 +944,15 @@ async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
     nextDay.setDate(nextDay.getDate() + 1);
     const toDate = nextDay.toISOString().split('T')[0];
 
-    const encodedKey = encodeURIComponent(instrumentKey);
-    const url = `https://api.upstox.com/v3/historical-candle/${encodedKey}/hours/1/${toDate}/${tradingDate}`;
+    // fromDate = 10 calendar days back (covers ~7 trading days for swing detection)
+    const fromDateObj = new Date(tradingDate);
+    fromDateObj.setDate(fromDateObj.getDate() - 10);
+    const fromDate = fromDateObj.toISOString().split('T')[0];
 
-    console.log(`[HourlyPivots] Fetching 1H candles: ${instrumentKey} date=${tradingDate}`);
+    const encodedKey = encodeURIComponent(instrumentKey);
+    const url = `https://api.upstox.com/v3/historical-candle/${encodedKey}/hours/1/${toDate}/${fromDate}`;
+
+    console.log(`[HourlyPivots] Fetching 1H candles: ${instrumentKey} from=${fromDate} to=${toDate}`);
 
     const response = await rateLimitedGet(url, {
       headers: {
@@ -880,29 +964,29 @@ async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
 
     const allCandles = response.data?.data?.candles || [];
 
-    // Filter to only the trading date (candles may include next day if market was open)
-    const candles = allCandles.filter(c => c[0]?.startsWith(tradingDate));
+    // Candles come newest-first from API. Sort oldest-first for aggregation.
+    allCandles.sort((a, b) => new Date(a[0]) - new Date(b[0]));
 
-    if (candles.length === 0) {
+    // Filter trading date candles for 1H/4H pivot calculation (original behavior)
+    const tradingDateCandles = allCandles.filter(c => c[0]?.startsWith(tradingDate));
+
+    if (tradingDateCandles.length === 0) {
       console.log(`[HourlyPivots] No candles for ${tradingDate} — skipping`);
-      return EMPTY;
+      return { ...EMPTY, swing_levels_1h: null };
     }
 
-    // Candles come newest-first from API. Sort oldest-first for aggregation.
-    candles.sort((a, b) => new Date(a[0]) - new Date(b[0]));
-
-    console.log(`[HourlyPivots] Got ${candles.length} candles for ${tradingDate} (${candles[0][0]} → ${candles[candles.length - 1][0]})`);
+    console.log(`[HourlyPivots] Got ${allCandles.length} total candles (${allCandles[0][0]} → ${allCandles[allCandles.length - 1][0]}), ${tradingDateCandles.length} for trading date`);
 
     // Candle format: [timestamp, open, high, low, close, volume, oi]
-    // 1H pivot: from the LAST hourly candle
-    const lastCandle = candles[candles.length - 1];
+    // 1H pivot: from the LAST hourly candle of trading date
+    const lastCandle = tradingDateCandles[tradingDateCandles.length - 1];
     const hourly1hPivots = calcClassicPivots(lastCandle[2], lastCandle[3], lastCandle[4]);
 
-    // 4H pivot: aggregate last N candles (4 if available, all if 2-3, skip if < 2)
+    // 4H pivot: aggregate last N candles of trading date (4 if available, all if 2-3, skip if < 2)
     let hourly4hPivots = null;
-    if (candles.length >= 2) {
-      const n = Math.min(4, candles.length);
-      const slice = candles.slice(-n);
+    if (tradingDateCandles.length >= 2) {
+      const n = Math.min(4, tradingDateCandles.length);
+      const slice = tradingDateCandles.slice(-n);
       const aggHigh = Math.max(...slice.map(c => c[2]));
       const aggLow = Math.min(...slice.map(c => c[3]));
       const aggClose = slice[slice.length - 1][4];
@@ -911,7 +995,10 @@ async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
 
     console.log(`[HourlyPivots] 1H pivot=${hourly1hPivots ? round2(hourly1hPivots.pivot) : 'N/A'} R1=${hourly1hPivots ? round2(hourly1hPivots.r1) : 'N/A'} S1=${hourly1hPivots ? round2(hourly1hPivots.s1) : 'N/A'} | 4H pivot=${hourly4hPivots ? round2(hourly4hPivots.pivot) : 'N/A'} R1=${hourly4hPivots ? round2(hourly4hPivots.r1) : 'N/A'} S1=${hourly4hPivots ? round2(hourly4hPivots.s1) : 'N/A'}`);
 
-    return { hourly_1h_pivots: hourly1hPivots, hourly_4h_pivots: hourly4hPivots };
+    // Compute 1H swing levels from all candles (7 trading days)
+    const swingLevels = find1HSwingLevels(allCandles);
+
+    return { hourly_1h_pivots: hourly1hPivots, hourly_4h_pivots: hourly4hPivots, swing_levels_1h: swingLevels };
   } catch (error) {
     console.error(`[HourlyPivots] Error fetching hourly pivots for ${instrumentKey}:`, error.message);
     return EMPTY;
@@ -955,7 +1042,8 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
         todays_volume: 0,
         avg_volume_50d: 0,
         hourly_1h_pivots: null,
-        hourly_4h_pivots: null
+        hourly_4h_pivots: null,
+        swing_levels_1h: null
       };
     }
 
@@ -1121,7 +1209,8 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       weekly_s1: weeklyPivot?.s1 || null,
       weekly_s2: weeklyPivot?.s2 || null,
       hourly_1h_pivots: hourlyPivots.hourly_1h_pivots,
-      hourly_4h_pivots: hourlyPivots.hourly_4h_pivots
+      hourly_4h_pivots: hourlyPivots.hourly_4h_pivots,
+      swing_levels_1h: hourlyPivots.swing_levels_1h
     };
   } catch (error) {
     console.error(`[DailyAnalysis] Error calculating data for ${symbol}:`, error.message);
@@ -1140,7 +1229,8 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       todays_volume: 0,
       avg_volume_50d: 0,
       hourly_1h_pivots: null,
-      hourly_4h_pivots: null
+      hourly_4h_pivots: null,
+      swing_levels_1h: null
     };
   }
 }

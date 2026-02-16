@@ -166,17 +166,17 @@ export async function getStockIndicators(instrument_key, debug = false) {
       }
     }
 
-    // Get Friday (last trading day) data for levels calculation
-    let fridayHigh = null;
-    let fridayLow = null;
-    let fridayClose = null;
-    let fridayVolume = null;
+    // Get previous candle (last trading day) data for levels calculation
+    let prevHigh = null;
+    let prevLow = null;
+    let prevClose = null;
+    let prevVolume = null;
 
     if (lastCandle) {
-      fridayHigh = Array.isArray(lastCandle) ? lastCandle[2] : lastCandle.high;
-      fridayLow = Array.isArray(lastCandle) ? lastCandle[3] : lastCandle.low;
-      fridayClose = Array.isArray(lastCandle) ? lastCandle[4] : lastCandle.close;
-      fridayVolume = Array.isArray(lastCandle) ? lastCandle[5] : lastCandle.volume;
+      prevHigh = Array.isArray(lastCandle) ? lastCandle[2] : lastCandle.high;
+      prevLow = Array.isArray(lastCandle) ? lastCandle[3] : lastCandle.low;
+      prevClose = Array.isArray(lastCandle) ? lastCandle[4] : lastCandle.close;
+      prevVolume = Array.isArray(lastCandle) ? lastCandle[5] : lastCandle.volume;
     }
 
     // Calculate weekly change (for A+ momentum scoring)
@@ -208,10 +208,10 @@ export async function getStockIndicators(instrument_key, debug = false) {
       distance_from_20dma_pct: indicators.sma20 && currentPrice ?
         round2(((currentPrice - indicators.sma20) / indicators.sma20) * 100) : null,
       // Additional fields for levels calculation
-      fridayHigh: round2(fridayHigh),
-      fridayLow: round2(fridayLow),
-      fridayClose: round2(fridayClose),
-      fridayVolume,
+      prevHigh: round2(prevHigh),
+      prevLow: round2(prevLow),
+      prevClose: round2(prevClose),
+      prevVolume,
       weekly_change_pct
     };
   } catch (error) {
@@ -228,7 +228,7 @@ export async function getStockIndicators(instrument_key, debug = false) {
  */
 function calculateLevelsForStock(stockData, scanType, levelCalculator = null) {
   const {
-    ema20, atr, fridayHigh, fridayClose, fridayLow, high_20d, high_52w, fridayVolume, volume_20avg,
+    ema20, atr, prevHigh, prevClose, prevLow, high_20d, high_52w, prevVolume, volume_20avg,
     // Pivot levels for target anchoring (NEW)
     weekly_r1, weekly_r2, weekly_s1, weekly_pivot,
     daily_r1, daily_r2, daily_s1, daily_pivot
@@ -238,12 +238,12 @@ function calculateLevelsForStock(stockData, scanType, levelCalculator = null) {
   const levelsData = {
     ema20,
     atr,
-    fridayHigh,
-    fridayClose,
-    fridayLow,
+    prevHigh,
+    prevClose,
+    prevLow,
     high20D: high_20d,
     high52W: high_52w,     // NEW: For structural ladder (last resort before rejection)
-    fridayVolume,
+    prevVolume,
     avgVolume20: volume_20avg,  // Named to match scanLevels.js expectation
     // Pivot levels for target anchoring (STRUCTURAL LADDER)
     // Priority: Weekly R1 → Weekly R2 → 52W High → REJECT
@@ -522,11 +522,11 @@ function buildStockDataFromTechService(techData, chartinkClose, chartinkVolume) 
     return_1m: techData.return_1m,
     distance_from_20dma_pct: techData.distance_from_20dma_pct,
 
-    // For level calculations (using today's data as "Friday" data)
-    fridayHigh: techData.todays_high,
-    fridayLow: techData.todays_low,
-    fridayClose: currentPrice,
-    fridayVolume: currentVolume,
+    // For level calculations (using today's data as previous candle data)
+    prevHigh: techData.todays_high,
+    prevLow: techData.todays_low,
+    prevClose: currentPrice,
+    prevVolume: currentVolume,
 
     // Weekly change (now available from techData)
     weekly_change_pct: techData.weekly_change_pct,
@@ -573,10 +573,10 @@ function buildStockDataFromLegacy(indicators, chartinkClose, chartinkVolume) {
     high_52w: null,  // Not available in legacy
     return_1m: indicators?.return_1m,
     distance_from_20dma_pct: indicators?.distance_from_20dma_pct,
-    fridayHigh: indicators?.fridayHigh,
-    fridayLow: indicators?.fridayLow,
-    fridayClose: indicators?.fridayClose,
-    fridayVolume: indicators?.fridayVolume,
+    prevHigh: indicators?.prevHigh,
+    prevLow: indicators?.prevLow,
+    prevClose: indicators?.prevClose,
+    prevVolume: indicators?.prevVolume,
     weekly_change_pct: indicators?.weekly_change_pct,
     ema_stack_bullish: null,  // Not available in legacy
     // Pivots not available in legacy

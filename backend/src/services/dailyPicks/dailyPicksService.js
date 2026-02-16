@@ -118,6 +118,21 @@ async function runDailyPicks(options = {}) {
     for (let i = 0; i < scored.length; i++) {
       const candidate = scored[i];
       console.log(`${LOG} [Step 5] --- Candidate ${i + 1}/${scored.length}: ${candidate.symbol} (${candidate.scan_type}, score=${candidate.rank_score}) ---`);
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // CONFLICT CHECK GATE: Reject if 1H structure blocks the trade
+      // LONG: reject if resistance zone within 1% above PDH (entry zone)
+      // SHORT: reject if support zone within 1% below PDL (entry zone)
+      // ═══════════════════════════════════════════════════════════════════════
+      const conflictResult = check1HStructuralConflict(candidate);
+      if (conflictResult.rejected) {
+        rejectedCount++;
+        const scanType = candidate.scan_type;
+        rejectionReasons[scanType] = (rejectionReasons[scanType] || 0) + 1;
+        console.log(`${LOG} [Step 5] ${candidate.symbol}: REJECTED by conflict check (${rejectedCount} rejected so far)`);
+        continue;
+      }
+
       const withLevels = calculateLevels(candidate);
       if (withLevels) {
         allViable.push(withLevels);
@@ -397,7 +412,9 @@ async function enrichCandidates(candidates) {
         },
         // Hourly pivots for multi-timeframe confluence scoring
         hourly_1h_pivots: stock.hourly_1h_pivots || null,
-        hourly_4h_pivots: stock.hourly_4h_pivots || null
+        hourly_4h_pivots: stock.hourly_4h_pivots || null,
+        // 1H swing levels for structural targets and conflict check
+        swing_levels_1h: stock.swing_levels_1h || null
       }
     });
   }
@@ -406,77 +423,112 @@ async function enrichCandidates(candidates) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// 1H STRUCTURAL CONFLICT CHECK
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Hard gate: reject candidates where 1H structure blocks the trade direction.
+ * LONG: reject if any resistance zone midpoint is within 1% above PDH (entry zone)
+ * SHORT: reject if any support zone midpoint is within 1% below PDL (entry zone)
+ *
+ * Uses PDH/PDL as approximate entry (not close) since that's where entries trigger.
+ *
+ * @returns {{ rejected: boolean, reason?: string }}
+ */
+function check1HStructuralConflict(candidate) {
+  const ohlcv = candidate._ohlcv;
+  if (!ohlcv?.swing_levels_1h) return { rejected: false };
+
+  const { resistanceZones = [], supportZones = [] } = ohlcv.swing_levels_1h;
+  const sym = candidate.symbol;
+  const isLong = candidate.direction === 'LONG';
+
+  if (isLong) {
+    // LONG: approximate entry = PDH (prevHigh). Reject if resistance within 1% above it.
+    const pdh = ohlcv.high;
+    const conflictZone = resistanceZones.find(z => z.midpoint > pdh && z.midpoint <= pdh * 1.01);
+    if (conflictZone) {
+      const reason = `1H structural conflict: resistance at ₹${round2(conflictZone.midpoint)} within 1% above entry zone (PDH ₹${round2(pdh)})`;
+      console.log(`${LOG} [ConflictCheck] ${sym}: REJECTED — ${reason}`);
+      return { rejected: true, reason };
+    }
+  } else {
+    // SHORT: approximate entry = PDL (prevLow). Reject if support within 1% below it.
+    const pdl = ohlcv.low;
+    const conflictZone = supportZones.find(z => z.midpoint < pdl && z.midpoint >= pdl * 0.99);
+    if (conflictZone) {
+      const reason = `1H structural conflict: support at ₹${round2(conflictZone.midpoint)} within 1% below entry zone (PDL ₹${round2(pdl)})`;
+      console.log(`${LOG} [ConflictCheck] ${sym}: REJECTED — ${reason}`);
+      return { rejected: true, reason };
+    }
+  }
+
+  console.log(`${LOG} [ConflictCheck] ${sym}: PASSED — no 1H structural conflict`);
+  return { rejected: false };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4: SCORE CANDIDATES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Multi-timeframe pivot confluence bonus.
- * Checks if 1H and/or 4H pivot levels cluster near daily pivot levels.
- * LONG: compares 1H_R1 / 4H_R1 against Daily_R1
- * SHORT: compares 1H_S1 / 4H_S1 against Daily_S1
+ * 1H stop validation bonus.
+ * Checks if any 1H swing level clusters within 0.5% of the PDH/PDL stop level.
+ * If a 1H swing level confirms the stop zone, the setup gets +5 score bonus.
+ *
+ * LONG: checks if any swing low clusters near PDL (the stop zone)
+ * SHORT: checks if any swing high clusters near PDH (the stop zone)
  *
  * @returns {{ bonus: number, detail: string }}
  */
 function calculateConfluence(candidate) {
   const THRESHOLD = 0.005; // 0.5% cluster distance
-  const PTS_PER_TF = 7.5;
+  const BONUS_PTS = 5;
   const sym = candidate.symbol;
 
   const ohlcv = candidate._ohlcv;
   if (!ohlcv) return { bonus: 0, detail: 'no ohlcv' };
 
-  const dailyPivots = ohlcv.daily_pivot_levels;
-  const h1 = ohlcv.hourly_1h_pivots;
-  const h4 = ohlcv.hourly_4h_pivots;
-
-  if (!dailyPivots) {
-    console.log(`${LOG} [Confluence] ${sym}: skip — no daily pivots`);
-    return { bonus: 0, detail: 'no daily pivots' };
-  }
-  if (!h1 && !h4) {
-    console.log(`${LOG} [Confluence] ${sym}: skip — no hourly pivots (1H=${h1 ? 'yes' : 'null'} 4H=${h4 ? 'yes' : 'null'})`);
-    return { bonus: 0, detail: 'no hourly pivots' };
+  const swingLevels = ohlcv.swing_levels_1h;
+  if (!swingLevels) {
+    console.log(`${LOG} [Confluence] ${sym}: skip — no 1H swing levels`);
+    return { bonus: 0, detail: 'no 1H swing levels' };
   }
 
   const isLong = candidate.direction === 'LONG';
-  const dailyLevel = isLong ? dailyPivots.r1 : dailyPivots.s1;
-  const levelLabel = isLong ? 'R1' : 'S1';
 
-  if (!dailyLevel || dailyLevel <= 0) return { bonus: 0, detail: `no daily ${levelLabel}` };
-
-  let bonus = 0;
-  const matches = [];
-
-  // Check 1H pivot proximity
-  const h1Level = isLong ? h1?.r1 : h1?.s1;
-  if (h1Level && h1Level > 0) {
-    const dist = Math.abs(h1Level - dailyLevel) / dailyLevel;
-    console.log(`${LOG} [Confluence] ${sym}: 1H ${levelLabel}=${round2(h1Level)} vs Daily ${levelLabel}=${round2(dailyLevel)} → dist=${round2(dist * 100)}% (threshold=0.5%)`);
-    if (dist <= THRESHOLD) {
-      bonus += PTS_PER_TF;
-      matches.push(`1H ${levelLabel} ${round2(dist * 100)}%`);
+  if (isLong) {
+    // LONG: check if any swing low clusters near PDL (stop zone)
+    const pdl = ohlcv.low;
+    const { supportZones = [] } = swingLevels;
+    const match = supportZones.find(z => {
+      const dist = Math.abs(z.midpoint - pdl) / pdl;
+      return dist <= THRESHOLD;
+    });
+    if (match) {
+      const dist = Math.abs(match.midpoint - pdl) / pdl;
+      const detail = `1H swing low at ${round2(match.midpoint)} confirms PDL stop at ${round2(pdl)} (${round2(dist * 100)}%)`;
+      console.log(`${LOG} [Confluence] ${sym}: +${BONUS_PTS} pts — ${detail}`);
+      return { bonus: BONUS_PTS, detail };
+    }
+  } else {
+    // SHORT: check if any swing high clusters near PDH (stop zone)
+    const pdh = ohlcv.high;
+    const { resistanceZones = [] } = swingLevels;
+    const match = resistanceZones.find(z => {
+      const dist = Math.abs(z.midpoint - pdh) / pdh;
+      return dist <= THRESHOLD;
+    });
+    if (match) {
+      const dist = Math.abs(match.midpoint - pdh) / pdh;
+      const detail = `1H swing high at ${round2(match.midpoint)} confirms PDH stop at ${round2(pdh)} (${round2(dist * 100)}%)`;
+      console.log(`${LOG} [Confluence] ${sym}: +${BONUS_PTS} pts — ${detail}`);
+      return { bonus: BONUS_PTS, detail };
     }
   }
 
-  // Check 4H pivot proximity
-  const h4Level = isLong ? h4?.r1 : h4?.s1;
-  if (h4Level && h4Level > 0) {
-    const dist = Math.abs(h4Level - dailyLevel) / dailyLevel;
-    console.log(`${LOG} [Confluence] ${sym}: 4H ${levelLabel}=${round2(h4Level)} vs Daily ${levelLabel}=${round2(dailyLevel)} → dist=${round2(dist * 100)}% (threshold=0.5%)`);
-    if (dist <= THRESHOLD) {
-      bonus += PTS_PER_TF;
-      matches.push(`4H ${levelLabel} ${round2(dist * 100)}%`);
-    }
-  }
-
-  if (bonus === 0) {
-    console.log(`${LOG} [Confluence] ${sym}: no confluence — distances exceed 0.5% threshold`);
-    return { bonus: 0, detail: 'no confluence' };
-  }
-
-  const detail = `${matches.join('+')} cluster near Daily ${levelLabel}=${round2(dailyLevel)}`;
-  console.log(`${LOG} [Confluence] ${sym}: ✅ +${round2(bonus)} pts — ${detail}`);
-  return { bonus: round2(bonus), detail };
+  console.log(`${LOG} [Confluence] ${sym}: no stop validation — no 1H swing near ${isLong ? 'PDL' : 'PDH'}`);
+  return { bonus: 0, detail: 'no stop validation' };
 }
 
 function scoreCandidates(enrichedCandidates) {
@@ -590,16 +642,19 @@ function calculateLevels(pick) {
   console.log(`${LOG} [Levels] ${symbol}: ema20=${_ohlcv.ema20} ema50=${_ohlcv.ema50} atr=${_ohlcv.atr}`);
   console.log(`${LOG} [Levels] ${symbol}: h5D=${_ohlcv.high_5d} l5D=${_ohlcv.low_5d} h10D=${_ohlcv.high_10d} l10D=${_ohlcv.low_10d} h20D=${_ohlcv.high_20d} l20D=${_ohlcv.low_20d} h52W=${_ohlcv.high_52w}`);
   console.log(`${LOG} [Levels] ${symbol}: pivots wR1=${_ohlcv.weekly_pivot_levels?.r1} wR2=${_ohlcv.weekly_pivot_levels?.r2} wS1=${_ohlcv.weekly_pivot_levels?.s1} wS2=${_ohlcv.weekly_pivot_levels?.s2} dP=${_ohlcv.daily_pivot_levels?.pivot} dR1=${_ohlcv.daily_pivot_levels?.r1} dR2=${_ohlcv.daily_pivot_levels?.r2} dS1=${_ohlcv.daily_pivot_levels?.s1} dS2=${_ohlcv.daily_pivot_levels?.s2}`);
+  const swingLevels = _ohlcv.swing_levels_1h;
+  console.log(`${LOG} [Levels] ${symbol}: 1H swings: resistanceZones=${swingLevels?.resistanceZones?.length || 0} [${(swingLevels?.resistanceZones || []).map(z => z.midpoint).join(',')}] supportZones=${swingLevels?.supportZones?.length || 0} [${(swingLevels?.supportZones || []).map(z => z.midpoint).join(',')}]`);
 
   // Prepare data for scanLevels engine
   const scanData = {
-    // Core price levels
-    fridayHigh: _ohlcv.high,
-    fridayLow: _ohlcv.low,
-    fridayClose: _ohlcv.close,
+    // Core price levels (previous candle = last completed daily candle)
+    prevHigh: _ohlcv.high,
+    prevLow: _ohlcv.low,
+    prevClose: _ohlcv.close,
 
     // Indicators
     ema20: _ohlcv.ema20,
+    ema50: _ohlcv.ema50 || 0,
     atr: _ohlcv.atr || 0,
 
     // 20-day levels (for stops/targets)
@@ -628,7 +683,6 @@ function calculateLevels(pick) {
     dailyPivot: _ohlcv.daily_pivot_levels?.pivot || null,
 
     // Previous day high/low — explicit names for intraday target fallback
-    // (fridayHigh/fridayLow are the same values but named for swing context)
     previousDayHigh: _ohlcv.high,
     previousDayLow: _ohlcv.low,
 
@@ -636,7 +690,11 @@ function calculateLevels(pick) {
     isIntraday: true,
 
     // Daily picks use relaxed R:R (1.2:1 vs swing's 1.5:1 for multi-day holds)
-    minRR: 1.2
+    minRR: 1.2,
+
+    // 1H swing levels for structural targets
+    resistanceZones: _ohlcv.swing_levels_1h?.resistanceZones || [],
+    supportZones: _ohlcv.swing_levels_1h?.supportZones || []
   };
 
   // Map daily picks scan type to engine archetype (e.g. breakout_setup → breakout)
@@ -659,11 +717,11 @@ function calculateLevels(pick) {
   const { entry, stop, target2: target, riskReward, riskPercent, rewardPercent, mode, reason } = result;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // DAILY PICKS RISK CAP: 4% (stricter than swing's 8%)
+  // DAILY PICKS RISK CAP: 3% (PDH/PDL-based stops, stricter than swing's 3%)
   // ═══════════════════════════════════════════════════════════════════════════
   // Daily picks are intraday MIS positions that force-close at 3 PM.
-  // No time to recover from 5%+ stops. Cap at 4% for safety.
-  const DAILY_PICKS_MAX_RISK = 4.0;
+  // With PDH/PDL stops, risk should naturally stay under 3%.
+  const DAILY_PICKS_MAX_RISK = 3.0;
 
   if (riskPercent > DAILY_PICKS_MAX_RISK) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED — Risk ${round2(riskPercent)}% exceeds daily picks cap (${DAILY_PICKS_MAX_RISK}%)`);

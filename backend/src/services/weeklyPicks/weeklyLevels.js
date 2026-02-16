@@ -4,8 +4,8 @@
  * Research-backed Entry/Target/StopLoss for weekly swing picks.
  * Uses percentage-based structural levels instead of ATR buffers.
  *
- * A+ Momentum: entry = fridayHigh × 1.005, stop = max(ema20, weeklyS1) × 0.997
- * Pullback:    entry = fridayHigh × 1.001, stop = max(fridayLow, ema20) × 0.997
+ * A+ Momentum: entry = prevHigh × 1.005, stop = max(ema20, weeklyS1) × 0.997
+ * Pullback:    entry = prevHigh × 1.001, stop = max(prevLow, ema20) × 0.997
  *
  * ATR is NOT used for entry/stop/target (kept for scoring & position sizing only).
  * Guardrails from engine/scanLevels.js are reused for validation.
@@ -164,16 +164,16 @@ function getWeeklyTimeRules(archetype) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function calculateWeeklyAPlusMomentumLevels(data) {
-  const { ema20, fridayHigh, fridayClose, weeklyS1, dailyR1, atr } = data;
+  const { ema20, prevHigh, prevClose, weeklyS1, dailyR1, atr } = data;
 
   console.log(`${TAG} ── A+ MOMENTUM LEVEL CALCULATION ──`);
   console.log(`${TAG}   INPUT DATA:`);
-  console.log(`${TAG}     fridayHigh=${round2(fridayHigh)}, fridayClose=${round2(fridayClose)}, ema20=${round2(ema20)}`);
+  console.log(`${TAG}     prevHigh=${round2(prevHigh)}, prevClose=${round2(prevClose)}, ema20=${round2(ema20)}`);
   console.log(`${TAG}     weeklyS1=${round2(weeklyS1)}, dailyR1=${round2(dailyR1)}, atr=${round2(atr)}`);
 
-  if (!isNum(fridayHigh) || fridayHigh <= 0) {
-    console.log(`${TAG}   REJECTED: Friday high missing/invalid`);
-    return { valid: false, reason: 'Friday high required for A+ momentum entry' };
+  if (!isNum(prevHigh) || prevHigh <= 0) {
+    console.log(`${TAG}   REJECTED: Prev high missing/invalid`);
+    return { valid: false, reason: 'Prev high required for A+ momentum entry' };
   }
 
   if (!isNum(ema20) || ema20 <= 0) {
@@ -181,9 +181,9 @@ function calculateWeeklyAPlusMomentumLevels(data) {
     return { valid: false, reason: 'EMA20 required for A+ momentum stop' };
   }
 
-  // ENTRY: fridayHigh × 1.005 — "Buy when price exceeds 52W high by 0.5%"
-  const entry = roundToTick(fridayHigh * 1.005);
-  console.log(`${TAG}   ENTRY: fridayHigh(${round2(fridayHigh)}) x 1.005 = ${round2(entry)}`);
+  // ENTRY: prevHigh × 1.005 — "Buy when price exceeds 52W high by 0.5%"
+  const entry = roundToTick(prevHigh * 1.005);
+  console.log(`${TAG}   ENTRY: prevHigh(${round2(prevHigh)}) x 1.005 = ${round2(entry)}`);
 
   // Entry range: 1% band for intraday swings
   const entryRange = [entry, roundToTick(entry * 1.01)];
@@ -212,8 +212,8 @@ function calculateWeeklyAPlusMomentumLevels(data) {
   const targets = findAPlusMomentumTargets(entry, data);
 
   // Distance from EMA20 for context
-  const distanceFromEMA = isNum(fridayClose) && isNum(ema20)
-    ? ((fridayClose - ema20) / ema20) * 100
+  const distanceFromEMA = isNum(prevClose) && isNum(ema20)
+    ? ((prevClose - ema20) / ema20) * 100
     : 0;
 
   return {
@@ -229,7 +229,7 @@ function calculateWeeklyAPlusMomentumLevels(data) {
     target2_basis: targets.target2Basis,
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
-    reason: `A+ Momentum (52W Breakout): Entry at fridayHigh×1.005 = ${round2(entry)}, ` +
+    reason: `A+ Momentum (52W Breakout): Entry at prevHigh×1.005 = ${round2(entry)}, ` +
             `Stop at max(EMA20,S1)×0.997 = ${round2(stop)}, ` +
             `${round2(distanceFromEMA)}% above EMA20. ` +
             `T2: ${targets.target2Basis} = ${round2(targets.target2)}`
@@ -242,16 +242,16 @@ function calculateWeeklyAPlusMomentumLevels(data) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function calculateWeeklyPullbackLevels(data) {
-  const { ema20, fridayHigh, fridayLow, dailyR1 } = data;
+  const { ema20, prevHigh, prevLow, dailyR1 } = data;
 
   console.log(`${TAG} ── PULLBACK LEVEL CALCULATION ──`);
   console.log(`${TAG}   INPUT DATA:`);
-  console.log(`${TAG}     fridayHigh=${round2(fridayHigh)}, fridayLow=${round2(fridayLow)}, ema20=${round2(ema20)}`);
+  console.log(`${TAG}     prevHigh=${round2(prevHigh)}, prevLow=${round2(prevLow)}, ema20=${round2(ema20)}`);
   console.log(`${TAG}     dailyR1=${round2(dailyR1)}, high20D=${round2(data.high20D)}, weeklyR1=${round2(data.weeklyR1)}, weeklyR2=${round2(data.weeklyR2)}, high52W=${round2(data.high52W)}`);
 
-  if (!isNum(fridayHigh) || fridayHigh <= 0) {
-    console.log(`${TAG}   REJECTED: Friday high missing/invalid`);
-    return { valid: false, reason: 'Friday high required for pullback entry' };
+  if (!isNum(prevHigh) || prevHigh <= 0) {
+    console.log(`${TAG}   REJECTED: Prev high missing/invalid`);
+    return { valid: false, reason: 'Prev high required for pullback entry' };
   }
 
   if (!isNum(ema20) || ema20 <= 0) {
@@ -259,20 +259,20 @@ function calculateWeeklyPullbackLevels(data) {
     return { valid: false, reason: 'EMA20 required for pullback stop' };
   }
 
-  // ENTRY: fridayHigh × 1.001 — "Break above high of pullback candle"
-  const entry = roundToTick(fridayHigh * 1.001);
-  console.log(`${TAG}   ENTRY: fridayHigh(${round2(fridayHigh)}) x 1.001 = ${round2(entry)}`);
+  // ENTRY: prevHigh × 1.001 — "Break above high of pullback candle"
+  const entry = roundToTick(prevHigh * 1.001);
+  console.log(`${TAG}   ENTRY: prevHigh(${round2(prevHigh)}) x 1.001 = ${round2(entry)}`);
 
   // Entry range: 0.5% slippage band
   const entryRange = [entry, roundToTick(entry * 1.005)];
   console.log(`${TAG}   ENTRY RANGE: [${round2(entryRange[0])}, ${round2(entryRange[1])}] (0.5% band)`);
 
-  // STOP: max(fridayLow, ema20) × 0.997 — "Below swing low"; EMA20 break = trend invalid
-  const stopBase = isNum(fridayLow) && fridayLow > 0
-    ? Math.max(fridayLow, ema20)
+  // STOP: max(prevLow, ema20) × 0.997 — "Below swing low"; EMA20 break = trend invalid
+  const stopBase = isNum(prevLow) && prevLow > 0
+    ? Math.max(prevLow, ema20)
     : ema20;
   const stop = roundToTick(stopBase * 0.997);
-  console.log(`${TAG}   STOP: max(fridayLow=${round2(fridayLow)}, ema20=${round2(ema20)}) = ${round2(stopBase)} x 0.997 = ${round2(stop)}`);
+  console.log(`${TAG}   STOP: max(prevLow=${round2(prevLow)}, ema20=${round2(ema20)}) = ${round2(stopBase)} x 0.997 = ${round2(stop)}`);
 
   const riskPct = ((entry - stop) / entry * 100);
   console.log(`${TAG}   RISK: entry(${round2(entry)}) - stop(${round2(stop)}) = ${round2(entry - stop)} (${round2(riskPct)}%)`);
@@ -293,7 +293,7 @@ function calculateWeeklyPullbackLevels(data) {
     mode: 'PULLBACK_CONSERVATIVE',
     archetype: 'pullback',
     entry,
-    entry_basis: 'friday_high_pct',
+    entry_basis: 'prev_high_pct',
     entryRange,
     stop,
     target: targets.target2,
@@ -301,8 +301,8 @@ function calculateWeeklyPullbackLevels(data) {
     target2_basis: targets.target2Basis,
     dailyR1Check: isNum(dailyR1) ? dailyR1 : null,
     entryType: 'buy_above',
-    reason: `Pullback (EMA20 Retest): Entry at fridayHigh×1.001 = ${round2(entry)}, ` +
-            `Stop at max(fridayLow,EMA20)×0.997 = ${round2(stop)}. ` +
+    reason: `Pullback (EMA20 Retest): Entry at prevHigh×1.001 = ${round2(entry)}, ` +
+            `Stop at max(prevLow,EMA20)×0.997 = ${round2(stop)}. ` +
             `T2: ${targets.target2Basis} = ${round2(targets.target2)}`
   };
 }
@@ -322,16 +322,16 @@ export function calculateWeeklyTradingLevels(scanType, data) {
     return { valid: false, reason: 'No data provided' };
   }
 
-  const { ema20, fridayClose, atr } = data;
+  const { ema20, prevClose, atr } = data;
 
   if (!isNum(ema20) || ema20 <= 0) {
     console.log(`${TAG} REJECTED: EMA20 missing or invalid`);
     return { valid: false, reason: 'EMA20 missing or invalid' };
   }
 
-  if (!isNum(fridayClose) || fridayClose <= 0) {
-    console.log(`${TAG} REJECTED: Friday close missing or invalid`);
-    return { valid: false, reason: 'Friday close missing or invalid' };
+  if (!isNum(prevClose) || prevClose <= 0) {
+    console.log(`${TAG} REJECTED: Prev close missing or invalid`);
+    return { valid: false, reason: 'Prev close missing or invalid' };
   }
 
   // Route to scan-specific calculator
