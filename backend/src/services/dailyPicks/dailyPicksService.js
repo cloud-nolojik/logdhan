@@ -27,8 +27,7 @@ import priceCacheService from '../priceCache.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import kiteConfig from '../../config/kite.config.js';
 import { getISTMidnight, calculatePnl, updateDailyResults, round2, delay } from './dailyPicksHelpers.js';
-import { collectOpeningRange, validatePicks, getUpstoxAccessToken } from './orbValidationService.js';
-import upstoxService from '../upstox.service.js';
+import { collectOpeningRange, validatePicks } from './orbValidationService.js';
 import scanLevels from '../../engine/scanLevels.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -53,66 +52,6 @@ function getAnthropicClient() {
     anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   }
   return anthropic;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// UPSTOX LTP HELPER — replaces Kite getLTP (Personal app lacks quote perms)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Fetch LTP for picks via Upstox, returning data in Kite-compatible format.
- * @param {Array} picks — pick objects with `symbol` and `instrument_key`
- * @returns {Object} — { 'NSE:SYMBOL': { last_price }, ... }
- */
-async function fetchLTPviaUpstox(picks) {
-  console.log(`${LOG} [UPSTOX-LTP] Fetching LTP for ${picks.length} picks`);
-
-  const accessToken = await getUpstoxAccessToken();
-  const tokenSnippet = accessToken ? `...${accessToken.slice(-6)}` : 'null';
-  console.log(`${LOG} [UPSTOX-LTP] Got Upstox token: ${tokenSnippet}`);
-
-  const instrumentKeys = [];
-  const keyToSymbol = {};
-  for (const pick of picks) {
-    if (pick.instrument_key) {
-      instrumentKeys.push(pick.instrument_key);
-      keyToSymbol[pick.instrument_key] = pick.symbol;
-      console.log(`${LOG} [UPSTOX-LTP] ${pick.symbol} → ${pick.instrument_key}`);
-    } else {
-      console.warn(`${LOG} [UPSTOX-LTP] ${pick.symbol}: No instrument_key — skipping`);
-    }
-  }
-
-  if (instrumentKeys.length === 0) {
-    console.warn(`${LOG} [UPSTOX-LTP] No instrument keys to fetch — returning empty`);
-    return {};
-  }
-
-  console.log(`${LOG} [UPSTOX-LTP] Calling getLiveMarketData for ${instrumentKeys.length} instruments`);
-  const result = await upstoxService.getLiveMarketData(instrumentKeys, accessToken);
-
-  if (!result.success) {
-    console.error(`${LOG} [UPSTOX-LTP] getLiveMarketData FAILED: ${result.message}`);
-    throw new Error(`Upstox LTP failed: ${result.message}`);
-  }
-
-  console.log(`${LOG} [UPSTOX-LTP] getLiveMarketData SUCCESS — ${Object.keys(result.data).length} instruments returned`);
-
-  // Convert from Upstox format { 'NSE_EQ|ISIN': { last_price } }
-  // to Kite-compatible format { 'NSE:SYMBOL': { last_price } }
-  const ltpData = {};
-  for (const [instKey, data] of Object.entries(result.data)) {
-    const sym = keyToSymbol[instKey];
-    if (sym && data?.last_price) {
-      ltpData[`NSE:${sym}`] = { last_price: data.last_price };
-      console.log(`${LOG} [UPSTOX-LTP] ${sym}: ₹${data.last_price} (trade_time: ${data.last_trade_time || 'N/A'})`);
-    } else {
-      console.warn(`${LOG} [UPSTOX-LTP] Unknown key or no price: ${instKey} → sym=${sym} price=${data?.last_price}`);
-    }
-  }
-
-  console.log(`${LOG} [UPSTOX-LTP] Returning LTP for ${Object.keys(ltpData).length} symbols`);
-  return ltpData;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1072,8 +1011,22 @@ async function startOrbCollection(options = {}) {
   console.log(`${LOG} Collecting ORB for: ${symbols.join(', ')}`);
   console.log(`${LOG} [DEBUG] About to call collectOpeningRange() — this blocks for ~15 min`);
 
-  const orbData = await collectOpeningRange(symbols, pendingPicks);
-  console.log(`${LOG} [DEBUG] collectOpeningRange() returned. Keys: ${Object.keys(orbData).join(', ')}`);
+  let orbData;
+  try {
+    orbData = await collectOpeningRange(symbols, pendingPicks);
+    console.log(`${LOG} [DEBUG] collectOpeningRange() returned. Keys: ${Object.keys(orbData).join(', ')}`);
+  } catch (orbErr) {
+    console.error(`${LOG} [ERROR] collectOpeningRange() THREW: ${orbErr.message}`);
+    console.error(`${LOG} [ERROR] Stack: ${orbErr.stack}`);
+    // Reset picks back to PENDING so next trigger can retry
+    for (const pick of pendingPicks) {
+      pick.trade.status = 'PENDING';
+      pick.kite.kite_status = 'pending';
+    }
+    await doc.save();
+    console.log(`${LOG} [ERROR] Reset ${pendingPicks.length} picks back to PENDING`);
+    return { success: false, error: orbErr.message };
+  }
 
   // Store ORB data on each pick
   for (const pick of pendingPicks) {
@@ -1719,9 +1672,11 @@ async function monitorDailyPickOrders(options = {}) {
   if (istHour >= TRAIL_START_HOUR && stillEnteredPicks.length > 0 && !dryRun) {
     console.log(`${LOG} [TRAILING] Checking trailing stops for ${stillEnteredPicks.length} positions (after 12 PM)`);
 
-    // Fetch fresh LTP via Upstox (Kite Personal app lacks quote permissions)
+    // Fetch fresh LTP via Kite Connect API
+    const symbols = stillEnteredPicks.map(p => `NSE:${p.symbol}`);
     try {
-      const ltpData = await fetchLTPviaUpstox(stillEnteredPicks);
+      console.log(`${LOG} [TRAILING] Fetching LTP for: ${symbols.join(', ')}`);
+      const ltpData = await kiteOrderService.getLTP(symbols);
 
       for (const pick of stillEnteredPicks) {
         const currentPrice = ltpData[`NSE:${pick.symbol}`]?.last_price;
@@ -1818,10 +1773,12 @@ async function tightenStops(options = {}) {
     return { success: true, tightened: 0 };
   }
 
-  // Fetch fresh LTP via Upstox (Kite Personal app lacks quote permissions)
+  // Fetch fresh LTP via Kite Connect API
+  const symbols = enteredPicks.map(p => `NSE:${p.symbol}`);
   let ltpData;
   try {
-    ltpData = await fetchLTPviaUpstox(enteredPicks);
+    console.log(`${LOG} [TIGHTEN] Fetching LTP for: ${symbols.join(', ')}`);
+    ltpData = await kiteOrderService.getLTP(symbols);
   } catch (err) {
     console.error(`${LOG} LTP fetch failed for tightening:`, err.message);
     return { success: false, error: err.message };
