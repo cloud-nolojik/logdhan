@@ -107,8 +107,8 @@ class KiteOrderService {
         validity: orderParams.validity || kiteConfig.ORDER_VALIDITY
       };
 
-      // Add price for LIMIT orders
-      if (params.order_type === 'LIMIT' && orderParams.price) {
+      // Add price for LIMIT and SL orders (SL requires both trigger_price and limit price)
+      if ((params.order_type === 'LIMIT' || params.order_type === 'SL') && orderParams.price) {
         params.price = orderParams.price;
       }
 
@@ -126,54 +126,64 @@ class KiteOrderService {
       );
 
       const durationMs = Date.now() - startTime;
+      const orderId = response.data?.order_id;
 
-      // Create order record in database
-      const kiteOrder = await KiteOrder.create({
-        user_id: this.adminUserId,
-        stock_id: orderParams.stockId,
-        simulation_id: orderParams.simulationId,
-        order_id: response.data?.order_id,
-        order_type: orderParams.orderType || 'MANUAL',
-        trading_symbol: params.tradingsymbol,
-        exchange: params.exchange,
-        transaction_type: params.transaction_type,
-        quantity: params.quantity,
-        price: params.price || 0,
-        trigger_price: params.trigger_price,
-        product: params.product,
-        kite_order_type: params.order_type,
-        status: 'PLACED',
-        placed_at: new Date(),
-        order_value: params.quantity * (params.price || 0),
-        kite_response: response,
-        is_gtt: false
-      });
+      console.log(`[KITE ORDER] Order placed successfully. Order ID: ${orderId}`);
+
+      // Create order record in database (non-blocking — don't let DB failure hide a placed order)
+      let kiteOrder = null;
+      try {
+        kiteOrder = await KiteOrder.create({
+          user_id: this.adminUserId,
+          stock_id: orderParams.stockId,
+          simulation_id: orderParams.simulationId,
+          order_id: orderId,
+          order_type: orderParams.orderType || 'MANUAL',
+          trading_symbol: params.tradingsymbol,
+          exchange: params.exchange,
+          transaction_type: params.transaction_type,
+          quantity: params.quantity,
+          price: params.price || 0,
+          trigger_price: params.trigger_price,
+          product: params.product,
+          kite_order_type: params.order_type,
+          status: 'PLACED',
+          placed_at: new Date(),
+          order_value: params.quantity * (params.price || 0),
+          kite_response: response,
+          is_gtt: false
+        });
+      } catch (dbErr) {
+        console.error(`[KITE ORDER] DB save failed for order ${orderId}:`, dbErr.message);
+      }
 
       // Log to audit
-      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_PLACED, {
-        orderId: response.data?.order_id,
-        symbol: params.tradingsymbol,
-        exchange: params.exchange,
-        orderType: orderParams.orderType,
-        transactionType: params.transaction_type,
-        quantity: params.quantity,
-        price: params.price,
-        triggerPrice: params.trigger_price,
-        status: 'SUCCESS',
-        response,
-        orderValue: params.quantity * (params.price || 0),
-        simulationId: orderParams.simulationId,
-        stockId: orderParams.stockId,
-        kiteOrderRef: kiteOrder._id,
-        durationMs,
-        source: orderParams.source || 'AUTO'
-      });
-
-      console.log(`[KITE ORDER] Order placed successfully. Order ID: ${response.data?.order_id}`);
+      try {
+        await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_PLACED, {
+          orderId,
+          symbol: params.tradingsymbol,
+          exchange: params.exchange,
+          orderType: orderParams.orderType,
+          transactionType: params.transaction_type,
+          quantity: params.quantity,
+          price: params.price,
+          triggerPrice: params.trigger_price,
+          status: 'SUCCESS',
+          response,
+          orderValue: params.quantity * (params.price || 0),
+          simulationId: orderParams.simulationId,
+          stockId: orderParams.stockId,
+          kiteOrderRef: kiteOrder?._id,
+          durationMs,
+          source: orderParams.source || 'AUTO'
+        });
+      } catch (auditErr) {
+        console.error(`[KITE ORDER] Audit log failed for order ${orderId}:`, auditErr.message);
+      }
 
       return {
         success: true,
-        orderId: response.data?.order_id,
+        orderId,
         kiteOrder,
         response
       };
