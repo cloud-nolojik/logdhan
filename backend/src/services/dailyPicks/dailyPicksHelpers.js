@@ -64,7 +64,7 @@ export function round2(n) {
 
 /** Round price to NSE tick size (0.05) */
 export function roundToTick(price, tick = 0.05) {
-  return Math.round(price / tick) * tick;
+  return round2(Math.round(price / tick) * tick);
 }
 
 export function delay(ms) {
