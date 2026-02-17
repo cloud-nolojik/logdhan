@@ -518,7 +518,8 @@ class KiteAutoLoginService {
     } catch (error) {
       const status = error.response?.status;
       const errorType = error.response?.data?.error_type;
-      console.log(`[KITE] makeRequest: ${method} ${endpoint} → FAILED status=${status} error_type=${errorType} msg=${error.message}`);
+      const errorMessage = error.response?.data?.message || error.message;
+      console.log(`[KITE] makeRequest: ${method} ${endpoint} → FAILED status=${status} error_type=${errorType} msg=${errorMessage}`);
 
       // Only retry on actual token expiry — NOT on PermissionException (which is permanent)
       const isTokenExpired = errorType === 'TokenException' ||
