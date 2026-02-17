@@ -1530,11 +1530,13 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // GUARD D: Maximum risk check (8%) - REJECT, don't adjust
+  // GUARD D: Maximum risk check - REJECT, don't adjust
+  // 52W scans allow 5% (breakout stocks are inherently volatile)
   // ─────────────────────────────────────────────────────────────────────────
   const risk = isShortTrade ? (stop - entry) : (entry - stop);
   const riskPercent = (risk / entry) * 100;
-  const MAX_RISK_PERCENT = 3.0;
+  const is52wScan = ['fiftytwoweek_high', 'fiftytwoweek_low'].includes(scanType?.toLowerCase());
+  const MAX_RISK_PERCENT = is52wScan ? 5.0 : 3.0;
 
   if (riskPercent > MAX_RISK_PERCENT) {
     return {
@@ -1745,7 +1747,7 @@ function findShortStructuralTarget(params) {
  *   Entry:  prevClose (stock already near 52W high)
  *   Stop:   entry − 1× ATR
  *   Target: entry + 2× ATR  → gives 2:1 R:R by construction
- *   Risk cap: if 1× ATR > 3% of entry → reject (too volatile)
+ *   Risk cap: if 1× ATR > 5% of entry → reject (too volatile)
  */
 function calculate52wHighLevels(data) {
   const { prevClose, atr, high52W } = data;
@@ -1762,12 +1764,12 @@ function calculate52wHighLevels(data) {
   const stop = entry - atr;
   const target = entry + (2 * atr);
 
-  // Risk cap: if 1× ATR > 3% of entry, stock is too volatile for this setup
+  // Risk cap: 5% for 52W scans (breakout stocks are inherently volatile)
   const riskPct = (atr / entry) * 100;
-  if (riskPct > 3.0) {
+  if (riskPct > 5.0) {
     return {
       valid: false,
-      reason: `52W High REJECTED: ATR risk ${round2(riskPct)}% > 3% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
+      reason: `52W High REJECTED: ATR risk ${round2(riskPct)}% > 5% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
       riskPercent: round2(riskPct),
       suggestedAction: 'skip_too_volatile'
     };
@@ -1805,7 +1807,7 @@ function calculate52wHighLevels(data) {
  *   Entry:  prevClose (stock already near 52W low)
  *   Stop:   entry + 1× ATR
  *   Target: entry − 2× ATR  → gives 2:1 R:R by construction
- *   Risk cap: if 1× ATR > 3% of entry → reject (too volatile)
+ *   Risk cap: if 1× ATR > 5% of entry → reject (too volatile)
  */
 function calculate52wLowLevels(data) {
   const { prevClose, atr } = data;
@@ -1822,12 +1824,12 @@ function calculate52wLowLevels(data) {
   const stop = entry + atr;
   const target = entry - (2 * atr);
 
-  // Risk cap: if 1× ATR > 3% of entry, stock is too volatile for this setup
+  // Risk cap: 5% for 52W scans (breakdown stocks are inherently volatile)
   const riskPct = (atr / entry) * 100;
-  if (riskPct > 3.0) {
+  if (riskPct > 5.0) {
     return {
       valid: false,
-      reason: `52W Low REJECTED: ATR risk ${round2(riskPct)}% > 3% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
+      reason: `52W Low REJECTED: ATR risk ${round2(riskPct)}% > 5% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
       riskPercent: round2(riskPct),
       suggestedAction: 'skip_too_volatile'
     };
