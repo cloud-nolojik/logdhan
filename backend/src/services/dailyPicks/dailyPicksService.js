@@ -740,11 +740,13 @@ function calculateLevels(pick) {
   const { entry, stop, target2: target, riskReward, riskPercent, rewardPercent, mode, reason } = result;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // DAILY PICKS RISK CAP: 3% (PDH/PDL-based stops, stricter than swing's 3%)
+  // DAILY PICKS RISK CAP: 3% default, 5% for 52W scans
   // ═══════════════════════════════════════════════════════════════════════════
   // Daily picks are intraday MIS positions that force-close at 3 PM.
   // With PDH/PDL stops, risk should naturally stay under 3%.
-  const DAILY_PICKS_MAX_RISK = 3.0;
+  // 52W breakout/breakdown stocks are inherently volatile — 5% cap.
+  const is52wScan = scan_type === 'fiftyTwoWeek_high' || scan_type === 'fiftyTwoWeek_low';
+  const DAILY_PICKS_MAX_RISK = is52wScan ? 5.0 : 3.0;
 
   if (riskPercent > DAILY_PICKS_MAX_RISK) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED — Risk ${round2(riskPercent)}% exceeds daily picks cap (${DAILY_PICKS_MAX_RISK}%)`);
