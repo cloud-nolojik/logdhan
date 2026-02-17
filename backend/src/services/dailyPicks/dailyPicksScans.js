@@ -211,11 +211,11 @@ export const SCAN_ARCHETYPE = {
   // LONG — map to generic archetypes
   compression_bullish: 'consolidation_breakout',
   pullback_at_support: 'pullback',
-  fiftyTwoWeek_high: 'breakout',
+  fiftyTwoWeek_high: 'fiftyTwoWeek_high',
   breakout_setup: 'breakout',
   // SHORT — pass through to dedicated calculators in scanLevels.js
   compression_bearish: 'compression_bearish',
   failed_at_resistance: 'failed_at_resistance',
-  fiftyTwoWeek_low: 'breakdown_setup',
+  fiftyTwoWeek_low: 'fiftyTwoWeek_low',
   breakdown_setup: 'breakdown_setup'
 };

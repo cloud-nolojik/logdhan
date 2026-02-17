@@ -79,10 +79,10 @@ function calculatePartialBookingLevel(entry, target, data) {
  * @returns {object} Time rules for simulation
  */
 function getTimeRules(archetype, entryType) {
-  // 52W Breakout — needs close confirmation, patient entry
-  if (archetype === '52w_breakout') {
+  // 52W Breakout/Breakdown — needs close confirmation, patient entry
+  if (archetype === '52w_breakout' || archetype === '52w_breakdown') {
     return {
-      entryConfirmation: 'close_above',  // Daily close must be >= entry
+      entryConfirmation: archetype === '52w_breakout' ? 'close_above' : 'close_below',
       entryWindowDays: 3,                // Mon-Wed to trigger entry
       maxHoldDays: 5,                    // Full trading week
       weekEndRule: 'trail_or_exit',      // Tighten stop on Friday if still holding
@@ -704,6 +704,16 @@ export function calculateTradingLevels(scanType, data) {
     // ═══════════════════════════════════════════════════════════════════════════
     // SHORT/BEARISH SCAN TYPES
     // ═══════════════════════════════════════════════════════════════════════════
+
+    case 'fiftyTwoWeek_high':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculate52wHighLevels`);
+      result = calculate52wHighLevels(data);
+      break;
+
+    case 'fiftyTwoWeek_low':
+      console.log(`🔍 [SCAN_LEVELS] Calling calculate52wLowLevels`);
+      result = calculate52wLowLevels(data);
+      break;
 
     case 'breakdown_setup':
       console.log(`🔍 [SCAN_LEVELS] Calling calculateBreakdownLevels`);
@@ -1452,7 +1462,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   const adjustments = [];
 
   // Detect if this is a SHORT trade based on scan type
-  const isShortTrade = ['breakdown_setup', 'momentum_carry_bearish', 'failed_at_resistance', 'compression_bearish'].includes(scanType);
+  const isShortTrade = ['breakdown_setup', 'momentum_carry_bearish', 'failed_at_resistance', 'compression_bearish', 'fiftyTwoWeek_low'].includes(scanType);
 
   // ─────────────────────────────────────────────────────────────────────────
   // GUARD A: Sanity check - all values must be positive
@@ -1720,6 +1730,134 @@ function findShortStructuralTarget(params) {
             `20D Low: ${isNum(low20D) ? round2(low20D) : 'N/A'}) ` +
             `below entry ${round2(entry)} fail minimum R:R of ${minRR}:1`,
     noData: false
+  };
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 52-WEEK HIGH BREAKOUT (ATR-based levels)
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Stock closing within 2% of 52W high with 2× volume surge.
+ * Traditional PDL stop is 6-9% away for big movers → R:R impossible.
+ *
+ * ATR-based approach (pro recommendation):
+ *   Entry:  prevClose (stock already near 52W high)
+ *   Stop:   entry − 1× ATR
+ *   Target: entry + 2× ATR  → gives 2:1 R:R by construction
+ *   Risk cap: if 1× ATR > 3% of entry → reject (too volatile)
+ */
+function calculate52wHighLevels(data) {
+  const { prevClose, atr, high52W } = data;
+
+  if (!isNum(prevClose) || prevClose <= 0) {
+    return { valid: false, reason: '52W High: Previous close required for entry' };
+  }
+
+  if (!isNum(atr) || atr <= 0) {
+    return { valid: false, reason: '52W High: ATR required for stop/target calculation' };
+  }
+
+  const entry = prevClose;
+  const stop = entry - atr;
+  const target = entry + (2 * atr);
+
+  // Risk cap: if 1× ATR > 3% of entry, stock is too volatile for this setup
+  const riskPct = (atr / entry) * 100;
+  if (riskPct > 3.0) {
+    return {
+      valid: false,
+      reason: `52W High REJECTED: ATR risk ${round2(riskPct)}% > 3% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
+      riskPercent: round2(riskPct),
+      suggestedAction: 'skip_too_volatile'
+    };
+  }
+
+  const rr = round2(2.0); // Always 2:1 by construction
+
+  console.log(`  [52W High] ATR-based: entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} ATR=${round2(atr)} risk=${round2(riskPct)}% R:R=${rr}:1`);
+
+  return {
+    valid: true,
+    mode: '52W_HIGH_BREAKOUT',
+    archetype: '52w_breakout',
+    entry,
+    entry_basis: 'prev_close',
+    entryRange: [roundToTick(entry), roundToTick(entry + 0.2 * atr)],
+    stop,
+    target,
+    target3: isNum(high52W) && high52W > target ? roundToTick(high52W) : roundToTick(entry + (3 * atr)),
+    target2_basis: 'atr_2x',
+    entryType: 'buy_above',
+    reason: `52W High Breakout: ATR-based levels. Stop 1×ATR (${round2(atr)}) below entry, target 2×ATR above. R:R 2:1. Risk ${round2(riskPct)}%.`
+  };
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 52-WEEK LOW BREAKDOWN (ATR-based levels)
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Stock closing within 2% of 52W low with 2× volume surge.
+ * Mirror of 52W high but for SHORT trades.
+ *
+ * ATR-based approach:
+ *   Entry:  prevClose (stock already near 52W low)
+ *   Stop:   entry + 1× ATR
+ *   Target: entry − 2× ATR  → gives 2:1 R:R by construction
+ *   Risk cap: if 1× ATR > 3% of entry → reject (too volatile)
+ */
+function calculate52wLowLevels(data) {
+  const { prevClose, atr } = data;
+
+  if (!isNum(prevClose) || prevClose <= 0) {
+    return { valid: false, reason: '52W Low: Previous close required for entry' };
+  }
+
+  if (!isNum(atr) || atr <= 0) {
+    return { valid: false, reason: '52W Low: ATR required for stop/target calculation' };
+  }
+
+  const entry = prevClose;
+  const stop = entry + atr;
+  const target = entry - (2 * atr);
+
+  // Risk cap: if 1× ATR > 3% of entry, stock is too volatile for this setup
+  const riskPct = (atr / entry) * 100;
+  if (riskPct > 3.0) {
+    return {
+      valid: false,
+      reason: `52W Low REJECTED: ATR risk ${round2(riskPct)}% > 3% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
+      riskPercent: round2(riskPct),
+      suggestedAction: 'skip_too_volatile'
+    };
+  }
+
+  // Guard: target must be positive
+  if (target <= 0) {
+    return {
+      valid: false,
+      reason: `52W Low REJECTED: Target ${round2(target)} would be negative (entry=${round2(entry)}, 2×ATR=${round2(2 * atr)})`
+    };
+  }
+
+  const rr = round2(2.0); // Always 2:1 by construction
+
+  console.log(`  [52W Low] ATR-based: entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} ATR=${round2(atr)} risk=${round2(riskPct)}% R:R=${rr}:1`);
+
+  return {
+    valid: true,
+    mode: '52W_LOW_BREAKDOWN',
+    archetype: '52w_breakdown',
+    entry,
+    entry_basis: 'prev_close',
+    entryRange: [roundToTick(entry - 0.2 * atr), roundToTick(entry)],
+    stop,
+    target,
+    target3: roundToTick(entry - (3 * atr)),
+    target2_basis: 'atr_2x',
+    entryType: 'sell_below',
+    reason: `52W Low Breakdown: ATR-based levels. Stop 1×ATR (${round2(atr)}) above entry, target 2×ATR below. R:R 2:1. Risk ${round2(riskPct)}%.`
   };
 }
 
@@ -2071,6 +2209,8 @@ export default {
   calculateMomentumLevels,
   calculateConsolidationLevels,
   calculateAPlusMomentumLevels,
+  calculate52wHighLevels,
+  calculate52wLowLevels,
   calculateBreakdownLevels,
   calculateMomentumBearishLevels,
   calculateFailedResistanceLevels,
