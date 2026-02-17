@@ -966,35 +966,53 @@ async function startOrbCollection(options = {}) {
   console.log(`${LOG} Starting ORB collection`);
   console.log(`${LOG} ════════════════════════════════════════`);
 
-  if (!isKiteIntegrationEnabled()) {
+  const kiteEnabled = isKiteIntegrationEnabled();
+  console.log(`${LOG} [DEBUG] isKiteIntegrationEnabled: ${kiteEnabled}`);
+  if (!kiteEnabled) {
     console.log(`${LOG} Kite not enabled — skipping ORB collection`);
     return { success: true, message: 'Kite not enabled' };
   }
 
+  // Debug: show what date range findToday() is using
+  const { getIstDayRange } = await import('../../utils/tradingDay.js');
+  const dayRange = getIstDayRange();
+  console.log(`${LOG} [DEBUG] findToday() looking for trading_date: ${dayRange.startUtc.toISOString()}`);
+
   const doc = await DailyPick.findToday();
+  console.log(`${LOG} [DEBUG] findToday() result: ${doc ? `found _id=${doc._id}, trading_date=${doc.trading_date?.toISOString()}, picks=${doc.picks?.length}` : 'null'}`);
   if (!doc) {
     console.log(`${LOG} No DailyPick doc for today — nothing to collect`);
     return { success: true, message: 'No picks today' };
   }
 
+  // Debug: log every pick's status
+  for (const pick of doc.picks) {
+    console.log(`${LOG} [DEBUG] Pick ${pick.symbol}: trade.status=${pick.trade.status}, kite.kite_status=${pick.kite.kite_status}`);
+  }
+
   const pendingPicks = doc.picks.filter(p => p.trade.status === 'PENDING');
+  console.log(`${LOG} [DEBUG] pendingPicks count: ${pendingPicks.length}`);
   if (pendingPicks.length === 0) {
     console.log(`${LOG} No PENDING picks — skipping ORB collection`);
     return { success: true, message: 'No pending picks' };
   }
 
   // Mark picks as COLLECTING_ORB
+  console.log(`${LOG} [DEBUG] Marking ${pendingPicks.length} picks as COLLECTING_ORB`);
   for (const pick of pendingPicks) {
     pick.trade.status = 'COLLECTING_ORB';
     pick.kite.kite_status = 'collecting_orb';
   }
   await doc.save();
+  console.log(`${LOG} [DEBUG] Saved COLLECTING_ORB status to DB`);
 
   // Collect ORB data (blocks for ~15 min)
   const symbols = pendingPicks.map(p => p.symbol);
   console.log(`${LOG} Collecting ORB for: ${symbols.join(', ')}`);
+  console.log(`${LOG} [DEBUG] About to call collectOpeningRange() — this blocks for ~15 min`);
 
   const orbData = await collectOpeningRange(symbols, pendingPicks);
+  console.log(`${LOG} [DEBUG] collectOpeningRange() returned. Keys: ${Object.keys(orbData).join(', ')}`);
 
   // Store ORB data on each pick
   for (const pick of pendingPicks) {

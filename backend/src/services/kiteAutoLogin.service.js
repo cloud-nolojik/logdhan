@@ -426,16 +426,19 @@ class KiteAutoLoginService {
   async getValidSession() {
     try {
       const session = await KiteSession.findOne({ kite_user_id: this.userId });
+      console.log(`[KITE] getValidSession: found=${!!session}, is_valid=${session?.is_valid}, has_token=${!!session?.access_token}, expiry=${session?.token_expiry?.toISOString() || 'none'}`);
 
       if (session && session.is_valid && session.access_token) {
         // Check token_expiry (6 AM IST next day). If past expiry, don't use it.
         if (session.token_expiry && session.token_expiry > new Date()) {
+          console.log('[KITE] getValidSession: Using existing DB token (not expired)');
           return session;
         }
         console.log('[KITE] Token past expiry, need fresh login');
       }
 
       // No valid session in DB — need auto login
+      console.log('[KITE] getValidSession: No valid token in DB, triggering auto-login');
       return await this._doAutoLogin();
 
     } catch (error) {
@@ -450,15 +453,19 @@ class KiteAutoLoginService {
    */
   async _doAutoLogin() {
     if (this._loginPromise) {
-      console.log('[KITE] Auto login already in progress — waiting for existing attempt...');
-      return await this._loginPromise;
+      console.log('[KITE] _doAutoLogin: login already in progress — waiting for existing attempt...');
+      const session = await this._loginPromise;
+      console.log(`[KITE] _doAutoLogin: existing attempt finished, got token=...${session?.access_token?.slice(-6) || 'none'}`);
+      return session;
     }
 
-    console.log('[KITE] Performing auto login...');
+    console.log('[KITE] _doAutoLogin: starting new auto login...');
     this._loginPromise = this.performAutoLogin().finally(() => {
       this._loginPromise = null;
     });
-    return await this._loginPromise;
+    const session = await this._loginPromise;
+    console.log(`[KITE] _doAutoLogin: login complete, got token=...${session?.access_token?.slice(-6) || 'none'}`);
+    return session;
   }
 
   /**
@@ -484,6 +491,9 @@ class KiteAutoLoginService {
   async makeRequest(method, endpoint, data = null, isRetry = false) {
     const headers = await this.getAuthHeaders();
     const usedToken = headers['Authorization']?.split(':')[1];
+    const tokenSnippet = usedToken ? `...${usedToken.slice(-6)}` : 'none';
+
+    console.log(`[KITE] makeRequest: ${method} ${endpoint} (token=${tokenSnippet}, isRetry=${isRetry})`);
 
     try {
       const config = {
@@ -502,20 +512,25 @@ class KiteAutoLoginService {
       }
 
       const response = await axios(config);
+      console.log(`[KITE] makeRequest: ${method} ${endpoint} → ${response.status} OK`);
       return response.data;
 
     } catch (error) {
-      const is403 = error.response?.status === 403 ||
-                     error.response?.data?.error_type === 'TokenException';
+      const status = error.response?.status;
+      const errorType = error.response?.data?.error_type;
+      console.log(`[KITE] makeRequest: ${method} ${endpoint} → FAILED status=${status} error_type=${errorType} msg=${error.message}`);
+
+      const is403 = status === 403 || errorType === 'TokenException';
 
       if (is403 && !isRetry) {
-        console.log('[KITE] Token expired on API call, invalidating and re-logging in...');
+        console.log(`[KITE] Token expired on API call (token=${tokenSnippet}), invalidating and re-logging in...`);
 
         // Mark only THIS token as expired (don't clobber a fresh one from another caller)
-        await KiteSession.findOneAndUpdate(
+        const invalidated = await KiteSession.findOneAndUpdate(
           { kite_user_id: this.userId, access_token: usedToken },
           { is_valid: false, connection_status: 'expired' }
         );
+        console.log(`[KITE] Token invalidation: ${invalidated ? 'matched & updated' : 'no match (already replaced)'}`);
 
         // Auto-login once (dedup-guarded), then retry the request exactly once
         await this._doAutoLogin();
