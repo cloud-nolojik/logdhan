@@ -357,10 +357,22 @@ router.post('/test-login', simpleAdminAuth, async (req, res) => {
  */
 router.post('/postback', async (req, res) => {
   try {
-    const postback = req.body;
+    // Kite sends postback as application/x-www-form-urlencoded with JSON as the body.
+    // Express urlencoded parser puts the JSON string as a key with empty value: { "{...}": "" }
+    // Detect this and parse the JSON string from the key.
+    let postback = req.body;
+    if (!postback.order_id && typeof postback === 'object') {
+      const keys = Object.keys(postback);
+      if (keys.length > 0 && keys[0].startsWith('{')) {
+        try {
+          postback = JSON.parse(keys[0]);
+        } catch (e) {
+          console.error('[KITE POSTBACK] Failed to parse JSON from key:', e.message);
+        }
+      }
+    }
 
     console.log(`[KITE POSTBACK] Received: order_id=${postback.order_id} symbol=${postback.tradingsymbol} status=${postback.status} avg_price=${postback.average_price} filled_qty=${postback.filled_quantity} type=${postback.order_type} txn=${postback.transaction_type} tag=${postback.tag || 'none'}`);
-    console.log(`[KITE POSTBACK] Full body: ${JSON.stringify(postback)}`);
 
     // Acknowledge immediately (Kite expects 200 within 5 seconds)
     res.status(200).json({ received: true });
