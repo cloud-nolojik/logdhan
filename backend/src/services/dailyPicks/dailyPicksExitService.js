@@ -38,6 +38,28 @@ async function runDailyExit(options = {}) {
     return { success: true, message: 'No picks today', exited: 0 };
   }
 
+  // Step 1a: Cancel unfilled ORDER_PLACED entries (SL/SL-M triggers that never fired)
+  const unfilledPicks = doc.picks.filter(p => p.trade.status === 'ORDER_PLACED');
+  if (unfilledPicks.length > 0) {
+    console.log(`${LOG} Cancelling ${unfilledPicks.length} unfilled ORDER_PLACED entries...`);
+    for (const pick of unfilledPicks) {
+      try {
+        if (!dryRun && pick.kite.entry_order_id) {
+          await kiteOrderService.cancelOrder(pick.kite.entry_order_id);
+          console.log(`${LOG} ${pick.symbol}: Cancelled unfilled entry order ${pick.kite.entry_order_id}`);
+        }
+        pick.trade.status = 'SKIPPED';
+        pick.trade.exit_reason = 'unfilled_at_3pm';
+        pick.kite.kite_status = 'cancelled';
+      } catch (err) {
+        console.error(`${LOG} ${pick.symbol}: Cancel unfilled entry failed:`, err.message);
+        pick.trade.status = 'SKIPPED';
+        pick.trade.exit_reason = 'unfilled_at_3pm_cancel_failed';
+        pick.kite.kite_status = 'cancelled';
+      }
+    }
+  }
+
   const enteredPicks = doc.picks.filter(p => p.trade.status === 'ENTERED');
   if (enteredPicks.length === 0) {
     console.log(`${LOG} No ENTERED positions to exit`);
@@ -45,7 +67,7 @@ async function runDailyExit(options = {}) {
     updateDailyResults(doc);
     await doc.save();
     await sendExitNotification(doc);
-    return { success: true, message: 'No open positions', exited: 0 };
+    return { success: true, message: 'No open positions', exited: 0, cancelledUnfilled: unfilledPicks.length };
   }
 
   console.log(`${LOG} ${enteredPicks.length} open position(s) to exit:`);

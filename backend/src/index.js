@@ -32,9 +32,8 @@ import weekendScreeningJob from './services/weeklyPicks/weekendScreeningJob.js';
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
 import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-picks-scan (8:45 AM Mon-Fri)
-import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // v2: ORB 9:15, validate+entry 9:30, monitor */3, tighten 14:00
+import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // v2: ORB 9:30, validate+entry, monitor */3, tighten 14:00, exit 15:00
 import { initFillListener } from './services/dailyPicks/dailyPicksService.js'; // Postback → instant SL+target
-import dailyExitJob from './services/jobs/dailyExitJob.js'; // daily-exit (3:00 PM Mon-Fri)
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -274,15 +273,6 @@ async function initializeDailyEntryJob() {
   }
 }
 
-// Initialize daily exit job (3:00 PM Mon-Fri IST - force-exit open positions)
-async function initializeDailyExitJob() {
-  try {
-    await dailyExitJob.initialize();
-  } catch (error) {
-    console.error('Failed to initialize daily exit job:', error);
-  }
-}
-
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -305,8 +295,7 @@ app.listen(PORT, async () => {
 
   // Daily picks jobs
   await initializeDailyPicksJob(); // daily-picks-scan (8:45 AM Mon-Fri)
-  await initializeDailyEntryJob(); // daily-picks-entry (9:15), fill-check (9:45), monitor (*/15 10-14)
-  await initializeDailyExitJob(); // daily-exit (3:00 PM Mon-Fri)
+  await initializeDailyEntryJob(); // daily-picks-entry 9:30, monitor */3, tighten 14:00, exit 15:00
 
   // Kite Connect token refresh job (6:00 AM IST daily)
   await kiteTokenRefreshJob.initialize();
@@ -329,8 +318,7 @@ process.on('SIGINT', async () => {
       kiteOrderSyncJob.shutdown(),
       kiteTokenRefreshJob.shutdown(),
       dailyPicksJob.shutdown(),
-      dailyEntryJob.shutdown(),
-      dailyExitJob.shutdown()
+      dailyEntryJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -355,8 +343,7 @@ process.on('SIGTERM', async () => {
       kiteOrderSyncJob.shutdown(),
       kiteTokenRefreshJob.shutdown(),
       dailyPicksJob.shutdown(),
-      dailyEntryJob.shutdown(),
-      dailyExitJob.shutdown()
+      dailyEntryJob.shutdown()
     ]);
 
     // Close MongoDB connection

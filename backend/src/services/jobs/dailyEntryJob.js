@@ -1,12 +1,12 @@
 /**
  * Daily Entry Job — v2: ORB Validation + Instant Protection + Trailing
  *
- * Six scheduled runs (Mon-Fri IST):
- * 1. 9:15 AM    — Start ORB collection (poll LTP for 15 min)
- * 2. 9:30 AM    — Validate picks against ORB, place entries for validated picks
- * 3. 10:30 AM   — Cancel unfilled entry orders (setup expired)
- * 4. Every 3 min (10-14) — Monitor stop/target fills + trailing stops
- * 5. 14:00      — Tighten stops to breakeven for profitable positions
+ * Seven scheduled runs (Mon-Fri IST):
+ * 1. 9:30 AM    — Fetch ORB OHLC + validate picks + place entries
+ * 2. 10:30 AM   — Cancel unfilled entry orders (setup expired)
+ * 3. Every 3 min (10-14) — Monitor stop/target fills + trailing stops
+ * 4. 14:00      — Tighten stops to breakeven for profitable positions
+ * 5. 15:00      — Force-exit open positions + cancel unfilled orders
  *
  * Polling fallback for fill detection:
  * - Every 2 min (9-10) — Check fills for ORDER_PLACED picks (postback handles most, this is backup)
@@ -23,6 +23,7 @@ import {
   monitorDailyPickOrders,
   tightenStops
 } from '../dailyPicks/dailyPicksService.js';
+import { runDailyExit } from '../dailyPicks/dailyPicksExitService.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 
 const LOG = '[DAILY-ENTRY-JOB]';
@@ -269,6 +270,36 @@ class DailyEntryJob {
       }
     });
 
+    // Job 7: Force-exit all open positions at 3:00 PM
+    this.agenda.define('daily-picks-exit', async (job) => {
+      if (this.runningJobs.has('exit')) {
+        console.log(`${LOG} Exit already running, skipping`);
+        return;
+      }
+
+      this.runningJobs.add('exit');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) {
+          console.log(`${LOG} Not a trading day — skipping 3:00 PM exit`);
+          return { skipped: true, reason: 'not_trading_day' };
+        }
+
+        console.log(`${LOG} [EXIT] ▶ Executing 3:00 PM force-exit...`);
+        const result = await runDailyExit();
+        this.stats.lastRunAt = new Date();
+        this.stats.lastResult = result;
+        console.log(`${LOG} [EXIT] ✅ Completed: ${result.exited} positions exited, ${result.cancelledUnfilled || 0} unfilled cancelled`);
+        return result;
+      } catch (error) {
+        console.error(`${LOG} Exit failed:`, error);
+        this.stats.errors++;
+        throw error;
+      } finally {
+        this.runningJobs.delete('exit');
+      }
+    });
+
     // Manual triggers
     this.agenda.define('manual-daily-picks-orb-collect', async (job) => {
       const opts = job.attrs.data || {};
@@ -288,6 +319,11 @@ class DailyEntryJob {
     this.agenda.define('manual-daily-picks-tighten', async (job) => {
       const opts = job.attrs.data || {};
       return tightenStops(opts);
+    });
+
+    this.agenda.define('manual-daily-picks-exit', async (job) => {
+      const opts = job.attrs.data || {};
+      return runDailyExit(opts);
     });
   }
 
@@ -310,6 +346,7 @@ class DailyEntryJob {
             'daily-picks-fill-fallback',
             'daily-picks-monitor',
             'daily-picks-tighten',
+            'daily-picks-exit',
             // Legacy v1 job names — clean up on first deploy
             'daily-picks-entry',
             'daily-picks-fill-check'
@@ -342,7 +379,12 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log(`${LOG} Scheduled: ORB+validate+entry 9:30, cancel-expired 10:30, fill-fallback */2 9-10, monitor */3 10-14, tighten 14:00 (Mon-Fri IST)`);
+      // 3:00 PM IST — Force-exit all open positions + cancel unfilled orders
+      await this.agenda.every('0 15 * * 1-5', 'daily-picks-exit', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+
+      console.log(`${LOG} Scheduled: ORB+validate+entry 9:30, cancel-expired 10:30, fill-fallback */2 9-10, monitor */3 10-14, tighten 14:00, exit 15:00 (Mon-Fri IST)`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
       throw error;
@@ -374,6 +416,13 @@ class DailyEntryJob {
     if (!this.isInitialized) throw new Error('Daily entry job not initialized');
     console.log(`${LOG} Manual tighten trigger`);
     const job = await this.agenda.now('manual-daily-picks-tighten', opts);
+    return { success: true, jobId: job.attrs._id };
+  }
+
+  async triggerExit(opts = {}) {
+    if (!this.isInitialized) throw new Error('Daily entry job not initialized');
+    console.log(`${LOG} Manual exit trigger`);
+    const job = await this.agenda.now('manual-daily-picks-exit', opts);
     return { success: true, jobId: job.attrs._id };
   }
 
