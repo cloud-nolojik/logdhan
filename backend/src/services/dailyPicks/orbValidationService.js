@@ -4,40 +4,73 @@
  * 1. collectOpeningRange() — 9:15-9:30 AM: Poll LTP every 8s to build 15-min opening range
  * 2. validatePicks()       — 9:30 AM: Check 5 validation conditions per pick before entry
  *
- * Uses kiteOrderService.getLTP() for price data (no WebSocket dependency).
+ * Uses Upstox getLiveMarketData() for price data (Kite Personal app lacks quote permissions).
  */
 
-import kiteOrderService from '../kiteOrder.service.js';
+import upstoxService from '../upstox.service.js';
+import { User } from '../../models/user.js';
 import { round2 } from './dailyPicksHelpers.js';
 
 const LOG = '[ORB]';
-const NIFTY_SYMBOL = 'NSE:NIFTY 50';
+const NIFTY_INSTRUMENT_KEY = 'NSE_INDEX|Nifty 50';
 const POLL_INTERVAL_MS = 8000;   // 8 seconds between LTP polls
 const COLLECTION_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
 /**
+ * Get a valid Upstox access token from any connected user.
+ * Market data is the same for all users, so any token works.
+ */
+async function getUpstoxAccessToken() {
+  const user = await User.findOne({ 'broker.upstox.access_token': { $exists: true, $ne: null } })
+    .select('broker.upstox.access_token')
+    .lean();
+
+  if (!user?.broker?.upstox?.access_token) {
+    throw new Error('No Upstox access token available — connect a broker account first');
+  }
+
+  return user.broker.upstox.access_token;
+}
+
+/**
  * Collect Opening Range data for given symbols during 9:15-9:30 AM.
  *
- * Polls Kite LTP API every 8 seconds, tracking high/low/open for each symbol + NIFTY.
+ * Polls Upstox LTP API every 8 seconds, tracking high/low/open for each symbol + NIFTY.
  * Returns ORB data map keyed by symbol.
  *
  * @param {string[]} symbols — Trading symbols (e.g. ['RELIANCE', 'TCS'])
- * @param {Object} picks — Array of pick objects (for prev close to calculate gap)
+ * @param {Object} picks — Array of pick objects (for prev close to calculate gap + instrument_key)
  * @returns {Object} — { 'RELIANCE': { high, low, opening_price, gap_percent, orb_direction }, ..., '_NIFTY': { ... } }
  */
 async function collectOpeningRange(symbols, picks) {
   console.log(`${LOG} Starting ORB collection for ${symbols.length} symbols + NIFTY`);
 
-  // Build instrument list: NSE:SYMBOL for each pick + NIFTY
-  const instruments = symbols.map(s => `NSE:${s}`);
-  if (!instruments.includes(NIFTY_SYMBOL)) {
-    instruments.push(NIFTY_SYMBOL);
+  // Get Upstox access token
+  const accessToken = await getUpstoxAccessToken();
+  console.log(`${LOG} Got Upstox access token`);
+
+  // Build instrument key list from picks + NIFTY
+  // Map: instrument_key → symbol (for reverse lookup from Upstox response)
+  const instrumentKeyToSymbol = {};
+  const instrumentKeys = [];
+
+  for (const pick of picks) {
+    if (pick.instrument_key) {
+      instrumentKeys.push(pick.instrument_key);
+      instrumentKeyToSymbol[pick.instrument_key] = pick.symbol;
+    } else {
+      console.warn(`${LOG} ${pick.symbol}: No instrument_key — will be skipped in LTP polls`);
+    }
   }
+
+  // Add NIFTY
+  instrumentKeys.push(NIFTY_INSTRUMENT_KEY);
+  instrumentKeyToSymbol[NIFTY_INSTRUMENT_KEY] = '_NIFTY';
 
   // Prev close map for gap calculation
   const prevCloseMap = {};
   for (const pick of picks) {
-    prevCloseMap[pick.symbol] = pick.levels.entry; // entry level = yesterday's close
+    prevCloseMap[pick.symbol] = pick.levels.entry;
   }
 
   // Tracking state per symbol
@@ -55,47 +88,49 @@ async function collectOpeningRange(symbols, picks) {
   const startTime = Date.now();
   let pollCount = 0;
 
-  console.log(`${LOG} Instruments to poll: ${instruments.join(', ')}`);
+  console.log(`${LOG} Upstox instruments to poll: ${instrumentKeys.join(', ')}`);
   console.log(`${LOG} Poll interval: ${POLL_INTERVAL_MS}ms, Duration: ${COLLECTION_DURATION_MS / 1000}s`);
 
   while (Date.now() - startTime < COLLECTION_DURATION_MS) {
     try {
-      const ltpData = await kiteOrderService.getLTP(instruments);
+      const result = await upstoxService.getLiveMarketData(instrumentKeys, accessToken);
       pollCount++;
 
-      const elapsed = Math.round((Date.now() - startTime) / 1000);
-      const prices = [];
+      if (!result.success) {
+        console.error(`${LOG} LTP poll #${pollCount} failed: ${result.message}`);
+        // Continue to next poll
+      } else {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        const prices = [];
 
-      for (const sym of symbols) {
-        const key = `NSE:${sym}`;
-        const ltp = ltpData[key]?.last_price;
-        if (!ltp) {
-          prices.push(`${sym}=N/A`);
-          continue;
+        // Process each instrument's LTP
+        for (const [instKey, data] of Object.entries(result.data)) {
+          const sym = instrumentKeyToSymbol[instKey];
+          if (!sym) continue;
+
+          const ltp = data?.last_price;
+          if (!ltp) {
+            if (sym !== '_NIFTY') prices.push(`${sym}=N/A`);
+            continue;
+          }
+
+          const d = orbData[sym];
+          if (d.opening_price === null) d.opening_price = ltp;
+          if (ltp > d.high) d.high = ltp;
+          if (ltp < d.low) d.low = ltp;
+          d.last_price = ltp;
+
+          if (sym === '_NIFTY') {
+            prices.push(`NIFTY=${ltp}`);
+          } else {
+            prices.push(`${sym}=${ltp}`);
+          }
         }
 
-        const d = orbData[sym];
-        if (d.opening_price === null) d.opening_price = ltp;
-        if (ltp > d.high) d.high = ltp;
-        if (ltp < d.low) d.low = ltp;
-        d.last_price = ltp;
-        prices.push(`${sym}=${ltp}`);
-      }
-
-      // Track NIFTY
-      const niftyLtp = ltpData[NIFTY_SYMBOL]?.last_price;
-      if (niftyLtp) {
-        const nd = orbData['_NIFTY'];
-        if (nd.opening_price === null) nd.opening_price = niftyLtp;
-        if (niftyLtp > nd.high) nd.high = niftyLtp;
-        if (niftyLtp < nd.low) nd.low = niftyLtp;
-        nd.last_price = niftyLtp;
-        prices.push(`NIFTY=${niftyLtp}`);
-      }
-
-      // Log every 5th poll to avoid spam, plus first and last
-      if (pollCount === 1 || pollCount % 5 === 0 || Date.now() - startTime + POLL_INTERVAL_MS >= COLLECTION_DURATION_MS) {
-        console.log(`${LOG} Poll #${pollCount} (${elapsed}s): ${prices.join(', ')}`);
+        // Log every 5th poll to avoid spam, plus first and last
+        if (pollCount === 1 || pollCount % 5 === 0 || Date.now() - startTime + POLL_INTERVAL_MS >= COLLECTION_DURATION_MS) {
+          console.log(`${LOG} Poll #${pollCount} (${elapsed}s): ${prices.join(', ')}`);
+        }
       }
 
     } catch (err) {
@@ -114,7 +149,7 @@ async function collectOpeningRange(symbols, picks) {
   console.log(`${LOG} ORB collection done — ${pollCount} polls in ${totalDuration}s`);
 
   // Calculate derived fields
-  const result = {};
+  const resultMap = {};
   for (const sym of symbols) {
     const d = orbData[sym];
     if (d.opening_price === null) {
@@ -130,7 +165,7 @@ async function collectOpeningRange(symbols, picks) {
     if (d.last_price > d.opening_price * 1.001) orbDirection = 'UP';
     else if (d.last_price < d.opening_price * 0.999) orbDirection = 'DOWN';
 
-    result[sym] = {
+    resultMap[sym] = {
       high: round2(d.high),
       low: round2(d.low),
       opening_price: round2(d.opening_price),
@@ -148,7 +183,7 @@ async function collectOpeningRange(symbols, picks) {
     if (nd.last_price > nd.opening_price * 1.001) niftyDir = 'UP';
     else if (nd.last_price < nd.opening_price * 0.999) niftyDir = 'DOWN';
 
-    result['_NIFTY'] = {
+    resultMap['_NIFTY'] = {
       high: round2(nd.high),
       low: round2(nd.low),
       opening_price: round2(nd.opening_price),
@@ -158,7 +193,7 @@ async function collectOpeningRange(symbols, picks) {
     console.log(`${LOG} NIFTY: ORB H=${nd.high} L=${nd.low} dir=${niftyDir}`);
   }
 
-  return result;
+  return resultMap;
 }
 
 /**
@@ -303,6 +338,6 @@ function validatePicks(picks, orbData) {
   return picks;
 }
 
-export { collectOpeningRange, validatePicks };
+export { collectOpeningRange, validatePicks, getUpstoxAccessToken };
 
-export default { collectOpeningRange, validatePicks };
+export default { collectOpeningRange, validatePicks, getUpstoxAccessToken };

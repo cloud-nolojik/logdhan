@@ -27,7 +27,8 @@ import priceCacheService from '../priceCache.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import kiteConfig from '../../config/kite.config.js';
 import { getISTMidnight, calculatePnl, updateDailyResults, round2, delay } from './dailyPicksHelpers.js';
-import { collectOpeningRange, validatePicks } from './orbValidationService.js';
+import { collectOpeningRange, validatePicks, getUpstoxAccessToken } from './orbValidationService.js';
+import upstoxService from '../upstox.service.js';
 import scanLevels from '../../engine/scanLevels.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -52,6 +53,47 @@ function getAnthropicClient() {
     anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   }
   return anthropic;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UPSTOX LTP HELPER — replaces Kite getLTP (Personal app lacks quote perms)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fetch LTP for picks via Upstox, returning data in Kite-compatible format.
+ * @param {Array} picks — pick objects with `symbol` and `instrument_key`
+ * @returns {Object} — { 'NSE:SYMBOL': { last_price }, ... }
+ */
+async function fetchLTPviaUpstox(picks) {
+  const accessToken = await getUpstoxAccessToken();
+
+  const instrumentKeys = [];
+  const keyToSymbol = {};
+  for (const pick of picks) {
+    if (pick.instrument_key) {
+      instrumentKeys.push(pick.instrument_key);
+      keyToSymbol[pick.instrument_key] = pick.symbol;
+    }
+  }
+
+  if (instrumentKeys.length === 0) return {};
+
+  const result = await upstoxService.getLiveMarketData(instrumentKeys, accessToken);
+  if (!result.success) {
+    throw new Error(`Upstox LTP failed: ${result.message}`);
+  }
+
+  // Convert from Upstox format { 'NSE_EQ|ISIN': { last_price } }
+  // to Kite-compatible format { 'NSE:SYMBOL': { last_price } }
+  const ltpData = {};
+  for (const [instKey, data] of Object.entries(result.data)) {
+    const sym = keyToSymbol[instKey];
+    if (sym && data?.last_price) {
+      ltpData[`NSE:${sym}`] = { last_price: data.last_price };
+    }
+  }
+
+  return ltpData;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1658,10 +1700,9 @@ async function monitorDailyPickOrders(options = {}) {
   if (istHour >= TRAIL_START_HOUR && stillEnteredPicks.length > 0 && !dryRun) {
     console.log(`${LOG} [TRAILING] Checking trailing stops for ${stillEnteredPicks.length} positions (after 12 PM)`);
 
-    // Fetch fresh LTP via Kite API (NOT priceCacheService — 5-min cache too stale for SL decisions)
-    const symbols = stillEnteredPicks.map(p => `NSE:${p.symbol}`);
+    // Fetch fresh LTP via Upstox (Kite Personal app lacks quote permissions)
     try {
-      const ltpData = await kiteOrderService.getLTP(symbols);
+      const ltpData = await fetchLTPviaUpstox(stillEnteredPicks);
 
       for (const pick of stillEnteredPicks) {
         const currentPrice = ltpData[`NSE:${pick.symbol}`]?.last_price;
@@ -1758,11 +1799,10 @@ async function tightenStops(options = {}) {
     return { success: true, tightened: 0 };
   }
 
-  // Fetch fresh LTP via Kite API (NOT priceCacheService — 5-min cache too stale for SL decisions)
-  const symbols = enteredPicks.map(p => `NSE:${p.symbol}`);
+  // Fetch fresh LTP via Upstox (Kite Personal app lacks quote permissions)
   let ltpData;
   try {
-    ltpData = await kiteOrderService.getLTP(symbols);
+    ltpData = await fetchLTPviaUpstox(enteredPicks);
   } catch (err) {
     console.error(`${LOG} LTP fetch failed for tightening:`, err.message);
     return { success: false, error: err.message };

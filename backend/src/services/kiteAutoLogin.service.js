@@ -520,9 +520,11 @@ class KiteAutoLoginService {
       const errorType = error.response?.data?.error_type;
       console.log(`[KITE] makeRequest: ${method} ${endpoint} → FAILED status=${status} error_type=${errorType} msg=${error.message}`);
 
-      const is403 = status === 403 || errorType === 'TokenException';
+      // Only retry on actual token expiry — NOT on PermissionException (which is permanent)
+      const isTokenExpired = errorType === 'TokenException' ||
+                             (status === 403 && errorType !== 'PermissionException');
 
-      if (is403 && !isRetry) {
+      if (isTokenExpired && !isRetry) {
         console.log(`[KITE] Token expired on API call (token=${tokenSnippet}), invalidating and re-logging in...`);
 
         // Mark only THIS token as expired (don't clobber a fresh one from another caller)

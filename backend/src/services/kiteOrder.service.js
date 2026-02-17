@@ -519,9 +519,12 @@ class KiteOrderService {
   async getLTP(instruments) {
     try {
       console.log(`[KITE ORDER] Fetching LTP for ${instruments.length} instruments: ${instruments.join(', ')}`);
-      // Kite expects repeated 'i' query params: ?i=NSE:SYM1&i=NSE:SYM2
-      // Build query string manually since axios default serializes arrays with brackets
-      const queryString = instruments.map(i => `i=${encodeURIComponent(i)}`).join('&');
+      // Kite expects repeated 'i' query params: ?i=NSE:INFY&i=NSE:NIFTY+50
+      // Colon must NOT be encoded (%3A breaks it), spaces encoded as +
+      const queryString = instruments
+        .map(i => `i=${i.replace(/ /g, '+')}`)
+        .join('&');
+      console.log(`[KITE ORDER] LTP query string: ${queryString}`);
       const response = await this.kiteService.makeRequest(
         'GET',
         `${kiteConfig.ENDPOINTS.QUOTE_LTP}?${queryString}`
