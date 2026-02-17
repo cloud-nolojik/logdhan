@@ -26,7 +26,7 @@ import { firebaseService } from '../firebase/firebase.service.js';
 import priceCacheService from '../priceCache.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import kiteConfig from '../../config/kite.config.js';
-import { getISTMidnight, calculatePnl, updateDailyResults, round2, delay } from './dailyPicksHelpers.js';
+import { getISTMidnight, calculatePnl, updateDailyResults, round2, roundToTick, delay } from './dailyPicksHelpers.js';
 import { collectOpeningRange, validatePicks } from './orbValidationService.js';
 import scanLevels from '../../engine/scanLevels.js';
 
@@ -1138,16 +1138,16 @@ async function validateAndPlaceEntries(options = {}) {
 
     if (entryType === 'buy_above') {
       orderType = 'SL';
-      triggerPrice = pick.levels.entry;
-      limitPrice = round2(pick.levels.entry * 1.002);
+      triggerPrice = roundToTick(pick.levels.entry);
+      limitPrice = roundToTick(pick.levels.entry * 1.002);
     } else if (entryType === 'sell_below') {
       orderType = 'SL-M';
-      triggerPrice = pick.levels.entry;
+      triggerPrice = roundToTick(pick.levels.entry);
       limitPrice = 0;
     } else {
       orderType = 'LIMIT';
       triggerPrice = 0;
-      limitPrice = pick.levels.entry;
+      limitPrice = roundToTick(pick.levels.entry);
     }
 
     console.log(`${LOG} ${pick.symbol}: ${orderType} ${pick.direction} qty=${qty} entry=₹${pick.levels.entry} (validated, ${pick.validation?.levels_recalculated ? 'recalculated' : 'original'} levels)`);

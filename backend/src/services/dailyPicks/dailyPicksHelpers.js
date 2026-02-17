@@ -62,6 +62,11 @@ export function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
+/** Round price to NSE tick size (0.05) */
+export function roundToTick(price, tick = 0.05) {
+  return Math.round(price / tick) * tick;
+}
+
 export function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
