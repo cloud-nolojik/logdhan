@@ -17,7 +17,6 @@ import { runChartinkScan } from '../chartinkService.js';
 import { getDailyAnalysisData } from '../technicalData.service.js';
 import { fetchAndCheckRegime } from '../../engine/regime.js';
 import DailyPick from '../../models/dailyPick.js';
-import MarketSentiment from '../../models/marketSentiment.js';
 import ApiUsage from '../../models/apiUsage.js';
 import kiteOrderService from '../kiteOrder.service.js';
 import kiteOrderEvents from '../kiteOrderEvents.js';
@@ -74,7 +73,6 @@ async function runDailyPicks(options = {}) {
     // Step 1: Market context
     const marketContext = await getMarketContext();
     console.log(`${LOG} Market regime: ${marketContext.regime}`);
-    console.log(`${LOG} GIFT Nifty: ${marketContext.gift_nifty_pct}% (${marketContext.gift_nifty_status})`);
 
     // Step 2: Run scans based on regime
     const scanResult = await runScans(marketContext);
@@ -214,25 +212,8 @@ async function getMarketContext() {
     console.error(`${LOG} Regime check failed, defaulting to UNKNOWN:`, err.message);
   }
 
-  // GIFT Nifty from MarketSentiment
-  let giftNiftyPct = null;
-  let giftNiftyStatus = null;
-  try {
-    const sentimentResult = await MarketSentiment.getTodayOrLatest('NIFTY_50');
-    const sentiment = sentimentResult?.sentiment;
-    if (sentiment?.sgx_nifty) {
-      const indication = sentiment.sgx_nifty.indication;
-      giftNiftyPct = indication ? parseFloat(indication.replace('%', '')) : null;
-      giftNiftyStatus = sentiment.sgx_nifty.status || null;
-    }
-  } catch (err) {
-    console.error(`${LOG} GIFT Nifty fetch failed:`, err.message);
-  }
-
   return {
     regime,
-    gift_nifty_pct: giftNiftyPct,
-    gift_nifty_status: giftNiftyStatus,
     nifty_prev_close: niftyPrevClose,
     decided_at: new Date()
   };
@@ -587,6 +568,20 @@ function scoreCandidates(enrichedCandidates) {
     else candlePts = 5;
     score += candlePts;
 
+    // EMA20 extension filter — skip overextended stocks, penalize stretched ones
+    const ema20 = c._ohlcv?.ema20;
+    if (ema20 && ema20 > 0) {
+      const distFromEma20 = round2(Math.abs((c._ohlcv.close - ema20) / ema20) * 100);
+      if (distFromEma20 >= 3.0) {
+        console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): SKIPPED — ${distFromEma20}% from EMA20 (>= 3%)`);
+        continue;
+      }
+      if (distFromEma20 >= 2.0) {
+        score -= 15;
+        console.log(`${LOG} ⚠️ ${c.symbol}: -15 pts EMA20 extension (${distFromEma20}% from EMA20)`);
+      }
+    }
+
     if (score >= MIN_SCORE) {
       scored.push({ ...c, rank_score: score });
       console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [CIR:${cirPts}/25(${round2(cir)}%) VOL:${volPts}/25(${s.volume_ratio}x) RSI:${rsiPts}/20(${s.rsi}) ATR:${atrPts}/15(${s.atr_pct}%) CANDLE:${candlePts}/15(${s.candle_pattern})]`);
@@ -793,7 +788,7 @@ async function generatePickInsights(picks, marketContext) {
       system: `You are an ultra-brief Indian equity technical analyst. For each stock, write exactly 1-2 sentences explaining WHY this is a good intraday trade candidate based on the technical data. Focus on the setup (candle pattern, volume confirmation, key levels). Be specific with numbers. Respond in JSON: { "insights": [{ "symbol": "...", "insight": "..." }] }`,
       messages: [{
         role: 'user',
-        content: `Market regime: ${marketContext.regime}. GIFT Nifty: ${marketContext.gift_nifty_pct || 'N/A'}%.
+        content: `Market regime: ${marketContext.regime}.
 
 Today's picks:
 ${JSON.stringify(picksData, null, 2)}

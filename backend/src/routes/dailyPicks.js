@@ -99,10 +99,6 @@ router.get('/today', auth, async (req, res) => {
     } catch (err) {
       console.warn('[DAILY-PICKS-API] Nifty price fetch failed:', err.message);
     }
-    // Remove stale Gift Nifty fields
-    delete marketContext.gift_nifty_pct;
-    delete marketContext.gift_nifty_status;
-
     res.json({
       success: true,
       data: {

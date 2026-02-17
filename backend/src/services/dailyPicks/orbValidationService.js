@@ -100,12 +100,13 @@ async function collectOpeningRange(symbols, picks) {
 /**
  * Validate picks against ORB data. Called at 9:30 AM after OHLC fetch.
  *
- * 5 checks per pick:
- * 1. Gap check       — abs(gap_percent) < 1.5%
- * 2. ORB alignment   — Bullish scan → UP ORB, bearish → DOWN ORB
- * 3. Nifty alignment — Nifty ORB doesn't oppose scan bias
- * 4. Entry still valid — Entry price within 1% of pre-calculated level
- * 5. Volume check    — Auto-pass (OHLC doesn't provide volume)
+ * 6 checks per pick:
+ * 1. Gap size        — abs(gap_percent) < 1.5%
+ * 2. Gap direction   — gap must not oppose scan bias (LONG + gap < -1% = fail)
+ * 3. ORB alignment   — Bullish scan → UP ORB only (NEUTRAL = fail)
+ * 4. Nifty alignment — Nifty ORB doesn't oppose scan bias
+ * 5. Entry still valid — Entry price within 1% of pre-calculated level
+ * 6. Volume check    — Auto-pass (OHLC doesn't provide volume)
  *
  * @param {Array} picks — Array of pick sub-documents from DailyPick
  * @param {Object} orbData — Output from collectOpeningRange()
@@ -136,6 +137,7 @@ function validatePicks(picks, orbData) {
         passed: true,
         checks: {
           gap_check: { passed: true, value: orb?.gap_percent || 0 },
+          gap_direction: { passed: true, value: orb?.gap_percent || 0, direction: 'FORCED' },
           orb_alignment: { passed: true, scan_bias: pick.direction, orb_dir: orb?.orb_direction || 'FORCED' },
           nifty_alignment: { passed: true, nifty_dir: niftyDir },
           entry_still_valid: { passed: true, distance_percent: 0 },
@@ -174,16 +176,24 @@ function validatePicks(picks, orbData) {
     const isBullish = pick.direction === 'LONG';
     const checks = {};
 
-    // Check 1: Gap < 1.5%
+    // Check 1: Gap size < 1.5%
     checks.gap_check = {
       passed: Math.abs(orb.gap_percent) < 1.5,
       value: orb.gap_percent
     };
 
-    // Check 2: ORB direction alignment
+    // Check 2: Gap direction must not oppose scan bias
+    const gapOpposesDirection = (isBullish && orb.gap_percent < -1.0) || (!isBullish && orb.gap_percent > 1.0);
+    checks.gap_direction = {
+      passed: !gapOpposesDirection,
+      value: orb.gap_percent,
+      direction: isBullish ? 'LONG' : 'SHORT'
+    };
+
+    // Check 3: ORB direction alignment
     const expectedDir = isBullish ? 'UP' : 'DOWN';
     checks.orb_alignment = {
-      passed: orb.orb_direction === expectedDir || orb.orb_direction === 'NEUTRAL',
+      passed: orb.orb_direction === expectedDir,
       scan_bias: pick.direction,
       orb_dir: orb.orb_direction
     };
@@ -262,7 +272,7 @@ function validatePicks(picks, orbData) {
       original_levels: originalLevels
     };
 
-    console.log(`${LOG} ${pick.symbol}: ${finalPassed ? 'PASSED' : 'FAILED'} — gap=${checks.gap_check.passed ? 'OK' : 'FAIL'}(${orb.gap_percent}%) orb=${checks.orb_alignment.passed ? 'OK' : 'FAIL'}(${orb.orb_direction}) nifty=${checks.nifty_alignment.passed ? 'OK' : 'FAIL'}(${niftyDir}) entry=${checks.entry_still_valid.passed ? 'OK' : 'FAIL'}(${distPct}%) vol=AUTO${levelsRecalculated ? ' [RECALCULATED]' : ''}`);
+    console.log(`${LOG} ${pick.symbol}: ${finalPassed ? 'PASSED' : 'FAILED'} — gap=${checks.gap_check.passed ? 'OK' : 'FAIL'}(${orb.gap_percent}%) gap_dir=${checks.gap_direction.passed ? 'OK' : 'FAIL'} orb=${checks.orb_alignment.passed ? 'OK' : 'FAIL'}(${orb.orb_direction}) nifty=${checks.nifty_alignment.passed ? 'OK' : 'FAIL'}(${niftyDir}) entry=${checks.entry_still_valid.passed ? 'OK' : 'FAIL'}(${distPct}%) vol=AUTO${levelsRecalculated ? ' [RECALCULATED]' : ''}`);
     if (!finalPassed) console.log(`${LOG} ${pick.symbol}: skip_reason=${skipReason}`);
   }
 

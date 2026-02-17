@@ -62,23 +62,23 @@
 
     // Scan 3: Momentum Carry — Yesterday closed at high with strong volume
     // Buyers still in control, likely gap up or continuation today
-    momentum_carry: {
-      type: 'bullish',
-      query: `( {cash} (
-        latest close >= latest high * 0.98 and
-        latest close > latest open and
-        latest close > 1 day ago close * 1.01 and
-        latest volume > latest sma( volume, 50 ) * 1.5 and
-        latest rsi( 14 ) > 55 and
-        latest rsi( 14 ) < 72 and
-        latest ema( close, 20 ) > latest ema( close, 50 ) and
-        latest close > latest sma( close, 200 ) and
-        latest high - latest low > latest close * 0.015 and
-        1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
-        2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-        market cap >= 1000
-      ) )`
-    },
+    // momentum_carry: {
+    //   type: 'bullish',
+    //   query: `( {cash} (
+    //     latest close >= latest high * 0.98 and
+    //     latest close > latest open and
+    //     latest close > 1 day ago close * 1.01 and
+    //     latest volume > latest sma( volume, 50 ) * 1.5 and
+    //     latest rsi( 14 ) > 55 and
+    //     latest rsi( 14 ) < 72 and
+    //     latest ema( close, 20 ) > latest ema( close, 50 ) and
+    //     latest close > latest sma( close, 200 ) and
+    //     latest high - latest low > latest close * 0.015 and
+    //     1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
+    //     2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
+    //     market cap >= 1000
+    //   ) )`
+    // },
 
     // Scan 4: Breakout Setup — Sitting just below 20-day high
     // One push away from breakout, coiling near resistance
@@ -184,11 +184,9 @@
 export const SCAN_LABELS = {
   compression_bullish: 'Compression Bullish',
   pullback_at_support: 'Pullback Support',
-  momentum_carry: 'Momentum Carry',
   breakout_setup: 'Breakout Setup',
   compression_bearish: 'Compression Bearish',
   failed_at_resistance: 'Failed Resistance',
-  momentum_carry_bearish: 'Momentum Carry Bear',
   breakdown_setup: 'Breakdown Setup'
 };
 
@@ -197,10 +195,10 @@ export const SCAN_LABELS = {
  * Scans are run in this order; deduplication keeps the first match.
  */
 export const SCAN_ORDER_BY_REGIME = {
-  BULLISH: ['compression_bullish', 'pullback_at_support', 'momentum_carry', 'breakout_setup'],
-  BEARISH: ['compression_bearish', 'failed_at_resistance', 'momentum_carry_bearish', 'breakdown_setup'],
-  NEUTRAL: ['compression_bullish', 'pullback_at_support', 'momentum_carry', 'breakout_setup', 'compression_bearish', 'failed_at_resistance', 'momentum_carry_bearish', 'breakdown_setup'],
-  UNKNOWN: ['compression_bullish', 'pullback_at_support', 'momentum_carry', 'breakout_setup']
+  BULLISH: ['compression_bullish', 'pullback_at_support', 'breakout_setup'],
+  BEARISH: ['compression_bearish', 'failed_at_resistance', 'breakdown_setup'],
+  NEUTRAL: ['compression_bullish', 'pullback_at_support', 'breakout_setup', 'compression_bearish', 'failed_at_resistance', 'breakdown_setup'],
+  UNKNOWN: ['compression_bullish', 'pullback_at_support', 'breakout_setup']
 };
 
 /**
@@ -212,11 +210,9 @@ export const SCAN_ARCHETYPE = {
   // LONG — map to generic archetypes
   compression_bullish: 'consolidation_breakout',
   pullback_at_support: 'pullback',
-  momentum_carry: 'momentum',
   breakout_setup: 'breakout',
   // SHORT — pass through to dedicated calculators in scanLevels.js
   compression_bearish: 'compression_bearish',
   failed_at_resistance: 'failed_at_resistance',
-  momentum_carry_bearish: 'momentum_carry_bearish',
   breakdown_setup: 'breakdown_setup'
 };

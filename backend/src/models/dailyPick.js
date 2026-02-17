@@ -97,6 +97,7 @@ const pickSchema = new mongoose.Schema({
     passed: Boolean,
     checks: {
       gap_check: { passed: Boolean, value: Number },
+      gap_direction: { passed: Boolean, value: Number, direction: String },
       orb_alignment: { passed: Boolean, scan_bias: String, orb_dir: String },
       nifty_alignment: { passed: Boolean, nifty_dir: String },
       entry_still_valid: { passed: Boolean, distance_percent: Number },
@@ -128,8 +129,6 @@ const dailyPickSchema = new mongoose.Schema({
   // Market context at decision time
   market_context: {
     regime: { type: String, enum: ['BULLISH', 'BEARISH', 'NEUTRAL', 'UNKNOWN'] },
-    gift_nifty_pct: Number,
-    gift_nifty_status: { type: String, enum: ['POSITIVE', 'NEGATIVE', 'FLAT'] },
     nifty_prev_close: Number,
     decided_at: Date
   },
