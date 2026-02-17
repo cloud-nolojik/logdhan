@@ -190,7 +190,7 @@ class KiteTokenRefreshJob {
     try {
       console.log(`[KITE-TOKEN-JOB] Performing auto login (attempt ${retryCount + 1})...`);
 
-      const session = await kiteAutoLoginService.performAutoLogin();
+      const session = await kiteAutoLoginService.forceRefresh();
 
       const durationMs = Date.now() - startTime;
       console.log(`[KITE-TOKEN-JOB] Token refreshed in ${durationMs}ms`);

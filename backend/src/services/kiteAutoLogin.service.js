@@ -412,58 +412,53 @@ class KiteAutoLoginService {
   }
 
   /**
-   * Get a valid session, auto-login if needed
+   * Get a valid session, auto-login if needed.
+   *
+   * DESIGN: The 6 AM token refresh job already performs a full login and saves
+   * a valid token to the DB. That token is good until 6 AM next day. So during
+   * market hours (9:15-15:30) we just trust whatever is in the DB — no profile
+   * API validation call. If the token happens to be bad, the actual API call
+   * in makeRequest() will get a 403, and ONLY THEN do we trigger auto-login.
+   *
+   * This eliminates the race condition where a profile-validation call succeeds
+   * but the real API call fails because a concurrent login overwrote the token.
    */
   async getValidSession() {
     try {
-      // Try to get existing session
-      console.log('[KITE] getValidSession: Looking for existing session...');
       const session = await KiteSession.findOne({ kite_user_id: this.userId });
-      console.log('[KITE] getValidSession: Session found:', session ? 'YES' : 'NO');
-
-      if (session) {
-        console.log('[KITE] getValidSession: session.is_valid:', session.is_valid);
-        console.log('[KITE] getValidSession: session.access_token:', session.access_token ? 'present' : 'missing');
-        console.log('[KITE] getValidSession: session.token_expiry:', session.token_expiry);
-      }
 
       if (session && session.is_valid && session.access_token) {
-        // Check if token is still valid
-        console.log('[KITE] getValidSession: Validating token...');
-        const isValid = await this.validateToken(session.access_token);
-        console.log('[KITE] getValidSession: Token validation result:', isValid);
-
-        if (isValid) {
-          // Update validation timestamp
-          session.last_validated_at = new Date();
-          session.validation_count += 1;
-          await session.save();
-
-          console.log('[KITE] Using existing valid session');
+        // Check token_expiry (6 AM IST next day). If past expiry, don't use it.
+        if (session.token_expiry && session.token_expiry > new Date()) {
           return session;
         }
-
-        console.log('[KITE] Existing token is invalid/expired');
+        console.log('[KITE] Token past expiry, need fresh login');
       }
 
-      // Token invalid or expired - perform auto login (with dedup)
-      // If another caller is already logging in, share that promise
-      // instead of triggering a parallel login that causes token overwrites
-      if (this._loginPromise) {
-        console.log('[KITE] Auto login already in progress — waiting for existing attempt...');
-        return await this._loginPromise;
-      }
-
-      console.log('[KITE] Performing auto login...');
-      this._loginPromise = this.performAutoLogin().finally(() => {
-        this._loginPromise = null;
-      });
-      return await this._loginPromise;
+      // No valid session in DB — need auto login
+      return await this._doAutoLogin();
 
     } catch (error) {
       console.error('[KITE] Failed to get valid session:', error.message);
       throw error;
     }
+  }
+
+  /**
+   * Dedup-guarded auto login. Multiple concurrent callers share a single
+   * login attempt so we never generate two access_tokens that clobber each other.
+   */
+  async _doAutoLogin() {
+    if (this._loginPromise) {
+      console.log('[KITE] Auto login already in progress — waiting for existing attempt...');
+      return await this._loginPromise;
+    }
+
+    console.log('[KITE] Performing auto login...');
+    this._loginPromise = this.performAutoLogin().finally(() => {
+      this._loginPromise = null;
+    });
+    return await this._loginPromise;
   }
 
   /**
@@ -479,11 +474,15 @@ class KiteAutoLoginService {
   }
 
   /**
-   * Make authenticated API request to Kite
+   * Make authenticated API request to Kite.
+   *
+   * On 403 / TokenException: invalidate the stale token, auto-login ONCE,
+   * and retry the request with the fresh token. No exponential retries —
+   * each retry was triggering a full login, and concurrent logins clobber
+   * each other on Kite (new access_token kills the old one).
    */
-  async makeRequest(method, endpoint, data = null, retryCount = 0) {
+  async makeRequest(method, endpoint, data = null, isRetry = false) {
     const headers = await this.getAuthHeaders();
-    // Capture the token used for this request so we can check it in the catch block
     const usedToken = headers['Authorization']?.split(':')[1];
 
     try {
@@ -506,21 +505,21 @@ class KiteAutoLoginService {
       return response.data;
 
     } catch (error) {
-      // Check if token expired (403 or token error)
-      if (error.response?.status === 403 || error.response?.data?.error_type === 'TokenException') {
-        if (retryCount < kiteConfig.MAX_RETRIES) {
-          console.log('[KITE] Token expired, refreshing...');
+      const is403 = error.response?.status === 403 ||
+                     error.response?.data?.error_type === 'TokenException';
 
-          // Only mark session expired if the FAILED token is still the current one.
-          // This prevents clobbering a fresh token that another concurrent caller just saved.
-          await KiteSession.findOneAndUpdate(
-            { kite_user_id: this.userId, access_token: usedToken },
-            { is_valid: false, connection_status: 'expired' }
-          );
+      if (is403 && !isRetry) {
+        console.log('[KITE] Token expired on API call, invalidating and re-logging in...');
 
-          // Retry with new token (getValidSession dedup ensures only one login runs)
-          return this.makeRequest(method, endpoint, data, retryCount + 1);
-        }
+        // Mark only THIS token as expired (don't clobber a fresh one from another caller)
+        await KiteSession.findOneAndUpdate(
+          { kite_user_id: this.userId, access_token: usedToken },
+          { is_valid: false, connection_status: 'expired' }
+        );
+
+        // Auto-login once (dedup-guarded), then retry the request exactly once
+        await this._doAutoLogin();
+        return this.makeRequest(method, endpoint, data, true);
       }
 
       throw error;
@@ -614,23 +613,14 @@ class KiteAutoLoginService {
   async forceRefresh() {
     console.log('[KITE] Force refreshing token...');
 
-    // If a login is already in progress, wait for it instead of stacking
-    if (this._loginPromise) {
-      console.log('[KITE] Login already in progress — waiting for existing attempt...');
-      return await this._loginPromise;
-    }
-
     // Mark current session as invalid
     await KiteSession.findOneAndUpdate(
       { kite_user_id: this.userId },
       { is_valid: false }
     );
 
-    // Perform new login (with dedup guard)
-    this._loginPromise = this.performAutoLogin().finally(() => {
-      this._loginPromise = null;
-    });
-    return await this._loginPromise;
+    // Perform new login (dedup-guarded)
+    return await this._doAutoLogin();
   }
 
   /**
