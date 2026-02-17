@@ -705,12 +705,12 @@ export function calculateTradingLevels(scanType, data) {
     // SHORT/BEARISH SCAN TYPES
     // ═══════════════════════════════════════════════════════════════════════════
 
-    case 'fiftyTwoWeek_high':
+    case 'fiftytwoweek_high':
       console.log(`🔍 [SCAN_LEVELS] Calling calculate52wHighLevels`);
       result = calculate52wHighLevels(data);
       break;
 
-    case 'fiftyTwoWeek_low':
+    case 'fiftytwoweek_low':
       console.log(`🔍 [SCAN_LEVELS] Calling calculate52wLowLevels`);
       result = calculate52wLowLevels(data);
       break;
