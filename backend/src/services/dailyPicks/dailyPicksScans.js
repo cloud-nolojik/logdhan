@@ -1,9 +1,9 @@
 /**
  * Daily Picks — ChartInk Scan Formulas
  *
- * 6 scans for next-day +2% trade candidates.
- * Bullish scans (1-3): run in BULLISH/NEUTRAL market regimes.
- * Bearish scans (4-6): run in BEARISH/NEUTRAL market regimes.
+ * 8 scans for next-day +2% trade candidates.
+ * Bullish scans (1-4): run in BULLISH/NEUTRAL/UNKNOWN regimes. 52W high runs in ALL regimes.
+ * Bearish scans (5-8): run in BEARISH/NEUTRAL regimes. 52W low runs in ALL regimes.
  *
  * ChartInk returns: { nsecode, bsecode, name, per_change, close, volume }
  * Enrichment (OHLCV, indicators) happens separately via Upstox.
@@ -60,25 +60,24 @@
       ) )`
     },
 
-    // Scan 3: Momentum Carry — Yesterday closed at high with strong volume
-    // Buyers still in control, likely gap up or continuation today
-    // momentum_carry: {
-    //   type: 'bullish',
-    //   query: `( {cash} (
-    //     latest close >= latest high * 0.98 and
-    //     latest close > latest open and
-    //     latest close > 1 day ago close * 1.01 and
-    //     latest volume > latest sma( volume, 50 ) * 1.5 and
-    //     latest rsi( 14 ) > 55 and
-    //     latest rsi( 14 ) < 72 and
-    //     latest ema( close, 20 ) > latest ema( close, 50 ) and
-    //     latest close > latest sma( close, 200 ) and
-    //     latest high - latest low > latest close * 0.015 and
-    //     1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
-    //     2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
-    //     market cap >= 1000
-    //   ) )`
-    // },
+    // Scan 3: 52-Week High Breakout — Strong volume near yearly high
+    // Stock closing within 2% of 52W high with volume surge = institutional breakout
+    // WHY IT WORKS: 52W high is strongest psychological resistance; breaking it with volume = new trend
+    fiftyTwoWeek_high: {
+      type: 'bullish',
+      query: `( {cash} (
+        latest close >= max( 250, high ) * 0.98 and
+        latest close > latest open and
+        latest volume > latest sma( volume, 50 ) * 2 and
+        latest close > latest ema( close, 20 ) and
+        latest ema( close, 20 ) > latest ema( close, 50 ) and
+        latest rsi( 14 ) > 55 and
+        latest rsi( 14 ) < 80 and
+        latest high - latest low > latest close * 0.015 and
+        1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
+        market cap >= 1000
+      ) )`
+    },
 
     // Scan 4: Breakout Setup — Sitting just below 20-day high
     // One push away from breakout, coiling near resistance
@@ -141,21 +140,21 @@
       ) )`
     },
 
-    // Scan 7: Bearish Momentum Carry
-    // Yesterday closed at low with strong volume = sellers in control
-    momentum_carry_bearish: {
+    // Scan 7: 52-Week Low Breakdown — Strong volume near yearly low
+    // Stock closing within 2% of 52W low with volume surge = institutional selling
+    // WHY IT WORKS: 52W low is strongest psychological support; breaking it with volume = capitulation
+    fiftyTwoWeek_low: {
       type: 'bearish',
       query: `( {cash} (
-        latest close <= latest low * 1.02 and
+        latest close <= min( 250, low ) * 1.02 and
         latest close < latest open and
-        latest close < 1 day ago close * 0.99 and
-        latest volume > latest sma( volume, 50 ) * 1.5 and
-        latest rsi( 14 ) > 28 and
-        latest rsi( 14 ) < 45 and
+        latest volume > latest sma( volume, 50 ) * 2 and
+        latest close < latest ema( close, 20 ) and
         latest ema( close, 20 ) < latest ema( close, 50 ) and
+        latest rsi( 14 ) < 45 and
+        latest rsi( 14 ) > 20 and
         latest high - latest low > latest close * 0.015 and
         1 day ago high - 1 day ago low > 1 day ago close * 0.015 and
-        2 days ago high - 2 days ago low > 2 days ago close * 0.015 and
         market cap >= 1000
       ) )`
     },
@@ -184,9 +183,11 @@
 export const SCAN_LABELS = {
   compression_bullish: 'Compression Bullish',
   pullback_at_support: 'Pullback Support',
+  fiftyTwoWeek_high: '52W High Breakout',
   breakout_setup: 'Breakout Setup',
   compression_bearish: 'Compression Bearish',
   failed_at_resistance: 'Failed Resistance',
+  fiftyTwoWeek_low: '52W Low Breakdown',
   breakdown_setup: 'Breakdown Setup'
 };
 
@@ -195,10 +196,10 @@ export const SCAN_LABELS = {
  * Scans are run in this order; deduplication keeps the first match.
  */
 export const SCAN_ORDER_BY_REGIME = {
-  BULLISH: ['compression_bullish', 'pullback_at_support', 'breakout_setup'],
-  BEARISH: ['compression_bearish', 'failed_at_resistance', 'breakdown_setup'],
-  NEUTRAL: ['compression_bullish', 'pullback_at_support', 'breakout_setup', 'compression_bearish', 'failed_at_resistance', 'breakdown_setup'],
-  UNKNOWN: ['compression_bullish', 'pullback_at_support', 'breakout_setup']
+  BULLISH: ['compression_bullish', 'pullback_at_support', 'fiftyTwoWeek_high', 'breakout_setup'],
+  BEARISH: ['compression_bearish', 'failed_at_resistance', 'fiftyTwoWeek_low', 'breakdown_setup'],
+  NEUTRAL: ['compression_bullish', 'pullback_at_support', 'fiftyTwoWeek_high', 'breakout_setup', 'compression_bearish', 'failed_at_resistance', 'fiftyTwoWeek_low', 'breakdown_setup'],
+  UNKNOWN: ['compression_bullish', 'pullback_at_support', 'fiftyTwoWeek_high', 'breakout_setup']
 };
 
 /**
@@ -210,9 +211,11 @@ export const SCAN_ARCHETYPE = {
   // LONG — map to generic archetypes
   compression_bullish: 'consolidation_breakout',
   pullback_at_support: 'pullback',
+  fiftyTwoWeek_high: 'breakout',
   breakout_setup: 'breakout',
   // SHORT — pass through to dedicated calculators in scanLevels.js
   compression_bearish: 'compression_bearish',
   failed_at_resistance: 'failed_at_resistance',
+  fiftyTwoWeek_low: 'breakdown_setup',
   breakdown_setup: 'breakdown_setup'
 };

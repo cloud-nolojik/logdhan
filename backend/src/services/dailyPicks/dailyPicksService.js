@@ -579,19 +579,27 @@ function scoreCandidates(enrichedCandidates) {
     else candlePts = 5;
     score += candlePts;
 
-    // EMA20 extension filter — skip overextended stocks, penalize stretched ones
+    // EMA20 extension filter — directional: only penalize if chasing in trade direction
+    // LONG 3%+ above EMA20 = chasing momentum → skip
+    // SHORT 3%+ below EMA20 = chasing momentum → skip
+    // LONG below EMA20 = pullback (fine), SHORT above EMA20 = bounce short (fine)
+    // 52W scans exempt — they are inherently extended by definition
+    const is52wScan = c.scan_type === 'fiftyTwoWeek_high' || c.scan_type === 'fiftyTwoWeek_low';
     const ema20 = c._ohlcv?.ema20;
-    if (ema20 && ema20 > 0) {
-      const distFromEma20 = round2(Math.abs((c._ohlcv.close - ema20) / ema20) * 100);
-      if (distFromEma20 >= 3.0) {
+    if (ema20 && ema20 > 0 && !is52wScan) {
+      const rawDist = round2(((c._ohlcv.close - ema20) / ema20) * 100); // positive = above, negative = below
+      const isChasing = (c.direction === 'LONG' && rawDist > 0) || (c.direction === 'SHORT' && rawDist < 0);
+      const absDist = Math.abs(rawDist);
+
+      if (isChasing && absDist >= 3.0) {
         ema20Skipped++;
-        console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): SKIPPED — ${distFromEma20}% from EMA20 (>= 3%)`);
+        console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): SKIPPED — ${rawDist}% from EMA20 (chasing, >= 3%)`);
         continue;
       }
-      if (distFromEma20 >= 2.0) {
+      if (isChasing && absDist >= 2.0) {
         ema20Penalized++;
         score -= 15;
-        console.log(`${LOG} ⚠️ ${c.symbol}: -15 pts EMA20 extension (${distFromEma20}% from EMA20)`);
+        console.log(`${LOG} ⚠️ ${c.symbol}: -15 pts EMA20 chasing (${rawDist}% from EMA20)`);
       }
     }
 
