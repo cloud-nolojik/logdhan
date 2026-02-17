@@ -335,8 +335,11 @@ async function enrichCandidates(candidates) {
     const range = high - low;
 
     const closeInRangePct = range > 0 ? ((close - low) / range) * 100 : 50;
+    // Use today's volume if available, otherwise fall back to ChartInk's volume (yesterday's)
+    // At 8:45 AM pre-market, todays_volume is 0 — ChartInk already confirmed strong volume
+    const effectiveVolume = stock.todays_volume > 0 ? stock.todays_volume : (candidate.chartink_data?.volume || 0);
     const volumeRatio = stock.avg_volume_50d > 0
-      ? stock.todays_volume / stock.avg_volume_50d
+      ? effectiveVolume / stock.avg_volume_50d
       : 1;
     const atrPct = close > 0 ? (range / close) * 100 : 0;
 
@@ -347,7 +350,8 @@ async function enrichCandidates(candidates) {
     const candlePattern = detectCandlePattern(open, high, low, close, 0, prevHigh, prevLow, prevClose);
 
     const lastDailyClose = stock.last_daily_close || close;
-    console.log(`${LOG} [Enrich] ${candidate.symbol} (${candidate.scan_type}): O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${stock.todays_volume} avgVol50=${stock.avg_volume_50d} rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
+    const volSource = stock.todays_volume > 0 ? 'live' : 'chartink';
+    console.log(`${LOG} [Enrich] ${candidate.symbol} (${candidate.scan_type}): O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${effectiveVolume}(${volSource}) avgVol50=${stock.avg_volume_50d} volRatio=${round2(volumeRatio)}x rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
     console.log(`${LOG} [Enrich] ${candidate.symbol} indicators: ema20=${stock.ema20 || 0} ema50=${stock.ema50 || 0} atr=${stock.atr || 0} h20D=${stock.high_20d || 0} l20D=${stock.low_20d || 0} h52W=${stock.high_52w || 0} wR1=${stock.weekly_r1 || 'null'} wR2=${stock.weekly_r2 || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'}`);
     console.log(`${LOG} [Enrich] ${candidate.symbol} pivots: dP=${stock.daily_pivot_levels?.pivot || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'} dS1=${stock.daily_pivot_levels?.s1 || 'null'} | 1H_R1=${stock.hourly_1h_pivots?.r1 || 'null'} 1H_S1=${stock.hourly_1h_pivots?.s1 || 'null'} | 4H_R1=${stock.hourly_4h_pivots?.r1 || 'null'} 4H_S1=${stock.hourly_4h_pivots?.s1 || 'null'}`);
 
@@ -399,6 +403,11 @@ async function enrichCandidates(candidates) {
       }
     });
   }
+
+  const noDataCount = candidates.length - enriched.length;
+  const liveVolCount = enriched.filter(e => e._ohlcv?.volume > 0).length;
+  const chartinkVolCount = enriched.length - liveVolCount;
+  console.log(`${LOG} [Step 3] RECONCILIATION: input=${candidates.length} apiReturned=${analysisData.stocks?.length || 0} noData=${noDataCount} enriched=${enriched.length} volSource: live=${liveVolCount} chartink=${chartinkVolCount}`);
 
   return enriched;
 }
@@ -516,6 +525,8 @@ function scoreCandidates(enrichedCandidates) {
   console.log(`${LOG} [Step 4] Scoring ${enrichedCandidates.length} candidates...`);
 
   const scored = [];
+  let ema20Skipped = 0, ema20Penalized = 0, belowMinScore = 0, passedCount = 0;
+  let vol5Count = 0, vol10Count = 0, vol15Count = 0, vol20Count = 0, vol25Count = 0;
 
   for (const c of enrichedCandidates) {
     const s = c.scan_scores;
@@ -532,11 +543,11 @@ function scoreCandidates(enrichedCandidates) {
     score += cirPts;
 
     // Volume ratio (25 pts)
-    if (s.volume_ratio > 3) volPts = 25;
-    else if (s.volume_ratio > 2) volPts = 20;
-    else if (s.volume_ratio > 1.5) volPts = 15;
-    else if (s.volume_ratio > 1.2) volPts = 10;
-    else volPts = 5;
+    if (s.volume_ratio > 3) { volPts = 25; vol25Count++; }
+    else if (s.volume_ratio > 2) { volPts = 20; vol20Count++; }
+    else if (s.volume_ratio > 1.5) { volPts = 15; vol15Count++; }
+    else if (s.volume_ratio > 1.2) { volPts = 10; vol10Count++; }
+    else { volPts = 5; vol5Count++; }
     score += volPts;
 
     // RSI positioning (20 pts)
@@ -573,16 +584,19 @@ function scoreCandidates(enrichedCandidates) {
     if (ema20 && ema20 > 0) {
       const distFromEma20 = round2(Math.abs((c._ohlcv.close - ema20) / ema20) * 100);
       if (distFromEma20 >= 3.0) {
+        ema20Skipped++;
         console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): SKIPPED — ${distFromEma20}% from EMA20 (>= 3%)`);
         continue;
       }
       if (distFromEma20 >= 2.0) {
+        ema20Penalized++;
         score -= 15;
         console.log(`${LOG} ⚠️ ${c.symbol}: -15 pts EMA20 extension (${distFromEma20}% from EMA20)`);
       }
     }
 
     if (score >= MIN_SCORE) {
+      passedCount++;
       scored.push({ ...c, rank_score: score });
       console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [CIR:${cirPts}/25(${round2(cir)}%) VOL:${volPts}/25(${s.volume_ratio}x) RSI:${rsiPts}/20(${s.rsi}) ATR:${atrPts}/15(${s.atr_pct}%) CANDLE:${candlePts}/15(${s.candle_pattern})]`);
 
@@ -596,9 +610,15 @@ function scoreCandidates(enrichedCandidates) {
         console.log(`${LOG}   ↳ Confluence: +${confluenceResult.bonus} pts (${confluenceResult.detail})`);
       }
     } else {
+      belowMinScore++;
       console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} < ${MIN_SCORE} [CIR:${cirPts} VOL:${volPts} RSI:${rsiPts} ATR:${atrPts} CANDLE:${candlePts}]`);
     }
   }
+
+  // Scoring reconciliation — every candidate must be accounted for
+  const totalProcessed = passedCount + belowMinScore + ema20Skipped;
+  console.log(`${LOG} [Step 4] RECONCILIATION: input=${enrichedCandidates.length} passed=${passedCount} belowMin=${belowMinScore} ema20Skip=${ema20Skipped} ema20Pen=${ema20Penalized} total=${totalProcessed}${totalProcessed !== enrichedCandidates.length ? ' ⚠️ MISMATCH' : ''}`);
+  console.log(`${LOG} [Step 4] VOL distribution: 25pts=${vol25Count} 20pts=${vol20Count} 15pts=${vol15Count} 10pts=${vol10Count} 5pts=${vol5Count}`);
 
   // Sort descending by score
   scored.sort((a, b) => b.rank_score - a.rank_score);
