@@ -21,15 +21,19 @@ const COLLECTION_DURATION_MS = 15 * 60 * 1000; // 15 minutes
  * Market data is the same for all users, so any token works.
  */
 async function getUpstoxAccessToken() {
+  console.log(`${LOG} Looking up Upstox access token from DB...`);
   const user = await User.findOne({ 'broker.upstox.access_token': { $exists: true, $ne: null } })
     .select('broker.upstox.access_token')
     .lean();
 
   if (!user?.broker?.upstox?.access_token) {
+    console.error(`${LOG} No Upstox access token found in any user document`);
     throw new Error('No Upstox access token available — connect a broker account first');
   }
 
-  return user.broker.upstox.access_token;
+  const token = user.broker.upstox.access_token;
+  console.log(`${LOG} Found Upstox token: ...${token.slice(-6)}`);
+  return token;
 }
 
 /**
@@ -120,10 +124,11 @@ async function collectOpeningRange(symbols, picks) {
           if (ltp < d.low) d.low = ltp;
           d.last_price = ltp;
 
+          const tradeTime = data?.last_trade_time || 'N/A';
           if (sym === '_NIFTY') {
-            prices.push(`NIFTY=${ltp}`);
+            prices.push(`NIFTY=${ltp}@${tradeTime}`);
           } else {
-            prices.push(`${sym}=${ltp}`);
+            prices.push(`${sym}=${ltp}@${tradeTime}`);
           }
         }
 

@@ -65,7 +65,11 @@ function getAnthropicClient() {
  * @returns {Object} — { 'NSE:SYMBOL': { last_price }, ... }
  */
 async function fetchLTPviaUpstox(picks) {
+  console.log(`${LOG} [UPSTOX-LTP] Fetching LTP for ${picks.length} picks`);
+
   const accessToken = await getUpstoxAccessToken();
+  const tokenSnippet = accessToken ? `...${accessToken.slice(-6)}` : 'null';
+  console.log(`${LOG} [UPSTOX-LTP] Got Upstox token: ${tokenSnippet}`);
 
   const instrumentKeys = [];
   const keyToSymbol = {};
@@ -73,15 +77,26 @@ async function fetchLTPviaUpstox(picks) {
     if (pick.instrument_key) {
       instrumentKeys.push(pick.instrument_key);
       keyToSymbol[pick.instrument_key] = pick.symbol;
+      console.log(`${LOG} [UPSTOX-LTP] ${pick.symbol} → ${pick.instrument_key}`);
+    } else {
+      console.warn(`${LOG} [UPSTOX-LTP] ${pick.symbol}: No instrument_key — skipping`);
     }
   }
 
-  if (instrumentKeys.length === 0) return {};
+  if (instrumentKeys.length === 0) {
+    console.warn(`${LOG} [UPSTOX-LTP] No instrument keys to fetch — returning empty`);
+    return {};
+  }
 
+  console.log(`${LOG} [UPSTOX-LTP] Calling getLiveMarketData for ${instrumentKeys.length} instruments`);
   const result = await upstoxService.getLiveMarketData(instrumentKeys, accessToken);
+
   if (!result.success) {
+    console.error(`${LOG} [UPSTOX-LTP] getLiveMarketData FAILED: ${result.message}`);
     throw new Error(`Upstox LTP failed: ${result.message}`);
   }
+
+  console.log(`${LOG} [UPSTOX-LTP] getLiveMarketData SUCCESS — ${Object.keys(result.data).length} instruments returned`);
 
   // Convert from Upstox format { 'NSE_EQ|ISIN': { last_price } }
   // to Kite-compatible format { 'NSE:SYMBOL': { last_price } }
@@ -90,9 +105,13 @@ async function fetchLTPviaUpstox(picks) {
     const sym = keyToSymbol[instKey];
     if (sym && data?.last_price) {
       ltpData[`NSE:${sym}`] = { last_price: data.last_price };
+      console.log(`${LOG} [UPSTOX-LTP] ${sym}: ₹${data.last_price} (trade_time: ${data.last_trade_time || 'N/A'})`);
+    } else {
+      console.warn(`${LOG} [UPSTOX-LTP] Unknown key or no price: ${instKey} → sym=${sym} price=${data?.last_price}`);
     }
   }
 
+  console.log(`${LOG} [UPSTOX-LTP] Returning LTP for ${Object.keys(ltpData).length} symbols`);
   return ltpData;
 }
 
