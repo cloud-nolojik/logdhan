@@ -63,6 +63,7 @@ const kiteConfig = {
 
     // Quotes
     QUOTE_LTP: '/quote/ltp',
+    QUOTE_OHLC: '/quote/ohlc',
 
     // Portfolio
     HOLDINGS: '/portfolio/holdings',

@@ -109,7 +109,7 @@ class DailyEntryJob {
       }
     });
 
-    // Job 2: Validate picks + place entries at 9:30 AM
+    // Job 2: Fetch ORB OHLC + Validate picks + place entries at 9:30 AM
     this.agenda.define('daily-picks-validate-entry', async (job) => {
       if (this.runningJobs.has('validate-entry')) {
         console.log(`${LOG} Validate+entry already running, skipping`);
@@ -124,7 +124,18 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
-        console.log(`${LOG} [VALIDATE-ENTRY] Calling validateAndPlaceEntries()...`);
+        // Step 1: Fetch ORB data (single OHLC call — instant)
+        console.log(`${LOG} [VALIDATE-ENTRY] Step 1: Fetching ORB OHLC...`);
+        const orbResult = await startOrbCollection();
+        console.log(`${LOG} [VALIDATE-ENTRY] ORB result:`, JSON.stringify(orbResult));
+
+        if (!orbResult.success) {
+          console.error(`${LOG} [VALIDATE-ENTRY] ORB fetch failed — skipping entry placement`);
+          return { ...orbResult, orders: 0 };
+        }
+
+        // Step 2: Validate + place entries
+        console.log(`${LOG} [VALIDATE-ENTRY] Step 2: Validating and placing entries...`);
         const result = await validateAndPlaceEntries();
         this.stats.entriesValidated++;
         this.stats.lastRunAt = new Date();
@@ -306,12 +317,7 @@ class DailyEntryJob {
         }
       });
 
-      // 9:15 AM IST — Start ORB collection (polls LTP for 15 min)
-      await this.agenda.every('15 9 * * 1-5', 'daily-picks-orb-collect', {}, {
-        timezone: 'Asia/Kolkata'
-      });
-
-      // 9:30 AM IST — Validate picks against ORB + place entries
+      // 9:30 AM IST — Fetch ORB OHLC + validate picks + place entries (all in one job)
       await this.agenda.every('30 9 * * 1-5', 'daily-picks-validate-entry', {}, {
         timezone: 'Asia/Kolkata'
       });
@@ -336,7 +342,7 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log(`${LOG} Scheduled v2: ORB 9:15, validate+entry 9:30, cancel-expired 10:30, fill-fallback */2 9-10, monitor */3 10-14, tighten 14:00 (Mon-Fri IST)`);
+      console.log(`${LOG} Scheduled: ORB+validate+entry 9:30, cancel-expired 10:30, fill-fallback */2 9-10, monitor */3 10-14, tighten 14:00 (Mon-Fri IST)`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
       throw error;

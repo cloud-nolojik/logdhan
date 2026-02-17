@@ -543,6 +543,39 @@ class KiteOrderService {
   }
 
   /**
+   * Get OHLC (Open/High/Low/Close) for one or more instruments.
+   * Kite API: GET /quote/ohlc?i=NSE:SYMBOL1&i=NSE:SYMBOL2
+   *
+   * @param {string[]} instruments — Array of "EXCHANGE:SYMBOL" strings
+   * @returns {Object} — { "NSE:RELIANCE": { last_price, ohlc: { open, high, low, close } }, ... }
+   */
+  async getOHLC(instruments) {
+    try {
+      console.log(`[KITE ORDER] Fetching OHLC for ${instruments.length} instruments: ${instruments.join(', ')}`);
+      const queryString = instruments
+        .map(i => `i=${i.replace(/ /g, '+')}`)
+        .join('&');
+
+      const response = await this.kiteService.makeRequest(
+        'GET',
+        `${kiteConfig.ENDPOINTS.QUOTE_OHLC}?${queryString}`
+      );
+
+      const data = response.data || {};
+      const summary = Object.entries(data).map(([k, v]) =>
+        `${k}: O=${v.ohlc?.open} H=${v.ohlc?.high} L=${v.ohlc?.low} C=${v.ohlc?.close} LTP=${v.last_price}`
+      ).join(' | ');
+      console.log(`[KITE ORDER] OHLC response: ${summary || 'empty'}`);
+
+      return data;
+
+    } catch (error) {
+      console.error('[KITE ORDER] OHLC fetch failed:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get order details from Kite
    */
   async getOrderDetails(orderId) {

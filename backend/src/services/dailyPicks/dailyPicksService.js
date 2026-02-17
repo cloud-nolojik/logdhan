@@ -957,74 +957,47 @@ async function sendNotification(marketContext, picks, doc) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Start ORB (Opening Range Breakout) data collection.
- * Called at 9:15 AM — polls LTP every 8s for 15 min (until 9:30 AM).
- * Stores ORB data on each pick's `orb` field and marks status as COLLECTING_ORB.
+ * Fetch ORB (Opening Range Breakout) data via single OHLC call.
+ * Called at 9:30 AM — at that time, the day's OHLC IS the 15-min opening candle.
+ * Stores ORB data on each pick's `orb` field.
  */
 async function startOrbCollection(options = {}) {
   console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} Starting ORB collection`);
+  console.log(`${LOG} Fetching ORB data (single OHLC call)`);
   console.log(`${LOG} ════════════════════════════════════════`);
 
   const kiteEnabled = isKiteIntegrationEnabled();
-  console.log(`${LOG} [DEBUG] isKiteIntegrationEnabled: ${kiteEnabled}`);
   if (!kiteEnabled) {
-    console.log(`${LOG} Kite not enabled — skipping ORB collection`);
+    console.log(`${LOG} Kite not enabled — skipping ORB`);
     return { success: true, message: 'Kite not enabled' };
   }
 
-  // Debug: show what date range findToday() is using
-  const { getIstDayRange } = await import('../../utils/tradingDay.js');
-  const dayRange = getIstDayRange();
-  console.log(`${LOG} [DEBUG] findToday() looking for trading_date: ${dayRange.startUtc.toISOString()}`);
-
   const doc = await DailyPick.findToday();
-  console.log(`${LOG} [DEBUG] findToday() result: ${doc ? `found _id=${doc._id}, trading_date=${doc.trading_date?.toISOString()}, picks=${doc.picks?.length}` : 'null'}`);
   if (!doc) {
     console.log(`${LOG} No DailyPick doc for today — nothing to collect`);
     return { success: true, message: 'No picks today' };
   }
 
-  // Debug: log every pick's status
-  for (const pick of doc.picks) {
-    console.log(`${LOG} [DEBUG] Pick ${pick.symbol}: trade.status=${pick.trade.status}, kite.kite_status=${pick.kite.kite_status}`);
-  }
+  // Accept PENDING or COLLECTING_ORB (in case of retry)
+  const pendingPicks = doc.picks.filter(p =>
+    p.trade.status === 'PENDING' || p.trade.status === 'COLLECTING_ORB'
+  );
 
-  const pendingPicks = doc.picks.filter(p => p.trade.status === 'PENDING');
-  console.log(`${LOG} [DEBUG] pendingPicks count: ${pendingPicks.length}`);
   if (pendingPicks.length === 0) {
-    console.log(`${LOG} No PENDING picks — skipping ORB collection`);
+    console.log(`${LOG} No PENDING picks — skipping ORB`);
     return { success: true, message: 'No pending picks' };
   }
 
-  // Mark picks as COLLECTING_ORB
-  console.log(`${LOG} [DEBUG] Marking ${pendingPicks.length} picks as COLLECTING_ORB`);
-  for (const pick of pendingPicks) {
-    pick.trade.status = 'COLLECTING_ORB';
-    pick.kite.kite_status = 'collecting_orb';
-  }
-  await doc.save();
-  console.log(`${LOG} [DEBUG] Saved COLLECTING_ORB status to DB`);
+  console.log(`${LOG} Fetching ORB for ${pendingPicks.length} picks: ${pendingPicks.map(p => p.symbol).join(', ')}`);
 
-  // Collect ORB data (blocks for ~15 min)
   const symbols = pendingPicks.map(p => p.symbol);
-  console.log(`${LOG} Collecting ORB for: ${symbols.join(', ')}`);
-  console.log(`${LOG} [DEBUG] About to call collectOpeningRange() — this blocks for ~15 min`);
 
   let orbData;
   try {
     orbData = await collectOpeningRange(symbols, pendingPicks);
-    console.log(`${LOG} [DEBUG] collectOpeningRange() returned. Keys: ${Object.keys(orbData).join(', ')}`);
+    console.log(`${LOG} ORB data received for: ${Object.keys(orbData).join(', ')}`);
   } catch (orbErr) {
     console.error(`${LOG} [ERROR] collectOpeningRange() THREW: ${orbErr.message}`);
-    console.error(`${LOG} [ERROR] Stack: ${orbErr.stack}`);
-    // Reset picks back to PENDING so next trigger can retry
-    for (const pick of pendingPicks) {
-      pick.trade.status = 'PENDING';
-      pick.kite.kite_status = 'pending';
-    }
-    await doc.save();
-    console.log(`${LOG} [ERROR] Reset ${pendingPicks.length} picks back to PENDING`);
     return { success: false, error: orbErr.message };
   }
 
@@ -1044,7 +1017,7 @@ async function startOrbCollection(options = {}) {
   }
   await doc.save();
 
-  console.log(`${LOG} ORB collection complete — data stored for ${Object.keys(orbData).filter(k => k !== '_NIFTY').length} symbols`);
+  console.log(`${LOG} ORB complete — data stored for ${Object.keys(orbData).filter(k => k !== '_NIFTY').length} symbols`);
   return { success: true, symbolsCollected: Object.keys(orbData).length };
 }
 
