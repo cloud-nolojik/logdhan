@@ -1753,67 +1753,91 @@ function findShortStructuralTarget(params) {
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * 52-WEEK HIGH BREAKOUT (ATR-based levels)
+ * 52-WEEK HIGH BREAKOUT
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * Stock closing within 2% of 52W high with 2× volume surge.
- * Traditional PDL stop is 6-9% away for big movers → R:R impossible.
  *
- * ATR-based approach (pro recommendation):
- *   Entry:  prevClose (stock already near 52W high)
- *   Stop:   entry − 1× ATR
- *   Target: entry + 2× ATR  → gives 2:1 R:R by construction
- *   Risk cap: if 1× ATR > 5% of entry → reject (too volatile)
+ * Intraday: PDL stop + Daily R1/R2 target (structural levels, ~2% risk)
+ * Swing:    ATR-based (entry − 1×ATR stop, entry + 2×ATR target)
+ * Risk cap: 5% of entry → reject (too volatile)
  */
 function calculate52wHighLevels(data) {
-  const { prevClose, atr, high52W } = data;
-
-  console.log(`  [52W High] ┌─── ENTRY CALCULATION ───`);
-  console.log(`  [52W High] │ INPUT: prevClose=${prevClose} atr=${atr} high52W=${high52W}`);
-  console.log(`  [52W High] │ ⚠️ prevClose comes from _ohlcv.close in dailyPicksService.js`);
-  console.log(`  [52W High] │ ⚠️ At 8:45 AM pre-market, this is YESTERDAY'S daily close (not live price)`);
+  const { prevClose, prevLow, atr, high52W, isIntraday, dailyR1, dailyR2 } = data;
 
   if (!isNum(prevClose) || prevClose <= 0) {
-    console.log(`  [52W High] │ ❌ REJECTED: prevClose invalid (${prevClose})`);
-    console.log(`  [52W High] └────────────────────────`);
     return { valid: false, reason: '52W High: Previous close required for entry' };
   }
 
   if (!isNum(atr) || atr <= 0) {
-    console.log(`  [52W High] │ ❌ REJECTED: ATR invalid (${atr})`);
-    console.log(`  [52W High] └────────────────────────`);
     return { valid: false, reason: '52W High: ATR required for stop/target calculation' };
   }
 
   const entry = prevClose;
-  const stop = entry - atr;
-  const target = entry + (2 * atr);
 
-  console.log(`  [52W High] │ FORMULA: entry = prevClose = ${round2(entry)}`);
-  console.log(`  [52W High] │ FORMULA: stop = entry(${round2(entry)}) - atr(${round2(atr)}) = ${round2(stop)}`);
-  console.log(`  [52W High] │ FORMULA: target = entry(${round2(entry)}) + 2×atr(${round2(2 * atr)}) = ${round2(target)}`);
+  // Stop: Intraday → PDL − 0.15% buffer (tighter), Swing → entry − 1×ATR (wider)
+  let stop;
+  if (isIntraday && isNum(prevLow) && prevLow > 0) {
+    stop = roundToTick(prevLow * (1 - 0.0015));
+    // Fallback: if PDL stop too wide (>3%), use half ATR instead
+    const pdlRiskPct = ((entry - stop) / entry) * 100;
+    if (pdlRiskPct > 3.0) {
+      console.log(`  [52W High] PDL stop risk ${round2(pdlRiskPct)}% > 3%, using 0.5×ATR stop`);
+      stop = roundToTick(entry - (0.5 * atr));
+    }
+  } else {
+    stop = entry - atr;
+  }
+
+  // Target: Intraday → Daily R1/R2 (skip 1H swing — always below entry for 52W breakouts)
+  //         Swing    → entry + 2×ATR
+  let target, target2_basis;
+  if (isIntraday) {
+    if (isNum(dailyR1) && dailyR1 > entry) {
+      target = dailyR1;
+      target2_basis = 'daily_r1';
+    } else if (isNum(dailyR2) && dailyR2 > entry) {
+      target = dailyR2;
+      target2_basis = 'daily_r2';
+    } else {
+      target = entry + (2 * atr);
+      target2_basis = 'atr_2x';
+    }
+
+    // Validate R:R with chosen target
+    const risk = entry - stop;
+    const reward = target - entry;
+    const rr = risk > 0 ? reward / risk : 0;
+    if (rr < (data.minRR || 1.2)) {
+      return {
+        valid: false,
+        reason: `52W High intraday: R:R ${round2(rr)}:1 < ${data.minRR || 1.2}:1 (target=${round2(target)} [${target2_basis}], stop=${round2(stop)})`
+      };
+    }
+  } else {
+    target = entry + (2 * atr);
+    target2_basis = 'atr_2x';
+  }
 
   // Risk cap: 5% for 52W scans (breakout stocks are inherently volatile)
-  const riskPct = (atr / entry) * 100;
-  console.log(`  [52W High] │ RISK: atr(${round2(atr)}) / entry(${round2(entry)}) × 100 = ${round2(riskPct)}% (cap: 5%)`);
-
+  const risk = Math.abs(entry - stop);
+  const riskPct = (risk / entry) * 100;
   if (riskPct > 5.0) {
-    console.log(`  [52W High] │ ❌ REJECTED: risk ${round2(riskPct)}% > 5% cap`);
-    console.log(`  [52W High] └────────────────────────`);
     return {
       valid: false,
-      reason: `52W High REJECTED: ATR risk ${round2(riskPct)}% > 5% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
+      reason: `52W High REJECTED: risk ${round2(riskPct)}% > 5% cap (stop=${round2(stop)}, entry=${round2(entry)}).`,
       riskPercent: round2(riskPct),
       suggestedAction: 'skip_too_volatile'
     };
   }
 
-  const rr = round2(2.0); // Always 2:1 by construction
+  const reward = Math.abs(target - entry);
+  const rr = risk > 0 ? round2(reward / risk) : 0;
+  const stopSource = isIntraday ? (stop === roundToTick(entry - (0.5 * atr)) ? '0.5×ATR' : 'PDL') : '1×ATR';
+
+  console.log(`  [52W High] ${isIntraday ? 'INTRADAY' : 'SWING'}: entry=${round2(entry)} stop=${round2(stop)}(${stopSource}) target=${round2(target)}(${target2_basis}) ATR=${round2(atr)} risk=${round2(riskPct)}% R:R=${rr}:1`);
 
   const target3 = isNum(high52W) && high52W > target ? roundToTick(high52W) : roundToTick(entry + (3 * atr));
-  console.log(`  [52W High] │ ✅ ACCEPTED: entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} target3=${target3}`);
-  console.log(`  [52W High] │   ATR=${round2(atr)} risk=${round2(riskPct)}% R:R=${rr}:1`);
-  console.log(`  [52W High] └────────────────────────`);
 
   return {
     valid: true,
@@ -1825,28 +1849,25 @@ function calculate52wHighLevels(data) {
     stop,
     target,
     target3,
-    target2_basis: 'atr_2x',
+    target2_basis,
     entryType: 'buy_above',
-    reason: `52W High Breakout: ATR-based levels. Stop 1×ATR (${round2(atr)}) below entry, target 2×ATR above. R:R 2:1. Risk ${round2(riskPct)}%.`
+    reason: `52W High Breakout: stop=${stopSource} (${round2(stop)}), target=${target2_basis} (${round2(target)}). R:R ${rr}:1. Risk ${round2(riskPct)}%.`
   };
 }
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * 52-WEEK LOW BREAKDOWN (ATR-based levels)
+ * 52-WEEK LOW BREAKDOWN
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * Stock closing within 2% of 52W low with 2× volume surge.
  * Mirror of 52W high but for SHORT trades.
  *
- * ATR-based approach:
- *   Entry:  prevClose (stock already near 52W low)
- *   Stop:   entry + 1× ATR
- *   Target: entry − 2× ATR  → gives 2:1 R:R by construction
- *   Risk cap: if 1× ATR > 5% of entry → reject (too volatile)
+ * Intraday: PDH stop + Daily S1/S2 target (structural levels)
+ * Swing:    ATR-based (entry ± 1×ATR stop, ± 2×ATR target)
  */
 function calculate52wLowLevels(data) {
-  const { prevClose, atr } = data;
+  const { prevClose, prevHigh, atr, isIntraday, dailyS1, dailyS2 } = data;
 
   if (!isNum(prevClose) || prevClose <= 0) {
     return { valid: false, reason: '52W Low: Previous close required for entry' };
@@ -1857,31 +1878,76 @@ function calculate52wLowLevels(data) {
   }
 
   const entry = prevClose;
-  const stop = entry + atr;
-  const target = entry - (2 * atr);
 
-  // Risk cap: 5% for 52W scans (breakdown stocks are inherently volatile)
-  const riskPct = (atr / entry) * 100;
-  if (riskPct > 5.0) {
-    return {
-      valid: false,
-      reason: `52W Low REJECTED: ATR risk ${round2(riskPct)}% > 5% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
-      riskPercent: round2(riskPct),
-      suggestedAction: 'skip_too_volatile'
-    };
+  // Stop: Intraday → PDH + 0.15% buffer (tighter), Swing → entry + 1×ATR (wider)
+  let stop;
+  if (isIntraday && isNum(prevHigh) && prevHigh > 0) {
+    stop = roundToTick(prevHigh * (1 + 0.0015));
+    // Fallback: if PDH stop too wide (>3%), use half ATR instead
+    const pdhRiskPct = ((stop - entry) / entry) * 100;
+    if (pdhRiskPct > 3.0) {
+      console.log(`  [52W Low] PDH stop risk ${round2(pdhRiskPct)}% > 3%, using 0.5×ATR stop`);
+      stop = roundToTick(entry + (0.5 * atr));
+    }
+  } else {
+    stop = entry + atr;
+  }
+
+  // Target: Intraday → Daily S1/S2 (skip 1H swing — always above entry for 52W breakdowns)
+  //         Swing    → entry − 2×ATR
+  let target, target2_basis;
+  if (isIntraday) {
+    if (isNum(dailyS1) && dailyS1 < entry && dailyS1 > 0) {
+      target = dailyS1;
+      target2_basis = 'daily_s1';
+    } else if (isNum(dailyS2) && dailyS2 < entry && dailyS2 > 0) {
+      target = dailyS2;
+      target2_basis = 'daily_s2';
+    } else {
+      target = entry - (2 * atr);
+      target2_basis = 'atr_2x';
+    }
+
+    // Validate R:R with chosen target
+    const risk = stop - entry;
+    const reward = entry - target;
+    const rr = risk > 0 ? reward / risk : 0;
+    if (rr < (data.minRR || 1.2)) {
+      return {
+        valid: false,
+        reason: `52W Low intraday: R:R ${round2(rr)}:1 < ${data.minRR || 1.2}:1 (target=${round2(target)} [${target2_basis}], stop=${round2(stop)})`
+      };
+    }
+  } else {
+    target = entry - (2 * atr);
+    target2_basis = 'atr_2x';
   }
 
   // Guard: target must be positive
   if (target <= 0) {
     return {
       valid: false,
-      reason: `52W Low REJECTED: Target ${round2(target)} would be negative (entry=${round2(entry)}, 2×ATR=${round2(2 * atr)})`
+      reason: `52W Low REJECTED: Target ${round2(target)} would be negative (entry=${round2(entry)})`
     };
   }
 
-  const rr = round2(2.0); // Always 2:1 by construction
+  // Risk cap: 5% for 52W scans (breakdown stocks are inherently volatile)
+  const risk = Math.abs(stop - entry);
+  const riskPct = (risk / entry) * 100;
+  if (riskPct > 5.0) {
+    return {
+      valid: false,
+      reason: `52W Low REJECTED: risk ${round2(riskPct)}% > 5% cap (stop=${round2(stop)}, entry=${round2(entry)}).`,
+      riskPercent: round2(riskPct),
+      suggestedAction: 'skip_too_volatile'
+    };
+  }
 
-  console.log(`  [52W Low] ATR-based: entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} ATR=${round2(atr)} risk=${round2(riskPct)}% R:R=${rr}:1`);
+  const reward = Math.abs(entry - target);
+  const rr = risk > 0 ? round2(reward / risk) : 0;
+  const stopSource = isIntraday ? (stop === roundToTick(entry + (0.5 * atr)) ? '0.5×ATR' : 'PDH') : '1×ATR';
+
+  console.log(`  [52W Low] ${isIntraday ? 'INTRADAY' : 'SWING'}: entry=${round2(entry)} stop=${round2(stop)}(${stopSource}) target=${round2(target)}(${target2_basis}) ATR=${round2(atr)} risk=${round2(riskPct)}% R:R=${rr}:1`);
 
   return {
     valid: true,
@@ -1893,9 +1959,9 @@ function calculate52wLowLevels(data) {
     stop,
     target,
     target3: roundToTick(entry - (3 * atr)),
-    target2_basis: 'atr_2x',
+    target2_basis,
     entryType: 'sell_below',
-    reason: `52W Low Breakdown: ATR-based levels. Stop 1×ATR (${round2(atr)}) above entry, target 2×ATR below. R:R 2:1. Risk ${round2(riskPct)}%.`
+    reason: `52W Low Breakdown: stop=${stopSource} (${round2(stop)}), target=${target2_basis} (${round2(target)}). R:R ${rr}:1. Risk ${round2(riskPct)}%.`
   };
 }
 

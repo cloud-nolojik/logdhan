@@ -225,25 +225,22 @@ async function getMarketContext() {
 
 async function runScans(marketContext) {
   const { regime } = marketContext;
-
-  // ⚠️ TEMPORARY DEBUG: Skip ChartInk scans, return only DYNAMATECH for testing
-  console.log(`${LOG} [Step 2] ⚠️ DEBUG OVERRIDE: Returning only DYNAMATECH (skipping ChartInk scans)`);
-  return {
-    candidates: [{
-      symbol: 'DYNAMATECH',
-      stock_name: 'Dynamatic Technologies Limited',
-      scan_type: 'fiftyTwoWeek_high',
-      direction: 'LONG',
-      chartink_data: { per_change: 0, close: 0, volume: 0 }
-    }],
-    bullish_count: 1,
-    bearish_count: 0
-  };
-  // ⚠️ END DEBUG OVERRIDE — Remove this block after testing
-
   const scanOrder = SCAN_ORDER_BY_REGIME[regime] || SCAN_ORDER_BY_REGIME.UNKNOWN;
 
   console.log(`${LOG} [Step 2] Running ${scanOrder.length} scans for ${regime} regime: ${scanOrder.join(', ')}`);
+
+  // DEBUG: Return only DYNAMATECH for testing 52W intraday levels
+  if (process.env.FORCE_CONDITIONS_MET === 'true') {
+    console.log(`${LOG} [DEBUG] FORCE_CONDITIONS_MET=true — returning DYNAMATECH only`);
+    return [{
+      nsecode: 'DYNAMATECH',
+      per_chg: 2.5,
+      close: 0,
+      scan_type: '52w_high_breakout',
+      direction: 'LONG',
+      type: 'BULLISH',
+    }];
+  }
 
   const seen = new Set();
   const candidates = [];
@@ -350,15 +347,6 @@ async function enrichCandidates(candidates) {
     const open = stock.open || 0;
     const range = high - low;
 
-    console.log(`${LOG} [Enrich] ┌─── ${candidate.symbol} (${candidate.scan_type}) DATA TRACE ───`);
-    console.log(`${LOG} [Enrich] │ RAW from getDailyAnalysisData:`);
-    console.log(`${LOG} [Enrich] │   stock.ltp=${stock.ltp} stock.prev_close=${stock.prev_close} stock.last_daily_close=${stock.last_daily_close}`);
-    console.log(`${LOG} [Enrich] │   stock.open=${stock.open} stock.high=${stock.high} stock.low=${stock.low}`);
-    console.log(`${LOG} [Enrich] │   stock.data_source="${stock.data_source}" stock.latest_candle_date=${stock.latest_candle_date} stock.prev_candle_date=${stock.prev_candle_date}`);
-    console.log(`${LOG} [Enrich] │ DERIVED values:`);
-    console.log(`${LOG} [Enrich] │   close = stock.ltp(${stock.ltp}) || stock.prev_close(${stock.prev_close}) = ${close}`);
-    console.log(`${LOG} [Enrich] │   ⚠️ THIS 'close' (=${close}) becomes _ohlcv.close → which becomes prevClose in scanLevels → which becomes ENTRY for 52W scans`);
-
     const closeInRangePct = range > 0 ? ((close - low) / range) * 100 : 50;
     // Use today's volume if available, otherwise fall back to ChartInk's volume (yesterday's)
     // At 8:45 AM pre-market, todays_volume is 0 — ChartInk already confirmed strong volume
@@ -376,9 +364,7 @@ async function enrichCandidates(candidates) {
 
     const lastDailyClose = stock.last_daily_close || close;
     const volSource = stock.todays_volume > 0 ? 'live' : 'chartink';
-    console.log(`${LOG} [Enrich] │ FINAL: O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose}`);
-    console.log(`${LOG} [Enrich] │ vol=${effectiveVolume}(${volSource}) avgVol50=${stock.avg_volume_50d} volRatio=${round2(volumeRatio)}x rsi=${stock.daily_rsi}`);
-    console.log(`${LOG} [Enrich] └────────────────────────────────────`);
+    console.log(`${LOG} [Enrich] ${candidate.symbol} (${candidate.scan_type}): O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${effectiveVolume}(${volSource}) avgVol50=${stock.avg_volume_50d} volRatio=${round2(volumeRatio)}x rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
     console.log(`${LOG} [Enrich] ${candidate.symbol} indicators: ema20=${stock.ema20 || 0} ema50=${stock.ema50 || 0} atr=${stock.atr || 0} h20D=${stock.high_20d || 0} l20D=${stock.low_20d || 0} h52W=${stock.high_52w || 0} wR1=${stock.weekly_r1 || 'null'} wR2=${stock.weekly_r2 || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'}`);
     console.log(`${LOG} [Enrich] ${candidate.symbol} pivots: dP=${stock.daily_pivot_levels?.pivot || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'} dS1=${stock.daily_pivot_levels?.s1 || 'null'} | 1H_R1=${stock.hourly_1h_pivots?.r1 || 'null'} 1H_S1=${stock.hourly_1h_pivots?.s1 || 'null'} | 4H_R1=${stock.hourly_4h_pivots?.r1 || 'null'} 4H_S1=${stock.hourly_4h_pivots?.s1 || 'null'}`);
 
