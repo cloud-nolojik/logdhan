@@ -230,21 +230,21 @@ async function runScans(marketContext) {
   console.log(`${LOG} [Step 2] Running ${scanOrder.length} scans for ${regime} regime: ${scanOrder.join(', ')}`);
 
   // DEBUG: Return only DYNAMATECH for testing 52W intraday levels
-  if (process.env.FORCE_CONDITIONS_MET === 'true') {
-    console.log(`${LOG} [DEBUG] FORCE_CONDITIONS_MET=true — returning DYNAMATECH only`);
-    return {
-      candidates: [{
-        symbol: 'DYNAMATECH',
-        per_chg: 2.5,
-        close: 0,
-        scan_type: 'fiftyTwoWeek_high',
-        direction: 'LONG',
-        type: 'BULLISH',
-      }],
-      bullish_count: 1,
-      bearish_count: 0
-    };
-  }
+  // if (process.env.FORCE_CONDITIONS_MET === 'true') {
+  //   console.log(`${LOG} [DEBUG] FORCE_CONDITIONS_MET=true — returning DYNAMATECH only`);
+  //   return {
+  //     candidates: [{
+  //       symbol: 'DYNAMATECH',
+  //       per_chg: 2.5,
+  //       close: 0,
+  //       scan_type: 'fiftyTwoWeek_high',
+  //       direction: 'LONG',
+  //       type: 'BULLISH',
+  //     }],
+  //     bullish_count: 1,
+  //     bearish_count: 0
+  //   };
+  // }
 
   const seen = new Set();
   const candidates = [];
