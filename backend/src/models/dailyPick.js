@@ -38,9 +38,9 @@ const pickSchema = new mongoose.Schema({
   levels: {
     entry: Number,                // Yesterday's close (market buy at open estimate)
     stop: Number,                 // Previous day's low (bullish) or high (bearish)
-    target: Number,               // Entry * 1.02 (recalculated from actual fill)
+    target: Number,               // Structural target (Daily R1, 1H swing, etc.) from scanLevels engine
     risk_pct: Number,             // Distance to stop %
-    reward_pct: Number,           // Always 2%
+    reward_pct: Number,           // Distance to structural target %
     risk_reward: Number,          // reward / risk
     mode: String,                 // scanLevels mode (e.g. 'structural', 'atr_fallback')
     reason: String,               // scanLevels reason
@@ -74,7 +74,7 @@ const pickSchema = new mongoose.Schema({
   kite: {
     entry_order_id: String,       // LIMIT BUY order ID
     stop_order_id: String,        // SL-M SELL order ID
-    target_order_id: String,      // LIMIT SELL order ID (+2% target)
+    target_order_id: String,      // LIMIT SELL order ID (structural target)
     kite_status: {
       type: String,
       enum: ['pending', 'collecting_orb', 'validated', 'order_placed', 'entered', 'sl_target_placed', 'completed', 'failed', 'skipped'],

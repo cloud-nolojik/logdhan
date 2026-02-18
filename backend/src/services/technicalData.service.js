@@ -217,7 +217,9 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
       const isOutdated = isCandleDataOutdated(dbRecord.candle_data, dbTimeframe);
 
       if (!isDataStale(dbRecord.updated_at) && !isOutdated) {
-        console.log(`[TechnicalData] Using cached ${dbTimeframe} data for ${symbol} (${dbRecord.candle_data.length} candles)`);
+        const latestCached = candleArray[candleArray.length - 1];
+        const prevCached = candleArray.length > 1 ? candleArray[candleArray.length - 2] : null;
+        console.log(`[TechnicalData] Using cached ${dbTimeframe} data for ${symbol} (${dbRecord.candle_data.length} candles, latest=${latestCached?.[0]?.split('T')[0]} C=${latestCached?.[4]}, prev=${prevCached?.[0]?.split('T')[0]} C=${prevCached?.[4]})`);
         // Merge today's intraday candle if after 4 PM on trading day (daily only)
         if (dbTimeframe === '1d') {
           return mergeTodayIntradayCandle(candleArray, instrumentKey, symbol);
@@ -1056,24 +1058,21 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     // Log the last few candles
     const lastCandle = dailyCandles[dailyCandles.length - 1];
     const secondLastCandle = dailyCandles.length > 1 ? dailyCandles[dailyCandles.length - 2] : null;
-    console.log(`[DailyStockData] ${symbol}: Last candle (latest daily):`, {
-      date: lastCandle[0],
-      open: lastCandle[1],
-      high: lastCandle[2],
-      low: lastCandle[3],
-      close: lastCandle[4],
-      volume: lastCandle[5]
-    });
-    if (secondLastCandle) {
-      console.log(`[DailyStockData] ${symbol}: Second last candle:`, {
-        date: secondLastCandle[0],
-        close: secondLastCandle[4]
-      });
+    const thirdLastCandle = dailyCandles.length > 2 ? dailyCandles[dailyCandles.length - 3] : null;
+    console.log(`[DailyStockData] ${symbol}: ┌─── DAILY CANDLE HISTORY (last 3) ───`);
+    if (thirdLastCandle) {
+      console.log(`[DailyStockData] ${symbol}: │ 3rd last: date=${thirdLastCandle[0]?.split('T')[0]} O=${thirdLastCandle[1]} H=${thirdLastCandle[2]} L=${thirdLastCandle[3]} C=${thirdLastCandle[4]} V=${thirdLastCandle[5]}`);
     }
+    if (secondLastCandle) {
+      console.log(`[DailyStockData] ${symbol}: │ 2nd last: date=${secondLastCandle[0]?.split('T')[0]} O=${secondLastCandle[1]} H=${secondLastCandle[2]} L=${secondLastCandle[3]} C=${secondLastCandle[4]} V=${secondLastCandle[5]}`);
+    }
+    console.log(`[DailyStockData] ${symbol}: │ LATEST:   date=${lastCandle[0]?.split('T')[0]} O=${lastCandle[1]} H=${lastCandle[2]} L=${lastCandle[3]} C=${lastCandle[4]} V=${lastCandle[5]}`);
+    console.log(`[DailyStockData] ${symbol}: └────────────────────────────────────`);
 
     // Calculate daily indicators from historical data
     const dailyIndicators = indicatorsEngine.calculate(dailyCandles);
-    console.log(`[DailyStockData] ${symbol}: Daily RSI-14 = ${dailyIndicators.rsi14}`);
+    console.log(`[DailyStockData] ${symbol}: Daily indicators: RSI-14=${dailyIndicators.rsi14} EMA20=${dailyIndicators.ema20} EMA50=${dailyIndicators.ema50} ATR=${dailyIndicators.atr}`);
+    console.log(`[DailyStockData] ${symbol}: h5D=${dailyIndicators.high_5d} l5D=${dailyIndicators.low_5d} h10D=${dailyIndicators.high_10d} l10D=${dailyIndicators.low_10d} h20D=${dailyIndicators.high_20d} l20D=${dailyIndicators.low_20d}`);
 
     // Latest daily candle = most recent completed trading day
     const latestDailyCandle = dailyCandles[dailyCandles.length - 1];
@@ -1084,6 +1083,7 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     let dailyPivot = null;
     if (latestDailyCandle) {
       dailyPivot = calcClassicPivots(latestDailyCandle[2], latestDailyCandle[3], latestDailyCandle[4]);
+      console.log(`[DailyStockData] ${symbol}: Daily pivots (from candle ${latestDailyCandle[0]?.split('T')[0]} H=${latestDailyCandle[2]} L=${latestDailyCandle[3]} C=${latestDailyCandle[4]}): P=${dailyPivot?.pivot} R1=${dailyPivot?.r1} R2=${dailyPivot?.r2} S1=${dailyPivot?.s1} S2=${dailyPivot?.s2}`);
     }
 
     // Calculate 50-day average volume
@@ -1097,10 +1097,15 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     // Priority: 1) Bulk live price (from priceCacheService), 2) Intraday candles, 3) Daily candle
     let open, high, low, ltp, todayVolume, dataSource;
 
+    console.log(`[DailyStockData] ${symbol}: ┌─── DATA SOURCE SELECTION ───`);
+    console.log(`[DailyStockData] ${symbol}: │ bulkLivePrice=${bulkLivePrice || 'null'}`);
+
     if (bulkLivePrice) {
       // Use bulk live price from priceCacheService (market hours - most efficient)
       // For OHLC we still need intraday candles, but LTP comes from bulk fetch
+      console.log(`[DailyStockData] ${symbol}: │ PATH: bulkLivePrice present → fetching intraday for OHLC...`);
       const liveData = await fetchLiveIntradayData(instrumentKey);
+      console.log(`[DailyStockData] ${symbol}: │ fetchLiveIntradayData returned: ${liveData ? 'HAS DATA' : 'NULL'}`);
 
       if (liveData) {
         open = liveData.open;
@@ -1109,6 +1114,7 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
         ltp = round2(bulkLivePrice); // Use bulk price for LTP (more current)
         todayVolume = liveData.volume;
         dataSource = 'BULK LTP + INTRADAY OHLC';
+        console.log(`[DailyStockData] ${symbol}: │ USING: BULK LTP (${ltp}) + INTRADAY OHLC (O=${open} H=${high} L=${low})`);
       } else {
         // Intraday not available, use daily + bulk LTP
         open = round2(latestDailyCandle[1]) || 0;
@@ -1117,17 +1123,13 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
         ltp = round2(bulkLivePrice);
         todayVolume = latestDailyCandle[5] || 0;
         dataSource = 'BULK LTP + DAILY OHLC';
+        console.log(`[DailyStockData] ${symbol}: │ ⚠️ USING: BULK LTP (${ltp}) + DAILY CANDLE OHLC (date=${latestDailyCandle[0]?.split('T')[0]} O=${open} H=${high} L=${low})`);
       }
     } else {
       // No bulk price - try intraday candles
+      console.log(`[DailyStockData] ${symbol}: │ PATH: No bulkLivePrice → trying fetchLiveIntradayData...`);
       const liveData = await fetchLiveIntradayData(instrumentKey);
-      console.log(`[DailyStockData] ${symbol}: Live intraday data:`, liveData ? {
-        ltp: liveData.ltp,
-        open: liveData.open,
-        high: liveData.high,
-        low: liveData.low,
-        volume: liveData.volume
-      } : 'NULL - will use daily candles');
+      console.log(`[DailyStockData] ${symbol}: │ fetchLiveIntradayData returned: ${liveData ? JSON.stringify({ ltp: liveData.ltp, open: liveData.open, high: liveData.high, low: liveData.low, volume: liveData.volume }) : 'NULL'}`);
 
       if (liveData) {
         // Live intraday data available (market hours)
@@ -1137,6 +1139,7 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
         ltp = liveData.ltp;
         todayVolume = liveData.volume;
         dataSource = 'LIVE INTRADAY (today)';
+        console.log(`[DailyStockData] ${symbol}: │ USING: LIVE INTRADAY → O=${open} H=${high} L=${low} LTP=${ltp}`);
       } else {
         // Use latest daily candle (after market hours)
         open = round2(latestDailyCandle[1]) || 0;
@@ -1145,6 +1148,9 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
         ltp = round2(latestDailyCandle[4]) || 0;
         todayVolume = latestDailyCandle[5] || 0;
         dataSource = `DAILY CANDLE (${latestDailyCandle[0]?.split('T')[0]})`;
+        console.log(`[DailyStockData] ${symbol}: │ ⚠️ USING: DAILY CANDLE (no intraday available)`);
+        console.log(`[DailyStockData] ${symbol}: │   candle date=${latestDailyCandle[0]?.split('T')[0]} → O=${open} H=${high} L=${low} C/LTP=${ltp}`);
+        console.log(`[DailyStockData] ${symbol}: │   ⚠️ LTP is yesterday's CLOSE (${ltp}), NOT live price!`);
       }
     }
 
@@ -1152,9 +1158,8 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     // This is the close BEFORE today/latest candle
     const prevClose = previousDayCandle ? round2(previousDayCandle[4]) : round2(latestDailyCandle[4]);
 
-    console.log(`[DailyStockData] ${symbol}: Data source = ${dataSource}`);
-    console.log(`[DailyStockData] ${symbol}: FINAL -> LTP=${ltp}, Open=${open}, High=${high}, Low=${low}, Vol=${todayVolume}`);
-    console.log(`[DailyStockData] ${symbol}: prev_close=${prevClose} (from ${previousDayCandle ? previousDayCandle[0]?.split('T')[0] : 'same candle'}), avgVol50d=${avgVolume50d}`);
+    console.log(`[DailyStockData] ${symbol}: │ prev_close=${prevClose} (from ${previousDayCandle ? previousDayCandle[0]?.split('T')[0] : 'SAME candle — no previousDayCandle!'})`);
+    console.log(`[DailyStockData] ${symbol}: └─── FINAL: source=${dataSource} LTP=${ltp} O=${open} H=${high} L=${low} prevClose=${prevClose} avgVol50d=${avgVolume50d} ───`);
 
     // last_daily_close = close of the most recent completed daily candle
     // This is what the stock last closed at (for entry estimation)

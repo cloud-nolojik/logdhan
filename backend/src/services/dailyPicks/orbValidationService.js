@@ -171,15 +171,20 @@ function validatePicks(picks, orbData) {
 
   for (const pick of picks) {
     const orb = orbData[pick.symbol];
+    console.log(`${LOG} ┌─── ${pick.symbol} (${pick.direction} ${pick.scan_type}) VALIDATION ───`);
     if (!orb) {
       pick.validation = {
         passed: false,
         checks: {},
         skip_reason: 'no_orb_data'
       };
-      console.log(`${LOG} ${pick.symbol}: SKIP — no ORB data`);
+      console.log(`${LOG} │ ❌ SKIP — no ORB data for ${pick.symbol}`);
+      console.log(`${LOG} └────────────────────────────────────`);
       continue;
     }
+
+    console.log(`${LOG} │ ORB data: O=${orb.opening_price} H=${orb.high} L=${orb.low} gap=${orb.gap_percent}% dir=${orb.orb_direction}`);
+    console.log(`${LOG} │ Pre-market levels: entry=${pick.levels.entry} stop=${pick.levels.stop} target=${pick.levels.target} R:R=${pick.levels.risk_reward}`);
 
     // Populate ORB data on the pick
     pick.orb = {
@@ -200,6 +205,8 @@ function validatePicks(picks, orbData) {
       passed: Math.abs(orb.gap_percent) < 1.5,
       value: orb.gap_percent
     };
+    console.log(`${LOG} │ Check 1 GAP SIZE: |${orb.gap_percent}%| < 1.5% → ${checks.gap_check.passed ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`${LOG} │   gap = (open(${orb.opening_price}) - entry(${pick.levels.entry})) / entry × 100`);
 
     // Check 2: Gap direction must not oppose scan bias
     const gapOpposesDirection = (isBullish && orb.gap_percent < -1.0) || (!isBullish && orb.gap_percent > 1.0);
@@ -208,6 +215,7 @@ function validatePicks(picks, orbData) {
       value: orb.gap_percent,
       direction: isBullish ? 'LONG' : 'SHORT'
     };
+    console.log(`${LOG} │ Check 2 GAP DIR: ${isBullish ? 'LONG' : 'SHORT'} bias, gap=${orb.gap_percent}% → ${checks.gap_direction.passed ? '✅ PASS' : '❌ FAIL (gap opposes direction)'}`);
 
     // Check 3: ORB breakout R:R check (Crabel-style SL-M entry)
     // Entry = ORB high + 0.1% buffer (LONG) or ORB low - 0.1% buffer (SHORT)
@@ -232,6 +240,12 @@ function validatePicks(picks, orbData) {
       orb_high: orb.high,
       orb_low: orb.low
     };
+    console.log(`${LOG} │ Check 3 ORB R:R:`);
+    console.log(`${LOG} │   orbEntry = ${isBullish ? 'ORB_high' : 'ORB_low'}(${isBullish ? orb.high : orb.low}) × ${isBullish ? '1.001' : '0.999'} = ${orbEntry}`);
+    console.log(`${LOG} │   originalStop=${originalStop} originalTarget=${originalTarget}`);
+    console.log(`${LOG} │   risk = |orbEntry(${orbEntry}) - stop(${originalStop})| = ${round2(risk)}`);
+    console.log(`${LOG} │   reward = |target(${originalTarget}) - orbEntry(${orbEntry})| = ${round2(reward)}`);
+    console.log(`${LOG} │   newRR = ${round2(reward)} / ${round2(risk)} = ${newRR} (min: ${MIN_ORB_RR}) → ${checks.orb_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
 
     // Check 4: Nifty alignment — >0.3% opposing move blocks trade
     const niftyOpposes = (isBullish && niftyChangePct < -NIFTY_THRESHOLD_PCT) ||
@@ -242,6 +256,7 @@ function validatePicks(picks, orbData) {
       nifty_change_pct: niftyChangePct,
       threshold: NIFTY_THRESHOLD_PCT
     };
+    console.log(`${LOG} │ Check 4 NIFTY: dir=${niftyDir} change=${niftyChangePct}% vs ${isBullish ? 'LONG' : 'SHORT'} (threshold: ±${NIFTY_THRESHOLD_PCT}%) → ${checks.nifty_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
 
     // Check 5: ORB range width — ensure ORB isn't too volatile for breakout entry
     const orbRange = orb.high - orb.low;
@@ -251,12 +266,14 @@ function validatePicks(picks, orbData) {
       orb_range_pct: orbRangePct,
       max_allowed: MAX_ORB_RANGE_PCT
     };
+    console.log(`${LOG} │ Check 5 ORB RANGE: (H(${orb.high}) - L(${orb.low})) / L × 100 = ${orbRangePct}% (max: ${MAX_ORB_RANGE_PCT}%) → ${checks.entry_still_valid.passed ? '✅ PASS' : '❌ FAIL'}`);
 
     // Check 6: Volume — auto-pass (OHLC doesn't provide volume data)
     checks.volume_check = {
       passed: true,
       ratio: null
     };
+    console.log(`${LOG} │ Check 6 VOLUME: auto-pass ✅`);
 
     // Determine overall pass/fail
     const allPassed = Object.values(checks).every(c => c.passed);
@@ -271,8 +288,9 @@ function validatePicks(picks, orbData) {
       skip_reason: skipReason
     };
 
-    console.log(`${LOG} ${pick.symbol}: ${allPassed ? 'PASSED' : 'FAILED'} — gap=${checks.gap_check.passed ? 'OK' : 'FAIL'}(${orb.gap_percent}%) gap_dir=${checks.gap_direction.passed ? 'OK' : 'FAIL'} orb_rr=${checks.orb_alignment.passed ? 'OK' : 'FAIL'}(RR=${newRR}) nifty=${checks.nifty_alignment.passed ? 'OK' : 'FAIL'}(${niftyChangePct}%) orb_range=${checks.entry_still_valid.passed ? 'OK' : 'FAIL'}(${orbRangePct}%) vol=AUTO`);
-    if (!allPassed) console.log(`${LOG} ${pick.symbol}: skip_reason=${skipReason}`);
+    console.log(`${LOG} │ ═══════════════════════════════════`);
+    console.log(`${LOG} │ RESULT: ${allPassed ? '✅ PASSED' : '❌ FAILED'}${skipReason ? ` (failed: ${skipReason})` : ''}`);
+    console.log(`${LOG} └────────────────────────────────────`);
   }
 
   return picks;

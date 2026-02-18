@@ -225,6 +225,22 @@ async function getMarketContext() {
 
 async function runScans(marketContext) {
   const { regime } = marketContext;
+
+  // ⚠️ TEMPORARY DEBUG: Skip ChartInk scans, return only DYNAMATECH for testing
+  console.log(`${LOG} [Step 2] ⚠️ DEBUG OVERRIDE: Returning only DYNAMATECH (skipping ChartInk scans)`);
+  return {
+    candidates: [{
+      symbol: 'DYNAMATECH',
+      stock_name: 'Dynamatic Technologies Limited',
+      scan_type: 'fiftyTwoWeek_high',
+      direction: 'LONG',
+      chartink_data: { per_change: 0, close: 0, volume: 0 }
+    }],
+    bullish_count: 1,
+    bearish_count: 0
+  };
+  // ⚠️ END DEBUG OVERRIDE — Remove this block after testing
+
   const scanOrder = SCAN_ORDER_BY_REGIME[regime] || SCAN_ORDER_BY_REGIME.UNKNOWN;
 
   console.log(`${LOG} [Step 2] Running ${scanOrder.length} scans for ${regime} regime: ${scanOrder.join(', ')}`);
@@ -334,6 +350,15 @@ async function enrichCandidates(candidates) {
     const open = stock.open || 0;
     const range = high - low;
 
+    console.log(`${LOG} [Enrich] ┌─── ${candidate.symbol} (${candidate.scan_type}) DATA TRACE ───`);
+    console.log(`${LOG} [Enrich] │ RAW from getDailyAnalysisData:`);
+    console.log(`${LOG} [Enrich] │   stock.ltp=${stock.ltp} stock.prev_close=${stock.prev_close} stock.last_daily_close=${stock.last_daily_close}`);
+    console.log(`${LOG} [Enrich] │   stock.open=${stock.open} stock.high=${stock.high} stock.low=${stock.low}`);
+    console.log(`${LOG} [Enrich] │   stock.data_source="${stock.data_source}" stock.latest_candle_date=${stock.latest_candle_date} stock.prev_candle_date=${stock.prev_candle_date}`);
+    console.log(`${LOG} [Enrich] │ DERIVED values:`);
+    console.log(`${LOG} [Enrich] │   close = stock.ltp(${stock.ltp}) || stock.prev_close(${stock.prev_close}) = ${close}`);
+    console.log(`${LOG} [Enrich] │   ⚠️ THIS 'close' (=${close}) becomes _ohlcv.close → which becomes prevClose in scanLevels → which becomes ENTRY for 52W scans`);
+
     const closeInRangePct = range > 0 ? ((close - low) / range) * 100 : 50;
     // Use today's volume if available, otherwise fall back to ChartInk's volume (yesterday's)
     // At 8:45 AM pre-market, todays_volume is 0 — ChartInk already confirmed strong volume
@@ -351,7 +376,9 @@ async function enrichCandidates(candidates) {
 
     const lastDailyClose = stock.last_daily_close || close;
     const volSource = stock.todays_volume > 0 ? 'live' : 'chartink';
-    console.log(`${LOG} [Enrich] ${candidate.symbol} (${candidate.scan_type}): O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${effectiveVolume}(${volSource}) avgVol50=${stock.avg_volume_50d} volRatio=${round2(volumeRatio)}x rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
+    console.log(`${LOG} [Enrich] │ FINAL: O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose}`);
+    console.log(`${LOG} [Enrich] │ vol=${effectiveVolume}(${volSource}) avgVol50=${stock.avg_volume_50d} volRatio=${round2(volumeRatio)}x rsi=${stock.daily_rsi}`);
+    console.log(`${LOG} [Enrich] └────────────────────────────────────`);
     console.log(`${LOG} [Enrich] ${candidate.symbol} indicators: ema20=${stock.ema20 || 0} ema50=${stock.ema50 || 0} atr=${stock.atr || 0} h20D=${stock.high_20d || 0} l20D=${stock.low_20d || 0} h52W=${stock.high_52w || 0} wR1=${stock.weekly_r1 || 'null'} wR2=${stock.weekly_r2 || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'}`);
     console.log(`${LOG} [Enrich] ${candidate.symbol} pivots: dP=${stock.daily_pivot_levels?.pivot || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'} dS1=${stock.daily_pivot_levels?.s1 || 'null'} | 1H_R1=${stock.hourly_1h_pivots?.r1 || 'null'} 1H_S1=${stock.hourly_1h_pivots?.s1 || 'null'} | 4H_R1=${stock.hourly_4h_pivots?.r1 || 'null'} 4H_S1=${stock.hourly_4h_pivots?.s1 || 'null'}`);
 
@@ -660,10 +687,13 @@ function scoreCandidates(enrichedCandidates) {
 function calculateLevels(pick) {
   const { _ohlcv, direction, scan_type, symbol } = pick;
 
-  console.log(`${LOG} [Levels] ${symbol}: direction=${direction} scan=${scan_type} score=${pick.rank_score}`);
-  console.log(`${LOG} [Levels] ${symbol}: OHLCV={O:${_ohlcv.open} H:${_ohlcv.high} L:${_ohlcv.low} C:${_ohlcv.close} prevC:${_ohlcv.prev_close}}`);
-  console.log(`${LOG} [Levels] ${symbol}: ema20=${_ohlcv.ema20} ema50=${_ohlcv.ema50} atr=${_ohlcv.atr}`);
-  console.log(`${LOG} [Levels] ${symbol}: h5D=${_ohlcv.high_5d} l5D=${_ohlcv.low_5d} h10D=${_ohlcv.high_10d} l10D=${_ohlcv.low_10d} h20D=${_ohlcv.high_20d} l20D=${_ohlcv.low_20d} h52W=${_ohlcv.high_52w}`);
+  console.log(`${LOG} [Levels] ┌─── ${symbol} LEVEL CALCULATION ───`);
+  console.log(`${LOG} [Levels] │ direction=${direction} scan=${scan_type} score=${pick.rank_score}`);
+  console.log(`${LOG} [Levels] │ _ohlcv: O=${_ohlcv.open} H=${_ohlcv.high} L=${_ohlcv.low} C=${_ohlcv.close} prevC=${_ohlcv.prev_close}`);
+  console.log(`${LOG} [Levels] │ ⚠️ CRITICAL: _ohlcv.close (=${_ohlcv.close}) will become prevClose in scanLevels`);
+  console.log(`${LOG} [Levels] │ ⚠️ For 52W scans: entry = prevClose = ${_ohlcv.close} — is this yesterday's close?`);
+  console.log(`${LOG} [Levels] │ indicators: ema20=${_ohlcv.ema20} ema50=${_ohlcv.ema50} atr=${_ohlcv.atr}`);
+  console.log(`${LOG} [Levels] │ swing: h5D=${_ohlcv.high_5d} l5D=${_ohlcv.low_5d} h10D=${_ohlcv.high_10d} l10D=${_ohlcv.low_10d} h20D=${_ohlcv.high_20d} l20D=${_ohlcv.low_20d} h52W=${_ohlcv.high_52w}`);
   console.log(`${LOG} [Levels] ${symbol}: pivots wR1=${_ohlcv.weekly_pivot_levels?.r1} wR2=${_ohlcv.weekly_pivot_levels?.r2} wS1=${_ohlcv.weekly_pivot_levels?.s1} wS2=${_ohlcv.weekly_pivot_levels?.s2} dP=${_ohlcv.daily_pivot_levels?.pivot} dR1=${_ohlcv.daily_pivot_levels?.r1} dR2=${_ohlcv.daily_pivot_levels?.r2} dS1=${_ohlcv.daily_pivot_levels?.s1} dS2=${_ohlcv.daily_pivot_levels?.s2}`);
   const swingLevels = _ohlcv.swing_levels_1h;
   console.log(`${LOG} [Levels] ${symbol}: 1H swings: resistanceZones=${swingLevels?.resistanceZones?.length || 0} [${(swingLevels?.resistanceZones || []).map(z => z.midpoint).join(',')}] supportZones=${swingLevels?.supportZones?.length || 0} [${(swingLevels?.supportZones || []).map(z => z.midpoint).join(',')}]`);
@@ -722,12 +752,21 @@ function calculateLevels(pick) {
 
   // Map daily picks scan type to engine archetype (e.g. breakout_setup → breakout)
   const archetype = SCAN_ARCHETYPE[scan_type] || scan_type;
-  console.log(`${LOG} [Levels] ${symbol}: scan_type="${scan_type}" → archetype="${archetype}"`);
+  console.log(`${LOG} [Levels] │ scan_type="${scan_type}" → archetype="${archetype}"`);
+  console.log(`${LOG} [Levels] │ scanData.prevClose=${scanData.prevClose} scanData.prevHigh=${scanData.prevHigh} scanData.prevLow=${scanData.prevLow}`);
+  console.log(`${LOG} [Levels] │ scanData.atr=${scanData.atr} scanData.high52W=${scanData.high52W}`);
 
   // Call scanLevels engine with the mapped archetype
-  console.log(`${LOG} [Levels] ${symbol}: calling scanLevels.calculateTradingLevels("${archetype}", scanData)`);
+  console.log(`${LOG} [Levels] │ → calling scanLevels.calculateTradingLevels("${archetype}", scanData)...`);
   const result = scanLevels.calculateTradingLevels(archetype, scanData);
-  console.log(`${LOG} [Levels] ${symbol}: engine returned valid=${result.valid} mode=${result.mode || 'N/A'} reason=${result.reason || 'N/A'}`);
+  console.log(`${LOG} [Levels] │ ← engine returned: valid=${result.valid} mode=${result.mode || 'N/A'}`);
+  if (result.valid) {
+    console.log(`${LOG} [Levels] │   entry=${result.entry} stop=${result.stop} target2=${result.target2} R:R=${result.riskReward} risk=${result.riskPercent}% reward=${result.rewardPercent}%`);
+    console.log(`${LOG} [Levels] │   target1=${result.target1 || 'N/A'} target3=${result.target3 || 'N/A'} entryType=${result.entryType}`);
+  } else {
+    console.log(`${LOG} [Levels] │   REJECTED: ${result.reason}`);
+  }
+  console.log(`${LOG} [Levels] └────────────────────────────────────`);
 
   if (!result.valid) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED by scanLevels — ${result.reason}`);
@@ -1266,13 +1305,18 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
   pick.trade.entry_price = entryPrice;
   pick.trade.entry_time = new Date();
 
-  // Recalculate target from actual fill
-  const target = pick.direction === 'LONG'
-    ? round2(entryPrice * (1 + TARGET_PCT / 100))
-    : round2(entryPrice * (1 - TARGET_PCT / 100));
+  // Preserve structural target from pre-market pipeline (Daily R1, 1H swing, etc.)
+  // Only fall back to flat 2% if structural target is somehow missing
+  const structuralTarget = pick.levels.target;
+  const target = (structuralTarget && structuralTarget > 0)
+    ? structuralTarget
+    : (pick.direction === 'LONG'
+        ? round2(entryPrice * (1 + TARGET_PCT / 100))
+        : round2(entryPrice * (1 - TARGET_PCT / 100)));
   pick.levels.target = target;
+  const targetSource = (structuralTarget && structuralTarget > 0) ? 'structural' : 'flat_2pct_fallback';
 
-  console.log(`${LOG} ✅ ${pick.symbol}: Filled @ ₹${entryPrice} — placing SL @ ₹${pick.levels.stop} + target @ ₹${target}`);
+  console.log(`${LOG} ✅ ${pick.symbol}: Filled @ ₹${entryPrice} — placing SL @ ₹${pick.levels.stop} + target @ ₹${target} (${targetSource})`);
 
   let slPlaced = false;
   let tgtPlaced = false;
@@ -1337,7 +1381,7 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
     console.log(`${LOG} │ Direction: ${pick.direction} | Scan: ${pick.scan_type}`);
     console.log(`${LOG} │ Planned Entry: ₹${pick.levels.entry} → Actual Fill: ₹${entryPrice} (slippage: ${slippage >= 0 ? '+' : ''}₹${slippage})`);
     console.log(`${LOG} │ Stop: ₹${pick.levels.stop} (SL-M orderId=${pick.kite.stop_order_id})`);
-    console.log(`${LOG} │ Target: ₹${target} (LIMIT orderId=${pick.kite.target_order_id})`);
+    console.log(`${LOG} │ Target: ₹${target} [${targetSource}] (LIMIT orderId=${pick.kite.target_order_id})`);
     console.log(`${LOG} │ Qty: ${pick.trade.qty} | Capital Deployed: ₹${capital}`);
     console.log(`${LOG} │ Max Loss: ₹${maxLoss} (${round2((riskPerShare / entryPrice) * 100)}%) | Max Profit: ₹${maxProfit} (${round2((rewardPerShare / entryPrice) * 100)}%)`);
     console.log(`${LOG} └─────────────────────────────────────────────────────`);

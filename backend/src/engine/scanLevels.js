@@ -769,9 +769,9 @@ export function calculateTradingLevels(scanType, data) {
   // ─────────────────────────────────────────────────────────────────────────
   // APPLY GUARDRAILS
   // ─────────────────────────────────────────────────────────────────────────
-  console.log(`🔍 [SCAN_LEVELS] Applying guardrails...`);
+  console.log(`🔍 [SCAN_LEVELS] Applying guardrails to: entry=${round2(result.entry)} stop=${round2(result.stop)} target=${round2(result.target)} atr=${round2(atr)} scanType=${scanType}`);
   const guarded = applyGuardrails(result.entry, result.stop, result.target, atr, scanType);
-  console.log(`🔍 [SCAN_LEVELS] Guardrails result:`, JSON.stringify(guarded));
+  console.log(`🔍 [SCAN_LEVELS] Guardrails: valid=${guarded.valid} ${guarded.valid ? `entry=${round2(guarded.entry)} stop=${round2(guarded.stop)} target=${round2(guarded.target)} R:R=${guarded.riskReward} risk=${guarded.riskPercent}% reward=${guarded.rewardPercent}%` : `REJECTED: ${guarded.reason}`}`);
 
   if (!guarded.valid) {
     return {
@@ -1768,11 +1768,20 @@ function findShortStructuralTarget(params) {
 function calculate52wHighLevels(data) {
   const { prevClose, atr, high52W } = data;
 
+  console.log(`  [52W High] ┌─── ENTRY CALCULATION ───`);
+  console.log(`  [52W High] │ INPUT: prevClose=${prevClose} atr=${atr} high52W=${high52W}`);
+  console.log(`  [52W High] │ ⚠️ prevClose comes from _ohlcv.close in dailyPicksService.js`);
+  console.log(`  [52W High] │ ⚠️ At 8:45 AM pre-market, this is YESTERDAY'S daily close (not live price)`);
+
   if (!isNum(prevClose) || prevClose <= 0) {
+    console.log(`  [52W High] │ ❌ REJECTED: prevClose invalid (${prevClose})`);
+    console.log(`  [52W High] └────────────────────────`);
     return { valid: false, reason: '52W High: Previous close required for entry' };
   }
 
   if (!isNum(atr) || atr <= 0) {
+    console.log(`  [52W High] │ ❌ REJECTED: ATR invalid (${atr})`);
+    console.log(`  [52W High] └────────────────────────`);
     return { valid: false, reason: '52W High: ATR required for stop/target calculation' };
   }
 
@@ -1780,9 +1789,17 @@ function calculate52wHighLevels(data) {
   const stop = entry - atr;
   const target = entry + (2 * atr);
 
+  console.log(`  [52W High] │ FORMULA: entry = prevClose = ${round2(entry)}`);
+  console.log(`  [52W High] │ FORMULA: stop = entry(${round2(entry)}) - atr(${round2(atr)}) = ${round2(stop)}`);
+  console.log(`  [52W High] │ FORMULA: target = entry(${round2(entry)}) + 2×atr(${round2(2 * atr)}) = ${round2(target)}`);
+
   // Risk cap: 5% for 52W scans (breakout stocks are inherently volatile)
   const riskPct = (atr / entry) * 100;
+  console.log(`  [52W High] │ RISK: atr(${round2(atr)}) / entry(${round2(entry)}) × 100 = ${round2(riskPct)}% (cap: 5%)`);
+
   if (riskPct > 5.0) {
+    console.log(`  [52W High] │ ❌ REJECTED: risk ${round2(riskPct)}% > 5% cap`);
+    console.log(`  [52W High] └────────────────────────`);
     return {
       valid: false,
       reason: `52W High REJECTED: ATR risk ${round2(riskPct)}% > 5% cap (ATR=${round2(atr)}, entry=${round2(entry)}). Stock too volatile.`,
@@ -1793,7 +1810,10 @@ function calculate52wHighLevels(data) {
 
   const rr = round2(2.0); // Always 2:1 by construction
 
-  console.log(`  [52W High] ATR-based: entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} ATR=${round2(atr)} risk=${round2(riskPct)}% R:R=${rr}:1`);
+  const target3 = isNum(high52W) && high52W > target ? roundToTick(high52W) : roundToTick(entry + (3 * atr));
+  console.log(`  [52W High] │ ✅ ACCEPTED: entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} target3=${target3}`);
+  console.log(`  [52W High] │   ATR=${round2(atr)} risk=${round2(riskPct)}% R:R=${rr}:1`);
+  console.log(`  [52W High] └────────────────────────`);
 
   return {
     valid: true,
@@ -1804,7 +1824,7 @@ function calculate52wHighLevels(data) {
     entryRange: [roundToTick(entry), roundToTick(entry + 0.2 * atr)],
     stop,
     target,
-    target3: isNum(high52W) && high52W > target ? roundToTick(high52W) : roundToTick(entry + (3 * atr)),
+    target3,
     target2_basis: 'atr_2x',
     entryType: 'buy_above',
     reason: `52W High Breakout: ATR-based levels. Stop 1×ATR (${round2(atr)}) below entry, target 2×ATR above. R:R 2:1. Risk ${round2(riskPct)}%.`
