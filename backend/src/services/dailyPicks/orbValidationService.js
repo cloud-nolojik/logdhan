@@ -132,42 +132,42 @@ function validatePicks(picks, orbData) {
   console.log(`${LOG} Validating ${picks.length} picks (NIFTY dir: ${niftyDir} change: ${niftyChangePct}%)`);
 
   // TEMPORARY: Skip all validation when FORCE_CONDITIONS_MET is true (for testing order placement)
-  if (process.env.FORCE_CONDITIONS_MET === 'true') {
-    console.log(`${LOG} FORCE_CONDITIONS_MET=true — BYPASSING ALL VALIDATION`);
-    for (const pick of picks) {
-      const orb = orbData[pick.symbol];
-      if (orb) {
-        pick.orb = {
-          high: orb.high,
-          low: orb.low,
-          opening_price: orb.opening_price,
-          gap_percent: orb.gap_percent,
-          orb_direction: orb.orb_direction,
-          nifty_orb_direction: niftyDir,
-          nifty_change_pct: niftyChangePct
-        };
-      }
-      const isBullish = pick.direction === 'LONG';
-      const orbEntry = isBullish
-        ? round2((orb?.high || 0) * (1 + ORB_BUFFER_PCT))
-        : round2((orb?.low || 0) * (1 - ORB_BUFFER_PCT));
-      pick.validation = {
-        passed: true,
-        checks: {
-          gap_check: { passed: true, value: orb?.gap_percent || 0 },
-          gap_direction: { passed: true, value: orb?.gap_percent || 0, direction: 'FORCED' },
-          orb_alignment: { passed: true, scan_bias: pick.direction, orb_dir: orb?.orb_direction || 'FORCED', new_entry: orbEntry, original_entry: pick.levels.entry, new_rr: 99, min_rr: MIN_ORB_RR, orb_high: orb?.high || 0, orb_low: orb?.low || 0 },
-          nifty_alignment: { passed: true, nifty_dir: niftyDir, nifty_change_pct: niftyChangePct, threshold: NIFTY_THRESHOLD_PCT },
-          entry_still_valid: { passed: true, orb_range_pct: 0, max_allowed: MAX_ORB_RANGE_PCT },
-          volume_check: { passed: true, ratio: null }
-        },
-        skip_reason: null,
-        forced: true
-      };
-      console.log(`${LOG} ${pick.symbol}: FORCED PASS (validation bypassed)`);
-    }
-    return picks;
-  }
+  // if (process.env.FORCE_CONDITIONS_MET === 'true') {
+  //   console.log(`${LOG} FORCE_CONDITIONS_MET=true — BYPASSING ALL VALIDATION`);
+  //   for (const pick of picks) {
+  //     const orb = orbData[pick.symbol];
+  //     if (orb) {
+  //       pick.orb = {
+  //         high: orb.high,
+  //         low: orb.low,
+  //         opening_price: orb.opening_price,
+  //         gap_percent: orb.gap_percent,
+  //         orb_direction: orb.orb_direction,
+  //         nifty_orb_direction: niftyDir,
+  //         nifty_change_pct: niftyChangePct
+  //       };
+  //     }
+  //     const isBullish = pick.direction === 'LONG';
+  //     const orbEntry = isBullish
+  //       ? round2((orb?.high || 0) * (1 + ORB_BUFFER_PCT))
+  //       : round2((orb?.low || 0) * (1 - ORB_BUFFER_PCT));
+  //     pick.validation = {
+  //       passed: true,
+  //       checks: {
+  //         gap_check: { passed: true, value: orb?.gap_percent || 0 },
+  //         gap_direction: { passed: true, value: orb?.gap_percent || 0, direction: 'FORCED' },
+  //         orb_alignment: { passed: true, scan_bias: pick.direction, orb_dir: orb?.orb_direction || 'FORCED', new_entry: orbEntry, original_entry: pick.levels.entry, new_rr: 99, min_rr: MIN_ORB_RR, orb_high: orb?.high || 0, orb_low: orb?.low || 0 },
+  //         nifty_alignment: { passed: true, nifty_dir: niftyDir, nifty_change_pct: niftyChangePct, threshold: NIFTY_THRESHOLD_PCT },
+  //         entry_still_valid: { passed: true, orb_range_pct: 0, max_allowed: MAX_ORB_RANGE_PCT },
+  //         volume_check: { passed: true, ratio: null }
+  //       },
+  //       skip_reason: null,
+  //       forced: true
+  //     };
+  //     console.log(`${LOG} ${pick.symbol}: FORCED PASS (validation bypassed)`);
+  //   }
+  //   return picks;
+  // }
 
   for (const pick of picks) {
     const orb = orbData[pick.symbol];
