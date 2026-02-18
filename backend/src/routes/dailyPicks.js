@@ -81,7 +81,12 @@ router.get('/today', auth, async (req, res) => {
           current_return_pct: currentReturnPct
         },
         kite_status: pick.kite?.kite_status,
-        ai_insight: pick.ai_insight
+        ai_insight: pick.ai_insight,
+        validation: pick.validation ? {
+          passed: pick.validation.passed,
+          skip_reason: pick.validation.skip_reason,
+          checks: pick.validation.checks
+        } : null
       };
     });
 
