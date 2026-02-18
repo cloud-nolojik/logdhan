@@ -232,14 +232,18 @@ async function runScans(marketContext) {
   // DEBUG: Return only DYNAMATECH for testing 52W intraday levels
   if (process.env.FORCE_CONDITIONS_MET === 'true') {
     console.log(`${LOG} [DEBUG] FORCE_CONDITIONS_MET=true — returning DYNAMATECH only`);
-    return [{
-      nsecode: 'DYNAMATECH',
-      per_chg: 2.5,
-      close: 0,
-      scan_type: '52w_high_breakout',
-      direction: 'LONG',
-      type: 'BULLISH',
-    }];
+    return {
+      candidates: [{
+        symbol: 'DYNAMATECH',
+        per_chg: 2.5,
+        close: 0,
+        scan_type: '52w_high_breakout',
+        direction: 'LONG',
+        type: 'BULLISH',
+      }],
+      bullish_count: 1,
+      bearish_count: 0
+    };
   }
 
   const seen = new Set();
