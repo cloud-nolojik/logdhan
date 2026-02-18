@@ -2,15 +2,24 @@
  * ORB (Opening Range Breakout) Validation Service
  *
  * 1. collectOpeningRange() — Called at 9:30 AM: Single OHLC call to get the 15-min opening range
- * 2. validatePicks()       — 9:30 AM: Check 5 validation conditions per pick before entry
+ * 2. validatePicks()       — 9:30 AM: Validate picks + compute Crabel-style SL-M breakout entries
  *
  * Uses Kite Connect API getOHLC() — at 9:30 the day's OHLC IS the 15-min opening candle.
+ *
+ * Crabel-style approach: instead of checking candle direction, place SL-M orders at ORB
+ * high/low + buffer. Market confirms the trade by triggering the breakout order.
  */
 
 import kiteOrderService from '../kiteOrder.service.js';
 import { round2 } from './dailyPicksHelpers.js';
 
 const LOG = '[ORB]';
+
+// Crabel-style ORB constants
+const ORB_BUFFER_PCT = 0.001;       // 0.1% above ORB high (longs) / below ORB low (shorts)
+const MIN_ORB_RR = 1.5;             // Minimum R:R with ORB-adjusted entry
+const NIFTY_THRESHOLD_PCT = 0.3;    // >0.3% opposing NIFTY move blocks trade
+const MAX_ORB_RANGE_PCT = 3.0;      // ORB range > 3% of stock price = too volatile
 
 /**
  * Collect Opening Range data by fetching OHLC at 9:30 AM.
@@ -58,7 +67,7 @@ async function collectOpeningRange(symbols, picks) {
     const prevClose = prevCloseMap[sym];
     const gapPct = prevClose ? round2(((open - prevClose) / prevClose) * 100) : 0;
 
-    // ORB direction: close of 15-min candle vs open
+    // ORB direction: close of 15-min candle vs open (kept for audit/logging)
     let orbDirection = 'NEUTRAL';
     if (close > open * 1.001) orbDirection = 'UP';
     else if (close < open * 0.999) orbDirection = 'DOWN';
@@ -83,14 +92,17 @@ async function collectOpeningRange(symbols, picks) {
     if (close > open * 1.001) niftyDir = 'UP';
     else if (close < open * 0.999) niftyDir = 'DOWN';
 
+    const niftyChangePct = open > 0 ? round2(((close - open) / open) * 100) : 0;
+
     resultMap['_NIFTY'] = {
       high: round2(high),
       low: round2(low),
       opening_price: round2(open),
-      orb_direction: niftyDir
+      orb_direction: niftyDir,
+      nifty_change_pct: niftyChangePct
     };
 
-    console.log(`${LOG} NIFTY: O=${open} H=${high} L=${low} C=${close} dir=${niftyDir}`);
+    console.log(`${LOG} NIFTY: O=${open} H=${high} L=${low} C=${close} dir=${niftyDir} change=${niftyChangePct}%`);
   }
 
   console.log(`${LOG} ORB data collected for ${Object.keys(resultMap).filter(k => k !== '_NIFTY').length} symbols`);
@@ -100,12 +112,12 @@ async function collectOpeningRange(symbols, picks) {
 /**
  * Validate picks against ORB data. Called at 9:30 AM after OHLC fetch.
  *
- * 6 checks per pick:
+ * Crabel-style: 5 checks per pick, then SL-M orders at ORB breakout levels.
  * 1. Gap size        — abs(gap_percent) < 1.5%
  * 2. Gap direction   — gap must not oppose scan bias (LONG + gap < -1% = fail)
- * 3. ORB alignment   — Bullish scan → UP ORB only (NEUTRAL = fail)
- * 4. Nifty alignment — Nifty ORB doesn't oppose scan bias
- * 5. Entry still valid — Entry price within 1% of pre-calculated level
+ * 3. ORB R:R check   — R:R >= 1.5 with ORB breakout entry vs original stop/target
+ * 4. Nifty alignment — NIFTY opposing move > 0.3% blocks trade
+ * 5. ORB range width — ORB range < 3% of stock price (too volatile = fail)
  * 6. Volume check    — Auto-pass (OHLC doesn't provide volume)
  *
  * @param {Array} picks — Array of pick sub-documents from DailyPick
@@ -115,12 +127,13 @@ async function collectOpeningRange(symbols, picks) {
 function validatePicks(picks, orbData) {
   const niftyOrb = orbData['_NIFTY'];
   const niftyDir = niftyOrb?.orb_direction || 'NEUTRAL';
+  const niftyChangePct = niftyOrb?.nifty_change_pct ?? 0;
 
-  console.log(`${LOG} Validating ${picks.length} picks (NIFTY dir: ${niftyDir})`);
+  console.log(`${LOG} Validating ${picks.length} picks (NIFTY dir: ${niftyDir} change: ${niftyChangePct}%)`);
 
   // TEMPORARY: Skip all validation when FORCE_CONDITIONS_MET is true (for testing order placement)
   if (process.env.FORCE_CONDITIONS_MET === 'true') {
-    console.log(`${LOG} ⚠️ FORCE_CONDITIONS_MET=true — BYPASSING ALL VALIDATION`);
+    console.log(`${LOG} FORCE_CONDITIONS_MET=true — BYPASSING ALL VALIDATION`);
     for (const pick of picks) {
       const orb = orbData[pick.symbol];
       if (orb) {
@@ -130,17 +143,22 @@ function validatePicks(picks, orbData) {
           opening_price: orb.opening_price,
           gap_percent: orb.gap_percent,
           orb_direction: orb.orb_direction,
-          nifty_orb_direction: niftyDir
+          nifty_orb_direction: niftyDir,
+          nifty_change_pct: niftyChangePct
         };
       }
+      const isBullish = pick.direction === 'LONG';
+      const orbEntry = isBullish
+        ? round2((orb?.high || 0) * (1 + ORB_BUFFER_PCT))
+        : round2((orb?.low || 0) * (1 - ORB_BUFFER_PCT));
       pick.validation = {
         passed: true,
         checks: {
           gap_check: { passed: true, value: orb?.gap_percent || 0 },
           gap_direction: { passed: true, value: orb?.gap_percent || 0, direction: 'FORCED' },
-          orb_alignment: { passed: true, scan_bias: pick.direction, orb_dir: orb?.orb_direction || 'FORCED' },
-          nifty_alignment: { passed: true, nifty_dir: niftyDir },
-          entry_still_valid: { passed: true, distance_percent: 0 },
+          orb_alignment: { passed: true, scan_bias: pick.direction, orb_dir: orb?.orb_direction || 'FORCED', new_entry: orbEntry, original_entry: pick.levels.entry, new_rr: 99, min_rr: MIN_ORB_RR, orb_high: orb?.high || 0, orb_low: orb?.low || 0 },
+          nifty_alignment: { passed: true, nifty_dir: niftyDir, nifty_change_pct: niftyChangePct, threshold: NIFTY_THRESHOLD_PCT },
+          entry_still_valid: { passed: true, orb_range_pct: 0, max_allowed: MAX_ORB_RANGE_PCT },
           volume_check: { passed: true, ratio: null }
         },
         skip_reason: null,
@@ -170,7 +188,8 @@ function validatePicks(picks, orbData) {
       opening_price: orb.opening_price,
       gap_percent: orb.gap_percent,
       orb_direction: orb.orb_direction,
-      nifty_orb_direction: niftyDir
+      nifty_orb_direction: niftyDir,
+      nifty_change_pct: niftyChangePct
     };
 
     const isBullish = pick.direction === 'LONG';
@@ -190,32 +209,50 @@ function validatePicks(picks, orbData) {
       direction: isBullish ? 'LONG' : 'SHORT'
     };
 
-    // Check 3: ORB direction alignment
-    const expectedDir = isBullish ? 'UP' : 'DOWN';
+    // Check 3: ORB breakout R:R check (Crabel-style SL-M entry)
+    // Entry = ORB high + 0.1% buffer (LONG) or ORB low - 0.1% buffer (SHORT)
+    const orbEntry = isBullish
+      ? round2(orb.high * (1 + ORB_BUFFER_PCT))
+      : round2(orb.low * (1 - ORB_BUFFER_PCT));
+
+    const originalStop = pick.levels.stop;
+    const originalTarget = pick.levels.target;
+    const risk = Math.abs(orbEntry - originalStop);
+    const reward = Math.abs(originalTarget - orbEntry);
+    const newRR = risk > 0 ? round2(reward / risk) : 0;
+
     checks.orb_alignment = {
-      passed: orb.orb_direction === expectedDir,
+      passed: newRR >= MIN_ORB_RR,
       scan_bias: pick.direction,
-      orb_dir: orb.orb_direction
+      orb_dir: orb.orb_direction,
+      new_entry: orbEntry,
+      original_entry: pick.levels.entry,
+      new_rr: newRR,
+      min_rr: MIN_ORB_RR,
+      orb_high: orb.high,
+      orb_low: orb.low
     };
 
-    // Check 3: Nifty alignment (doesn't oppose)
-    const niftyOpposes = (isBullish && niftyDir === 'DOWN') || (!isBullish && niftyDir === 'UP');
+    // Check 4: Nifty alignment — >0.3% opposing move blocks trade
+    const niftyOpposes = (isBullish && niftyChangePct < -NIFTY_THRESHOLD_PCT) ||
+                         (!isBullish && niftyChangePct > NIFTY_THRESHOLD_PCT);
     checks.nifty_alignment = {
       passed: !niftyOpposes,
-      nifty_dir: niftyDir
+      nifty_dir: niftyDir,
+      nifty_change_pct: niftyChangePct,
+      threshold: NIFTY_THRESHOLD_PCT
     };
 
-    // Check 4: Entry still valid — current price within 1% of pre-calculated entry
-    const currentPrice = orb.opening_price;
-    const distPct = pick.levels.entry
-      ? round2(Math.abs((currentPrice - pick.levels.entry) / pick.levels.entry) * 100)
-      : 0;
+    // Check 5: ORB range width — ensure ORB isn't too volatile for breakout entry
+    const orbRange = orb.high - orb.low;
+    const orbRangePct = orb.low > 0 ? round2((orbRange / orb.low) * 100) : 0;
     checks.entry_still_valid = {
-      passed: distPct < 1.0,
-      distance_percent: distPct
+      passed: orbRangePct <= MAX_ORB_RANGE_PCT,
+      orb_range_pct: orbRangePct,
+      max_allowed: MAX_ORB_RANGE_PCT
     };
 
-    // Check 5: Volume — auto-pass (OHLC doesn't provide volume data)
+    // Check 6: Volume — auto-pass (OHLC doesn't provide volume data)
     checks.volume_check = {
       passed: true,
       ratio: null
@@ -223,57 +260,19 @@ function validatePicks(picks, orbData) {
 
     // Determine overall pass/fail
     const allPassed = Object.values(checks).every(c => c.passed);
-    let levelsRecalculated = false;
-    let originalLevels = null;
-
-    // Gap recalculation: if gap > 1.5% but ORB direction aligns, try recalculating
-    if (!checks.gap_check.passed && checks.orb_alignment.passed) {
-      originalLevels = {
-        entry: pick.levels.entry,
-        stop: pick.levels.stop,
-        target: pick.levels.target
-      };
-
-      const newEntry = isBullish ? orb.high : orb.low;
-      const newStop = isBullish ? orb.low : orb.high;
-      const newTarget = round2(newEntry * (isBullish ? 1.02 : 0.98));
-      const newRiskPct = round2(Math.abs((newEntry - newStop) / newEntry) * 100);
-      const newRR = newRiskPct > 0 ? round2(2.0 / newRiskPct) : 0;
-
-      if (newRiskPct <= 4.0 && newRR >= 1.2) {
-        pick.levels.entry = round2(newEntry);
-        pick.levels.stop = round2(newStop);
-        pick.levels.target = newTarget;
-        pick.levels.risk_pct = newRiskPct;
-        pick.levels.risk_reward = newRR;
-        levelsRecalculated = true;
-
-        checks.gap_check.passed = true;
-        checks.entry_still_valid.passed = true;
-        checks.entry_still_valid.distance_percent = 0;
-
-        console.log(`${LOG} ${pick.symbol}: Levels recalculated — entry=${newEntry} stop=${newStop} target=${newTarget} risk=${newRiskPct}% RR=${newRR}`);
-      } else {
-        console.log(`${LOG} ${pick.symbol}: Gap recalc rejected — risk=${newRiskPct}% RR=${newRR} (limits: risk<=4%, RR>=1.2)`);
-      }
-    }
-
-    const finalPassed = Object.values(checks).every(c => c.passed);
-    const skipReason = finalPassed ? null : Object.entries(checks)
+    const skipReason = allPassed ? null : Object.entries(checks)
       .filter(([, c]) => !c.passed)
       .map(([k]) => k)
       .join(', ');
 
     pick.validation = {
-      passed: finalPassed,
+      passed: allPassed,
       checks,
-      skip_reason: skipReason,
-      levels_recalculated: levelsRecalculated,
-      original_levels: originalLevels
+      skip_reason: skipReason
     };
 
-    console.log(`${LOG} ${pick.symbol}: ${finalPassed ? 'PASSED' : 'FAILED'} — gap=${checks.gap_check.passed ? 'OK' : 'FAIL'}(${orb.gap_percent}%) gap_dir=${checks.gap_direction.passed ? 'OK' : 'FAIL'} orb=${checks.orb_alignment.passed ? 'OK' : 'FAIL'}(${orb.orb_direction}) nifty=${checks.nifty_alignment.passed ? 'OK' : 'FAIL'}(${niftyDir}) entry=${checks.entry_still_valid.passed ? 'OK' : 'FAIL'}(${distPct}%) vol=AUTO${levelsRecalculated ? ' [RECALCULATED]' : ''}`);
-    if (!finalPassed) console.log(`${LOG} ${pick.symbol}: skip_reason=${skipReason}`);
+    console.log(`${LOG} ${pick.symbol}: ${allPassed ? 'PASSED' : 'FAILED'} — gap=${checks.gap_check.passed ? 'OK' : 'FAIL'}(${orb.gap_percent}%) gap_dir=${checks.gap_direction.passed ? 'OK' : 'FAIL'} orb_rr=${checks.orb_alignment.passed ? 'OK' : 'FAIL'}(RR=${newRR}) nifty=${checks.nifty_alignment.passed ? 'OK' : 'FAIL'}(${niftyChangePct}%) orb_range=${checks.entry_still_valid.passed ? 'OK' : 'FAIL'}(${orbRangePct}%) vol=AUTO`);
+    if (!allPassed) console.log(`${LOG} ${pick.symbol}: skip_reason=${skipReason}`);
   }
 
   return picks;

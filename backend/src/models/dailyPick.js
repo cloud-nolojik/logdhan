@@ -89,7 +89,8 @@ const pickSchema = new mongoose.Schema({
     opening_price: Number,
     gap_percent: Number,
     orb_direction: { type: String, enum: ['UP', 'DOWN', 'NEUTRAL'] },
-    nifty_orb_direction: { type: String, enum: ['UP', 'DOWN', 'NEUTRAL'] }
+    nifty_orb_direction: { type: String, enum: ['UP', 'DOWN', 'NEUTRAL'] },
+    nifty_change_pct: Number
   },
 
   // Validation gate — checked at 9:30 AM before placing entry
@@ -98,9 +99,9 @@ const pickSchema = new mongoose.Schema({
     checks: {
       gap_check: { passed: Boolean, value: Number },
       gap_direction: { passed: Boolean, value: Number, direction: String },
-      orb_alignment: { passed: Boolean, scan_bias: String, orb_dir: String },
-      nifty_alignment: { passed: Boolean, nifty_dir: String },
-      entry_still_valid: { passed: Boolean, distance_percent: Number },
+      orb_alignment: { passed: Boolean, scan_bias: String, orb_dir: String, new_entry: Number, original_entry: Number, new_rr: Number, min_rr: Number, orb_high: Number, orb_low: Number },
+      nifty_alignment: { passed: Boolean, nifty_dir: String, nifty_change_pct: Number, threshold: Number },
+      entry_still_valid: { passed: Boolean, orb_range_pct: Number, max_allowed: Number },
       volume_check: { passed: Boolean, ratio: Number }
     },
     skip_reason: String,

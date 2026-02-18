@@ -1036,7 +1036,8 @@ async function startOrbCollection(options = {}) {
         opening_price: orb.opening_price,
         gap_percent: orb.gap_percent,
         orb_direction: orb.orb_direction,
-        nifty_orb_direction: orbData['_NIFTY']?.orb_direction || 'NEUTRAL'
+        nifty_orb_direction: orbData['_NIFTY']?.orb_direction || 'NEUTRAL',
+        nifty_change_pct: orbData['_NIFTY']?.nifty_change_pct ?? 0
       };
     }
   }
@@ -1063,13 +1064,13 @@ async function validateAndPlaceEntries(options = {}) {
 
   if (!isKiteIntegrationEnabled()) {
     console.log(`${LOG} Kite not enabled — skipping`);
-    return { success: true, message: 'Kite not enabled', orders: 0 };
+    return { success: true, message: 'Kite not enabled', orders: 0, validated: 0, skipped: 0 };
   }
 
   const doc = await DailyPick.findToday();
   if (!doc) {
     console.log(`${LOG} No DailyPick doc for today — nothing to place`);
-    return { success: true, message: 'No picks today', orders: 0 };
+    return { success: true, message: 'No picks today', orders: 0, validated: 0, skipped: 0 };
   }
 
   // Accept both COLLECTING_ORB (normal flow) and PENDING (if ORB collection was skipped/manual)
@@ -1078,7 +1079,7 @@ async function validateAndPlaceEntries(options = {}) {
   );
   if (eligiblePicks.length === 0) {
     console.log(`${LOG} No eligible picks for validation — skipping`);
-    return { success: true, message: 'No eligible picks', orders: 0 };
+    return { success: true, message: 'No eligible picks', orders: 0, validated: 0, skipped: 0 };
   }
 
   // Step 1: Validate against ORB data
@@ -1096,14 +1097,35 @@ async function validateAndPlaceEntries(options = {}) {
     }
   }
   // Reconstruct NIFTY ORB from first pick that has it
-  const niftyDir = eligiblePicks.find(p => p.orb?.nifty_orb_direction)?.orb?.nifty_orb_direction;
-  if (niftyDir) {
-    orbData['_NIFTY'] = { orb_direction: niftyDir };
+  const firstWithNifty = eligiblePicks.find(p => p.orb?.nifty_orb_direction);
+  if (firstWithNifty) {
+    orbData['_NIFTY'] = {
+      orb_direction: firstWithNifty.orb.nifty_orb_direction,
+      nifty_change_pct: firstWithNifty.orb.nifty_change_pct ?? 0
+    };
   }
 
   validatePicks(eligiblePicks, orbData);
 
-  // Step 2: Separate validated vs skipped
+  // Step 2: Update validated picks' entry to ORB breakout level (Crabel-style SL-M)
+  for (const pick of eligiblePicks) {
+    if (pick.validation?.passed && pick.validation.checks.orb_alignment?.new_entry) {
+      // Store original entry for audit trail
+      if (!pick.validation.original_levels) {
+        pick.validation.original_levels = {
+          entry: pick.levels.entry,
+          stop: pick.levels.stop,
+          target: pick.levels.target
+        };
+        pick.validation.levels_recalculated = true;
+      }
+      // Update entry to ORB breakout level
+      pick.levels.entry = pick.validation.checks.orb_alignment.new_entry;
+      pick.levels.entry_type = pick.direction === 'LONG' ? 'buy_above' : 'sell_below';
+    }
+  }
+
+  // Step 3: Separate validated vs skipped
   const validatedPicks = eligiblePicks.filter(p => p.validation?.passed);
   const skippedPicks = eligiblePicks.filter(p => !p.validation?.passed);
 
@@ -1117,7 +1139,7 @@ async function validateAndPlaceEntries(options = {}) {
   if (validatedPicks.length === 0) {
     console.log(`${LOG} All picks failed validation — no orders to place`);
     await doc.save();
-    return { success: true, message: 'All picks failed validation', orders: 0 };
+    return { success: true, message: 'All picks failed validation', orders: 0, validated: 0, skipped: skippedPicks.length };
   }
 
   // Mark as VALIDATED
@@ -1158,27 +1180,14 @@ async function validateAndPlaceEntries(options = {}) {
       continue;
     }
 
-    const entryType = pick.levels.entry_type || 'limit';
-    let orderType, triggerPrice, limitPrice;
+    // Crabel-style: always SL-M at ORB breakout level
+    const triggerPrice = roundToTick(pick.levels.entry);
+    const originalEntry = pick.validation?.original_levels?.entry;
 
-    if (entryType === 'buy_above') {
-      orderType = 'SL';
-      triggerPrice = roundToTick(pick.levels.entry);
-      limitPrice = roundToTick(pick.levels.entry * 1.002);
-    } else if (entryType === 'sell_below') {
-      orderType = 'SL-M';
-      triggerPrice = roundToTick(pick.levels.entry);
-      limitPrice = 0;
-    } else {
-      orderType = 'LIMIT';
-      triggerPrice = 0;
-      limitPrice = roundToTick(pick.levels.entry);
-    }
-
-    console.log(`${LOG} ${pick.symbol}: ${orderType} ${pick.direction} qty=${qty} entry=₹${pick.levels.entry} (validated, ${pick.validation?.levels_recalculated ? 'recalculated' : 'original'} levels)`);
+    console.log(`${LOG} ${pick.symbol}: SL-M ${pick.direction} qty=${qty} trigger=₹${triggerPrice} (original entry=₹${originalEntry || 'N/A'})`);
 
     if (dryRun) {
-      console.log(`${LOG} [DRY RUN] Would place ${orderType} order for ${pick.symbol}`);
+      console.log(`${LOG} [DRY RUN] Would place SL-M order for ${pick.symbol}`);
       continue;
     }
 
@@ -1187,18 +1196,14 @@ async function validateAndPlaceEntries(options = {}) {
         tradingsymbol: pick.symbol,
         exchange: 'NSE',
         transaction_type: pick.direction === 'LONG' ? 'BUY' : 'SELL',
-        order_type: orderType,
+        order_type: 'SL-M',
         product: 'MIS',
         quantity: qty,
-        price: limitPrice,
+        trigger_price: triggerPrice,
         simulationId: `daily_pick_${pick.symbol}`,
         orderType: 'ENTRY',
         source: 'DAILY_PICKS'
       };
-
-      if (orderType === 'SL' || orderType === 'SL-M') {
-        orderParams.trigger_price = triggerPrice;
-      }
 
       const result = await kiteOrderService.placeOrder(orderParams);
 
@@ -1216,10 +1221,10 @@ async function validateAndPlaceEntries(options = {}) {
         const maxProfit = round2(rewardPerShare * qty);
         console.log(`${LOG} ┌── TRADE: ${pick.symbol} ──────────────────────────────`);
         console.log(`${LOG} │ Direction: ${pick.direction} | Scan: ${pick.scan_type} | Mode: ${pick.levels.mode}`);
-        console.log(`${LOG} │ Analysis → Entry: ₹${pick.levels.entry} | Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target}`);
+        console.log(`${LOG} │ Original Entry: ₹${originalEntry || 'N/A'} → ORB Entry: ₹${pick.levels.entry} | Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target}`);
         console.log(`${LOG} │ T1 (partial): ${pick.levels.target1 ? '₹' + pick.levels.target1 : 'N/A'} | T3 (stretch): ${pick.levels.target3 ? '₹' + pick.levels.target3 : 'N/A'}`);
-        console.log(`${LOG} │ R:R=${pick.levels.risk_reward} | Risk=${pick.levels.risk_pct}% | Reward=${pick.levels.reward_pct}%`);
-        console.log(`${LOG} │ Order → ${orderType} qty=${qty} price=₹${limitPrice || triggerPrice} orderId=${result.orderId}`);
+        console.log(`${LOG} │ R:R=${pick.validation?.checks?.orb_alignment?.new_rr || pick.levels.risk_reward} | Risk=${pick.levels.risk_pct}% | Reward=${pick.levels.reward_pct}%`);
+        console.log(`${LOG} │ Order → SL-M qty=${qty} trigger=₹${triggerPrice} orderId=${result.orderId}`);
         console.log(`${LOG} │ Capital: ₹${orderAmount} | Max Loss: ₹${maxLoss} | Max Profit: ₹${maxProfit}`);
         console.log(`${LOG} │ Reason: ${pick.levels.reason}`);
         console.log(`${LOG} └─────────────────────────────────────────────────────`);
