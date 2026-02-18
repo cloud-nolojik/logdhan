@@ -237,7 +237,7 @@ async function runScans(marketContext) {
         symbol: 'DYNAMATECH',
         per_chg: 2.5,
         close: 0,
-        scan_type: '52w_high_breakout',
+        scan_type: 'fiftyTwoWeek_high',
         direction: 'LONG',
         type: 'BULLISH',
       }],
