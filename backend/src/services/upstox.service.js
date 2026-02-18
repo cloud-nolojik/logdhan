@@ -23,11 +23,13 @@ class UpstoxService {
    * Note: Most stocks > ₹100 use ₹0.05 tick size
    */
   getTickSize(price) {
-    if (price < 1) return 0.01;
-    if (price < 5) return 0.01;
-    if (price < 10) return 0.01;
-    // For prices >= ₹10, NSE uses ₹0.05 tick size
-    return 0.05;
+    // NSE tick size bands (revised April 15, 2025)
+    if (price <= 250) return 0.01;
+    if (price <= 1000) return 0.05;
+    if (price <= 5000) return 0.10;
+    if (price <= 10000) return 0.50;
+    if (price <= 20000) return 1.00;
+    return 5.00;
   }
 
   /**
@@ -54,7 +56,7 @@ class UpstoxService {
     }
 
     // Fix floating point precision issues
-    const decimalPlaces = tickSize === 0.05 ? 2 : 2;
+    const decimalPlaces = tickSize >= 1 ? 0 : 2;
     rounded = parseFloat(rounded.toFixed(decimalPlaces));
 
     console.log(`[TICK SIZE] Price ₹${price} -> Tick: ₹${tickSize} -> Rounded (${direction}): ₹${rounded}`);

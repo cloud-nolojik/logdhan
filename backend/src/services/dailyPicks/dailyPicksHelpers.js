@@ -62,9 +62,26 @@ export function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
-/** Round price to NSE tick size (0.05) */
-export function roundToTick(price, tick = 0.05) {
-  return round2(Math.round(price / tick) * tick);
+/**
+ * Get NSE tick size based on price band (revised April 15, 2025).
+ * @see https://zerodha.com/marketintel/bulletin/408151/revision-in-tick-size-for-nse-derivatives-and-cash-segment-from-april-15-2025
+ */
+export function getNseTickSize(price) {
+  if (price <= 250) return 0.01;
+  if (price <= 1000) return 0.05;
+  if (price <= 5000) return 0.10;
+  if (price <= 10000) return 0.50;
+  if (price <= 20000) return 1.00;
+  return 5.00;
+}
+
+/** Round price to NSE tick size based on price band */
+export function roundToTick(price, tick) {
+  const t = tick ?? getNseTickSize(price);
+  const rounded = Math.round(price / t) * t;
+  // Precision: 2 decimals for ticks < 1, 0 decimals for ticks >= 1
+  const decimals = t >= 1 ? 0 : 2;
+  return parseFloat(rounded.toFixed(decimals));
 }
 
 export function delay(ms) {

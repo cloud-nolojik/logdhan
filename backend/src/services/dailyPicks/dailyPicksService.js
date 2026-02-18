@@ -1110,20 +1110,20 @@ async function validateAndPlaceEntries(options = {}) {
   // Step 2: Update validated picks' entry to ORB breakout level (Crabel-style SL-M)
   for (const pick of eligiblePicks) {
     if (pick.validation?.passed && pick.validation.checks.orb_alignment?.new_entry) {
-      // Store original entry for audit trail
-      if (!pick.validation.original_levels) {
-        pick.validation.original_levels = {
-          entry: pick.levels.entry,
-          stop: pick.levels.stop,
-          target: pick.levels.target
-        };
-        pick.validation.levels_recalculated = true;
-      }
+      // Store original entry for audit trail before overwriting
+      pick.validation.original_levels = {
+        entry: pick.levels.entry,
+        stop: pick.levels.stop,
+        target: pick.levels.target
+      };
+      pick.validation.levels_recalculated = true;
       // Update entry to ORB breakout level
       pick.levels.entry = pick.validation.checks.orb_alignment.new_entry;
       pick.levels.entry_type = pick.direction === 'LONG' ? 'buy_above' : 'sell_below';
     }
   }
+  // Mongoose needs a nudge to detect nested changes on subdocument arrays
+  doc.markModified('picks');
 
   // Step 3: Separate validated vs skipped
   const validatedPicks = eligiblePicks.filter(p => p.validation?.passed);
@@ -1182,7 +1182,7 @@ async function validateAndPlaceEntries(options = {}) {
 
     // Crabel-style: always SL-M at ORB breakout level
     const triggerPrice = roundToTick(pick.levels.entry);
-    const originalEntry = pick.validation?.original_levels?.entry;
+    const originalEntry = pick.validation?.checks?.orb_alignment?.original_entry;
 
     console.log(`${LOG} ${pick.symbol}: SL-M ${pick.direction} qty=${qty} trigger=₹${triggerPrice} (original entry=₹${originalEntry || 'N/A'})`);
 
@@ -1223,7 +1223,7 @@ async function validateAndPlaceEntries(options = {}) {
         console.log(`${LOG} │ Direction: ${pick.direction} | Scan: ${pick.scan_type} | Mode: ${pick.levels.mode}`);
         console.log(`${LOG} │ Original Entry: ₹${originalEntry || 'N/A'} → ORB Entry: ₹${pick.levels.entry} | Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target}`);
         console.log(`${LOG} │ T1 (partial): ${pick.levels.target1 ? '₹' + pick.levels.target1 : 'N/A'} | T3 (stretch): ${pick.levels.target3 ? '₹' + pick.levels.target3 : 'N/A'}`);
-        console.log(`${LOG} │ R:R=${pick.validation?.checks?.orb_alignment?.new_rr || pick.levels.risk_reward} | Risk=${pick.levels.risk_pct}% | Reward=${pick.levels.reward_pct}%`);
+        console.log(`${LOG} │ R:R=${pick.validation?.checks?.orb_alignment?.new_rr ?? pick.levels.risk_reward} | Risk=${pick.levels.risk_pct}% | Reward=${pick.levels.reward_pct}%`);
         console.log(`${LOG} │ Order → SL-M qty=${qty} trigger=₹${triggerPrice} orderId=${result.orderId}`);
         console.log(`${LOG} │ Capital: ₹${orderAmount} | Max Loss: ₹${maxLoss} | Max Profit: ₹${maxProfit}`);
         console.log(`${LOG} │ Reason: ${pick.levels.reason}`);

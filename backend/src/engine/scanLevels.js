@@ -17,11 +17,27 @@
 import { round2, isNum } from './helpers.js';
 
 /**
- * Round to nearest tick (0.05 for most Indian stocks)
+ * Get NSE tick size based on price band (revised April 15, 2025).
+ * @see https://zerodha.com/marketintel/bulletin/408151/revision-in-tick-size-for-nse-derivatives-and-cash-segment-from-april-15-2025
  */
-export function roundToTick(price, tick = 0.05) {
+function getNseTickSize(price) {
+  if (price <= 250) return 0.01;
+  if (price <= 1000) return 0.05;
+  if (price <= 5000) return 0.10;
+  if (price <= 10000) return 0.50;
+  if (price <= 20000) return 1.00;
+  return 5.00;
+}
+
+/**
+ * Round price to NSE tick size based on price band.
+ */
+export function roundToTick(price, tick) {
   if (!isNum(price)) return 0;
-  return parseFloat((Math.round(price / tick) * tick).toFixed(2));
+  const t = tick ?? getNseTickSize(price);
+  const rounded = Math.round(price / t) * t;
+  const decimals = t >= 1 ? 0 : 2;
+  return parseFloat(rounded.toFixed(decimals));
 }
 
 /**
@@ -1621,7 +1637,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   // ─────────────────────────────────────────────────────────────────────────
   // Calculate final metrics
   // ─────────────────────────────────────────────────────────────────────────
-  const finalRewardPercent = ((adjustedTarget - entry) / entry) * 100;
+  const finalRewardPercent = (adjustedReward / entry) * 100;
 
   return {
     valid: true,
