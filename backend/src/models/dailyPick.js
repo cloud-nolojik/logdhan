@@ -155,7 +155,39 @@ const dailyPickSchema = new mongoose.Schema({
     total_pnl: Number,
     best_pick: String,
     worst_pick: String
-  }
+  },
+
+  // Candidate review table — all scored candidates with decisions (for admin review)
+  candidates_review: [{
+    symbol: String,
+    scan_type: String,
+    direction: String,
+    rank_score: Number,
+    candle: {
+      open: Number,
+      high: Number,
+      low: Number,
+      close: Number,
+      prev_close: Number,
+      volume: Number
+    },
+    indicators: {
+      ema20: Number,
+      atr: Number,
+      rsi: Number
+    },
+    levels: {
+      entry: Number,
+      stop: Number,
+      target: Number,
+      risk_pct: Number,
+      risk_reward: Number,
+      target_basis: String,
+      mode: String
+    },
+    status: String,
+    rejection_reason: String
+  }]
 }, { timestamps: true });
 
 // Compound indexes

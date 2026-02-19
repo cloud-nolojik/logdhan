@@ -102,7 +102,7 @@ async function runDailyPicks(options = {}) {
 
     if (scored.length === 0) {
       console.log(`${LOG} No picks above minimum score.`);
-      const doc = await saveToDB(marketContext, [], scanResult);
+      const doc = await saveToDB(marketContext, [], scanResult, []);
       await sendNotification(marketContext, [], doc);
       return { success: true, picks: 0, doc };
     }
@@ -111,34 +111,77 @@ async function runDailyPicks(options = {}) {
     // then select top MAX_DAILY_PICKS with scan-type diversity.
     console.log(`${LOG} [Step 5] Evaluating all ${scored.length} scored candidates through levels engine...`);
     const allViable = [];
+    const candidatesReview = [];
     let rejectedCount = 0;
     const rejectionReasons = {};
     for (let i = 0; i < scored.length; i++) {
       const candidate = scored[i];
+      const _ohlcv = candidate._ohlcv;
       console.log(`${LOG} [Step 5] --- Candidate ${i + 1}/${scored.length}: ${candidate.symbol} (${candidate.scan_type}, score=${candidate.rank_score}) ---`);
+
+      // Base review entry with candle + indicator data
+      const reviewEntry = {
+        symbol: candidate.symbol,
+        scan_type: candidate.scan_type,
+        direction: candidate.direction,
+        rank_score: candidate.rank_score,
+        candle: {
+          open: _ohlcv.open,
+          high: _ohlcv.high,
+          low: _ohlcv.low,
+          close: _ohlcv.close,
+          prev_close: _ohlcv.prev_close,
+          volume: _ohlcv.volume
+        },
+        indicators: {
+          ema20: _ohlcv.ema20,
+          atr: _ohlcv.atr,
+          rsi: _ohlcv.rsi
+        },
+        levels: null,
+        status: null,
+        rejection_reason: null
+      };
 
       // ═══════════════════════════════════════════════════════════════════════
       // CONFLICT CHECK GATE: Reject if 1H structure blocks the trade
-      // LONG: reject if resistance zone within 1% above PDH (entry zone)
-      // SHORT: reject if support zone within 1% below PDL (entry zone)
+      // LONG: reject if resistance zone within 2% above PDH (entry zone)
+      // SHORT: reject if support zone within 2% below PDL (entry zone)
       // ═══════════════════════════════════════════════════════════════════════
       const conflictResult = check1HStructuralConflict(candidate);
       if (conflictResult.rejected) {
         rejectedCount++;
         const scanType = candidate.scan_type;
         rejectionReasons[scanType] = (rejectionReasons[scanType] || 0) + 1;
+        reviewEntry.status = 'rejected_conflict';
+        reviewEntry.rejection_reason = conflictResult.reason;
+        candidatesReview.push(reviewEntry);
         console.log(`${LOG} [Step 5] ${candidate.symbol}: REJECTED by conflict check (${rejectedCount} rejected so far)`);
         continue;
       }
 
       const withLevels = calculateLevels(candidate);
       if (withLevels) {
+        reviewEntry.status = 'viable';
+        reviewEntry.levels = {
+          entry: withLevels.levels.entry,
+          stop: withLevels.levels.stop,
+          target: withLevels.levels.target,
+          risk_pct: withLevels.levels.risk_pct,
+          risk_reward: withLevels.levels.risk_reward,
+          target_basis: withLevels.levels.target2_basis || withLevels.levels.mode,
+          mode: withLevels.levels.mode
+        };
+        candidatesReview.push(reviewEntry);
         allViable.push(withLevels);
         console.log(`${LOG} [Step 5] ${candidate.symbol}: VIABLE (${allViable.length} viable so far)`);
       } else {
         rejectedCount++;
         const scanType = candidate.scan_type;
         rejectionReasons[scanType] = (rejectionReasons[scanType] || 0) + 1;
+        reviewEntry.status = 'rejected_levels';
+        reviewEntry.rejection_reason = candidate._lastRejectionReason || 'Levels engine rejected';
+        candidatesReview.push(reviewEntry);
         console.log(`${LOG} [Step 5] ${candidate.symbol}: REJECTED (${rejectedCount} rejected so far)`);
       }
     }
@@ -155,9 +198,17 @@ async function runDailyPicks(options = {}) {
     const picksWithLevels = selectDiversePicks(allViable, MAX_DAILY_PICKS);
     console.log(`${LOG} Selected ${picksWithLevels.length} picks (diversity-weighted) from ${allViable.length} viable`);
 
+    // Mark selected picks in the review table
+    const selectedSymbols = new Set(picksWithLevels.map(p => p.symbol));
+    for (const entry of candidatesReview) {
+      if (entry.status === 'viable' && selectedSymbols.has(entry.symbol)) {
+        entry.status = 'selected';
+      }
+    }
+
     if (picksWithLevels.length === 0) {
       console.log(`${LOG} All ${scored.length} candidates rejected by engine (no viable R:R). Saving empty doc.`);
-      const doc = await saveToDB(marketContext, [], scanResult);
+      const doc = await saveToDB(marketContext, [], scanResult, candidatesReview);
       await sendNotification(marketContext, [], doc);
       return { success: true, picks: 0, doc };
     }
@@ -169,7 +220,7 @@ async function runDailyPicks(options = {}) {
 
     // Step 7: Save to DB
     console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks`);
-    const doc = await saveToDB(marketContext, picksWithInsights, scanResult);
+    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview);
     console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
 
     // Step 8: Send notification
@@ -762,6 +813,7 @@ function calculateLevels(pick) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED by scanLevels — ${result.reason}`);
     if (result.currentRR) console.log(`${LOG} [Levels] ${symbol}: currentRR=${result.currentRR} suggestedTarget=${result.suggestedTarget || 'N/A'}`);
     if (result.noData) console.log(`${LOG} [Levels] ${symbol}: noData=${result.noData} (missing indicator data)`);
+    pick._lastRejectionReason = result.reason || 'Levels engine rejected';
     return null;
   }
 
@@ -779,6 +831,7 @@ function calculateLevels(pick) {
 
   if (riskPercent > DAILY_PICKS_MAX_RISK) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED — Risk ${round2(riskPercent)}% exceeds daily picks cap (${DAILY_PICKS_MAX_RISK}%)`);
+    pick._lastRejectionReason = `Risk ${round2(riskPercent)}% exceeds ${DAILY_PICKS_MAX_RISK}% cap`;
     return null;
   }
 
@@ -895,7 +948,7 @@ Generate 1-2 sentence insights for each pick.`
 // STEP 7: SAVE TO DB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function saveToDB(marketContext, picks, scanResult) {
+async function saveToDB(marketContext, picks, scanResult, candidatesReview = []) {
   // Determine scan_date and trading_date based on when we're running:
   // - 8:45 AM scheduled run: scan_date = yesterday, trading_date = today
   // - Manual evening run:    scan_date = today,     trading_date = next trading day
@@ -950,7 +1003,8 @@ async function saveToDB(marketContext, picks, scanResult) {
           bullish_count: scanResult.bullish_count || 0,
           bearish_count: scanResult.bearish_count || 0,
           selected_count: picks.length
-        }
+        },
+        candidates_review: candidatesReview
       }
     },
     { upsert: true, new: true }

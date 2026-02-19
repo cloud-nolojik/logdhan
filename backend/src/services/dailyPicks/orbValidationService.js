@@ -17,7 +17,7 @@ const LOG = '[ORB]';
 
 // Crabel-style ORB constants
 const ORB_BUFFER_PCT = 0.001;       // 0.1% above ORB high (longs) / below ORB low (shorts)
-const MIN_ORB_RR = 1.5;             // Minimum R:R with ORB-adjusted entry
+const MIN_ORB_RR = 1.2;             // Minimum R:R with ORB-adjusted entry (matches pre-market gate)
 const NIFTY_THRESHOLD_PCT = 0.3;    // >0.3% opposing NIFTY move blocks trade
 const MAX_ORB_RANGE_PCT = 3.0;      // ORB range > 3% of stock price = too volatile
 

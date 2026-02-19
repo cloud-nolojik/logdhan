@@ -3,6 +3,7 @@
  *
  * GET  /api/daily-picks/today       — Today's picks with live prices
  * GET  /api/daily-picks/history     — Recent daily pick results
+ * GET  /api/daily-picks/review      — Candidate review table (admin)
  * POST /api/daily-picks/trigger-scan  — Manual scan trigger (admin/testing)
  * POST /api/daily-picks/trigger-entry — Manual entry trigger (admin/testing)
  * POST /api/daily-picks/trigger-exit  — Manual exit trigger (admin/testing)
@@ -182,6 +183,84 @@ router.get('/history', auth, async (req, res) => {
 
   } catch (error) {
     console.error('[DAILY-PICKS-API] Error fetching history:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/daily-picks/review?date=2026-02-19
+ * Returns candidate review table for a given trading date (admin only).
+ * Defaults to today if no date provided.
+ */
+router.get('/review', adminAuth, async (req, res) => {
+  try {
+    let tradingDate;
+    if (req.query.date) {
+      // Parse date string as IST midnight (same logic as getIstDayRange)
+      const [y, m, d] = req.query.date.split('-').map(Number);
+      tradingDate = new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - 5.5 * 60 * 60 * 1000);
+    } else {
+      tradingDate = getIstDayRange().startUtc;
+    }
+
+    const doc = await DailyPick.findOne({ trading_date: tradingDate })
+      .select('trading_date scan_date candidates_review summary market_context')
+      .lean();
+
+    if (!doc) {
+      return res.json({ success: true, data: null, message: 'No scan found for this date' });
+    }
+
+    // Sort by rank_score descending
+    const candidates = (doc.candidates_review || [])
+      .sort((a, b) => (b.rank_score || 0) - (a.rank_score || 0));
+
+    // Summary counts
+    const statusCounts = {};
+    for (const c of candidates) {
+      statusCounts[c.status] = (statusCounts[c.status] || 0) + 1;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        trading_date: doc.trading_date ? new Date(new Date(doc.trading_date).getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0] : null,
+        scan_date: doc.scan_date ? new Date(new Date(doc.scan_date).getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0] : null,
+        market_regime: doc.market_context?.regime,
+        total_candidates: candidates.length,
+        status_counts: statusCounts,
+        candidates
+      }
+    });
+  } catch (error) {
+    console.error('[DAILY-PICKS-API] Error fetching review:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/daily-picks/review/dates
+ * Returns list of trading dates that have candidate review data (admin only).
+ */
+router.get('/review/dates', adminAuth, async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days) || 30, 90);
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const docs = await DailyPick.find(
+      { trading_date: { $gte: cutoff }, 'candidates_review.0': { $exists: true } },
+      { trading_date: 1, 'summary.total_candidates': 1, 'summary.selected_count': 1 }
+    ).sort({ trading_date: -1 }).lean();
+
+    const dates = docs.map(d => ({
+      date: new Date(new Date(d.trading_date).getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0],
+      total_candidates: d.summary?.total_candidates || 0,
+      selected_count: d.summary?.selected_count || 0
+    }));
+
+    res.json({ success: true, data: dates });
+  } catch (error) {
+    console.error('[DAILY-PICKS-API] Error fetching review dates:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
