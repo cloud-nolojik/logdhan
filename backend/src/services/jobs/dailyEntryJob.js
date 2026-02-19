@@ -1,12 +1,11 @@
 /**
  * Daily Entry Job — v2: ORB Validation + Instant Protection + Trailing
  *
- * Seven scheduled runs (Mon-Fri IST):
+ * Six scheduled runs (Mon-Fri IST):
  * 1. 9:30 AM    — Fetch ORB OHLC + validate picks + place entries
- * 2. 10:30 AM   — Cancel unfilled entry orders (setup expired)
- * 3. Every 3 min (10-14) — Monitor stop/target fills + trailing stops
- * 4. 14:00      — Tighten stops to breakeven for profitable positions
- * 5. 15:00      — Force-exit open positions + cancel unfilled orders
+ * 2. Every 3 min (10-14) — Monitor stop/target fills + trailing stops
+ * 3. 14:00      — Tighten stops to breakeven for profitable positions
+ * 4. 15:00      — Force-exit open positions + cancel unfilled orders
  *
  * Polling fallback for fill detection:
  * - Every 2 min (9-10) — Check fills for ORDER_PLACED picks (postback handles most, this is backup)
@@ -18,7 +17,6 @@ import Agenda from 'agenda';
 import {
   startOrbCollection,
   validateAndPlaceEntries,
-  cancelExpiredEntries,
   checkFillsFallback,
   monitorDailyPickOrders,
   tightenStops
@@ -152,37 +150,7 @@ class DailyEntryJob {
       }
     });
 
-    // Job 3: Cancel expired entries at 10:30 AM
-    this.agenda.define('daily-picks-cancel-expired', async (job) => {
-      if (this.runningJobs.has('cancel-expired')) {
-        console.log(`${LOG} Cancel-expired already running, skipping`);
-        return;
-      }
-
-      this.runningJobs.add('cancel-expired');
-      try {
-        const isTradingDay = await MarketHoursUtil.isTradingDay();
-        if (!isTradingDay) {
-          console.log(`${LOG} Not a trading day — skipping cancel-expired`);
-          return { skipped: true, reason: 'not_trading_day' };
-        }
-
-        console.log(`${LOG} [CANCEL-EXPIRED] Calling cancelExpiredEntries()...`);
-        const result = await cancelExpiredEntries();
-        this.stats.lastRunAt = new Date();
-        this.stats.lastResult = result;
-        console.log(`${LOG} [CANCEL-EXPIRED] Completed: cancelled=${result.cancelled}`);
-        return result;
-      } catch (error) {
-        console.error(`${LOG} Cancel-expired failed:`, error);
-        this.stats.errors++;
-        throw error;
-      } finally {
-        this.runningJobs.delete('cancel-expired');
-      }
-    });
-
-    // Job 4: Polling fallback for fill detection (*/2 9-10)
+    // Job 3: Polling fallback for fill detection (*/2 9-10)
     this.agenda.define('daily-picks-fill-fallback', async (job) => {
       if (this.runningJobs.has('fill-fallback')) {
         console.log(`${LOG} Fill fallback already running, skipping`);
@@ -342,7 +310,7 @@ class DailyEntryJob {
           $in: [
             'daily-picks-orb-collect',
             'daily-picks-validate-entry',
-            'daily-picks-cancel-expired',
+            'daily-picks-cancel-expired', // legacy — clean up
             'daily-picks-fill-fallback',
             'daily-picks-monitor',
             'daily-picks-tighten',
@@ -356,11 +324,6 @@ class DailyEntryJob {
 
       // 9:30 AM IST — Fetch ORB OHLC + validate picks + place entries (all in one job)
       await this.agenda.every('30 9 * * 1-5', 'daily-picks-validate-entry', {}, {
-        timezone: 'Asia/Kolkata'
-      });
-
-      // 10:30 AM IST — Cancel unfilled entry orders
-      await this.agenda.every('30 10 * * 1-5', 'daily-picks-cancel-expired', {}, {
         timezone: 'Asia/Kolkata'
       });
 
@@ -384,7 +347,7 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log(`${LOG} Scheduled: ORB+validate+entry 9:30, cancel-expired 10:30, fill-fallback */2 9-10, monitor */3 10-14, tighten 14:00, exit 15:00 (Mon-Fri IST)`);
+      console.log(`${LOG} Scheduled: ORB+validate+entry 9:30, fill-fallback */2 9-10, monitor */3 10-14, tighten 14:00, exit 15:00 (Mon-Fri IST)`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
       throw error;
