@@ -903,31 +903,39 @@ function calculateBreakoutLevels(data) {
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday → Fixed 3% (breakout stocks break beyond 1H structure)
+  // TARGET: Intraday → Daily R1/R2 → Fixed 3% fallback → REJECT
   //         Swing    → Weekly R1 → R2 → 52W High
   // ═══════════════════════════════════════════════════════════════════════════
   let targetResult;
   if (isIntraday) {
-    // Fixed 3% target for breakout — these stocks break beyond 1H structure
-    const target = roundToTick(entry * 1.03);
-    const reward = Math.abs(target - entry);
-    const rr = risk > 0 ? reward / risk : 0;
+    const minRR = data.minRR || 1.2;
 
-    if (rr < 1.2) {
-      return {
-        valid: false,
-        noData: true,
-        reason: `Breakout REJECTED: Fixed 3% target R:R ${rr.toFixed(1)}:1 < 1.2:1 (stop too wide for 3% target)`
-      };
+    // Try daily pivots first (structural levels are better than blind %)
+    targetResult = findDailyLongTarget({ entry, risk, dailyR1, dailyR2, previousDayHigh, minRR });
+
+    // Fallback: fixed 3% if daily pivots fail
+    if (!targetResult || targetResult.rejected) {
+      console.log(`  [Breakout] Daily pivots failed, trying fixed 3%: ${targetResult?.reason || 'no daily data'}`);
+      const target = roundToTick(entry * 1.03);
+      const reward = Math.abs(target - entry);
+      const rr = risk > 0 ? reward / risk : 0;
+
+      if (rr >= minRR) {
+        console.log(`  [Breakout] Using fixed 3% target: ${target} (entry=${round2(entry)}, R:R=${rr.toFixed(1)})`);
+        targetResult = {
+          target2: target,
+          target3: null,
+          target2_basis: 'fixed_3pct',
+          reason: `Fixed 3% target at ${round2(target)}, R:R ${round2(rr)}:1`
+        };
+      } else {
+        targetResult = {
+          rejected: true,
+          noData: true,
+          reason: `Breakout REJECTED: Daily pivots and fixed 3% both failed R:R (3% R:R ${rr.toFixed(1)}:1 < ${minRR}:1)`
+        };
+      }
     }
-
-    console.log(`  [Breakout] Using fixed 3% target: ${target} (entry=${round2(entry)}, R:R=${rr.toFixed(1)})`);
-    targetResult = {
-      target2: target,
-      target3: null,
-      target2_basis: 'fixed_3pct',
-      reason: `Fixed 3% target at ${round2(target)}, R:R ${round2(rr)}:1`
-    };
   } else {
     targetResult = findStructuralTarget({
       entry, risk, weeklyR1, weeklyR2, high52W, atr,
@@ -999,6 +1007,7 @@ function calculatePullbackLevels(data) {
     dailyR2,
     high52W,
     isIntraday,
+    previousDayHigh,
     resistanceZones
   } = data;
 
@@ -1091,25 +1100,30 @@ function calculatePullbackLevels(data) {
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday → 1H swing resistance zones
+  // TARGET: Intraday → 1H swing → Daily R1/R2 → REJECT
   //         Swing    → Daily R1 → R2 → Weekly R1 → R2 → 52W High
   // ═══════════════════════════════════════════════════════════════════════════
-  const targetResult = isIntraday
-    ? find1HSwingTarget({
-        entry, risk, resistanceZones, isShort: false,
-        minRR: data.minRR || 1.2
-      })
-    : findPullbackTarget({
-        entry, risk, dailyR1, dailyR2, weeklyR1, weeklyR2, high52W,
-        minRR: data.minRR || 1.2
-      });
+  let targetResult;
+  if (isIntraday) {
+    const minRR = data.minRR || 1.2;
+    targetResult = find1HSwingTarget({ entry, risk, resistanceZones, isShort: false, minRR });
+    if (targetResult.rejected) {
+      console.log(`  [Pullback] 1H swing failed, trying daily pivots: ${targetResult.reason}`);
+      targetResult = findDailyLongTarget({ entry, risk, dailyR1, dailyR2, previousDayHigh, minRR });
+    }
+  } else {
+    targetResult = findPullbackTarget({
+      entry, risk, dailyR1, dailyR2, weeklyR1, weeklyR2, high52W,
+      minRR: data.minRR || 1.2
+    });
+  }
 
   // If no structural target gives adequate R:R → REJECT this setup
-  if (targetResult.rejected) {
+  if (!targetResult || targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,
-      reason: `Pullback REJECTED: ${targetResult.reason}`
+      noData: targetResult?.noData || false,
+      reason: `Pullback REJECTED: ${targetResult?.reason || 'No target found'}`
     };
   }
 
@@ -1292,7 +1306,7 @@ function calculateMomentumLevels(data) {
  * Target: STRUCTURAL LADDER (Weekly R1 → R2 → 52W High → REJECT)
  */
 function calculateConsolidationLevels(data) {
-  const { prevHigh, prevLow, high10D, low10D, atr, weeklyR1, weeklyR2, high52W, dailyR1, isIntraday, resistanceZones } = data;
+  const { prevHigh, prevLow, high10D, low10D, atr, weeklyR1, weeklyR2, high52W, dailyR1, dailyR2, previousDayHigh, isIntraday, resistanceZones } = data;
 
   if (!isNum(prevHigh) || !isNum(prevLow) || prevHigh <= 0 || prevLow <= 0) {
     return { valid: false, reason: 'Previous candle high/low required for consolidation entry' };
@@ -1319,23 +1333,28 @@ function calculateConsolidationLevels(data) {
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday → 1H swing resistance zones; Swing → Weekly ladder
+  // TARGET: Intraday → 1H swing → Daily R1/R2 → REJECT; Swing → Weekly ladder
   // ═══════════════════════════════════════════════════════════════════════════
-  const targetResult = isIntraday
-    ? find1HSwingTarget({
-        entry, risk, resistanceZones, isShort: false,
-        minRR: data.minRR || 1.2
-      })
-    : findStructuralTarget({
-        entry, risk, weeklyR1, weeklyR2, high52W, atr,
-        minRR: data.minRR || 1.5
-      });
+  let targetResult;
+  if (isIntraday) {
+    const minRR = data.minRR || 1.2;
+    targetResult = find1HSwingTarget({ entry, risk, resistanceZones, isShort: false, minRR });
+    if (targetResult.rejected) {
+      console.log(`  [Consolidation] 1H swing failed, trying daily pivots: ${targetResult.reason}`);
+      targetResult = findDailyLongTarget({ entry, risk, dailyR1, dailyR2, previousDayHigh, minRR });
+    }
+  } else {
+    targetResult = findStructuralTarget({
+      entry, risk, weeklyR1, weeklyR2, high52W, atr,
+      minRR: data.minRR || 1.5
+    });
+  }
 
-  if (targetResult.rejected) {
+  if (!targetResult || targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,
-      reason: `Consolidation REJECTED: ${targetResult.reason}`
+      noData: targetResult?.noData || false,
+      reason: `Consolidation REJECTED: ${targetResult?.reason || 'No target found'}`
     };
   }
 
@@ -1386,7 +1405,7 @@ function calculateConsolidationLevels(data) {
  *   If not → ATR extension target (2.5 ATR from entry) since there's no overhead structure.
  */
 function calculateAPlusMomentumLevels(data) {
-  const { ema20, prevHigh, prevLow, prevClose, atr, weeklyR1, weeklyR2, high52W, dailyR1, isIntraday, resistanceZones } = data;
+  const { ema20, prevHigh, prevLow, prevClose, atr, weeklyR1, weeklyR2, high52W, dailyR1, dailyR2, previousDayHigh, isIntraday, resistanceZones } = data;
 
   if (!isNum(prevHigh) || prevHigh <= 0) {
     return { valid: false, reason: 'Previous candle high required for A+ momentum entry' };
@@ -1422,24 +1441,29 @@ function calculateAPlusMomentumLevels(data) {
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday → 1H swing resistance zones
+  // TARGET: Intraday → 1H swing → Daily R1/R2 → REJECT
   //         Swing → Weekly ladder with 52W breakout ATR extension fallback
   // ═══════════════════════════════════════════════════════════════════════════
-  const targetResult = isIntraday
-    ? find1HSwingTarget({
-        entry, risk, resistanceZones, isShort: false,
-        minRR: data.minRR || 1.2
-      })
-    : findStructuralTarget({
-        entry, risk, weeklyR1, weeklyR2, high52W, atr,
-        minRR: data.minRR || 1.5
-      });
+  let targetResult;
+  if (isIntraday) {
+    const minRR = data.minRR || 1.2;
+    targetResult = find1HSwingTarget({ entry, risk, resistanceZones, isShort: false, minRR });
+    if (targetResult.rejected) {
+      console.log(`  [APlusMomentum] 1H swing failed, trying daily pivots: ${targetResult.reason}`);
+      targetResult = findDailyLongTarget({ entry, risk, dailyR1, dailyR2, previousDayHigh, minRR });
+    }
+  } else {
+    targetResult = findStructuralTarget({
+      entry, risk, weeklyR1, weeklyR2, high52W, atr,
+      minRR: data.minRR || 1.5
+    });
+  }
 
-  if (targetResult.rejected) {
+  if (!targetResult || targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,
-      reason: `A+ Momentum REJECTED: ${targetResult.reason}`
+      noData: targetResult?.noData || false,
+      reason: `A+ Momentum REJECTED: ${targetResult?.reason || 'No target found'}`
     };
   }
 
@@ -1974,7 +1998,7 @@ function calculate52wLowLevels(data) {
  * Target: Weekly S1 → S2 → 20D Low → ATR Extension
  */
 function calculateBreakdownLevels(data) {
-  const { ema20, low20D, prevHigh, prevLow, prevClose, atr, high5D, high10D, weeklyS1, weeklyS2, dailyS1, isIntraday } = data;
+  const { ema20, low20D, prevHigh, prevLow, prevClose, atr, high5D, high10D, weeklyS1, weeklyS2, dailyS1, dailyS2, previousDayLow, isIntraday } = data;
 
   if (!isNum(prevLow) || prevLow <= 0) {
     return { valid: false, reason: 'Previous candle low required for breakdown entry' };
@@ -2002,30 +2026,38 @@ function calculateBreakdownLevels(data) {
 
   const risk = stop - entry;
 
-  // Target: Intraday → Fixed 3% (breakdown stocks break beyond 1H structure)
+  // Target: Intraday → Daily S1/S2 → Fixed 3% fallback → REJECT
   //         Swing    → Weekly support ladder
   let targetResult;
   if (isIntraday) {
-    // Fixed 3% target for breakdown — these stocks break beyond 1H structure
-    const target = roundToTick(entry * 0.97);
-    const reward = Math.abs(target - entry);
-    const rr = risk > 0 ? reward / risk : 0;
+    const minRR = data.minRR || 1.2;
 
-    if (rr < 1.2) {
-      return {
-        valid: false,
-        noData: true,
-        reason: `Breakdown REJECTED: Fixed 3% target R:R ${rr.toFixed(1)}:1 < 1.2:1 (stop too wide for 3% target)`
-      };
+    // Try daily pivots first (structural levels are better than blind %)
+    targetResult = findDailyShortTarget({ entry, risk, dailyS1, dailyS2, previousDayLow, minRR });
+
+    // Fallback: fixed 3% if daily pivots fail
+    if (!targetResult || targetResult.rejected) {
+      console.log(`  [Breakdown] Daily pivots failed, trying fixed 3%: ${targetResult?.reason || 'no daily data'}`);
+      const target = roundToTick(entry * 0.97);
+      const reward = Math.abs(target - entry);
+      const rr = risk > 0 ? reward / risk : 0;
+
+      if (rr >= minRR) {
+        console.log(`  [Breakdown] Using fixed 3% target: ${target} (entry=${round2(entry)}, R:R=${rr.toFixed(1)})`);
+        targetResult = {
+          target2: target,
+          target3: null,
+          target2_basis: 'fixed_3pct',
+          reason: `Fixed 3% target at ${round2(target)}, R:R ${round2(rr)}:1`
+        };
+      } else {
+        targetResult = {
+          rejected: true,
+          noData: true,
+          reason: `Breakdown REJECTED: Daily pivots and fixed 3% both failed R:R (3% R:R ${rr.toFixed(1)}:1 < ${minRR}:1)`
+        };
+      }
     }
-
-    console.log(`  [Breakdown] Using fixed 3% target: ${target} (entry=${round2(entry)}, R:R=${rr.toFixed(1)})`);
-    targetResult = {
-      target2: target,
-      target3: null,
-      target2_basis: 'fixed_3pct',
-      reason: `Fixed 3% target at ${round2(target)}, R:R ${round2(rr)}:1`
-    };
   } else {
     targetResult = findShortStructuralTarget({
       entry, risk, weeklyS1, weeklyS2, low20D, atr,
@@ -2166,7 +2198,7 @@ function calculateMomentumBearishLevels(data) {
  * Target: Weekly S1 → S2 → 20D Low
  */
 function calculateFailedResistanceLevels(data) {
-  const { high20D, prevHigh, prevLow, prevClose, atr, weeklyS1, weeklyS2, weeklyR1, low20D, dailyS1, isIntraday, supportZones } = data;
+  const { high20D, prevHigh, prevLow, prevClose, atr, weeklyS1, weeklyS2, weeklyR1, low20D, dailyS1, dailyS2, previousDayLow, isIntraday, supportZones } = data;
 
   if (!isNum(prevLow) || prevLow <= 0) {
     return { valid: false, reason: 'Previous candle low required for failed resistance entry' };
@@ -2191,22 +2223,27 @@ function calculateFailedResistanceLevels(data) {
 
   const risk = stop - entry;
 
-  // Target: Intraday → 1H swing support zones; Swing → Weekly support ladder
-  const targetResult = isIntraday
-    ? find1HSwingTarget({
-        entry, risk, supportZones, isShort: true,
-        minRR: data.minRR || 1.2
-      })
-    : findShortStructuralTarget({
-        entry, risk, weeklyS1, weeklyS2, low20D, atr,
-        minRR: data.minRR || 1.5
-      });
+  // Target: Intraday → 1H swing → Daily S1/S2 → REJECT; Swing → Weekly support ladder
+  let targetResult;
+  if (isIntraday) {
+    const minRR = data.minRR || 1.2;
+    targetResult = find1HSwingTarget({ entry, risk, supportZones, isShort: true, minRR });
+    if (targetResult.rejected) {
+      console.log(`  [FailedResistance] 1H swing failed, trying daily pivots: ${targetResult.reason}`);
+      targetResult = findDailyShortTarget({ entry, risk, dailyS1, dailyS2, previousDayLow, minRR });
+    }
+  } else {
+    targetResult = findShortStructuralTarget({
+      entry, risk, weeklyS1, weeklyS2, low20D, atr,
+      minRR: data.minRR || 1.5
+    });
+  }
 
-  if (targetResult.rejected) {
+  if (!targetResult || targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,
-      reason: `Failed Resistance REJECTED: ${targetResult.reason}`
+      noData: targetResult?.noData || false,
+      reason: `Failed Resistance REJECTED: ${targetResult?.reason || 'No target found'}`
     };
   }
 
@@ -2238,7 +2275,7 @@ function calculateFailedResistanceLevels(data) {
  * Target: Weekly S1 → S2 → 20D Low
  */
 function calculateCompressionBearishLevels(data) {
-  const { prevHigh, prevLow, low10D, high10D, atr, weeklyS1, weeklyS2, low20D, dailyS1, isIntraday, supportZones } = data;
+  const { prevHigh, prevLow, low10D, high10D, atr, weeklyS1, weeklyS2, low20D, dailyS1, dailyS2, previousDayLow, isIntraday, supportZones } = data;
 
   if (!isNum(prevHigh) || !isNum(prevLow) || prevHigh <= 0 || prevLow <= 0) {
     return { valid: false, reason: 'Previous candle high/low required for compression bearish entry' };
@@ -2260,22 +2297,27 @@ function calculateCompressionBearishLevels(data) {
 
   const risk = stop - entry;
 
-  // Target: Intraday → 1H swing support zones; Swing → Weekly support ladder
-  const targetResult = isIntraday
-    ? find1HSwingTarget({
-        entry, risk, supportZones, isShort: true,
-        minRR: data.minRR || 1.2
-      })
-    : findShortStructuralTarget({
-        entry, risk, weeklyS1, weeklyS2, low20D, atr,
-        minRR: data.minRR || 1.5
-      });
+  // Target: Intraday → 1H swing → Daily S1/S2 → REJECT; Swing → Weekly support ladder
+  let targetResult;
+  if (isIntraday) {
+    const minRR = data.minRR || 1.2;
+    targetResult = find1HSwingTarget({ entry, risk, supportZones, isShort: true, minRR });
+    if (targetResult.rejected) {
+      console.log(`  [CompressionBearish] 1H swing failed, trying daily pivots: ${targetResult.reason}`);
+      targetResult = findDailyShortTarget({ entry, risk, dailyS1, dailyS2, previousDayLow, minRR });
+    }
+  } else {
+    targetResult = findShortStructuralTarget({
+      entry, risk, weeklyS1, weeklyS2, low20D, atr,
+      minRR: data.minRR || 1.5
+    });
+  }
 
-  if (targetResult.rejected) {
+  if (!targetResult || targetResult.rejected) {
     return {
       valid: false,
-      noData: targetResult.noData || false,
-      reason: `Compression Bearish REJECTED: ${targetResult.reason}`
+      noData: targetResult?.noData || false,
+      reason: `Compression Bearish REJECTED: ${targetResult?.reason || 'No target found'}`
     };
   }
 

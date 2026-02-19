@@ -451,20 +451,20 @@ function check1HStructuralConflict(candidate) {
   const isLong = candidate.direction === 'LONG';
 
   if (isLong) {
-    // LONG: approximate entry = PDH (prevHigh). Reject if resistance within 1% above it.
+    // LONG: approximate entry = PDH (prevHigh). Reject if resistance within 2% above it.
     const pdh = ohlcv.high;
-    const conflictZone = resistanceZones.find(z => z.midpoint > pdh && z.midpoint <= pdh * 1.01);
+    const conflictZone = resistanceZones.find(z => z.midpoint > pdh && z.midpoint <= pdh * 1.02);
     if (conflictZone) {
-      const reason = `1H structural conflict: resistance at ₹${round2(conflictZone.midpoint)} within 1% above entry zone (PDH ₹${round2(pdh)})`;
+      const reason = `1H structural conflict: resistance at ₹${round2(conflictZone.midpoint)} within 2% above entry zone (PDH ₹${round2(pdh)})`;
       console.log(`${LOG} [ConflictCheck] ${sym}: REJECTED — ${reason}`);
       return { rejected: true, reason };
     }
   } else {
-    // SHORT: approximate entry = PDL (prevLow). Reject if support within 1% below it.
+    // SHORT: approximate entry = PDL (prevLow). Reject if support within 2% below it.
     const pdl = ohlcv.low;
-    const conflictZone = supportZones.find(z => z.midpoint < pdl && z.midpoint >= pdl * 0.99);
+    const conflictZone = supportZones.find(z => z.midpoint < pdl && z.midpoint >= pdl * 0.98);
     if (conflictZone) {
-      const reason = `1H structural conflict: support at ₹${round2(conflictZone.midpoint)} within 1% below entry zone (PDL ₹${round2(pdl)})`;
+      const reason = `1H structural conflict: support at ₹${round2(conflictZone.midpoint)} within 2% below entry zone (PDL ₹${round2(pdl)})`;
       console.log(`${LOG} [ConflictCheck] ${sym}: REJECTED — ${reason}`);
       return { rejected: true, reason };
     }
