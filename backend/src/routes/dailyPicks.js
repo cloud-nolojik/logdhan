@@ -20,6 +20,14 @@ import { getIstDayRange } from '../utils/tradingDay.js';
 
 const router = express.Router();
 
+const ALLOWED_MOBILE = '919008108650';
+const mobileAuth = (req, res, next) => {
+  if (req.user?.mobileNumber !== ALLOWED_MOBILE) {
+    return res.status(403).json({ success: false, error: 'Not authorized' });
+  }
+  next();
+};
+
 /**
  * GET /api/daily-picks/today
  * Returns today's DailyPick with live prices enriched.
@@ -192,7 +200,7 @@ router.get('/history', auth, async (req, res) => {
  * Returns candidate review table for a given trading date (admin only).
  * Defaults to today if no date provided.
  */
-router.get('/review', adminAuth, async (req, res) => {
+router.get('/review', auth, mobileAuth, async (req, res) => {
   try {
     let tradingDate;
     if (req.query.date) {
@@ -242,7 +250,7 @@ router.get('/review', adminAuth, async (req, res) => {
  * GET /api/daily-picks/review/dates
  * Returns list of trading dates that have candidate review data (admin only).
  */
-router.get('/review/dates', adminAuth, async (req, res) => {
+router.get('/review/dates', auth, mobileAuth, async (req, res) => {
   try {
     const days = Math.min(parseInt(req.query.days) || 30, 90);
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);

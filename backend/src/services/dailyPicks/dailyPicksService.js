@@ -970,7 +970,7 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [])
     tradingDate = await MarketHoursUtil.getNextTradingDay(todayMidnight);
   }
 
-  console.log(`${LOG} [Step 7] Run at ${istHour}:xx IST → scanDate=${scanDate.toISOString()} tradingDate=${tradingDate.toISOString()}`);
+  console.log(`${LOG} [Step 7] Run at ${istHour}:xx IST → scanDate=${scanDate.toISOString()} tradingDate=${tradingDate.toISOString()} candidatesReview=${candidatesReview.length}`);
 
   const pickDocs = picks.map(p => ({
     symbol: p.symbol,
