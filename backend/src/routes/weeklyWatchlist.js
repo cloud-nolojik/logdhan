@@ -480,8 +480,8 @@ function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
     };
   }
 
-  // SKIPPED — user chose not to take this trade
-  if (sim?.status === 'SKIPPED') {
+  // SKIPPED — user chose not to take this trade (check both sim status and tracking status)
+  if (sim?.status === 'SKIPPED' || trackingStatus === 'SKIPPED') {
     const dailyUpdateCard = buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
     return {
       journey_status: 'SKIPPED',
@@ -582,6 +582,41 @@ function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
   const realizedPnl = sim.realized_pnl || 0;
   const trailingStop = sim.trailing_stop;
   const peakPrice = sim.peak_price || entryPrice;
+
+  // Guard: if entry_price is missing/zero, don't calculate bogus P&L
+  if (!entryPrice) {
+    const dailyUpdateCard = buildDailyUpdateCardFromAnalysis(dailyTrack, journeyStatus, trackingStatus, trackingFlags, levels, lastSnapshot);
+    return {
+      journey_status: journeyStatus,
+      emoji: '⏳',
+      headline: 'No Entry Yet',
+      subtext: 'Entry price not set',
+      pnl_line: null,
+      live_price: livePrice,
+      entry_price: null,
+      entry_date: null,
+      total_pnl: null,
+      total_return_pct: null,
+      stock_gain_pct: null,
+      investment_value: null,
+      realized_pnl: 0,
+      unrealized_pnl: 0,
+      trailing_stop: null,
+      peak_price: null,
+      peak_gain_pct: null,
+      qty_total: qtyTotal || null,
+      qty_remaining: null,
+      events: sim.events || [],
+      dist_from_entry_pct: null,
+      dist_from_stop_pct: null,
+      dist_from_target_pct: null,
+      dist_from_target2_pct: null,
+      levels_summary: levelsSummary,
+      last_snapshot_date: lastSnapshotDate,
+      daily_update_card: dailyUpdateCard,
+      daily_track_date: dailyTrackDate
+    };
+  }
 
   // Calculate unrealized P&L based on current position
   let unrealizedPnl = 0;
