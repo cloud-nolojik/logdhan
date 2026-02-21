@@ -1234,17 +1234,17 @@ async function validateAndPlaceEntries(options = {}) {
   // Step 3: Capital allocation + order placement (same logic as v1)
   const MAX_WEIGHT = 0.45;
   const balance = await kiteOrderService.getAvailableBalance();
-  console.log(`${LOG} Balance: ₹${balance.available}, Usable: ₹${balance.usable}`);
+  console.log(`${LOG} Balance: ₹${balance.available}, Intraday budget: ₹${balance.usableIntraday}`);
 
   const totalScore = validatedPicks.reduce((sum, p) => sum + p.rank_score, 0);
   const rawWeights = validatedPicks.map(p => Math.min(p.rank_score / totalScore, MAX_WEIGHT));
   const weightSum = rawWeights.reduce((s, w) => s + w, 0);
   const allocations = validatedPicks.map((pick, i) => ({
     pick,
-    capital: Math.floor(balance.usable * (rawWeights[i] / weightSum))
+    capital: Math.floor(balance.usableIntraday * (rawWeights[i] / weightSum))
   }));
 
-  console.log(`${LOG} Capital allocation: totalScore=${totalScore} usable=₹${balance.usable}`);
+  console.log(`${LOG} Capital allocation: totalScore=${totalScore} intradayBudget=₹${balance.usableIntraday}`);
   for (const { pick, capital } of allocations) {
     const cappedAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
     const estQty = Math.floor(cappedAmount / pick.levels.entry);

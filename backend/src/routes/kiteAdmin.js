@@ -1,3 +1,4 @@
+import logger from '../utils/logger.js';
 import express from 'express';
 import kiteOrderService from '../services/kiteOrder.service.js';
 import kiteAutoLoginService from '../services/kiteAutoLogin.service.js';
@@ -6,6 +7,7 @@ import KiteAuditLog from '../models/kiteAuditLog.js';
 import KiteSession from '../models/kiteSession.js';
 import kiteConfig from '../config/kite.config.js';
 import { simpleAdminAuth } from '../middleware/simpleAdminAuth.js';
+import mongoose from 'mongoose';
 
 const router = express.Router();
 
@@ -60,7 +62,7 @@ router.get('/audit-logs', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Audit logs error:', error);
+    logger.error('[KITE ADMIN] Audit logs error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -74,7 +76,10 @@ router.get('/audit-logs', simpleAdminAuth, async (req, res) => {
  */
 router.get('/audit-logs/:id', simpleAdminAuth, async (req, res) => {
   try {
-    const log = await KiteAuditLog.findById(req.params.id);
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: 'Invalid ID format' });
+    }
+    const log = await KiteAuditLog.findById(req.params.id).lean();
 
     if (!log) {
       return res.status(404).json({
@@ -89,7 +94,7 @@ router.get('/audit-logs/:id', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Audit log detail error:', error);
+    logger.error('[KITE ADMIN] Audit log detail error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -149,7 +154,7 @@ router.get('/orders', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Orders list error:', error);
+    logger.error('[KITE ADMIN] Orders list error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -163,6 +168,9 @@ router.get('/orders', simpleAdminAuth, async (req, res) => {
  */
 router.get('/orders/:id', simpleAdminAuth, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: 'Invalid ID format' });
+    }
     const order = await KiteOrder.findById(req.params.id)
       .populate('stock_id')
       .populate('related_orders');
@@ -192,7 +200,7 @@ router.get('/orders/:id', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Order detail error:', error);
+    logger.error('[KITE ADMIN] Order detail error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -215,7 +223,7 @@ router.get('/gtt', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] GTT list error:', error);
+    logger.error('[KITE ADMIN] GTT list error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -232,7 +240,7 @@ router.post('/cancel-order/:orderId', simpleAdminAuth, async (req, res) => {
     const { orderId } = req.params;
     const { reason } = req.body;
 
-    console.log(`[KITE ADMIN] Cancel order requested: ${orderId}`);
+    logger.info(`[KITE ADMIN] Cancel order requested: ${orderId}`);
 
     const result = await kiteOrderService.cancelOrder(orderId, {
       reason: reason || 'Admin cancelled',
@@ -246,7 +254,7 @@ router.post('/cancel-order/:orderId', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Cancel order error:', error);
+    logger.error('[KITE ADMIN] Cancel order error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -263,7 +271,7 @@ router.post('/cancel-gtt/:gttId', simpleAdminAuth, async (req, res) => {
     const { gttId } = req.params;
     const { reason } = req.body;
 
-    console.log(`[KITE ADMIN] Cancel GTT requested: ${gttId}`);
+    logger.info(`[KITE ADMIN] Cancel GTT requested: ${gttId}`);
 
     const result = await kiteOrderService.cancelGTT(gttId, {
       reason: reason || 'Admin cancelled',
@@ -277,7 +285,7 @@ router.post('/cancel-gtt/:gttId', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Cancel GTT error:', error);
+    logger.error('[KITE ADMIN] Cancel GTT error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -371,7 +379,7 @@ router.get('/stats', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Stats error:', error);
+    logger.error('[KITE ADMIN] Stats error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -393,7 +401,7 @@ router.get('/balance', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Balance error:', error);
+    logger.error('[KITE ADMIN] Balance error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -416,7 +424,7 @@ router.get('/holdings', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Holdings error:', error);
+    logger.error('[KITE ADMIN] Holdings error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -439,7 +447,7 @@ router.post('/test-order', simpleAdminAuth, async (req, res) => {
       });
     }
 
-    console.log(`[KITE ADMIN] Test order requested: ${transaction_type} ${quantity} ${tradingsymbol} @ ${price}`);
+    logger.info(`[KITE ADMIN] Test order requested: ${transaction_type} ${quantity} ${tradingsymbol} @ ${price}`);
 
     const result = await kiteOrderService.placeOrder({
       tradingsymbol,
@@ -457,7 +465,7 @@ router.post('/test-order', simpleAdminAuth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[KITE ADMIN] Test order error:', error);
+    logger.error('[KITE ADMIN] Test order error:', error);
     res.status(500).json({
       success: false,
       error: error.message

@@ -1,0 +1,975 @@
+import logger from '../utils/logger.js';
+import aiReviewService from '../services/aiAnalyze.service.js';
+import intradayAnalyzeService from '../services/intradayAnalyze.service.js';
+import onDemandAnalysisService from '../services/onDemandAnalysisService.js';
+import candleFetcherService from '../services/candleFetcher.service.js';
+import priceCacheService from '../services/priceCache.service.js';
+import StockAnalysis from '../models/stockAnalysis.js';
+import Stock from '../models/stock.js';
+import weeklyTrackAnalysisJob from '../services/weeklyPicks/weeklyTrackAnalysisJob.js';
+import { User } from '../models/user.js';
+
+// Helper
+const getLatestPrice = (instrumentKey, fallbackPrice) => {
+  const cachedPrice = priceCacheService.getPrice(instrumentKey);
+  return cachedPrice || fallbackPrice || 0;
+};
+
+export const analyzeStock = async (req, res) => {
+  try {
+    const {
+      instrument_key,
+      analysis_type = 'swing',
+      isFromRewardedAd = false,
+      creditType = 'regular'
+    } = req.body;
+
+    // Check for force_fresh parameter to bypass cache
+    const forceFresh = req.query.force_fresh === 'true' || req.body.force_fresh === 'true';
+
+    // Validate required fields
+    if (!instrument_key) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'instrument_key is required'
+      });
+    }
+
+    // Get user ID first to check subscription and watchlist
+    const userId = req.user.id;
+
+    // Lookup stock details from database
+    const stockInfo = await Stock.getByInstrumentKey(instrument_key);
+
+    if (!stockInfo) {
+      return res.status(404).json({
+        success: false,
+        error: 'Stock not found',
+        message: `No stock found with instrument_key: ${instrument_key}`
+      });
+    }
+
+    const stock_name = stockInfo.name;
+    const stock_symbol = stockInfo.trading_symbol;
+
+    // ⚡ Check user limits using service method (watchlist quota + daily limit)
+    const limitsCheck = await aiReviewService.checkAnalysisLimits(userId, instrument_key);
+
+    if (!limitsCheck.allowed) {
+
+      return res.status(200).json({
+        success: false,
+        status: 'limit_reached',
+        error: limitsCheck.reason,
+        message: limitsCheck.message,
+        limitInfo: limitsCheck.limitInfo
+      });
+    }
+
+    // Get current price from cache (faster than API call)
+    let current_price = null;
+    try {
+      current_price = priceCacheService.getPrice(instrument_key);
+
+      if (current_price) {
+
+      } else {
+
+      }
+    } catch (error) {
+      logger.warn(`⚠️ [PRICE CACHE] Error fetching from cache: ${error.message}`);
+    }
+
+    // Check if stock is weekly_track - if so, run position_management instead of swing
+    const user = await User.findById(userId).select('watchlist').lean();
+    const watchlistItem = user?.watchlist?.find(item => item.instrument_key === instrument_key);
+    const isWeeklyTrack = watchlistItem?.added_source === 'weekly_track';
+
+    // Route to appropriate service based on analysis type or stock source
+    if (isWeeklyTrack && analysis_type === 'swing') {
+      // Weekly track stock - run position_management analysis
+      logger.info(`[AI ROUTE] 🎯 Step 1: Stock is weekly_track, routing to position_management for ${stock_symbol}`);
+
+      try {
+        // If no cached price, try to fetch from candle data
+        if (!current_price) {
+          logger.info(`[AI ROUTE] 🎯 Step 1.5: No cached price, fetching from candles...`);
+          try {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const candles = await candleFetcherService.fetchCandlesFromAPI(
+              instrument_key,
+              '1d',
+              yesterday,
+              new Date(),
+              false
+            );
+            if (candles && candles.length > 0) {
+              current_price = candles[candles.length - 1].close;
+              logger.info(`[AI ROUTE] 🎯 Step 1.5: Got price from candles: ${current_price}`);
+            }
+          } catch (priceError) {
+            logger.warn(`[AI ROUTE] ⚠️ Could not fetch price: ${priceError.message}`);
+          }
+        }
+
+        logger.info(`[AI ROUTE] 🎯 Step 3: Calling analyzeStock with:`, {
+          instrument_key,
+          trading_symbol: stock_symbol,
+          name: stock_name,
+          current_price,
+          forceReanalyze: forceFresh
+        });
+
+        const result = await weeklyTrackAnalysisJob.analyzeStock(
+          { instrument_key, trading_symbol: stock_symbol, name: stock_name },
+          current_price,
+          { forceReanalyze: forceFresh }
+        );
+
+        logger.info(`[AI ROUTE] 🎯 Step 4: analyzeStock result:`, JSON.stringify(result));
+
+        if (!result.success) {
+          logger.info(`[AI ROUTE] ❌ Step 5: Analysis failed:`, result.error);
+          return res.status(200).json({
+            success: false,
+            error: result.error || 'position_analysis_failed',
+            message: result.error || 'Could not generate position analysis. Make sure this stock has a swing analysis first.',
+            is_weekly_track: true
+          });
+        }
+
+        logger.info(`[AI ROUTE] 🎯 Step 6: Fetching saved analysis from DB...`);
+        const analysis = await StockAnalysis.findOne({
+          instrument_key,
+          analysis_type: 'position_management',
+          status: 'completed'
+        }).sort({ created_at: -1 }).lean();
+
+        logger.info(`[AI ROUTE] 🎯 Step 7: Analysis fetched:`, analysis ? analysis._id : 'NOT FOUND');
+
+        if (!analysis) {
+          return res.status(200).json({
+            success: false,
+            error: 'analysis_not_saved',
+            message: 'Analysis was generated but could not be retrieved.',
+            is_weekly_track: true
+          });
+        }
+
+        logger.info(`[AI ROUTE] ✅ Step 8: Returning success response`);
+        logger.info(`[AI ROUTE] 🔍 DEBUG analysis_data keys:`, Object.keys(analysis.analysis_data || {}));
+        logger.info(`[AI ROUTE] 🔍 DEBUG position_management exists:`, !!analysis.analysis_data?.position_management);
+        logger.info(`[AI ROUTE] 🔍 DEBUG position_management.status:`, analysis.analysis_data?.position_management?.status);
+
+        return res.status(200).json({
+          success: true,
+          status: 'completed',
+          message: result.cached ? 'Position analysis retrieved from cache' : 'Position analysis generated successfully',
+          data: {
+            _id: analysis._id,
+            instrument_key: analysis.instrument_key,
+            stock_name: analysis.stock_name,
+            stock_symbol: analysis.stock_symbol,
+            analysis_type: 'position_management',
+            current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
+            analysis_data: analysis.analysis_data,
+            status: analysis.status,
+            valid_until: analysis.valid_until,
+            created_at: analysis.created_at
+          },
+          is_weekly_track: true,
+          from_cache: result.cached || false
+        });
+
+      } catch (positionError) {
+        logger.error(`[AI ROUTE] ❌ Position analysis error:`, positionError.message);
+        logger.error(`[AI ROUTE] ❌ Stack:`, positionError.stack);
+        return res.status(200).json({
+          success: false,
+          error: 'position_analysis_error',
+          message: positionError.message || 'Error generating position analysis',
+          is_weekly_track: true
+        });
+      }
+    }
+
+    if (analysis_type === 'intraday') {
+      // Use intradayAnalyzeService for news-based intraday analysis
+      logger.info(`[AI ROUTE] Routing to intradayAnalyzeService for ${stock_symbol}`);
+
+      const result = await intradayAnalyzeService.getOrGenerateAnalysis({
+        instrumentKey: instrument_key,
+        symbol: stock_symbol,
+        forceRefresh: forceFresh
+      });
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          error: result.error,
+          message: result.message || 'Intraday analysis not available for this stock'
+        });
+      }
+
+      // Return intraday analysis result
+      const analysis = result.analysis;
+      return res.status(200).json({
+        success: true,
+        status: 'completed',
+        message: result.from_cache ? 'Intraday plan retrieved from cache' : 'Intraday plan generated successfully',
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: 'intraday',
+          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
+          analysis_data: analysis.analysis_data,
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          created_at: analysis.created_at
+        },
+        from_cache: result.from_cache
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SWING ANALYSIS - Use on-demand analysis service
+    // Quick reject (non-setups) returns instantly, full analysis runs in background
+    // ═══════════════════════════════════════════════════════════════════════════
+    logger.info(`[AI ROUTE] Routing to onDemandAnalysisService for ${stock_symbol}`);
+
+    // Run analysis (may be quick reject or full analysis)
+    const result = await onDemandAnalysisService.analyze(instrument_key, userId, {
+      stock_name,
+      stock_symbol,
+      forceFresh,
+      sendNotification: true
+    });
+
+    // Handle blocked analysis (bullish stock during market hours)
+    // Now saves a pending record so the app can display it
+    if (result.blocked && result.data) {
+      const analysis = result.data;
+      return res.status(200).json({
+        success: true,
+        status: 'pending_full_analysis',
+        message: result.message,
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: analysis.analysis_type,
+          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
+          analysis_data: analysis.analysis_data,
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          created_at: analysis.created_at
+        },
+        classification: result.classification,
+        pending_full_analysis: true,
+        from_cache: false
+      });
+    }
+
+    // Handle errors
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error || 'analysis_failed',
+        message: result.error || 'Failed to analyze stock'
+      });
+    }
+
+    // Handle eliminated stocks
+    if (result.eliminated) {
+      return res.status(200).json({
+        success: true,
+        status: 'eliminated',
+        message: result.reason,
+        stock_info: result.stockInfo
+      });
+    }
+
+    // Return analysis result (quick reject or full analysis)
+    const analysis = result.data;
+    const isQuickReject = result.fromQuickReject;
+
+    return res.status(200).json({
+      success: true,
+      status: 'completed',
+      message: isQuickReject
+        ? 'Quick classification complete - not a swing buy setup'
+        : (result.cached ? 'Analysis retrieved from cache' : 'Analysis generated successfully'),
+      data: {
+        _id: analysis._id,
+        instrument_key: analysis.instrument_key,
+        stock_name: analysis.stock_name,
+        stock_symbol: analysis.stock_symbol,
+        analysis_type: analysis.analysis_type,
+        current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
+        analysis_data: analysis.analysis_data,
+        status: analysis.status,
+        valid_until: analysis.valid_until,
+        created_at: analysis.created_at
+      },
+      from_cache: result.cached || false,
+      quick_reject: isQuickReject,
+      classification: result.classification
+    });
+
+  } catch (error) {
+    logger.error('❌ AI Analysis API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to process analysis request'
+    });
+  }
+};
+
+export const getAnalysisHistory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = parseInt(req.query.limit) || 10;
+
+    const history = await aiReviewService.getUserAnalysisHistory(userId, limit);
+
+    res.json({
+      success: true,
+      data: history,
+      count: history.length
+    });
+
+  } catch (error) {
+    logger.error('❌ Analysis History API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to fetch analysis history'
+    });
+  }
+};
+
+export const getAnalysisById = async (req, res) => {
+  try {
+    const { analysisId } = req.params;
+    const userId = req.user.id;
+
+    const analysis = await StockAnalysis.findOne({
+      _id: analysisId,
+      user_id: userId
+    }).lean();
+
+    if (!analysis) {
+      return res.status(404).json({
+        success: false,
+        error: 'Analysis not found',
+        message: 'The requested analysis was not found or you do not have access to it'
+      });
+    }
+
+    // Use latest price from cache instead of stale DB value
+    res.json({
+      success: true,
+      data: {
+        ...analysis,
+        current_price: getLatestPrice(analysis.instrument_key, analysis.current_price)
+      }
+    });
+
+  } catch (error) {
+    logger.error('❌ Get Analysis API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to fetch analysis'
+    });
+  }
+};
+
+export const getAnalysisByInstrument = async (req, res) => {
+  try {
+    const { instrumentKey } = req.params;
+    let { analysis_type = 'swing', force_type } = req.query;
+
+    // Determine analysis type from force_type or watchlist source
+    if (force_type) {
+      analysis_type = force_type;
+    } else {
+      const watchlistItem = req.user.watchlist?.find(item => item.instrument_key === instrumentKey);
+      if (watchlistItem?.added_source === 'weekly_track' && analysis_type === 'swing') {
+        analysis_type = 'position_management';
+      }
+    }
+
+    // Single DB query — fetch most recent analysis
+    const analysis = await StockAnalysis.findOne({
+      instrument_key: instrumentKey,
+      analysis_type: analysis_type
+    }).sort({ created_at: -1 }).lean();
+
+    // Not found → app shows "Analyze Stock" button
+    if (!analysis) {
+      return res.json({
+        success: true,
+        status: 'not_analyzed',
+        error: analysis_type === 'position_management' ? 'position_analysis_pending' : 'not_analyzed',
+        message: analysis_type === 'position_management'
+          ? 'No position analysis available yet.'
+          : 'This stock has not been analyzed yet',
+        call_to_action: analysis_type === 'position_management' ? 'Analyze Position' : 'Click "Analyze This Stock" to get AI strategies',
+        is_weekly_track: analysis_type === 'position_management',
+        can_analyze_manually: true
+      });
+    }
+
+    // Failed → stop polling
+    if (analysis.status === 'failed') {
+      return res.status(404).json({
+        success: false,
+        error: 'Analysis failed',
+        message: 'Analysis failed or timed out'
+      });
+    }
+
+    // Still in progress → return progress info
+    const completedStatuses = ['completed', 'in_position', 'exited', 'expired'];
+    if (!completedStatuses.includes(analysis.status)) {
+      const progressInfo = analysis.progress || {
+        current_step: 'Starting analysis...',
+        percentage: 0,
+        steps_completed: 0,
+        total_steps: 6,
+        estimated_time_remaining: 300
+      };
+      const elapsedSeconds = Math.floor((Date.now() - new Date(analysis.created_at).getTime()) / 1000);
+      const estimatedMinutes = Math.ceil(Math.max(0, 300 - elapsedSeconds) / 60);
+
+      return res.status(202).json({
+        success: true,
+        status: 'background_processing',
+        message: 'Analysis is happening in the background. We will notify you once it\'s complete.',
+        stock_name: analysis.stock_name,
+        stock_symbol: analysis.stock_symbol,
+        instrument_key: analysis.instrument_key,
+        progress: {
+          current_step: progressInfo.current_step,
+          percentage: progressInfo.percentage,
+          steps_completed: progressInfo.steps_completed,
+          total_steps: progressInfo.total_steps,
+          estimated_time_remaining: `~${estimatedMinutes} min`
+        },
+        notification_enabled: true,
+        created_at: analysis.created_at
+      });
+    }
+
+    // ─── Completed analysis — build response ───
+    const currentPrice = getLatestPrice(analysis.instrument_key, analysis.current_price);
+    const now = new Date();
+    const isExpired = analysis.valid_until
+      ? now > new Date(analysis.valid_until)
+      : (analysis.created_at ? (now.getTime() - new Date(analysis.created_at).getTime() > 7 * 24 * 60 * 60 * 1000) : false);
+
+    // Intraday — patch missing fields for old cached data
+    if (analysis_type === 'intraday') {
+      const rawData = analysis.analysis_data?.toObject ? analysis.analysis_data.toObject() : (analysis.analysis_data || {});
+      const analysisData = { ...rawData };
+      if (!analysisData.symbol) analysisData.symbol = analysis.stock_symbol;
+      if (!analysisData.analysis_type) analysisData.analysis_type = 'intraday';
+      if (!analysisData.generated_at_ist) analysisData.generated_at_ist = analysis.created_at?.toISOString() || now.toISOString();
+      if (!analysisData.overall_sentiment && analysisData.intraday?.aggregate_sentiment) {
+        analysisData.overall_sentiment = analysisData.intraday.aggregate_sentiment;
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: 'intraday',
+          current_price: currentPrice,
+          analysis_data: analysisData,
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          created_at: analysis.created_at
+        },
+        cached: true,
+        analysis_id: analysis._id.toString(),
+        error: null,
+        message: null
+      });
+    }
+
+    // Position management — wrap in expected structure
+    if (analysis_type === 'position_management') {
+      const positionData = analysis.analysis_data?.position_management || analysis.analysis_data || {};
+
+      return res.json({
+        success: true,
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: 'position_management',
+          current_price: currentPrice,
+          analysis_data: {
+            schema_version: '1.0',
+            symbol: analysis.stock_symbol,
+            analysis_type: 'position_management',
+            generated_at_ist: analysis.created_at?.toISOString() || now.toISOString(),
+            position_management: positionData,
+            original_levels: analysis.analysis_data?.original_levels || null,
+            original_swing_analysis_id: analysis.analysis_data?.original_swing_analysis_id || null
+          },
+          status: analysis.status,
+          valid_until: analysis.valid_until,
+          is_expired: isExpired,
+          created_at: analysis.created_at
+        },
+        cached: true,
+        analysis_id: analysis._id.toString(),
+        is_weekly_track: true,
+        error: null,
+        message: isExpired ? 'Position analysis expired. New analysis runs at 4:00 PM.' : null
+      });
+    }
+
+    // Swing analysis — check if data is complete
+    const hasOldSchema = analysis.analysis_data?.market_summary?.last && analysis.analysis_data?.market_summary?.trend;
+    const hasNewSchema = analysis.analysis_data?.setup_score && analysis.analysis_data?.verdict;
+
+    if (!hasOldSchema && !hasNewSchema) {
+      return res.json({
+        success: true,
+        data: {
+          _id: analysis._id,
+          instrument_key: analysis.instrument_key,
+          stock_name: analysis.stock_name,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: analysis.analysis_type,
+          current_price: currentPrice,
+          analysis_data: {
+            ...analysis.analysis_data,
+            generated_at_ist: now.toISOString(),
+            market_summary: { last: currentPrice, trend: "NEUTRAL", volatility: "MEDIUM", volume: "AVERAGE" },
+            overall_sentiment: "NEUTRAL",
+            strategies: [],
+            disclaimer: "Analysis data incomplete - still processing..."
+          },
+          status: 'in_progress',
+          progress: analysis.progress,
+          created_at: analysis.created_at,
+          expires_at: analysis.expires_at
+        },
+        cached: false,
+        analysis_id: analysis._id.toString(),
+        error: null,
+        message: 'Analysis data incomplete - still processing'
+      });
+    }
+
+    // Complete swing analysis
+    res.json({
+      success: true,
+      data: {
+        _id: analysis._id,
+        instrument_key: analysis.instrument_key,
+        stock_name: analysis.stock_name,
+        stock_symbol: analysis.stock_symbol,
+        analysis_type: analysis.analysis_type,
+        current_price: currentPrice,
+        analysis_data: analysis.analysis_data,
+        status: analysis.status,
+        created_at: analysis.created_at,
+        valid_until: analysis.valid_until,
+        expires_at: analysis.expires_at,
+        is_expired: isExpired,
+        expiry_message: isExpired ? 'This analysis has expired. Click "Analyze This Stock" for a fresh analysis.' : null
+      },
+      cached: true,
+      analysis_id: analysis._id.toString(),
+      error: null,
+      message: null
+    });
+
+  } catch (error) {
+    logger.error('❌ Get Analysis by Instrument API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to fetch analysis by instrument'
+    });
+  }
+};
+
+export const getStats = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const stats = await StockAnalysis.getAnalysisStats();
+    const recentAnalyses = await StockAnalysis.findActive(5);
+
+    res.json({
+      success: true,
+      data: {
+        stats,
+        recent_count: recentAnalyses.length,
+        recent_analyses: recentAnalyses.map((analysis) => ({
+          _id: analysis._id,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: analysis.analysis_type,
+          created_at: analysis.created_at,
+          top_strategy: analysis.analysis_data.strategies.find((s) => s.isTopPick) || analysis.analysis_data.strategies[0]
+        }))
+      }
+    });
+
+  } catch (error) {
+    logger.error('❌ Stats API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to fetch analysis statistics'
+    });
+  }
+};
+
+export const deleteAnalysis = async (req, res) => {
+  try {
+    const { analysisId } = req.params;
+    const userId = req.user.id;
+
+    const analysis = await StockAnalysis.findOne({
+      _id: analysisId,
+      user_id: userId
+    }).lean();
+
+    if (!analysis) {
+      return res.status(404).json({
+        success: false,
+        error: 'Analysis not found',
+        message: 'The requested analysis was not found or you do not have access to it'
+      });
+    }
+
+    await StockAnalysis.deleteOne({ _id: analysisId });
+
+    res.json({
+      success: true,
+      message: 'Analysis deleted successfully'
+    });
+
+  } catch (error) {
+    logger.error('❌ Delete Analysis API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to delete analysis'
+    });
+  }
+};
+
+export const getAnalysisProgress = async (req, res) => {
+  try {
+    const { analysisId } = req.params;
+    const userId = req.user.id;
+
+    const analysis = await StockAnalysis.findOne({
+      _id: analysisId,
+      user_id: userId
+    }).lean();
+
+    if (!analysis) {
+      return res.status(404).json({
+        success: false,
+        error: 'analysis_not_found',
+        message: 'Analysis not found or access denied'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        analysis_id: analysis._id,
+        status: analysis.status,
+        progress: analysis.progress,
+        stock_symbol: analysis.stock_symbol,
+        analysis_type: analysis.analysis_type,
+        created_at: analysis.created_at,
+        valid_until: analysis.valid_until, // 🆕 Add validity period
+        expires_at: analysis.expires_at,
+        // Include partial results if available
+        partial_data: analysis.status === 'in_progress' ? {
+          market_summary: analysis.analysis_data?.market_summary,
+          overall_sentiment: analysis.analysis_data?.overall_sentiment
+        } : null
+      }
+    });
+
+  } catch (error) {
+    logger.error('❌ Analysis progress error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'progress_fetch_failed',
+      message: 'Failed to fetch analysis progress'
+    });
+  }
+};
+
+export const getCacheStats = async (req, res) => {
+  try {
+    // Get analysis statistics directly from StockAnalysis collection (no cache)
+    const tradingDate = req.query.date ? new Date(req.query.date) : new Date();
+    const startOfDay = new Date(tradingDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(tradingDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const stats = await StockAnalysis.aggregate([
+      {
+        $match: {
+          created_at: { $gte: startOfDay, $lte: endOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: '$analysis_type',
+          count: { $sum: 1 },
+          active_orders: {
+            $sum: {
+              $cond: [
+                { $gt: [{ $size: { $ifNull: ['$placed_orders', []] } }, 0] },
+                1,
+                0]
+
+            }
+          },
+          expired: {
+            $sum: {
+              $cond: [
+                { $lt: ['$expires_at', new Date()] },
+                1,
+                0]
+
+            }
+          }
+        }
+      }]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        date: tradingDate.toISOString().split('T')[0],
+        statistics: stats,
+        total_analyses: stats.reduce((sum, stat) => sum + stat.count, 0),
+        note: 'Direct analysis storage (no cache system)'
+      }
+    });
+
+  } catch (error) {
+    logger.error('❌ Cache Stats API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to fetch cache statistics'
+    });
+  }
+};
+
+export const deleteAnalysisManual = async (req, res) => {
+  try {
+    const { instrument_key, analysis_type } = req.body;
+
+    if (!instrument_key || !analysis_type) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'instrument_key and analysis_type are required'
+      });
+    }
+
+    // Delete analysis directly from StockAnalysis collection
+    const result = await StockAnalysis.findOneAndDelete({
+      instrument_key,
+      analysis_type
+    });
+
+    if (result) {
+      res.json({
+        success: true,
+        message: 'Analysis deleted successfully',
+        data: {
+          instrument_key,
+          analysis_type,
+          deleted_analysis: {
+            id: result._id,
+            stock_symbol: result.stock_symbol,
+            created_at: result.created_at,
+            expires_at: result.expires_at
+          }
+        }
+      });
+    } else {
+      res.json({
+        success: false,
+        message: 'No analysis found to delete',
+        data: {
+          instrument_key,
+          analysis_type
+        }
+      });
+    }
+
+  } catch (error) {
+    logger.error('❌ Analysis Delete API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to delete analysis'
+    });
+  }
+};
+
+export const getCacheInfo = async (req, res) => {
+  try {
+    const { instrument_key } = req.params;
+    const { analysis_type = 'swing' } = req.query;
+
+    // Get existing analysis directly from StockAnalysis collection (no cache)
+    const analysis = await StockAnalysis.findByInstrument(instrument_key, analysis_type);
+
+    if (analysis) {
+      const now = new Date();
+      const isExpired = analysis.expires_at <= now;
+      const timeToExpiry = analysis.expires_at.getTime() - now.getTime();
+
+      res.json({
+        success: true,
+        data: {
+          exists: true,
+          expired: isExpired,
+          expires_at: analysis.expires_at,
+          created_at: analysis.created_at,
+          updated_at: analysis.updated_at,
+          time_to_expiry_ms: timeToExpiry,
+          time_to_expiry_hours: Math.round(timeToExpiry / (1000 * 60 * 60) * 10) / 10,
+          stock_symbol: analysis.stock_symbol,
+          analysis_type: analysis.analysis_type,
+          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
+          has_orders: analysis.hasActiveOrders(),
+          total_strategies: analysis.analysis_data?.strategies?.length || 0
+        }
+      });
+    } else {
+      res.json({
+        success: true,
+        data: {
+          exists: false,
+          message: 'No analysis found for this stock and analysis type'
+        }
+      });
+    }
+
+  } catch (error) {
+    logger.error('❌ Cache Info API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to fetch cache information'
+    });
+  }
+};
+
+export const checkHealth = (req, res) => {
+  res.json({
+    success: true,
+    message: 'AI service is running',
+    timestamp: new Date().toISOString(),
+    openai_configured: !!process.env.OPENAI_API_KEY,
+    cache_enabled: true
+  });
+};
+
+export const evaluateMissedEntry = async (req, res) => {
+  try {
+    const {
+      instrument_key,
+      original_entry,
+      current_price,
+      target,
+      stop_loss,
+      strategy_type,
+      analysis_type = 'swing'
+    } = req.body;
+
+    // Validate required fields
+    if (!instrument_key || !original_entry || !current_price || !target || !stop_loss || !strategy_type) {
+      return res.status(400).json({
+        success: false,
+        error: 'missing_fields',
+        message: 'Required fields: instrument_key, original_entry, current_price, target, stop_loss, strategy_type'
+      });
+    }
+
+    // Validate strategy type
+    if (!['BUY', 'SELL'].includes(strategy_type.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_strategy_type',
+        message: 'strategy_type must be BUY or SELL'
+      });
+    }
+
+    // Get stock info
+    const stockInfo = await Stock.getByInstrumentKey(instrument_key);
+    if (!stockInfo) {
+      return res.status(404).json({
+        success: false,
+        error: 'stock_not_found',
+        message: `No stock found with instrument_key: ${instrument_key}`
+      });
+    }
+
+    logger.info(`[EVALUATE MISSED ENTRY API] 🔍 Request for ${stockInfo.trading_symbol}`);
+    logger.info(`[EVALUATE MISSED ENTRY API] Entry: ₹${original_entry}, Current: ₹${current_price}`);
+
+    // Import aiReviewService
+    const { aiReviewService } = await import('../services/ai/aiReview.service.js');
+
+    // Evaluate the missed entry
+    const result = await aiReviewService.evaluateMissedEntry({
+      stockSymbol: stockInfo.trading_symbol,
+      stockName: stockInfo.name,
+      originalEntry: parseFloat(original_entry),
+      currentPrice: parseFloat(current_price),
+      target: parseFloat(target),
+      stopLoss: parseFloat(stop_loss),
+      strategyType: strategy_type.toUpperCase(),
+      analysisType: analysis_type
+    });
+
+    logger.info(`[EVALUATE MISSED ENTRY API] ✅ Verdict: ${result.verdict}`);
+
+    res.json({
+      success: true,
+      data: result
+    });
+
+  } catch (error) {
+    logger.error('❌ Evaluate Missed Entry API Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'internal_error',
+      message: 'Failed to evaluate missed entry'
+    });
+  }
+};

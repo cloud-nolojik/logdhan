@@ -29,6 +29,8 @@ const kiteConfig = {
   MIS_LEVERAGE_FACTOR: 2,       // MIS leverage multiplier (Zerodha allows ~5x, using 2x conservatively)
   MAX_ORDER_VALUE: 100000,      // ₹1 lakh max per order
   MAX_DAILY_ORDERS: 10,         // Max orders per day
+  SWING_CAPITAL_PERCENT: 0.60,   // 60% of usable capital for swing (CNC/GTT)
+  INTRADAY_CAPITAL_PERCENT: 0.40, // 40% of usable capital for intraday (MIS)
 
   // Order settings
   DEFAULT_PRODUCT: 'CNC',       // Cash & Carry (delivery)

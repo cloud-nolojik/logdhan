@@ -1,6 +1,6 @@
 import { BlobServiceClient } from '@azure/storage-blob';
 import path from 'path';
-import fs from 'fs';
+import { promises as fs } from 'fs';
 
 class AzureStorageService {
   constructor() {
@@ -78,9 +78,10 @@ class AzureStorageService {
       const publicUrl = blockBlobClient.url;
 
       // Clean up local file after successful upload
-      if (fs.existsSync(localFilePath)) {
-        fs.unlinkSync(localFilePath);
-
+      try {
+        await fs.unlink(localFilePath);
+      } catch (unlinkErr) {
+        if (unlinkErr.code !== 'ENOENT') throw unlinkErr;
       }
 
       return publicUrl;

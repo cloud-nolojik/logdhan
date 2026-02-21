@@ -262,11 +262,20 @@ async function placePullbackGTTs(pullbackStocks, dryRun = false) {
   console.log(`${LOG_PREFIX} ${highConfidenceStocks.length}/${pullbackStocks.length} pullback stocks meet grade threshold`);
 
   const balance = await kiteOrderService.getAvailableBalance();
-  const capitalPerStock = balance.usable / highConfidenceStocks.length;
 
-  console.log(`${LOG_PREFIX} Balance: ₹${balance.available.toFixed(2)}, Usable: ₹${balance.usable.toFixed(2)}, Per stock: ₹${capitalPerStock.toFixed(2)}`);
+  // Score-weighted allocation for swing capital
+  const MAX_WEIGHT = 0.45;
+  const totalScore = highConfidenceStocks.reduce((sum, s) => sum + (s.setupScore || 50), 0);
+  const rawWeights = highConfidenceStocks.map(s => Math.min((s.setupScore || 50) / totalScore, MAX_WEIGHT));
+  const weightSum = rawWeights.reduce((s, w) => s + w, 0);
+  const allocations = highConfidenceStocks.map((stock, i) => ({
+    stock,
+    capital: Math.floor(balance.usableSwing * (rawWeights[i] / weightSum))
+  }));
 
-  for (const stock of highConfidenceStocks) {
+  console.log(`${LOG_PREFIX} Balance: ₹${balance.available.toFixed(2)}, Swing budget: ₹${balance.usableSwing.toFixed(2)}, Score-weighted across ${highConfidenceStocks.length} stocks (totalScore=${totalScore})`);
+
+  for (const { stock, capital } of allocations) {
     try {
       // Idempotency: skip if active entry GTT already exists
       const existingGTT = await KiteOrder.findOne({
@@ -283,8 +292,8 @@ async function placePullbackGTTs(pullbackStocks, dryRun = false) {
         continue;
       }
 
-      // Calculate quantity
-      const orderAmount = Math.min(capitalPerStock, kiteConfig.MAX_ORDER_VALUE);
+      // Calculate quantity (score-weighted capital allocation)
+      const orderAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
       const quantity = Math.floor(orderAmount / stock.entry);
 
       if (quantity < 1) {

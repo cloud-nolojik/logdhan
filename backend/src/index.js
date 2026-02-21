@@ -3,7 +3,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import path from 'path';
-import fs from 'fs';
+
 import connectDB from './config/database.js';
 
 // Environment validation - fail fast on startup

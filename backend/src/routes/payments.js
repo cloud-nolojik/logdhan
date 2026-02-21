@@ -1,10 +1,11 @@
 import express from 'express';
-import fs from 'fs';
+import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { auth } from '../middleware/auth.js';
 import { cashfreeService } from '../services/payment/cashfree.service.js';
 import { Payment } from '../models/payment.js';
+import logger from '../utils/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,7 +46,7 @@ router.post('/create-order', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error creating payment order:', error);
+    logger.error('Error creating payment order:', error);
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to create payment order',
@@ -61,7 +62,7 @@ router.post('/webhook', async (req, res) => {
     const signature = req.headers['x-webhook-signature'];
 
     if (!signature) {
-      console.error('Webhook signature missing');
+      logger.error('Webhook signature missing');
       return res.status(400).json({ error: 'Signature missing' });
     }
 
@@ -76,7 +77,7 @@ router.post('/webhook', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error processing webhook:', error);
+    logger.error('Error processing webhook:', error);
     res.status(500).json({
       success: false,
       message: 'Webhook processing failed',
@@ -129,7 +130,7 @@ router.get('/status/:orderId', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error getting payment status:', error);
+    logger.error('Error getting payment status:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to get payment status',
@@ -164,7 +165,7 @@ router.get('/history', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error getting payment history:', error);
+    logger.error('Error getting payment history:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to get payment history',
@@ -183,7 +184,7 @@ router.get('/packages', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error getting recharge packages:', error);
+    logger.error('Error getting recharge packages:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to get recharge packages',
@@ -221,7 +222,7 @@ router.post('/calculate', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error calculating credits:', error);
+    logger.error('Error calculating credits:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to calculate credits',
@@ -245,21 +246,21 @@ router.get('/checkout/:sessionId', async (req, res) => {
 
     // Read the payment template
     const templatePath = path.join(__dirname, '../../views/payment.html');
-    let template = fs.readFileSync(templatePath, 'utf8');
+    let template = await fs.readFile(templatePath, 'utf8');
 
     // Determine SDK URL and environment based on NODE_ENV
     const sdkUrl = process.env.NODE_ENV === 'production' ?
-    'https://sdk.cashfree.com/js/v3/cashfree.js' :
-    'https://sandbox.cashfree.com/js/v3/cashfree.js';
+      'https://sdk.cashfree.com/js/v3/cashfree.js' :
+      'https://sandbox.cashfree.com/js/v3/cashfree.js';
 
     const environment = process.env.NODE_ENV === 'production' ? 'production' : 'sandbox';
 
     // Replace placeholders
     template = template.
-    replace(/{{SDK_URL}}/g, sdkUrl).
-    replace(/{{PAYMENT_SESSION_ID}}/g, sessionId).
-    replace(/{{ENVIRONMENT}}/g, environment).
-    replace(/{{RETURN_URL}}/g, returnUrl || process.env.FRONTEND_URL || 'about:blank');
+      replace(/{{SDK_URL}}/g, sdkUrl).
+      replace(/{{PAYMENT_SESSION_ID}}/g, sessionId).
+      replace(/{{ENVIRONMENT}}/g, environment).
+      replace(/{{RETURN_URL}}/g, returnUrl || process.env.FRONTEND_URL || 'about:blank');
 
     // Debug: Check if replacement worked
     const hasSessionId = template.includes(sessionId);
@@ -276,7 +277,7 @@ router.get('/checkout/:sessionId', async (req, res) => {
     res.send(template);
 
   } catch (error) {
-    console.error('Error serving payment page:', error);
+    logger.error('Error serving payment page:', error);
     res.status(500).send('Internal server error');
   }
 });
@@ -295,21 +296,21 @@ router.get('/cashfree-checkout/:sessionId', async (req, res) => {
 
     // Read the payment template
     const templatePath = path.join(__dirname, '../../views/payment.html');
-    let template = fs.readFileSync(templatePath, 'utf8');
+    let template = await fs.readFile(templatePath, 'utf8');
 
     // Determine SDK URL and environment based on NODE_ENV
     const sdkUrl = process.env.NODE_ENV === 'production' ?
-    'https://sdk.cashfree.com/js/v3/cashfree.js' :
-    'https://sandbox.cashfree.com/js/v3/cashfree.js';
+      'https://sdk.cashfree.com/js/v3/cashfree.js' :
+      'https://sandbox.cashfree.com/js/v3/cashfree.js';
 
     const environment = process.env.NODE_ENV === 'production' ? 'production' : 'sandbox';
 
     // Replace placeholders
     template = template.
-    replace(/{{SDK_URL}}/g, sdkUrl).
-    replace(/{{PAYMENT_SESSION_ID}}/g, sessionId).
-    replace(/{{ENVIRONMENT}}/g, environment).
-    replace(/{{RETURN_URL}}/g, returnUrl || process.env.FRONTEND_URL || 'about:blank');
+      replace(/{{SDK_URL}}/g, sdkUrl).
+      replace(/{{PAYMENT_SESSION_ID}}/g, sessionId).
+      replace(/{{ENVIRONMENT}}/g, environment).
+      replace(/{{RETURN_URL}}/g, returnUrl || process.env.FRONTEND_URL || 'about:blank');
 
     // Debug: Check if replacement worked
     const hasSessionId = template.includes(sessionId);
@@ -326,7 +327,7 @@ router.get('/cashfree-checkout/:sessionId', async (req, res) => {
     res.send(template);
 
   } catch (error) {
-    console.error('Error serving payment page:', error);
+    logger.error('Error serving payment page:', error);
     res.status(500).send('Internal server error');
   }
 });

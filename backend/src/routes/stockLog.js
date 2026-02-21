@@ -1,3 +1,4 @@
+import logger from '../utils/logger.js';
 import express from 'express';
 import mongoose from 'mongoose';
 import { auth } from '../middleware/auth.js';
@@ -174,7 +175,7 @@ router.post('/', auth, async (req, res) => {
         isFromRewardedAd: isFromRewardedAd // Flag indicating ad was watched
       }, req.user.id).catch((error) => {// Pass user ID for experience-based responses
         // Just log the error, don't block the response
-        console.error('Error triggering AI review workflow:', error);
+        logger.error('Error triggering AI review workflow:', error);
 
       });
     }
@@ -201,21 +202,21 @@ router.post('/', auth, async (req, res) => {
       message: needsReview ? 'Trade logged successfully. AI review in progress...' : 'Trade log entry created successfully'
     });
   } catch (error) {
-    console.error('Error creating trade log entry:', error);
+    logger.error('Error creating trade log entry:', error);
     res.status(500).json({ error: 'Error creating trade log entry' });
   }
 });
 
 router.get('/getLogs', auth, async (req, res) => {
   try {
-    const logs = await StockLog.find({ user: req.user.id }).sort({ createdAt: -1 });
+    const logs = await StockLog.find({ user: req.user.id }).sort({ createdAt: -1 }).lean();
     res.json({
       success: true,
       data: logs,
       message: "Trade logs retrieved successfully"
     });
   } catch (error) {
-    console.error('Error fetching stock logs:', error);
+    logger.error('Error fetching stock logs:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching stock logs',
@@ -266,7 +267,7 @@ router.get('/:instrument_key', auth, async (req, res) => {
 
     res.json({ entries });
   } catch (error) {
-    console.error('Error fetching trade log entries:', error);
+    logger.error('Error fetching trade log entries:', error);
     res.status(500).json({ error: 'Error fetching trade log entries' });
   }
 });
@@ -274,6 +275,9 @@ router.get('/:instrument_key', auth, async (req, res) => {
 // Get complete trade log entry (with or without review)
 router.get('/:id/trade-log', auth, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: 'Invalid ID format' });
+    }
     const logEntry = await StockLog.findOne({
       _id: req.params.id,
       user: req.user.id
@@ -290,7 +294,7 @@ router.get('/:id/trade-log', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error getting trade log:', error);
+    logger.error('Error getting trade log:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -298,6 +302,9 @@ router.get('/:id/trade-log', auth, async (req, res) => {
 // Get review status for a log entry
 router.get('/:id/review-status', auth, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: 'Invalid ID format' });
+    }
     const logEntry = await StockLog.findOne({
       _id: req.params.id,
       user: req.user.id
@@ -314,9 +321,9 @@ router.get('/:id/review-status', auth, async (req, res) => {
 
     // Check if review is completed based on reviewStatus and reviewResult presence
     const isReviewCompleted = logEntry.reviewStatus === 'completed' ||
-    logEntry.reviewStatus === 'rejected' ||
-    logEntry.reviewStatus === 'failed' && reviewData ||
-    reviewData && analysisData;
+      logEntry.reviewStatus === 'rejected' ||
+      logEntry.reviewStatus === 'failed' && reviewData ||
+      reviewData && analysisData;
 
     // Extract rejection reason from flat structure (now consistent across success/rejected)
     const rejectionReason = analysisData?.rejectionReason || null;
@@ -336,7 +343,7 @@ router.get('/:id/review-status', auth, async (req, res) => {
 
       // Map validity to analysis correctness
       isAnalysisCorrect: analysisData?.isValid === true ? "valid" :
-      analysisData?.isValid === false ? "invalid" : "unknown",
+        analysisData?.isValid === false ? "invalid" : "unknown",
 
       // Extract confidence from chips or set default
       confidence: extractConfidenceFromChips(uiData?.chips) || 0.0,
@@ -377,7 +384,7 @@ router.get('/:id/review-status', auth, async (req, res) => {
       data: response
     });
   } catch (error) {
-    console.error('Error getting review status:', error);
+    logger.error('Error getting review status:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -385,6 +392,9 @@ router.get('/:id/review-status', auth, async (req, res) => {
 // Request AI review for a specific trade log
 router.post('/:id/request-review', auth, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid ID format' });
+    }
     const logEntry = await StockLog.findOne({
       _id: req.params.id,
       user: req.user.id
@@ -459,7 +469,7 @@ router.post('/:id/request-review', auth, async (req, res) => {
       });
 
     } catch (deductError) {
-      console.error('Error deducting credits for AI review:', deductError);
+      logger.error('Error deducting credits for AI review:', deductError);
 
       // Revert the needsReview flag since credit deduction failed
       await StockLog.findByIdAndUpdate(req.params.id, {
@@ -475,7 +485,7 @@ router.post('/:id/request-review', auth, async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Error requesting AI review:', error);
+    logger.error('Error requesting AI review:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -486,6 +496,9 @@ router.post('/:id/request-review', auth, async (req, res) => {
 // Retry AI review for a specific trade log
 router.post('/:id/retry-review', auth, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid ID format' });
+    }
     const logEntry = await StockLog.findOne({
       _id: req.params.id,
       user: req.user.id
@@ -559,7 +572,7 @@ router.post('/:id/retry-review', auth, async (req, res) => {
       });
 
     } catch (processError) {
-      console.error('Error processing AI review retry:', processError);
+      logger.error('Error processing AI review retry:', processError);
 
       // Revert the status changes since processing failed
       await StockLog.findByIdAndUpdate(req.params.id, {
@@ -578,7 +591,7 @@ router.post('/:id/retry-review', auth, async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Error retrying AI review:', error);
+    logger.error('Error retrying AI review:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -610,35 +623,35 @@ router.get('/export/csv', auth, async (req, res) => {
     }
 
     // Get trade logs with filtering (sort by executedAt since that's your main date field)
-    const tradeLogs = await StockLog.find(filter).sort({ executedAt: -1 });
+    const tradeLogs = await StockLog.find(filter).sort({ executedAt: -1 }).lean();
 
     // Enhanced CSV headers - shorter names for better Excel display
     const csvHeader = [
-    'Instrument Key',
-    'Symbol',
-    'Stock Name',
-    'Exchange',
-    'Direction',
-    'Quantity',
-    'Entry Price',
-    'Target Price',
-    'Stop Loss',
-    'Term',
-    'User Reasoning',
-    'Tags',
-    'Notes',
-    'Executed',
-    'Executed Date',
-    'AI Review Requested',
-    'Review Status',
-    'AI Verdict',
-    'AI Analysis Valid',
-    'AI Recommendation',
-    'Rejection Reason',
-    'Review Requested Date',
-    'Review Completed Date',
-    'Created Date',
-    'Updated Date'];
+      'Instrument Key',
+      'Symbol',
+      'Stock Name',
+      'Exchange',
+      'Direction',
+      'Quantity',
+      'Entry Price',
+      'Target Price',
+      'Stop Loss',
+      'Term',
+      'User Reasoning',
+      'Tags',
+      'Notes',
+      'Executed',
+      'Executed Date',
+      'AI Review Requested',
+      'Review Status',
+      'AI Verdict',
+      'AI Analysis Valid',
+      'AI Recommendation',
+      'Rejection Reason',
+      'Review Requested Date',
+      'Review Completed Date',
+      'Created Date',
+      'Updated Date'];
 
     const csvRows = tradeLogs.map((log) => {
       // Extract AI review data properly
@@ -659,7 +672,7 @@ router.get('/export/csv', auth, async (req, res) => {
             aiAnalysisCorrect = firstReview.isAnalaysisCorrect ? 'Yes' : 'No';
           } else if (firstReview.analysis?.isValid !== undefined) {
             aiAnalysisCorrect = firstReview.analysis.isValid === true ? 'Yes' :
-            firstReview.analysis.isValid === false ? 'No' : 'N/A';
+              firstReview.analysis.isValid === false ? 'No' : 'N/A';
           } else {
             aiAnalysisCorrect = 'N/A';
           }
@@ -671,7 +684,7 @@ router.get('/export/csv', auth, async (req, res) => {
           rejectionReason = firstReview.analysis?.rejectionReason || '';
 
         } catch (e) {
-          console.error('Error parsing review result:', e);
+          logger.error('Error parsing review result:', e);
           aiVerdict = 'Error parsing';
           aiAnalysisCorrect = 'N/A';
           aiInsight = 'Error parsing review data';
@@ -701,39 +714,39 @@ router.get('/export/csv', auth, async (req, res) => {
       };
 
       return [
-      log.stock?.instrument_key || '',
-      log.stock?.trading_symbol || '',
-      `"${(log.stock?.name || '').replace(/"/g, '""')}"`, // Escape stock name
-      log.stock?.exchange || '',
-      log.direction || '',
-      log.quantity || '',
-      log.entryPrice || '',
-      log.targetPrice || '',
-      log.stopLoss || '',
-      log.term || '',
-      `"${(log.reasoning || '').replace(/"/g, '""')}"`, // Escape quotes properly for reasoning
-      `"${(log.tags?.join('; ') || '').replace(/"/g, '""')}"`, // Escape tags properly
-      `"${(log.note || '').replace(/"/g, '""')}"`, // Escape notes properly
-      log.executed ? 'Yes' : 'No',
-      `"${formatDate(log.executedAt)}"`, // Escape date-time string
-      log.needsReview ? 'Yes' : 'No',
-      `"${(log.reviewStatus || '').replace(/"/g, '""')}"`, // Escape review status
-      `"${aiVerdict.replace(/"/g, '""')}"`, // Escape AI verdict
-      aiAnalysisCorrect,
-      `"${aiInsight.replace(/"/g, '""')}"`, // Escape quotes properly for AI insight
-      `"${rejectionReason.replace(/"/g, '""')}"`, // Escape quotes properly for rejection reason
-      `"${formatDate(log.reviewRequestedAt)}"`, // Escape date-time string
-      `"${formatDate(log.reviewCompletedAt)}"`, // Escape date-time string
-      `"${formatDate(log.createdAt)}"`, // Escape date-time string
-      `"${formatDate(log.updatedAt)}"` // Escape date-time string
+        log.stock?.instrument_key || '',
+        log.stock?.trading_symbol || '',
+        `"${(log.stock?.name || '').replace(/"/g, '""')}"`, // Escape stock name
+        log.stock?.exchange || '',
+        log.direction || '',
+        log.quantity || '',
+        log.entryPrice || '',
+        log.targetPrice || '',
+        log.stopLoss || '',
+        log.term || '',
+        `"${(log.reasoning || '').replace(/"/g, '""')}"`, // Escape quotes properly for reasoning
+        `"${(log.tags?.join('; ') || '').replace(/"/g, '""')}"`, // Escape tags properly
+        `"${(log.note || '').replace(/"/g, '""')}"`, // Escape notes properly
+        log.executed ? 'Yes' : 'No',
+        `"${formatDate(log.executedAt)}"`, // Escape date-time string
+        log.needsReview ? 'Yes' : 'No',
+        `"${(log.reviewStatus || '').replace(/"/g, '""')}"`, // Escape review status
+        `"${aiVerdict.replace(/"/g, '""')}"`, // Escape AI verdict
+        aiAnalysisCorrect,
+        `"${aiInsight.replace(/"/g, '""')}"`, // Escape quotes properly for AI insight
+        `"${rejectionReason.replace(/"/g, '""')}"`, // Escape quotes properly for rejection reason
+        `"${formatDate(log.reviewRequestedAt)}"`, // Escape date-time string
+        `"${formatDate(log.reviewCompletedAt)}"`, // Escape date-time string
+        `"${formatDate(log.createdAt)}"`, // Escape date-time string
+        `"${formatDate(log.updatedAt)}"` // Escape date-time string
       ];
     });
 
     // Build CSV content
     const csvContent = [
-    csvHeader.join(','),
-    ...csvRows.map((row) => row.join(','))].
-    join('\n');
+      csvHeader.join(','),
+      ...csvRows.map((row) => row.join(','))].
+      join('\n');
 
     // Get user details for email
     const user = await User.findById(req.user._id);
@@ -797,7 +810,7 @@ router.get('/export/csv', auth, async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Error exporting trade logs:', error);
+    logger.error('Error exporting trade logs:', error);
     res.status(500).json({ error: 'Failed to export trade logs' });
   }
 });
@@ -805,7 +818,7 @@ router.get('/export/csv', auth, async (req, res) => {
 // Get user email status for export
 router.get('/user/email-status', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('email firstName');
+    const user = await User.findById(req.user._id).select('email firstName').lean();
 
     res.status(200).json({
       success: true,
@@ -816,7 +829,7 @@ router.get('/user/email-status', auth, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error getting user email status:', error);
+    logger.error('Error getting user email status:', error);
     res.status(500).json({ error: 'Failed to get user email status' });
   }
 });
@@ -866,7 +879,7 @@ router.post('/user/update-email', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error updating user email:', error);
+    logger.error('Error updating user email:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update email address'
@@ -881,54 +894,54 @@ router.get('/token-usage/stats', auth, async (req, res) => {
 
     // Aggregate token usage data for the user
     const tokenStats = await StockLog.aggregate([
-    {
-      $match: {
-        user: userId,
-        tokenUsage: { $exists: true },
-        'tokenUsage.totalTokens': { $gt: 0 }
-      }
-    },
-    {
-      $group: {
-        _id: null,
-        totalInputTokens: { $sum: '$tokenUsage.inputTokens' },
-        totalOutputTokens: { $sum: '$tokenUsage.outputTokens' },
-        totalCacheCreationTokens: { $sum: '$tokenUsage.cacheCreationInputTokens' },
-        totalCacheReadTokens: { $sum: '$tokenUsage.cacheReadInputTokens' },
-        totalTokens: { $sum: '$tokenUsage.totalTokens' },
-        totalCost: { $sum: '$tokenUsage.estimatedCost' },
-        reviewCount: { $sum: 1 },
-        models: { $addToSet: '$tokenUsage.model' }
-      }
-    }]
+      {
+        $match: {
+          user: userId,
+          tokenUsage: { $exists: true },
+          'tokenUsage.totalTokens': { $gt: 0 }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalInputTokens: { $sum: '$tokenUsage.inputTokens' },
+          totalOutputTokens: { $sum: '$tokenUsage.outputTokens' },
+          totalCacheCreationTokens: { $sum: '$tokenUsage.cacheCreationInputTokens' },
+          totalCacheReadTokens: { $sum: '$tokenUsage.cacheReadInputTokens' },
+          totalTokens: { $sum: '$tokenUsage.totalTokens' },
+          totalCost: { $sum: '$tokenUsage.estimatedCost' },
+          reviewCount: { $sum: 1 },
+          models: { $addToSet: '$tokenUsage.model' }
+        }
+      }]
     );
 
     // Get monthly breakdown
     const monthlyStats = await StockLog.aggregate([
-    {
-      $match: {
-        user: userId,
-        tokenUsage: { $exists: true },
-        'tokenUsage.totalTokens': { $gt: 0 }
-      }
-    },
-    {
-      $group: {
-        _id: {
-          year: { $year: '$createdAt' },
-          month: { $month: '$createdAt' }
-        },
-        totalTokens: { $sum: '$tokenUsage.totalTokens' },
-        totalCost: { $sum: '$tokenUsage.estimatedCost' },
-        reviewCount: { $sum: 1 }
-      }
-    },
-    {
-      $sort: { '_id.year': -1, '_id.month': -1 }
-    },
-    {
-      $limit: 12 // Last 12 months
-    }]
+      {
+        $match: {
+          user: userId,
+          tokenUsage: { $exists: true },
+          'tokenUsage.totalTokens': { $gt: 0 }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' }
+          },
+          totalTokens: { $sum: '$tokenUsage.totalTokens' },
+          totalCost: { $sum: '$tokenUsage.estimatedCost' },
+          reviewCount: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id.year': -1, '_id.month': -1 }
+      },
+      {
+        $limit: 12 // Last 12 months
+      }]
     );
 
     // Get recent reviews with token usage
@@ -937,9 +950,9 @@ router.get('/token-usage/stats', auth, async (req, res) => {
       tokenUsage: { $exists: true },
       'tokenUsage.totalTokens': { $gt: 0 }
     }).
-    select('stock.trading_symbol tokenUsage.totalTokens tokenUsage.estimatedCost tokenUsage.model tokenUsage.timestamp createdAt').
-    sort({ createdAt: -1 }).
-    limit(10);
+      select('stock.trading_symbol tokenUsage.totalTokens tokenUsage.estimatedCost tokenUsage.model tokenUsage.timestamp createdAt').
+      sort({ createdAt: -1 }).
+      limit(10);
 
     res.status(200).json({
       success: true,
@@ -965,7 +978,7 @@ router.get('/token-usage/stats', auth, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching token usage stats:', error);
+    logger.error('Error fetching token usage stats:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch token usage statistics'
@@ -981,7 +994,7 @@ router.get('/terms', (req, res) => {
       data: getTermsForSelection()
     });
   } catch (error) {
-    console.error('Error fetching trading terms:', error);
+    logger.error('Error fetching trading terms:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch trading terms'

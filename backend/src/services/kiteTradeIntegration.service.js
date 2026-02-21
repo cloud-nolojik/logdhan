@@ -101,28 +101,42 @@ async function processSimulationForKiteOrders(phase1Results, stocksMap) {
 
     console.log(`[KITE-INTEGRATION] Found ${highConfidenceSignals.length} high-confidence breakout stocks`);
 
-    // Get available balance and calculate per-stock allocation
+    // Get available balance and calculate score-weighted allocation
     const balance = await kiteOrderService.getAvailableBalance();
-    const capitalPerStock = balance.usable / highConfidenceSignals.length;
+
+    const MAX_WEIGHT = 0.45;
+    const totalScore = highConfidenceSignals.reduce((sum, r) => {
+      const stock = stocksMap.get(r.symbol);
+      return sum + (stock?.setup_score || 50);
+    }, 0);
+    const rawWeights = highConfidenceSignals.map(r => {
+      const stock = stocksMap.get(r.symbol);
+      return Math.min((stock?.setup_score || 50) / totalScore, MAX_WEIGHT);
+    });
+    const weightSum = rawWeights.reduce((s, w) => s + w, 0);
+    const allocations = highConfidenceSignals.map((r, i) => ({
+      result: r,
+      capital: Math.floor(balance.usableSwing * (rawWeights[i] / weightSum))
+    }));
 
     console.log(`[KITE-INTEGRATION] Balance: ₹${balance.available.toFixed(2)}, ` +
-                `Usable: ₹${balance.usable.toFixed(2)}, ` +
-                `Per stock: ₹${capitalPerStock.toFixed(2)}`);
+                `Swing budget: ₹${balance.usableSwing.toFixed(2)}, ` +
+                `Score-weighted across ${highConfidenceSignals.length} stocks (totalScore=${totalScore})`);
 
     // Send notification before placing orders
     await sendOrderNotification(highConfidenceSignals, balance);
 
     // Process each high-confidence breakout entry signal — entry GTT ONLY (no OCO)
     // OCO is placed later by processPostEntryOrders() after sim confirms actual ENTRY
-    for (const result of highConfidenceSignals) {
+    for (const { result, capital } of allocations) {
       try {
         const stock = stocksMap.get(result.symbol);
         const levels = stock.levels;
         const entryPrice = levels.entry;
         const currentPrice = result.ltp;
 
-        // Calculate quantity
-        const orderAmount = Math.min(capitalPerStock, kiteConfig.MAX_ORDER_VALUE);
+        // Calculate quantity (score-weighted capital allocation)
+        const orderAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
         const quantity = Math.floor(orderAmount / entryPrice);
 
         if (quantity < 1) {

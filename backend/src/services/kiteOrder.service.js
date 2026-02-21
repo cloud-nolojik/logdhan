@@ -35,12 +35,45 @@ class KiteOrderService {
       const availableCash = equity.available?.cash || 0;
       const leveragedMargin = availableMargin * (kiteConfig.MIS_LEVERAGE_FACTOR || 1);
       const usableAmount = leveragedMargin * kiteConfig.CAPITAL_USAGE_PERCENT;
+      const rawSwing = usableAmount * kiteConfig.SWING_CAPITAL_PERCENT;
+      const rawIntraday = usableAmount * kiteConfig.INTRADAY_CAPITAL_PERCENT;
 
-      console.log(`[KITE ORDER] Balance: net=₹${availableMargin} cash=₹${availableCash} leveraged=₹${leveragedMargin} (${kiteConfig.MIS_LEVERAGE_FACTOR}x) usable=₹${usableAmount} (${kiteConfig.CAPITAL_USAGE_PERCENT * 100}%) utilised=₹${equity.utilised?.debits || 0}`);
+      // Subtract capital already committed to active GTTs and open orders (not yet executed)
+      // GTTs don't block margin on Kite until triggered, so we must track this ourselves.
+      const [pendingSwingValue, pendingIntradayValue] = await Promise.all([
+        KiteOrder.aggregate([
+          { $match: {
+            user_id: kiteConfig.ADMIN_USER_ID,
+            product: 'CNC',
+            $or: [
+              { is_gtt: true, gtt_status: 'active' },
+              { status: { $in: ['PLACED', 'OPEN', 'TRIGGER_PENDING'] } }
+            ]
+          }},
+          { $group: { _id: null, total: { $sum: '$order_value' } } }
+        ]).then(r => r[0]?.total || 0),
+        KiteOrder.aggregate([
+          { $match: {
+            user_id: kiteConfig.ADMIN_USER_ID,
+            product: 'MIS',
+            $or: [
+              { is_gtt: true, gtt_status: 'active' },
+              { status: { $in: ['PLACED', 'OPEN', 'TRIGGER_PENDING'] } }
+            ]
+          }},
+          { $group: { _id: null, total: { $sum: '$order_value' } } }
+        ]).then(r => r[0]?.total || 0)
+      ]);
+
+      const usableSwing = Math.max(0, rawSwing - pendingSwingValue);
+      const usableIntraday = Math.max(0, rawIntraday - pendingIntradayValue);
+
+      console.log(`[KITE ORDER] Balance: net=₹${availableMargin} cash=₹${availableCash} leveraged=₹${leveragedMargin} (${kiteConfig.MIS_LEVERAGE_FACTOR}x) usable=₹${usableAmount} (${kiteConfig.CAPITAL_USAGE_PERCENT * 100}%)`);
+      console.log(`[KITE ORDER] Swing: raw=₹${rawSwing} pending=₹${pendingSwingValue} available=₹${usableSwing} | Intraday: raw=₹${rawIntraday} pending=₹${pendingIntradayValue} available=₹${usableIntraday}`);
 
       await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.BALANCE_CHECK, {
         status: 'SUCCESS',
-        response: { availableMargin, availableCash, leveragedMargin, usableAmount },
+        response: { availableMargin, availableCash, leveragedMargin, usableAmount, rawSwing, rawIntraday, pendingSwingValue, pendingIntradayValue, usableSwing, usableIntraday },
         source: 'AUTO'
       });
 
@@ -48,6 +81,10 @@ class KiteOrderService {
         total: equity.net || 0,
         available: availableMargin,
         usable: usableAmount,
+        usableSwing,
+        usableIntraday,
+        pendingSwing: pendingSwingValue,
+        pendingIntraday: pendingIntradayValue,
         used: equity.utilised?.debits || 0
       };
     } catch (error) {

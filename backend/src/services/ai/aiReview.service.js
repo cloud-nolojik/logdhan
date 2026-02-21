@@ -2,9 +2,6 @@ import axios from 'axios';
 import Parser from 'rss-parser';
 import { rateLimitedGet } from '../../utils/upstoxRateLimiter.js';
 // Removed QuickChart import due to ES module compatibility issues
-import fs from 'fs';
-import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import PQueue from 'p-queue';
 import { User } from '../../models/user.js';
 import StockLog from '../../models/stockLog.js';

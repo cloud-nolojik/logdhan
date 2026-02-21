@@ -1,0 +1,97 @@
+# 🔬 Code Audit Report
+
+**Project**: Logdhan (SwingSetups)
+**Audit Date**: 2026-02-20
+**Codebase Size**: 333 backend files, ~40,000 lines of code
+**Tech Stack**: Node.js, Express, MongoDB (Mongoose), Kotlin Multiplatform
+
+---
+
+## Health Scorecard
+
+| Area | Score | Status | Key Issues |
+|------|-------|--------|-----------|
+| Architecture | 6/10 | 🟡 | Controllers mixed into routing layer. Good service layer abstraction. |
+| Code Quality | 5/10 | 🟡 | Excessive `console.log` (1179+), but mostly using ES modules and standard naming patterns. No TypeScript limits type safety. |
+| Database | 7/10 | 🟢 | Solid Mongoose schemas (37 models) with indexes. Good use of `lean()` for reads, but some unpaginated/heavy aggregation patterns present. |
+| API Design | 8/10 | 🟢 | Consistent envelope structure (success/data/message/error). Rate limiting configured. Extensive auth middleware applied accurately. |
+| Security | 5/10 | 🟡 | Possible NoSQL injection vectors in older routes using raw `req.params.id`. `.env` is properly gitignored. |
+| Testing | 1/10 | 🔴 | Zero automated unit tests. Only ad-hoc script runners exist. 0% test coverage. |
+| Performance | 6/10 | 🟡 | Synchronous `readFileSync` observed in Firebase init / payments routing. Extensive cache layer (priceCacheService) does provide mitigation. |
+| DevOps & Config | 8/10 | 🟢 | Continuous deployment scripts, PM2 clustering, and Grafana / Promtail logs are present and well-structured. |
+| Business Rules | 7/10 | 🟢 | Most rules (1.5 R:R, market hours, watchlist limits) appear enforced dynamically within specific services/schedulers. |
+
+**Overall Codebase Health**: **5.8/10**
+- 🟡 **4-6**: Needs improvement before scaling (Requires test coverage and controller extractions).
+
+---
+
+## Top Issues by Severity
+
+**🔴 Critical (Fix immediately)**:
+1. **Missing Test Coverage**: The project relies entirely on ad-hoc scripts (`testLiveBulkAnalysis.js`) for validation. Any minor refactor poses massive production risk. 
+   - *Fix*: Install Vitest or Jest. Implement unit tests for core AI logic (`aiAnalyze.service.js`) and watchlist limit enforcements.
+
+**🟠 High (Fix this sprint)**:
+1. **NoSQL Injection Vectors**: Several routes (e.g., [kiteAdmin.js](file:///Users/nolojik/Documents/logdhan/backend/src/routes/kiteAdmin.js), [stockLog.js](file:///Users/nolojik/Documents/logdhan/backend/src/routes/stockLog.js)) pass `req.params.id` directly into `findByIdAndUpdate` without sanitization or casting to ObjectId.
+   - *Fix*: Use `mongoose.Types.ObjectId.isValid` or a validation library like `zod` prior to database querying.
+
+**🟡 Medium (Fix this month)**:
+1. **Controller / Route Coupling**: The `backend/src/controllers` directory is completely empty while `routes/` contains massive 1000+ line files (like `ai.js`, `bulkAnalysis.js`). 
+   - *Fix*: Extract the business logic logic inside the Express router callbacks into dedicated controller files.
+2. **Synchronous File Operations**: Unnecessary event-loop blocking using `readFileSync` in runtime execution paths (e.g. `payments.js`).
+   - *Fix*: Use asynchronous `fs.promises.readFile` during runtime, or only use sync methods during boot up prior to the server listening.
+
+**💡 Low (Improve over time)**:
+1. **Console.log accumulation**: >1100 `console.log` statements remain scattered in production executed code.
+   - *Fix*: Use a structured logger like `winston` or `pino` and suppress trace logs outside of development.
+2. **TypeScript Migration**: As a financial stock tool, the complexity warrants strict typing. Currently it is purely JavaScript with JSDocs. 
+   - *Fix*: Gradually introduce `.ts` starting with core domain entities.
+
+---
+
+### Hotspot Files (Highest Risk)
+| File | Size / Issues | Risk | Notes |
+|------|---------------|------|-------|
+| `routes/ai.js` | 35 KB | 🟠 | Massive route file handling AI orchestration and caching callbacks. |
+| `routes/bulkAnalysis.js` | 67 KB | 🔴 | Core scheduling logic mixed with HTTP routing. Extremely high risk of race conditions during modifications. |
+| `routes/weeklyWatchlist.js` | 43 KB | 🟠 | High frequency of recent modifications and complex conditional branching. |
+
+---
+
+### Technical Debt Estimate
+| Category | Items | Effort |
+|----------|-------|--------|
+| Security fixes | 6-10 | \~8 hours |
+| Missing tests | 100+ | \~80 hours |
+| Refactoring (Controllers) | 36 files | \~40 hours |
+| Documentation/Logging | Project wide | \~12 hours |
+| **Total** | **--** | **\~140 hours** |
+
+---
+
+### Recommended Action Plan
+
+**Week 1 (Critical)**:
+1. Setup basic testing framework (Vitest).
+2. Write unit tests for `aiAnalyze.service.js` and `Auth` routes to secure core loops.
+3. Fix raw `req.params` passing to Mongoose queries to prevent NoSQL injection.
+
+**Week 2-3 (High)**:
+1. Extract controller logic from `routes/bulkAnalysis.js` and `routes/ai.js` into the `controllers/` directory.
+2. Verify all `console.log` instances are converted to structured logging compatible with Promtail/Grafana.
+
+**Month 2 (Medium)**:
+1. Refactor older database queries to utilize `.lean()` when documents do not require mutation.
+2. Replace synchronous fs calls in execution paths with `fs.promises`.
+3. Increase test coverage across the 37 models to enforce schema validation rules.
+
+**Ongoing**:
+1. Implement a gradual migration path toward TypeScript using JSDoc definitions.
+
+---
+
+### What's Done Well
+1. ✅ **Database Schemas & Validation**: Mongoose models are highly detailed (e.g., `user.js` handles complex nested structures and array limits effectively).
+2. ✅ **DevOps Maturity**: `deploy-continous.sh`, `PM2` configs, and `promtail` integrations denote a solid environment operations baseline.
+3. ✅ **Service Abstraction**: Features like `priceCache.service.js` and `intradayAnalyze.service.js` are well segmented from data access layers.

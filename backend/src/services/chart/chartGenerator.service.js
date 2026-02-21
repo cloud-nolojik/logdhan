@@ -1,8 +1,9 @@
 import { createCanvas } from 'canvas';
-import fs from 'fs';
+import { promises as fsPromises, existsSync } from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
+import logger from '../../utils/logger.js';
 
 class ChartGeneratorService {
   constructor() {
@@ -20,8 +21,7 @@ class ChartGeneratorService {
       if (chartData.tradeData) {
         // New format from AI service
         ({ tradeData, candleSummary, indicators, patternAnalysis, chartOverlay } = chartData);
-      } else
-      {
+      } else {
 
         return null;
       }
@@ -56,7 +56,7 @@ class ChartGeneratorService {
       };
 
     } catch (error) {
-      console.error('❌ Chart generation failed:', error);
+      logger.error('❌ Chart generation failed:', error);
 
       // Generate fail-soft fallback response
       const fallbackUrl = await this.generateFallbackChart(tradeData, error.message);
@@ -144,14 +144,14 @@ RESPOND IN JSON:
       const response = await axios.post('https://api.openai.com/v1/chat/completions', {
         model: 'gpt-4o-mini',
         messages: [
-        {
-          role: 'system',
-          content: 'You are a professional technical analyst. Always respond with valid JSON only.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }],
+          {
+            role: 'system',
+            content: 'You are a professional technical analyst. Always respond with valid JSON only.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }],
 
         temperature: 0.3,
         max_tokens: 1500
@@ -180,7 +180,7 @@ RESPOND IN JSON:
       return JSON.parse(jsonContent);
 
     } catch (error) {
-      console.error('❌ AI technical analysis failed:', error);
+      logger.error('❌ AI technical analysis failed:', error);
       return {
         pattern: 'Analysis unavailable',
         confidence: 0,
@@ -200,7 +200,7 @@ RESPOND IN JSON:
 
     // Validate that we have valid prices
     if (isNaN(entryPrice) || entryPrice <= 0) {
-      console.warn('⚠️ Invalid entry price, using default ₹1000');
+      logger.warn('⚠️ Invalid entry price, using default ₹1000');
       const defaultPrice = 1000;
       return this.generateDefaultMockData(defaultPrice, tradeData.symbol || 'STOCK');
     }
@@ -304,7 +304,7 @@ RESPOND IN JSON:
 
     // Validate ohlcvData
     if (!ohlcvData || ohlcvData.length === 0) {
-      console.warn('⚠️ No OHLCV data provided, generating fallback chart');
+      logger.warn('⚠️ No OHLCV data provided, generating fallback chart');
       ohlcvData = this.generateDefaultMockData(parseFloat(tradeData.entryprice) || 1000, tradeData.symbol || 'STOCK');
     }
 
@@ -322,7 +322,7 @@ RESPOND IN JSON:
 
     // If no valid prices, use fallback values
     if (prices.length === 0) {
-      console.warn('⚠️ No valid price data found, using fallback chart');
+      logger.warn('⚠️ No valid price data found, using fallback chart');
       const fallbackPrice = parseFloat(tradeData.entryprice) || 1000;
       const minPrice = fallbackPrice * 0.95;
       const maxPrice = fallbackPrice * 1.05;
@@ -551,7 +551,7 @@ RESPOND IN JSON:
     ctx.fillStyle = '#00ffff';
     ctx.font = 'bold 14px Arial';
     const entryLabel = showBothLevels ?
-    `📈 SUGGESTED ENTRY: ₹${entryPrice}` : `📈 ENTRY: ₹${entryPrice}`;
+      `📈 SUGGESTED ENTRY: ₹${entryPrice}` : `📈 ENTRY: ₹${entryPrice}`;
     ctx.fillText(entryLabel, padding.left + 10, entryY - 10);
 
     // Target line
@@ -563,7 +563,7 @@ RESPOND IN JSON:
     ctx.stroke();
     ctx.fillStyle = '#00ff00';
     const targetLabel = showBothLevels ?
-    `🎯 SUGGESTED TARGET: ₹${targetPrice}` : `🎯 TARGET: ₹${targetPrice}`;
+      `🎯 SUGGESTED TARGET: ₹${targetPrice}` : `🎯 TARGET: ₹${targetPrice}`;
     ctx.fillText(targetLabel, padding.left + 10, targetY - 10);
 
     // Stop loss line
@@ -575,7 +575,7 @@ RESPOND IN JSON:
     ctx.stroke();
     ctx.fillStyle = '#ff0000';
     const stopLabel = showBothLevels ?
-    `🛑 SUGGESTED STOP: ₹${stopPrice}` : `🛑 STOP: ₹${stopPrice}`;
+      `🛑 SUGGESTED STOP: ₹${stopPrice}` : `🛑 STOP: ₹${stopPrice}`;
     ctx.fillText(stopLabel, padding.left + 10, stopY + 20);
 
     // Show R:R ratio for suggested levels
@@ -610,8 +610,8 @@ RESPOND IN JSON:
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 18px Arial';
     const titleText = timeframe ?
-    `${tradeData.symbol} (${timeframe}) - ${technicalAnalysis.patternType || 'Technical Analysis'}` :
-    `${tradeData.symbol} - ${technicalAnalysis.patternType || 'Technical Analysis'}`;
+      `${tradeData.symbol} (${timeframe}) - ${technicalAnalysis.patternType || 'Technical Analysis'}` :
+      `${tradeData.symbol} - ${technicalAnalysis.patternType || 'Technical Analysis'}`;
     ctx.fillText(titleText, padding.left, 30);
 
     // Confidence score
@@ -721,7 +721,7 @@ RESPOND IN JSON:
       return await this.uploadChart(chartBuffer);
 
     } catch (fallbackError) {
-      console.error('❌ Fallback chart generation also failed:', fallbackError);
+      logger.error('❌ Fallback chart generation also failed:', fallbackError);
       return null;
     }
   }
@@ -735,13 +735,13 @@ RESPOND IN JSON:
     try {
       // Save locally first
       const chartDir = path.join(process.cwd(), 'temp', 'charts');
-      if (!fs.existsSync(chartDir)) {
-        fs.mkdirSync(chartDir, { recursive: true });
+      if (!existsSync(chartDir)) {
+        await fsPromises.mkdir(chartDir, { recursive: true });
       }
 
       const localPath = path.join(chartDir, fileName);
 
-      fs.writeFileSync(localPath, chartBuffer);
+      await fsPromises.writeFile(localPath, chartBuffer);
 
       // Import Azure service dynamically
       const { azureStorageService } = await import('../storage/azureStorage.service.js');
@@ -749,20 +749,20 @@ RESPOND IN JSON:
 
       // Clean up local file only if Azure upload was successful
       try {
-        if (fs.existsSync(localPath)) {
-          fs.unlinkSync(localPath);
+        if (existsSync(localPath)) {
+          await fsPromises.unlink(localPath);
         }
       } catch (cleanupError) {
         // Ignore ENOENT errors silently
         if (cleanupError.code !== 'ENOENT') {
-          console.warn('⚠️ Could not clean up local file:', cleanupError.message);
+          logger.warn('⚠️ Could not clean up local file:', cleanupError.message);
         }
       }
 
       return azureUrl;
 
     } catch (error) {
-      console.error('Chart upload failed:', error);
+      logger.error('Chart upload failed:', error);
       // Fallback to local URL
       const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5650}`;
       return `${backendUrl}/charts/${fileName}`;
