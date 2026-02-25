@@ -25,7 +25,7 @@ import { firebaseService } from '../firebase/firebase.service.js';
 import priceCacheService from '../priceCache.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import kiteConfig from '../../config/kite.config.js';
-import { getISTMidnight, calculatePnl, updateDailyResults, round2, roundToTick, delay } from './dailyPicksHelpers.js';
+import { getISTMidnight, calculatePnl, updateDailyResults, round2, roundToTick, getNseTickSize, delay } from './dailyPicksHelpers.js';
 import { collectOpeningRange, validatePicks } from './orbValidationService.js';
 import scanLevels from '../../engine/scanLevels.js';
 
@@ -222,6 +222,10 @@ async function runDailyPicks(options = {}) {
     console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks`);
     const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview);
     console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
+
+    // Step 7.5: Place pre-market entries (GTT for LONG, AMO for SHORT)
+    const preMarketResult = await placePreMarketEntries(doc);
+    console.log(`${LOG} [Step 7.5] Pre-market entries: ${preMarketResult.ordersPlaced} placed`);
 
     // Step 8: Send notification
     console.log(`${LOG} [Step 8] Sending notification...`);
@@ -1061,6 +1065,190 @@ async function sendNotification(marketContext, picks, doc) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// STEP 7.5: PRE-MARKET ENTRY ORDERS (GTT for LONG, AMO for SHORT)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Place pre-market entry orders immediately after pick generation.
+ * LONG picks → GTT single-leg + CNC (delivery), triggers at entry price.
+ * SHORT picks → AMO SL-M + MIS (intraday), queued for market open.
+ * Skips ORB validation — entries based on scan engine's levels.
+ */
+async function placePreMarketEntries(doc) {
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} [Step 7.5] Placing pre-market entries`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+
+  if (!isKiteIntegrationEnabled()) {
+    console.log(`${LOG} [Step 7.5] Kite not enabled — skipping`);
+    return { success: true, message: 'Kite not enabled', ordersPlaced: 0 };
+  }
+
+  if (process.env.ENABLE_PRE_MARKET_ENTRY === 'false') {
+    console.log(`${LOG} [Step 7.5] Pre-market entry disabled — skipping`);
+    return { success: true, message: 'Pre-market entry disabled', ordersPlaced: 0 };
+  }
+
+  const pendingPicks = doc.picks.filter(p => p.trade.status === 'PENDING' || p.trade.status === 'FAILED');
+  if (pendingPicks.length === 0) {
+    console.log(`${LOG} [Step 7.5] No PENDING/FAILED picks — skipping`);
+    return { success: true, message: 'No pending picks', ordersPlaced: 0 };
+  }
+
+  // Capital allocation — LONG draws from swing pool (CNC), SHORT from intraday pool (MIS)
+  const MAX_WEIGHT = 0.45;
+  const balance = await kiteOrderService.getAvailableBalance();
+  console.log(`${LOG} [Step 7.5] Balance: ₹${balance.available}, Swing budget: ₹${balance.usableSwing}, Intraday budget: ₹${balance.usableIntraday}`);
+
+  const totalScore = pendingPicks.reduce((sum, p) => sum + p.rank_score, 0);
+  const rawWeights = pendingPicks.map(p => Math.min(p.rank_score / totalScore, MAX_WEIGHT));
+  const weightSum = rawWeights.reduce((s, w) => s + w, 0);
+
+  // Split picks by direction to allocate from the correct capital pool
+  const longPicks = pendingPicks.filter(p => p.direction === 'LONG');
+  const shortPicks = pendingPicks.filter(p => p.direction === 'SHORT');
+  const longTotalWeight = longPicks.reduce((s, p) => s + Math.min(p.rank_score / totalScore, MAX_WEIGHT), 0);
+  const shortTotalWeight = shortPicks.reduce((s, p) => s + Math.min(p.rank_score / totalScore, MAX_WEIGHT), 0);
+
+  const allocations = pendingPicks.map((pick, i) => {
+    const isLong = pick.direction === 'LONG';
+    const pool = isLong ? balance.usableSwing : balance.usableIntraday;
+    const dirWeight = isLong ? longTotalWeight : shortTotalWeight;
+    const pickWeight = Math.min(pick.rank_score / totalScore, MAX_WEIGHT);
+    const capital = dirWeight > 0 ? Math.floor(pool * (pickWeight / dirWeight)) : 0;
+    return { pick, capital };
+  });
+
+  console.log(`${LOG} [Step 7.5] Capital allocation: totalScore=${totalScore} swingBudget=₹${balance.usableSwing} intradayBudget=₹${balance.usableIntraday}`);
+  for (const { pick, capital } of allocations) {
+    const cappedAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
+    const estQty = Math.floor(cappedAmount / pick.levels.entry);
+    console.log(`${LOG}   ${pick.symbol}: ${pick.direction} weight=${round2(rawWeights[pendingPicks.indexOf(pick)] / weightSum * 100)}% capital=₹${capital} capped=₹${cappedAmount} estQty=${estQty} entry=₹${pick.levels.entry}`);
+  }
+
+  let ordersPlaced = 0;
+
+  for (const { pick, capital } of allocations) {
+    const orderAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
+    const qty = Math.floor(orderAmount / pick.levels.entry);
+    if (qty <= 0) {
+      console.log(`${LOG} [Step 7.5] ${pick.symbol}: qty=0 (price ₹${pick.levels.entry} > capital ₹${orderAmount}) — skipping`);
+      continue;
+    }
+
+    const triggerPrice = roundToTick(pick.levels.entry);
+
+    try {
+      if (pick.direction === 'LONG') {
+        // LONG → GTT single-leg + CNC (delivery)
+        console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT LONG qty=${qty} trigger=₹${triggerPrice} product=CNC`);
+
+        const result = await kiteOrderService.placeGTT({
+          type: 'single',
+          tradingsymbol: pick.symbol,
+          exchange: 'NSE',
+          trigger_values: [triggerPrice],
+          last_price: pick.levels.entry,
+          orders: [{
+            transaction_type: 'BUY',
+            quantity: qty,
+            order_type: 'LIMIT',
+            product: 'CNC',
+            price: triggerPrice
+          }],
+          simulationId: `daily_pick_${pick.symbol}`,
+          orderType: 'ENTRY',
+          source: 'DAILY_PICKS'
+        });
+
+        if (result.success && result.triggerId) {
+          pick.trade.status = 'ORDER_PLACED';
+          pick.trade.qty = qty;
+          pick.kite.entry_order_id = String(result.triggerId);
+          pick.kite.kite_status = 'gtt_placed';
+          ordersPlaced++;
+
+          console.log(`${LOG} [Step 7.5] ┌── GTT ENTRY: ${pick.symbol} ──────────────────────`);
+          console.log(`${LOG} [Step 7.5] │ Direction: LONG | Scan: ${pick.scan_type} | Product: CNC`);
+          console.log(`${LOG} [Step 7.5] │ Trigger: ₹${triggerPrice} | Qty: ${qty} | Capital: ₹${orderAmount}`);
+          console.log(`${LOG} [Step 7.5] │ Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target} | R:R=${pick.levels.risk_reward}`);
+          console.log(`${LOG} [Step 7.5] │ GTT Trigger ID: ${result.triggerId}`);
+          console.log(`${LOG} [Step 7.5] └─────────────────────────────────────────────────────`);
+        } else {
+          console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: GTT placement failed — ${JSON.stringify(result)}`);
+          pick.trade.status = 'FAILED';
+          pick.kite.kite_status = 'failed';
+        }
+
+      } else {
+        // SHORT → AMO SL-M + MIS (intraday)
+        // Kite requires SL-M SELL trigger_price < LTP. At pre-market, LTP ≈ entry price,
+        // so we nudge trigger one tick below LTP to satisfy validation.
+        let amoTrigger = triggerPrice;
+        try {
+          const ltpData = await kiteOrderService.getLTP([`NSE:${pick.symbol}`]);
+          const ltp = ltpData?.[`NSE:${pick.symbol}`]?.last_price;
+          if (ltp && amoTrigger >= ltp) {
+            const tick = getNseTickSize(ltp);
+            amoTrigger = roundToTick(ltp - tick);
+            console.log(`${LOG} [Step 7.5] ${pick.symbol}: Trigger ₹${triggerPrice} >= LTP ₹${ltp}, nudged to ₹${amoTrigger} (1 tick below LTP)`);
+          }
+        } catch (ltpErr) {
+          // LTP fetch failed — nudge trigger 1 tick below entry as fallback
+          const tick = getNseTickSize(triggerPrice);
+          amoTrigger = roundToTick(triggerPrice - tick);
+          console.log(`${LOG} [Step 7.5] ${pick.symbol}: LTP fetch failed, nudged trigger to ₹${amoTrigger} (1 tick below entry)`);
+        }
+
+        console.log(`${LOG} [Step 7.5] ${pick.symbol}: AMO SHORT qty=${qty} trigger=₹${amoTrigger} product=MIS`);
+
+        const result = await kiteOrderService.placeAMOOrder({
+          tradingsymbol: pick.symbol,
+          exchange: 'NSE',
+          transaction_type: 'SELL',
+          order_type: 'SL-M',
+          product: 'MIS',
+          quantity: qty,
+          trigger_price: amoTrigger,
+          simulationId: `daily_pick_${pick.symbol}`,
+          orderType: 'ENTRY',
+          source: 'DAILY_PICKS'
+        });
+
+        if (result.success && result.orderId) {
+          pick.trade.status = 'ORDER_PLACED';
+          pick.trade.qty = qty;
+          pick.kite.entry_order_id = result.orderId;
+          pick.kite.kite_status = 'amo_placed';
+          ordersPlaced++;
+
+          console.log(`${LOG} [Step 7.5] ┌── AMO ENTRY: ${pick.symbol} ──────────────────────`);
+          console.log(`${LOG} [Step 7.5] │ Direction: SHORT | Scan: ${pick.scan_type} | Product: MIS`);
+          console.log(`${LOG} [Step 7.5] │ Trigger: ₹${amoTrigger}${amoTrigger !== triggerPrice ? ` (nudged from ₹${triggerPrice})` : ''} | Qty: ${qty} | Capital: ₹${orderAmount}`);
+          console.log(`${LOG} [Step 7.5] │ Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target} | R:R=${pick.levels.risk_reward}`);
+          console.log(`${LOG} [Step 7.5] │ Order ID: ${result.orderId}`);
+          console.log(`${LOG} [Step 7.5] └─────────────────────────────────────────────────────`);
+        } else {
+          console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: AMO placement failed — ${JSON.stringify(result)}`);
+          pick.trade.status = 'FAILED';
+          pick.kite.kite_status = 'failed';
+        }
+      }
+    } catch (err) {
+      console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: Order error —`, err.message);
+      pick.trade.status = 'FAILED';
+      pick.kite.kite_status = 'failed';
+    }
+  }
+
+  doc.markModified('picks');
+  await doc.save();
+
+  console.log(`${LOG} [Step 7.5] Pre-market entries: ${ordersPlaced}/${pendingPicks.length} placed`);
+  return { success: true, ordersPlaced };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // v2: ORB COLLECTION — 9:15 AM
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1280,7 +1468,7 @@ async function validateAndPlaceEntries(options = {}) {
         exchange: 'NSE',
         transaction_type: pick.direction === 'LONG' ? 'BUY' : 'SELL',
         order_type: 'SL-M',
-        product: 'MIS',
+        product: pick.direction === 'LONG' ? 'CNC' : 'MIS',
         quantity: qty,
         trigger_price: triggerPrice,
         simulationId: `daily_pick_${pick.symbol}`,
@@ -1360,7 +1548,10 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
   pick.levels.target = target;
   const targetSource = (structuralTarget && structuralTarget > 0) ? 'structural' : 'flat_2pct_fallback';
 
-  console.log(`${LOG} ✅ ${pick.symbol}: Filled @ ₹${entryPrice} — placing SL @ ₹${pick.levels.stop} + target @ ₹${target} (${targetSource})`);
+  // Direction-aware product: LONG = CNC (GTT delivery), SHORT = MIS (AMO intraday)
+  const product = pick.direction === 'LONG' ? 'CNC' : 'MIS';
+
+  console.log(`${LOG} ✅ ${pick.symbol}: Filled @ ₹${entryPrice} — placing SL @ ₹${pick.levels.stop} + target @ ₹${target} (${targetSource}) product=${product}`);
 
   let slPlaced = false;
   let tgtPlaced = false;
@@ -1373,7 +1564,7 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
       transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
       order_type: 'SL-M',
       trigger_price: pick.levels.stop,
-      product: 'MIS',
+      product,
       quantity: pick.trade.qty,
       simulationId: `daily_pick_sl_${pick.symbol}`,
       orderType: 'STOP_LOSS',
@@ -1396,7 +1587,7 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
       transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
       order_type: 'LIMIT',
       price: target,
-      product: 'MIS',
+      product,
       quantity: pick.trade.qty,
       simulationId: `daily_pick_tgt_${pick.symbol}`,
       orderType: 'TARGET',
@@ -1449,7 +1640,7 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
         exchange: 'NSE',
         transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
         order_type: 'MARKET',
-        product: 'MIS',
+        product,
         quantity: pick.trade.qty,
         simulationId: `daily_pick_emergency_${pick.symbol}`,
         orderType: 'EMERGENCY_EXIT',
@@ -1505,11 +1696,25 @@ function initFillListener() {
         return;
       }
 
-      const pick = doc.picks.find(p =>
+      // Match regular/AMO orders by order ID
+      let pick = doc.picks.find(p =>
         p.kite.entry_order_id === postback.order_id &&
         p.trade.status === 'ORDER_PLACED' &&
         p.kite.kite_status !== 'sl_target_placed'
       );
+
+      // Match GTT fills by tradingsymbol — GTT child orders have a different ID than the trigger ID
+      if (!pick) {
+        pick = doc.picks.find(p =>
+          p.symbol === postback.tradingsymbol &&
+          p.trade.status === 'ORDER_PLACED' &&
+          p.kite.kite_status === 'gtt_placed'
+        );
+        if (pick) {
+          console.log(`${LOG} [FILL-LISTENER] ${pick.symbol}: Matched GTT fill by tradingsymbol — child orderId=${postback.order_id} (GTT triggerId=${pick.kite.entry_order_id})`);
+        }
+      }
+
       if (!pick) {
         console.log(`${LOG} [FILL-LISTENER] orderId=${postback.order_id} not matched to any ORDER_PLACED daily pick — ignoring (may be swing/manual order)`);
         return;
@@ -1550,29 +1755,75 @@ async function checkFillsFallback(options = {}) {
 
   let filled = 0;
 
+  // Fetch all active GTTs once (for GTT fill detection)
+  let activeGTTs = null;
+  const hasGTTPicks = orderPlacedPicks.some(p => p.kite.kite_status === 'gtt_placed');
+  if (hasGTTPicks) {
+    try {
+      activeGTTs = await kiteOrderService.getGTTs();
+      console.log(`${LOG} [FILL-FALLBACK] Fetched ${activeGTTs.length} active GTTs for fill check`);
+    } catch (err) {
+      console.error(`${LOG} [FILL-FALLBACK] Failed to fetch GTTs:`, err.message);
+    }
+  }
+
   for (const pick of orderPlacedPicks) {
     try {
-      console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Checking entry order ${pick.kite.entry_order_id}...`);
-      const order = await kiteOrderService.getOrderDetails(pick.kite.entry_order_id);
-      if (!order) {
-        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order not found — skipping`);
-        continue;
-      }
+      if (pick.kite.kite_status === 'gtt_placed') {
+        // GTT pick — check GTT status via API
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Checking GTT trigger ${pick.kite.entry_order_id}...`);
+        if (!activeGTTs) continue;
 
-      const status = order.status?.toUpperCase();
-      console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order status=${status} avg_price=${order.average_price} filled_qty=${order.filled_quantity}`);
+        const gtt = activeGTTs.find(g => String(g.id) === String(pick.kite.entry_order_id));
+        if (!gtt) {
+          // GTT not in active list — likely triggered and completed already.
+          // The postback listener should have caught it, but check LTP as fallback.
+          console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: GTT ${pick.kite.entry_order_id} not found in active GTTs — may have already triggered. Postback listener should handle fill.`);
+          continue;
+        }
 
-      if (status === 'COMPLETE') {
-        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Fill detected via polling @ ₹${order.average_price} — placing SL+target`);
-        await placeSLAndTarget(pick, doc, order.average_price || pick.levels.entry);
-        filled++;
-      } else if (status === 'CANCELLED' || status === 'REJECTED') {
-        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order ${status} — marking as SKIPPED`);
-        pick.trade.status = 'SKIPPED';
-        pick.kite.kite_status = 'skipped';
-        await doc.save();
+        const gttStatus = gtt.status?.toLowerCase();
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: GTT status=${gttStatus}`);
+
+        if (gttStatus === 'triggered') {
+          // GTT triggered — find the child order's fill price from GTT response
+          const fillPrice = gtt.orders?.[0]?.result?.average_price || pick.levels.entry;
+          console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: GTT triggered — fill @ ₹${fillPrice} — placing SL+target`);
+          await placeSLAndTarget(pick, doc, fillPrice);
+          filled++;
+        } else if (gttStatus === 'cancelled' || gttStatus === 'rejected' || gttStatus === 'disabled') {
+          console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: GTT ${gttStatus} — marking as SKIPPED`);
+          pick.trade.status = 'SKIPPED';
+          pick.kite.kite_status = 'skipped';
+          await doc.save();
+        } else {
+          console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: GTT still active — will check next poll`);
+        }
+
       } else {
-        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Still pending (status=${status}) — will check next poll`);
+        // Regular/AMO order — existing logic
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Checking entry order ${pick.kite.entry_order_id}...`);
+        const order = await kiteOrderService.getOrderDetails(pick.kite.entry_order_id);
+        if (!order) {
+          console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order not found — skipping`);
+          continue;
+        }
+
+        const status = order.status?.toUpperCase();
+        console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order status=${status} avg_price=${order.average_price} filled_qty=${order.filled_quantity}`);
+
+        if (status === 'COMPLETE') {
+          console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Fill detected via polling @ ₹${order.average_price} — placing SL+target`);
+          await placeSLAndTarget(pick, doc, order.average_price || pick.levels.entry);
+          filled++;
+        } else if (status === 'CANCELLED' || status === 'REJECTED') {
+          console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order ${status} — marking as SKIPPED`);
+          pick.trade.status = 'SKIPPED';
+          pick.kite.kite_status = 'skipped';
+          await doc.save();
+        } else {
+          console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Still pending (status=${status}) — will check next poll`);
+        }
       }
     } catch (err) {
       console.error(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Error —`, err.message);
@@ -1688,7 +1939,7 @@ async function monitorDailyPickOrders(options = {}) {
               exchange: 'NSE',
               transaction_type: correctiveSide,
               order_type: 'MARKET',
-              product: 'MIS',
+              product: pick.direction === 'LONG' ? 'CNC' : 'MIS',
               quantity: pick.trade.qty,
               simulationId: `daily_pick_corrective_${pick.symbol}`,
               orderType: 'CORRECTIVE',
@@ -2062,6 +2313,7 @@ async function logApiUsage(requestId, response, responseTime, success, context) 
 
 export {
   runDailyPicks,
+  placePreMarketEntries,
   startOrbCollection,
   validateAndPlaceEntries,
   checkFillsFallback,
@@ -2075,6 +2327,7 @@ export {
 
 export default {
   runDailyPicks,
+  placePreMarketEntries,
   startOrbCollection,
   validateAndPlaceEntries,
   checkFillsFallback,

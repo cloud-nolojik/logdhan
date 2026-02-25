@@ -59,6 +59,7 @@ const kiteConfig = {
     // Orders
     ORDERS: '/orders',
     REGULAR_ORDER: '/orders/regular',
+    AMO_ORDER: '/orders/amo',
 
     // GTT
     GTT_TRIGGERS: '/gtt/triggers',

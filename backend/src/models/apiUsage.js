@@ -22,7 +22,7 @@ const apiUsageSchema = new mongoose.Schema({
   // Feature/service that made the call
   feature: {
     type: String,
-    enum: ['DAILY_NEWS_STOCKS', 'MARKET_SENTIMENT', 'HEADLINE_SENTIMENT', 'AI_ANALYSIS', 'WEEKLY_ANALYSIS', 'DAILY_TRACK', 'OTHER'],
+    enum: ['DAILY_NEWS_STOCKS', 'MARKET_SENTIMENT', 'HEADLINE_SENTIMENT', 'AI_ANALYSIS', 'WEEKLY_ANALYSIS', 'DAILY_TRACK', 'DAILY_PICKS_INSIGHT', 'OTHER'],
     required: true
   },
 

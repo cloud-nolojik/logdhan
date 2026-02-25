@@ -13,7 +13,7 @@ import express from 'express';
 import { auth, adminAuth } from '../middleware/auth.js';
 import DailyPick from '../models/dailyPick.js';
 import { SCAN_LABELS } from '../services/dailyPicks/dailyPicksScans.js';
-import { runDailyPicks, validateAndPlaceEntries } from '../services/dailyPicks/dailyPicksService.js';
+import { runDailyPicks, validateAndPlaceEntries, placePreMarketEntries } from '../services/dailyPicks/dailyPicksService.js';
 import { runDailyExit } from '../services/dailyPicks/dailyPicksExitService.js';
 import priceCacheService from '../services/priceCache.service.js';
 import { getIstDayRange } from '../utils/tradingDay.js';
@@ -303,6 +303,28 @@ router.post('/trigger-entry', adminAuth, async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('[DAILY-PICKS-API] Trigger entry error:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/daily-picks/trigger-premarket-entry
+ * Manual trigger for pre-market GTT/AMO entry placement.
+ * Places orders for today's PENDING picks that failed or weren't placed yet.
+ */
+router.post('/trigger-premarket-entry', async (req, res) => {
+  try {
+    console.log(`[DAILY-PICKS-API] Manual pre-market entry trigger`);
+
+    const doc = await DailyPick.findToday();
+    if (!doc) {
+      return res.json({ success: true, data: { message: 'No picks today' } });
+    }
+
+    const result = await placePreMarketEntries(doc);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('[DAILY-PICKS-API] Pre-market entry trigger error:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });

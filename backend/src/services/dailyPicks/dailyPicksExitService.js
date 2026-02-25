@@ -45,8 +45,17 @@ async function runDailyExit(options = {}) {
     for (const pick of unfilledPicks) {
       try {
         if (!dryRun && pick.kite.entry_order_id) {
-          await kiteOrderService.cancelOrder(pick.kite.entry_order_id);
-          console.log(`${LOG} ${pick.symbol}: Cancelled unfilled entry order ${pick.kite.entry_order_id}`);
+          if (pick.kite.kite_status === 'gtt_placed') {
+            // LONG GTT — cancel GTT trigger (otherwise it stays active indefinitely)
+            await kiteOrderService.cancelGTT(pick.kite.entry_order_id, {
+              reason: 'unfilled_at_3pm', source: 'DAILY_PICKS'
+            });
+            console.log(`${LOG} ${pick.symbol}: Cancelled unfilled GTT trigger ${pick.kite.entry_order_id}`);
+          } else {
+            // SHORT AMO or legacy regular order
+            await kiteOrderService.cancelOrder(pick.kite.entry_order_id);
+            console.log(`${LOG} ${pick.symbol}: Cancelled unfilled entry order ${pick.kite.entry_order_id}`);
+          }
         }
         pick.trade.status = 'SKIPPED';
         pick.trade.exit_reason = 'unfilled_at_3pm';
@@ -166,6 +175,9 @@ async function runDailyExit(options = {}) {
         continue;
       }
 
+      // Direction-aware product: LONG = CNC (GTT delivery), SHORT = MIS (AMO intraday)
+      const exitProduct = pick.direction === 'LONG' ? 'CNC' : 'MIS';
+
       let exitOrderId = null;
       try {
         const result = await kiteOrderService.placeOrder({
@@ -173,7 +185,7 @@ async function runDailyExit(options = {}) {
           exchange: 'NSE',
           transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
           order_type: 'MARKET',
-          product: 'MIS',
+          product: exitProduct,
           quantity: pick.trade.qty,
           simulationId: `daily_pick_exit_${pick.symbol}`,
           orderType: 'TIME_EXIT',
@@ -197,7 +209,7 @@ async function runDailyExit(options = {}) {
             exchange: 'NSE',
             transaction_type: pick.direction === 'LONG' ? 'SELL' : 'BUY',
             order_type: 'MARKET',
-            product: 'MIS',
+            product: exitProduct,
             quantity: pick.trade.qty,
             simulationId: `daily_pick_exit_retry_${pick.symbol}`,
             orderType: 'TIME_EXIT',
@@ -211,16 +223,17 @@ async function runDailyExit(options = {}) {
             throw new Error('Retry also failed');
           }
         } catch (retryErr) {
-          console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} — FAILED TO EXIT. Manual exit required. Exchange auto-exit at 3:20 PM (MIS).`);
+          const autoExitNote = exitProduct === 'MIS' ? ' Exchange auto-exit at 3:20 PM (MIS).' : ' CNC position — NO auto-exit, MUST close manually!';
+          console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} — FAILED TO EXIT. Manual exit required.${autoExitNote}`);
           // Send admin alert
           try {
             await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
               'CRITICAL: Daily Pick Exit Failed',
-              `Failed to exit ${pick.symbol}. Manual exit required. Exchange auto-exit at 3:20 PM.`,
+              `Failed to exit ${pick.symbol}. Manual exit required.${autoExitNote}`,
               { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
             );
           } catch (notifErr) { /* ignore */ }
-          pick.trade.status = 'ENTERED'; // Keep as ENTERED — exchange will handle
+          pick.trade.status = 'ENTERED'; // Keep as ENTERED — manual intervention needed
           continue;
         }
       }

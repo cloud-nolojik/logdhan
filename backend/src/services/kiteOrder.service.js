@@ -249,6 +249,129 @@ class KiteOrderService {
   }
 
   /**
+   * Place an AMO (After Market Order) — same as regular order but via /orders/amo endpoint.
+   * Used for SHORT intraday picks placed before market open.
+   */
+  async placeAMOOrder(orderParams) {
+    const startTime = Date.now();
+
+    try {
+      if (!orderParams.tradingsymbol || !orderParams.quantity || !orderParams.transaction_type) {
+        throw new Error('Missing required AMO order parameters');
+      }
+
+      const params = {
+        tradingsymbol: orderParams.tradingsymbol,
+        exchange: orderParams.exchange || kiteConfig.DEFAULT_EXCHANGE,
+        transaction_type: orderParams.transaction_type,
+        order_type: orderParams.order_type || kiteConfig.ORDER_TYPES.LIMIT,
+        quantity: orderParams.quantity,
+        product: orderParams.product || kiteConfig.DEFAULT_PRODUCT,
+        validity: orderParams.validity || kiteConfig.ORDER_VALIDITY
+      };
+
+      if ((params.order_type === 'LIMIT' || params.order_type === 'SL') && orderParams.price) {
+        params.price = orderParams.price;
+      }
+
+      if ((params.order_type === 'SL' || params.order_type === 'SL-M') && orderParams.trigger_price) {
+        params.trigger_price = orderParams.trigger_price;
+      }
+
+      console.log('[KITE AMO] Placing AMO order:', params);
+
+      const response = await this.kiteService.makeRequest(
+        'POST',
+        kiteConfig.ENDPOINTS.AMO_ORDER,
+        params
+      );
+
+      const durationMs = Date.now() - startTime;
+      const orderId = response.data?.order_id;
+
+      console.log(`[KITE AMO] AMO order placed successfully. Order ID: ${orderId}`);
+
+      let kiteOrder = null;
+      try {
+        kiteOrder = await KiteOrder.create({
+          user_id: this.adminUserId,
+          stock_id: orderParams.stockId,
+          simulation_id: orderParams.simulationId,
+          order_id: orderId,
+          order_type: orderParams.orderType || 'MANUAL',
+          trading_symbol: params.tradingsymbol,
+          exchange: params.exchange,
+          transaction_type: params.transaction_type,
+          quantity: params.quantity,
+          price: params.price || 0,
+          trigger_price: params.trigger_price,
+          product: params.product,
+          kite_order_type: params.order_type,
+          status: 'PLACED',
+          placed_at: new Date(),
+          order_value: params.quantity * (params.price || 0),
+          kite_response: response,
+          is_gtt: false
+        });
+      } catch (dbErr) {
+        console.error(`[KITE AMO] DB save failed for AMO order ${orderId}:`, dbErr.message);
+      }
+
+      try {
+        await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_PLACED, {
+          orderId,
+          symbol: params.tradingsymbol,
+          exchange: params.exchange,
+          orderType: orderParams.orderType,
+          transactionType: params.transaction_type,
+          quantity: params.quantity,
+          price: params.price,
+          triggerPrice: params.trigger_price,
+          status: 'SUCCESS',
+          response,
+          orderValue: params.quantity * (params.price || 0),
+          simulationId: orderParams.simulationId,
+          stockId: orderParams.stockId,
+          kiteOrderRef: kiteOrder?._id,
+          durationMs,
+          source: orderParams.source || 'AUTO',
+          variety: 'amo'
+        });
+      } catch (auditErr) {
+        console.error(`[KITE AMO] Audit log failed for AMO order ${orderId}:`, auditErr.message);
+      }
+
+      return {
+        success: true,
+        orderId,
+        kiteOrder,
+        response
+      };
+
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+
+      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_PLACED, {
+        symbol: orderParams.tradingsymbol,
+        orderType: orderParams.orderType,
+        transactionType: orderParams.transaction_type,
+        quantity: orderParams.quantity,
+        price: orderParams.price,
+        status: 'FAILED',
+        error: error.message,
+        request: orderParams,
+        simulationId: orderParams.simulationId,
+        durationMs,
+        source: orderParams.source || 'AUTO',
+        variety: 'amo'
+      });
+
+      console.error('[KITE AMO] AMO order placement failed:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Place a GTT (Good Till Triggered) order
    */
   async placeGTT(gttParams) {

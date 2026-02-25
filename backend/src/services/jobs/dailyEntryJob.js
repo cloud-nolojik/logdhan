@@ -117,6 +117,12 @@ class DailyEntryJob {
 
       this.runningJobs.add('validate-entry');
       try {
+        // Feature flag: disable ORB validation when pre-market GTT/AMO flow is active (default)
+        if (process.env.ENABLE_ORB_VALIDATION !== 'true') {
+          console.log(`${LOG} ORB validation disabled (pre-market entry flow active) — skipping`);
+          return { skipped: true, reason: 'orb_validation_disabled' };
+        }
+
         const isTradingDay = await MarketHoursUtil.isTradingDay();
         if (!isTradingDay) {
           console.log(`${LOG} Not a trading day — skipping validate+entry`);
