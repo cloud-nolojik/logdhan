@@ -172,40 +172,13 @@ export function getRegimeWarning(setupType, regimeCheck) {
  */
 export async function fetchAndCheckRegime() {
   try {
-    // Dynamic import to avoid circular dependencies
-    const { default: PreFetchedData } = await import('../models/preFetchedData.js');
+    // Use getCandleData which handles DB cache, outdated checks, and Cloudflare cache-busting
+    const { getCandleData } = await import('../services/technicalData.service.js');
 
-    // Try to get Nifty data from PreFetchedData first
-    const niftyPrefetch = await PreFetchedData.findOne({
-      instrument_key: NIFTY_50_INSTRUMENT_KEY,
-      timeframe: '1d'
-    }).lean();
-
-    if (niftyPrefetch?.candle_data?.length >= 50) {
-      return checkMarketRegime({ niftyCandles: niftyPrefetch.candle_data });
-    }
-
-    // Fallback: Fetch from API
-    const { default: candleFetcherService } = await import('../services/candleFetcher.service.js');
-
-    const toDate = new Date();
-    const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 90); // 90 days to ensure 50+ trading days
-
-    const formatDate = (d) => d.toISOString().split('T')[0];
-
-    const candles = await candleFetcherService.fetchCandlesFromAPI(
-      NIFTY_50_INSTRUMENT_KEY,
-      'day',
-      formatDate(fromDate),
-      formatDate(toDate),
-      true
-    );
+    const candles = await getCandleData(NIFTY_50_INSTRUMENT_KEY, 'NIFTY50', '1d');
 
     if (candles && candles.length >= 50) {
-      const result = checkMarketRegime({ niftyCandles: candles });
-      console.log(`[REGIME] ${result.description}`);
-      return result;
+      return checkMarketRegime({ niftyCandles: candles });
     }
 
     console.warn('[REGIME] Could not fetch sufficient Nifty data');

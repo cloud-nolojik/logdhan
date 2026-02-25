@@ -284,20 +284,23 @@ async function runScans(marketContext) {
 
   console.log(`${LOG} [Step 2] Running ${scanOrder.length} scans for ${regime} regime: ${scanOrder.join(', ')}`);
 
-  // DEBUG: Return only DYNAMATECH for testing 52W intraday levels
+  // DEBUG: Force specific stock for testing (enable via FORCE_CONDITIONS_MET=true)
   // if (process.env.FORCE_CONDITIONS_MET === 'true') {
-  //   console.log(`${LOG} [DEBUG] FORCE_CONDITIONS_MET=true — returning DYNAMATECH only`);
+  //   console.log(`${LOG} [DEBUG] FORCE_CONDITIONS_MET=true — returning EMUDHRA only`);
   //   return {
   //     candidates: [{
-  //       symbol: 'DYNAMATECH',
-  //       per_chg: 2.5,
-  //       close: 0,
-  //       scan_type: 'fiftyTwoWeek_high',
-  //       direction: 'LONG',
-  //       type: 'BULLISH',
+  //       symbol: 'EMUDHRA',
+  //       stock_name: 'eMudhra Ltd',
+  //       scan_type: 'fiftyTwoWeek_low',
+  //       direction: 'SHORT',
+  //       chartink_data: {
+  //         per_change: -9.5,
+  //         close: 443.6,
+  //         volume: 1500000
+  //       }
   //     }],
-  //     bullish_count: 1,
-  //     bearish_count: 0
+  //     bullish_count: 0,
+  //     bearish_count: 1
   //   };
   // }
 
@@ -364,11 +367,8 @@ async function runScans(marketContext) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function enrichCandidates(candidates) {
-  console.log(`${LOG} [Step 3] Enriching ${candidates.length} candidates via Upstox...`);
-
   const symbols = candidates.map(c => c.symbol);
-
-  console.log(`${LOG} [Step 3] Requesting enrichment for symbols: ${symbols.join(', ')}`);
+  console.log(`${LOG} [Step 3] Enriching ${symbols.length} candidates: ${symbols.join(', ')}`);
 
   let analysisData;
   try {
@@ -378,24 +378,21 @@ async function enrichCandidates(candidates) {
     return [];
   }
 
-  console.log(`${LOG} [Step 3] getDailyAnalysisData returned ${analysisData.stocks?.length || 0} stocks`);
-
   const stockMap = {};
   for (const stock of analysisData.stocks) {
     stockMap[stock.symbol] = stock;
   }
 
-  // Log which symbols are missing from enrichment
   const missingSymbols = symbols.filter(s => !stockMap[s]);
   if (missingSymbols.length > 0) {
-    console.log(`${LOG} [Step 3] Missing from enrichment (${missingSymbols.length}): ${missingSymbols.join(', ')}`);
+    console.log(`${LOG} [Step 3] Missing from enrichment: ${missingSymbols.join(', ')}`);
   }
 
   const enriched = [];
   for (const candidate of candidates) {
     const stock = stockMap[candidate.symbol];
     if (!stock || !stock.instrument_key) {
-      console.log(`${LOG} Skipping ${candidate.symbol} — no enrichment data`);
+      console.log(`${LOG} [Step 3] ${candidate.symbol}: SKIPPED — no enrichment data`);
       continue;
     }
 
@@ -407,25 +404,21 @@ async function enrichCandidates(candidates) {
     const range = high - low;
 
     const closeInRangePct = range > 0 ? ((close - low) / range) * 100 : 50;
-    // Use today's volume if available, otherwise fall back to ChartInk's volume (yesterday's)
-    // At 8:45 AM pre-market, todays_volume is 0 — ChartInk already confirmed strong volume
     const effectiveVolume = stock.todays_volume > 0 ? stock.todays_volume : (candidate.chartink_data?.volume || 0);
     const volumeRatio = stock.avg_volume_50d > 0
       ? effectiveVolume / stock.avg_volume_50d
       : 1;
     const atrPct = close > 0 ? (range / close) * 100 : 0;
 
-    // Candle pattern from latest candle (today or last trading day)
     const prevClose = stock.prev_close || 0;
-    const prevHigh = high; // We only have current day from getDailyAnalysisData
+    const prevHigh = high;
     const prevLow = low;
     const candlePattern = detectCandlePattern(open, high, low, close, 0, prevHigh, prevLow, prevClose);
-
     const lastDailyClose = stock.last_daily_close || close;
     const volSource = stock.todays_volume > 0 ? 'live' : 'chartink';
-    console.log(`${LOG} [Enrich] ${candidate.symbol} (${candidate.scan_type}): O=${open} H=${high} L=${low} C=${close} prevClose=${prevClose} lastDailyClose=${lastDailyClose} ltp=${stock.ltp} vol=${effectiveVolume}(${volSource}) avgVol50=${stock.avg_volume_50d} volRatio=${round2(volumeRatio)}x rsi=${stock.daily_rsi} latestCandle=${stock.latest_candle_date || 'N/A'} prevCandle=${stock.prev_candle_date || 'N/A'} source=${stock.data_source || 'N/A'}`);
-    console.log(`${LOG} [Enrich] ${candidate.symbol} indicators: ema20=${stock.ema20 || 0} ema50=${stock.ema50 || 0} atr=${stock.atr || 0} h20D=${stock.high_20d || 0} l20D=${stock.low_20d || 0} h52W=${stock.high_52w || 0} wR1=${stock.weekly_r1 || 'null'} wR2=${stock.weekly_r2 || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'}`);
-    console.log(`${LOG} [Enrich] ${candidate.symbol} pivots: dP=${stock.daily_pivot_levels?.pivot || 'null'} dR1=${stock.daily_pivot_levels?.r1 || 'null'} dS1=${stock.daily_pivot_levels?.s1 || 'null'} | 1H_R1=${stock.hourly_1h_pivots?.r1 || 'null'} 1H_S1=${stock.hourly_1h_pivots?.s1 || 'null'} | 4H_R1=${stock.hourly_4h_pivots?.r1 || 'null'} 4H_S1=${stock.hourly_4h_pivots?.s1 || 'null'}`);
+
+    // Single compact debug line — compare across runs to spot divergence
+    console.log(`${LOG} [ENRICH-DEBUG] ${candidate.symbol} (${candidate.scan_type}/${candidate.direction}): src=${stock.data_source || 'N/A'} O=${open} H=${high} L=${low} C=${close} prevC=${prevClose} | vol=${effectiveVolume}(${volSource}) avgVol50=${stock.avg_volume_50d} ratio=${round2(volumeRatio)}x | RSI=${stock.daily_rsi} EMA20=${stock.ema20 || 0} ATR=${round2(atrPct)}% CIR=${round2(closeInRangePct)}% candle=${candlePattern}`);
 
     enriched.push({
       ...candidate,
@@ -437,7 +430,6 @@ async function enrichCandidates(candidates) {
         atr_pct: round2(atrPct),
         candle_pattern: candlePattern
       },
-      // Raw data for level calculation
       _ohlcv: {
         open,
         high,
@@ -447,11 +439,9 @@ async function enrichCandidates(candidates) {
         last_daily_close: lastDailyClose,
         volume: stock.todays_volume || 0,
         avg_volume_50d: stock.avg_volume_50d || 0,
-        // Indicators for scan-type-specific levels (from engine)
         ema20: stock.ema20 || 0,
         ema50: stock.ema50 || 0,
         atr: stock.atr || 0,
-        // Swing levels (5D/10D for breakdown stops, 20D for momentum)
         high_5d: stock.high_5d || 0,
         low_5d: stock.low_5d || 0,
         high_10d: stock.high_10d || 0,
@@ -459,7 +449,6 @@ async function enrichCandidates(candidates) {
         high_20d: stock.high_20d || 0,
         low_20d: stock.low_20d || 0,
         high_52w: stock.high_52w || 0,
-        // Pivot levels for targets
         daily_pivot_levels: stock.daily_pivot_levels || null,
         weekly_pivot_levels: {
           r1: stock.weekly_r1 || null,
@@ -467,19 +456,14 @@ async function enrichCandidates(candidates) {
           s1: stock.weekly_s1 || null,
           s2: stock.weekly_s2 || null
         },
-        // Hourly pivots for multi-timeframe confluence scoring
         hourly_1h_pivots: stock.hourly_1h_pivots || null,
         hourly_4h_pivots: stock.hourly_4h_pivots || null,
-        // 1H swing levels for structural targets and conflict check
         swing_levels_1h: stock.swing_levels_1h || null
       }
     });
   }
 
-  const noDataCount = candidates.length - enriched.length;
-  const liveVolCount = enriched.filter(e => e._ohlcv?.volume > 0).length;
-  const chartinkVolCount = enriched.length - liveVolCount;
-  console.log(`${LOG} [Step 3] RECONCILIATION: input=${candidates.length} apiReturned=${analysisData.stocks?.length || 0} noData=${noDataCount} enriched=${enriched.length} volSource: live=${liveVolCount} chartink=${chartinkVolCount}`);
+  console.log(`${LOG} [Step 3] Enriched ${enriched.length}/${candidates.length} (${candidates.length - enriched.length} missing)`);
 
   return enriched;
 }

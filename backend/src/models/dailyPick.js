@@ -77,7 +77,7 @@ const pickSchema = new mongoose.Schema({
     target_order_id: String,      // LIMIT SELL order ID (structural target)
     kite_status: {
       type: String,
-      enum: ['pending', 'collecting_orb', 'validated', 'order_placed', 'entered', 'sl_target_placed', 'completed', 'failed', 'skipped'],
+      enum: ['pending', 'collecting_orb', 'validated', 'order_placed', 'gtt_placed', 'amo_placed', 'entered', 'sl_target_placed', 'completed', 'cancelled', 'failed', 'skipped'],
       default: 'pending'
     }
   },
