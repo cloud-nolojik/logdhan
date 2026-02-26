@@ -1125,7 +1125,8 @@ async function placePreMarketEntries(doc) {
     try {
       if (pick.direction === 'LONG') {
         // LONG → GTT single-leg + CNC (delivery)
-        console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT LONG qty=${qty} trigger=₹${triggerPrice} product=CNC`);
+        console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT LONG qty=${qty} trigger=₹${triggerPrice} last_price=₹${pick.candle.close} product=CNC`);
+        console.log(`${LOG} [Step 7.5] ${pick.symbol}: [DEBUG] candle=${JSON.stringify(pick.candle)} levels=${JSON.stringify(pick.levels)}`);
 
         const result = await kiteOrderService.placeGTT({
           type: 'single',
@@ -1144,6 +1145,8 @@ async function placePreMarketEntries(doc) {
           orderType: 'ENTRY',
           source: 'DAILY_PICKS'
         });
+
+        console.log(`${LOG} [Step 7.5] ${pick.symbol}: [DEBUG] placeGTT result=${JSON.stringify({ success: result.success, triggerId: result.triggerId })}`);
 
         if (result.success && result.triggerId) {
           pick.trade.status = 'ORDER_PLACED';
@@ -1219,7 +1222,7 @@ async function placePreMarketEntries(doc) {
         }
       }
     } catch (err) {
-      console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: Order error —`, err.message);
+      console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: Order error — ${err.message}`, err.response?.data ? JSON.stringify(err.response.data) : '');
       pick.trade.status = 'FAILED';
       pick.kite.kite_status = 'failed';
     }
