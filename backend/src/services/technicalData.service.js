@@ -275,6 +275,14 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
     );
     console.log(`[CandleData] ${symbol}: saved ${candleDataForDb.length} candles to DB`);
 
+    // Step 5: Verify API data is actually fresh after saving
+    const isStillOutdated = await isCandleDataOutdated(candleDataForDb, dbTimeframe);
+    if (isStillOutdated) {
+      const lastApiDateStr = typeof lastApi?.[0] === 'string' ? lastApi[0].split('T')[0] : 'unknown';
+      const expectedDateStr = await MarketHoursUtil.getLastCompletedTradingDay();
+      console.warn(`[CandleData] ${symbol}: ⚠️ API data still outdated after fetch (last=${lastApiDateStr}, expected=${expectedDateStr}) — API may not have updated yet`);
+    }
+
     return apiCandles;
 
   } catch (error) {
