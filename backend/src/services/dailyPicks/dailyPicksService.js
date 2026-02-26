@@ -1081,7 +1081,13 @@ async function placePreMarketEntries(doc) {
 
   // Capital allocation — LONG draws from swing pool (CNC), SHORT from intraday pool (MIS)
   const MAX_WEIGHT = 0.45;
-  const balance = await kiteOrderService.getAvailableBalance();
+  let balance;
+  try {
+    balance = await kiteOrderService.getAvailableBalance();
+  } catch (err) {
+    console.error(`${LOG} [Step 7.5] ❌ Failed to fetch balance — ${err.message}`);
+    throw err;
+  }
   console.log(`${LOG} [Step 7.5] Balance: ₹${balance.available}, Swing budget: ₹${balance.usableSwing}, Intraday budget: ₹${balance.usableIntraday}`);
 
   const totalScore = pendingPicks.reduce((sum, p) => sum + p.rank_score, 0);
