@@ -1110,9 +1110,19 @@ async function placePreMarketEntries(doc) {
     console.log(`${LOG}   ${pick.symbol}: ${pick.direction} weight=${round2(rawWeights[pendingPicks.indexOf(pick)] / weightSum * 100)}% capital=₹${capital} capped=₹${cappedAmount} estQty=${estQty} entry=₹${pick.levels.entry}`);
   }
 
+  // Breakout/52W scans wait for ORB validation at 9:30 AM — entry ≈ current price, gap risk is high
+  // Pullback/compression scans place pre-market — entry below current price, safe for LIMIT
+  const ORB_WAIT_SCANS = ['fiftyTwoWeek_high', 'fiftyTwoWeek_low', 'breakout_setup', 'breakdown_setup'];
+
   let ordersPlaced = 0;
 
   for (const { pick, capital } of allocations) {
+    // Defer breakout/52W scans to ORB validation — stays PENDING for 9:30 AM job
+    if (ORB_WAIT_SCANS.includes(pick.scan_type)) {
+      console.log(`${LOG} [Step 7.5] ${pick.symbol}: ${pick.scan_type} — deferred to ORB validation at 9:30 AM`);
+      continue;
+    }
+
     const orderAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
     const qty = Math.floor(orderAmount / pick.levels.entry);
     if (qty <= 0) {
@@ -1125,15 +1135,17 @@ async function placePreMarketEntries(doc) {
     try {
       if (pick.direction === 'LONG') {
         // LONG → GTT single-leg + CNC (delivery)
-        console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT LONG qty=${qty} trigger=₹${triggerPrice} last_price=₹${pick.candle.close} product=CNC`);
-        console.log(`${LOG} [Step 7.5] ${pick.symbol}: [DEBUG] candle=${JSON.stringify(pick.candle)} levels=${JSON.stringify(pick.levels)}`);
+        // Kite rejects GTT if trigger_price === last_price, so nudge last_price one tick below
+        const tick = getNseTickSize(triggerPrice);
+        const lastPrice = roundToTick(triggerPrice - tick);
+        console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT LONG qty=${qty} trigger=₹${triggerPrice} last_price=₹${lastPrice} product=CNC`);
 
         const result = await kiteOrderService.placeGTT({
           type: 'single',
           tradingsymbol: pick.symbol,
           exchange: 'NSE',
           trigger_values: [triggerPrice],
-          last_price: pick.candle.close,
+          last_price: lastPrice,
           orders: [{
             transaction_type: 'BUY',
             quantity: qty,
