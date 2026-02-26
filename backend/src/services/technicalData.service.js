@@ -150,6 +150,7 @@ async function fetchFromUpstox(instrumentKey, timeframe, days = 365) {
   // Cache-bust: Cloudflare CDN caches by URL and can serve stale index data to certain regions
   const cacheBust = `_t=${Date.now()}`;
   const url = `https://api.upstox.com/v2/historical-candle/${encodedKey}/${interval}/${toDateStr}/${fromDateStr}?${cacheBust}`;
+  console.log(`[CandleData] fetchFromUpstox: ${url}`);
 
   try {
     const response = await rateLimitedGet(url, {
@@ -162,11 +163,11 @@ async function fetchFromUpstox(instrumentKey, timeframe, days = 365) {
     const candles = response.data?.data?.candles || [];
 
     // Upstox returns newest first, reverse to oldest first
-    return candles.reverse();
+    return { candles: candles.reverse(), status: 200 };
   } catch (error) {
-    const status = error.response?.status || 'N/A';
-    console.error(`[TechnicalData] fetchFromUpstox FAILED for ${instrumentKey}: HTTP ${status} - ${error.message}`);
-    return [];
+    const status = error.response?.status || 0;
+    console.error(`[CandleData] fetchFromUpstox FAILED for ${instrumentKey}: HTTP ${status} - ${error.message}`);
+    return { candles: [], status };
   }
 }
 
@@ -183,6 +184,7 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
 
   try {
     // Step 1: Check DB for existing data
+    console.log(`[CandleData] ${symbol}: checking DB for ${instrumentKey} / ${dbTimeframe}`);
     const dbRecord = await PreFetchedData.findOne({
       instrument_key: instrumentKey,
       timeframe: dbTimeframe
@@ -190,6 +192,9 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
 
     // Step 2: Check if data exists and has the last completed trading day's candle
     if (dbRecord && dbRecord.candle_data?.length > 0) {
+      const lastCandle = dbRecord.candle_data[dbRecord.candle_data.length - 1];
+      console.log(`[CandleData] ${symbol}: DB has ${dbRecord.candle_data.length} candles, last=${lastCandle?.timestamp}`);
+
       const candleArray = dbRecord.candle_data.map(c => [
         c.timestamp,
         c.open,
@@ -200,33 +205,49 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
       ]);
 
       const isOutdated = await isCandleDataOutdated(dbRecord.candle_data, dbTimeframe);
+      console.log(`[CandleData] ${symbol}: isOutdated=${isOutdated}`);
 
       if (!isOutdated) {
-        // Data has the last completed trading day's candle — use cached
-        // Merge today's intraday candle if after 4 PM on trading day (daily only)
-        if (dbTimeframe === '1d') {
-          const merged = await mergeTodayIntradayCandle(candleArray, instrumentKey, symbol);
-          return merged;
-        }
+        console.log(`[CandleData] ${symbol}: CACHED — returning ${candleArray.length} candles`);
         return candleArray;
       }
 
+    } else {
+      console.log(`[CandleData] ${symbol}: NO DB record found`);
     }
 
     // Step 3: Data missing or outdated - fetch from API
+    console.log(`[CandleData] ${symbol}: fetching from Upstox API (${upstoxTimeframe}, 400 days)...`);
+    let fetchResult = await fetchFromUpstox(instrumentKey, upstoxTimeframe, 400);
+    let apiCandles = fetchResult.candles;
+    let activeKey = instrumentKey;
 
-    const apiCandles = await fetchFromUpstox(instrumentKey, upstoxTimeframe, 400);
+    // If HTTP 400 (invalid instrument key), try refreshing the key from Stock DB
+    if (fetchResult.status === 400 && apiCandles.length === 0) {
+      console.warn(`[CandleData] ${symbol}: HTTP 400 — instrument key may be stale, looking up fresh key...`);
+      const freshStock = await Stock.findOne({
+        trading_symbol: symbol.toUpperCase(),
+        exchange: 'NSE',
+        is_active: true
+      }).lean();
+
+      if (freshStock && freshStock.instrument_key !== instrumentKey) {
+        console.log(`[CandleData] ${symbol}: Key changed: ${instrumentKey} → ${freshStock.instrument_key}`);
+        activeKey = freshStock.instrument_key;
+        fetchResult = await fetchFromUpstox(activeKey, upstoxTimeframe, 400);
+        apiCandles = fetchResult.candles;
+      }
+    }
+
+    console.log(`[CandleData] ${symbol}: API returned ${apiCandles.length} candles`);
 
     if (apiCandles.length === 0) {
-      // If API fails but we have stale data, use it
-      if (dbRecord && dbRecord.candle_data?.length > 0) {
-        const staleCandles = dbRecord.candle_data.map(c => [c.timestamp, c.open, c.high, c.low, c.close, c.volume]);
-        console.warn(`[CandleData] ${symbol}: API failed — using stale DB data (${staleCandles.length} candles)`);
-        return staleCandles;
-      }
-      console.warn(`[CandleData] ${symbol}: API failed — no fallback data`);
+      console.warn(`[CandleData] ${symbol}: API failed for ${activeKey} — skipping (stale DB data not used)`);
       return [];
     }
+
+    const lastApi = apiCandles[apiCandles.length - 1];
+    console.log(`[CandleData] ${symbol}: API fresh ${apiCandles.length} candles, last=${lastApi?.[0]}`);
 
     // Step 4: Save to DB for future use
     const candleDataForDb = apiCandles.map(c => ({
@@ -239,7 +260,7 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
     }));
 
     await PreFetchedData.findOneAndUpdate(
-      { instrument_key: instrumentKey, timeframe: dbTimeframe },
+      { instrument_key: activeKey, timeframe: dbTimeframe },
       {
         $set: {
           stock_symbol: symbol,
@@ -252,75 +273,13 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
       },
       { upsert: true }
     );
-    // Merge today's intraday candle if after 4 PM on trading day (daily only)
-    if (dbTimeframe === '1d') {
-      const merged = await mergeTodayIntradayCandle(apiCandles, instrumentKey, symbol);
-      if (merged.length !== apiCandles.length) {
-        console.log(`[CANDLE-DEBUG] ${symbol}: MERGE added candle! ${apiCandles.length} → ${merged.length}`);
-      }
-      return merged;
-    }
+    console.log(`[CandleData] ${symbol}: saved ${candleDataForDb.length} candles to DB`);
+
     return apiCandles;
 
   } catch (error) {
-    console.error(`[CANDLE-DEBUG] ${symbol}: ERROR — ${error.message}`);
+    console.error(`[CandleData] ${symbol}: ERROR — ${error.message}`);
     return [];
-  }
-}
-
-/**
- * Merge today's completed intraday candle into historical daily candles.
- * Between 4 PM - midnight IST on a trading day, the historical API only has
- * up to yesterday's close. The intraday API has today's completed candle.
- * @param {Array} dailyCandles - Historical candles [[timestamp, o, h, l, c, v], ...]
- * @param {string} instrumentKey - Instrument key for intraday fetch
- * @param {string} symbol - Trading symbol for logging
- * @returns {Promise<Array>} Candles with today's candle appended if applicable
- */
-async function mergeTodayIntradayCandle(dailyCandles, instrumentKey, symbol) {
-  try {
-    const ist = MarketHoursUtil.toIST(new Date());
-    const hour = ist.getHours();
-    const isTrading = await MarketHoursUtil.isTradingDay(new Date());
-
-    // Only merge after 4 PM IST on a trading day
-    if (!isTrading || hour < 16) {
-      return dailyCandles;
-    }
-
-    // Check if today's candle is already in the historical data
-    const todayStr = ist.toISOString().split('T')[0];
-    const lastCandle = dailyCandles[dailyCandles.length - 1];
-    if (lastCandle) {
-      const lastDate = new Date(lastCandle[0]).toISOString().split('T')[0];
-      if (lastDate === todayStr) {
-        console.log(`[TechnicalData] ${symbol}: Today's candle already in historical data`);
-        return dailyCandles;
-      }
-    }
-
-    // Fetch today's intraday data
-    const liveData = await fetchLiveIntradayData(instrumentKey);
-    if (!liveData) {
-      console.log(`[TechnicalData] ${symbol}: No intraday data for today - using historical only`);
-      return dailyCandles;
-    }
-
-    // Build today's daily candle from intraday aggregation
-    const todayCandle = [
-      `${todayStr}T00:00:00+05:30`,
-      liveData.open,
-      liveData.high,
-      liveData.low,
-      liveData.ltp,     // closing price = last traded price (market closed)
-      liveData.volume
-    ];
-
-    console.log(`[TechnicalData] ${symbol}: Merged today's intraday candle (close=${liveData.ltp}, vol=${liveData.volume})`);
-    return [...dailyCandles, todayCandle];
-  } catch (error) {
-    console.warn(`[TechnicalData] ${symbol}: Failed to merge intraday candle: ${error.message}`);
-    return dailyCandles;
   }
 }
 
@@ -690,6 +649,7 @@ async function lookupInstrumentKeys(symbols) {
 
       if (stock) {
         symbolMap[symbol] = { instrumentKey: stock.instrument_key, name: stock.name };
+        console.log(`[Lookup] ${symbol}: NSE → ${stock.instrument_key}`);
       } else {
         const bseStock = await Stock.findOne({
           trading_symbol: symbol.toUpperCase(),
@@ -699,8 +659,10 @@ async function lookupInstrumentKeys(symbols) {
 
         if (bseStock) {
           symbolMap[symbol] = { instrumentKey: bseStock.instrument_key, name: bseStock.name };
+          console.log(`[Lookup] ${symbol}: BSE → ${bseStock.instrument_key}`);
         } else {
           symbolMap[symbol] = null;
+          console.warn(`[Lookup] ${symbol}: NOT FOUND in NSE or BSE`);
         }
       }
     } catch (error) {
@@ -965,13 +927,15 @@ async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
  * @param {string} instrumentKey - Instrument key
  * @param {number|null} bulkLivePrice - Optional live price from bulk fetch (priceCacheService)
  */
-async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = null) {
+async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = null, skipIntraday = false) {
   try {
     // Fetch historical daily candles for RSI, pivots, avg volume
+    console.log(`[DailyStock] ${symbol}: calling getCandleData(${instrumentKey}, '1d')...`);
     const dailyCandles = await getCandleData(instrumentKey, symbol, '1d');
+    console.log(`[DailyStock] ${symbol}: getCandleData returned ${dailyCandles.length} candles`);
 
     if (dailyCandles.length === 0) {
-      console.log(`[ENRICH-DEBUG] ${symbol}: NO CANDLES — returning zeros`);
+      console.log(`[DailyStock] ${symbol}: NO CANDLES — returning zeros`);
       return {
         symbol,
         instrument_key: instrumentKey,
@@ -1017,7 +981,15 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     // Priority: 1) Bulk live price (from priceCacheService), 2) Intraday candles, 3) Daily candle
     let open, high, low, ltp, todayVolume, dataSource;
 
-    if (bulkLivePrice) {
+    if (skipIntraday) {
+      // Skip all intraday API calls — use daily candle data only
+      open = round2(latestDailyCandle[1]) || 0;
+      high = round2(latestDailyCandle[2]) || 0;
+      low = round2(latestDailyCandle[3]) || 0;
+      ltp = round2(latestDailyCandle[4]) || 0;
+      todayVolume = latestDailyCandle[5] || 0;
+      dataSource = 'DAILY';
+    } else if (bulkLivePrice) {
       const liveData = await fetchLiveIntradayData(instrumentKey);
       if (liveData) {
         open = liveData.open;
@@ -1073,7 +1045,9 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     }
 
     // Fetch hourly pivots for intraday confluence scoring
-    const hourlyPivots = await fetchHourlyPivots(instrumentKey, latestDailyCandle[0]);
+    const hourlyPivots = skipIntraday
+      ? { hourly_1h_pivots: null, hourly_4h_pivots: null, swing_levels_1h: null }
+      : await fetchHourlyPivots(instrumentKey, latestDailyCandle[0]);
 
     // === FINGERPRINT: Single debug line with all scoring-critical values ===
     console.log(`[ENRICH-DEBUG] ${symbol}: src=${dataSource} candles=${dailyCandles.length} | O=${open} H=${high} L=${low} C=${ltp} prevC=${prevClose} vol=${todayVolume} avgVol50=${avgVolume50d} | RSI=${dailyIndicators.rsi14} EMA20=${dailyIndicators.ema20} ATR=${dailyIndicators.atr} | pivot=${dailyPivot?.pivot} 1hP=${hourlyPivots.hourly_1h_pivots?.pivot || 'null'} 4hP=${hourlyPivots.hourly_4h_pivots?.pivot || 'null'}`);
@@ -1152,12 +1126,12 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
  * @param {Array<string>} symbols - Array of trading symbols
  * @returns {Object} Daily analysis response
  */
-export async function getDailyAnalysisData(symbols) {
+export async function getDailyAnalysisData(symbols, { skipIntraday = true } = {}) {
   const startTime = Date.now();
 
   // Check if market is open
   const isMarketOpen = await MarketHoursUtil.isMarketOpen();
-  console.log(`[DailyAnalysis] ${symbols.length} symbols, market=${isMarketOpen ? 'OPEN' : 'CLOSED'}: ${symbols.join(', ')}`);
+  console.log(`[DailyAnalysis] ${symbols.length} symbols, market=${isMarketOpen ? 'OPEN' : 'CLOSED'}, skipIntraday=${skipIntraday}: ${symbols.join(', ')}`);
 
   // Look up instrument keys
   const symbolMap = await lookupInstrumentKeys(symbols);
@@ -1166,7 +1140,7 @@ export async function getDailyAnalysisData(symbols) {
   const niftyKey = 'NSE_INDEX|Nifty 50';
   const [niftyCandles, niftyLive] = await Promise.all([
     getCandleData(niftyKey, 'NIFTY50', '1d'),
-    fetchLiveIntradayData(niftyKey)
+    skipIntraday ? Promise.resolve(null) : fetchLiveIntradayData(niftyKey)
   ]);
 
   let niftyLevel = 0;
@@ -1212,7 +1186,7 @@ export async function getDailyAnalysisData(symbols) {
 
     // Pass live price from bulk fetch if available
     const livePrice = livePriceMap[stockInfo.instrumentKey];
-    return calculateDailyStockData(symbol, stockInfo.instrumentKey, livePrice);
+    return calculateDailyStockData(symbol, stockInfo.instrumentKey, livePrice, skipIntraday);
   });
 
   // Generate IST timestamp

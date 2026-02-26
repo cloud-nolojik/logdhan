@@ -1,17 +1,17 @@
 /**
- * Daily Picks Job — 6:32 AM IST
+ * Instrument Sync Job — 6:00 AM IST
  *
- * Runs ChartInk scans, enriches, scores, saves, and notifies.
- * Schedule: Monday-Friday at 6:32 AM IST (before market open for clean OHLCV).
+ * Downloads latest instrument keys from Upstox and updates Stock DB.
+ * Schedule: Monday-Friday at 6:00 AM IST (before daily picks at 8:45 AM).
  */
 
 import Agenda from 'agenda';
-import { runDailyPicks } from '../dailyPicks/dailyPicksService.js';
+import { runSync } from '../instrumentSync.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 
-const LOG = '[DAILY-PICKS-JOB]';
+const LOG = '[INSTRUMENT-SYNC-JOB]';
 
-class DailyPicksJob {
+class InstrumentSyncJob {
   constructor() {
     this.agenda = null;
     this.isInitialized = false;
@@ -36,7 +36,7 @@ class DailyPicksJob {
       this.agenda = new Agenda({
         db: {
           address: process.env.MONGODB_URI,
-          collection: 'daily_picks_jobs',
+          collection: 'instrument_sync_jobs',
           options: { useUnifiedTopology: true }
         },
         processEvery: '1 minute',
@@ -58,7 +58,7 @@ class DailyPicksJob {
   }
 
   defineJobs() {
-    this.agenda.define('daily-picks-scan', async (job) => {
+    this.agenda.define('sync-instrument-keys', async (job) => {
       if (this.isRunning) {
         console.log(`${LOG} Already running, skipping`);
         return;
@@ -66,47 +66,23 @@ class DailyPicksJob {
 
       this.isRunning = true;
       try {
-        // Pre-flight: trading day check
         const isTradingDay = await MarketHoursUtil.isTradingDay();
         if (!isTradingDay) {
           console.log(`${LOG} Not a trading day — skipping`);
           return { skipped: true, reason: 'not_trading_day' };
         }
 
-        const result = await runDailyPicks();
+        const result = await runSync();
 
         this.stats.runsCompleted++;
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
 
-        console.log(`${LOG} Completed: ${result.picks} picks`);
+        console.log(`${LOG} Completed in ${result.elapsed}s`);
         return result;
       } catch (error) {
-        console.error(`${LOG} Scan failed:`, error);
+        console.error(`${LOG} Sync failed:`, error);
         this.stats.errors++;
-        throw error;
-      } finally {
-        this.isRunning = false;
-      }
-    });
-
-    // Manual trigger
-    this.agenda.define('manual-daily-picks-scan', async (job) => {
-      if (this.isRunning) {
-        console.log(`${LOG} Already running, skipping manual trigger`);
-        return;
-      }
-
-      this.isRunning = true;
-      try {
-        const opts = job.attrs.data || {};
-        const result = await runDailyPicks(opts);
-
-        this.stats.lastRunAt = new Date();
-        this.stats.lastResult = result;
-        return result;
-      } catch (error) {
-        console.error(`${LOG} Manual scan failed:`, error);
         throw error;
       } finally {
         this.isRunning = false;
@@ -123,25 +99,25 @@ class DailyPicksJob {
 
   async scheduleRecurringJobs() {
     try {
-      await this.agenda.cancel({ name: 'daily-picks-scan' });
+      await this.agenda.cancel({ name: 'sync-instrument-keys' });
 
-      // 6:32 AM IST, Monday-Friday (before market open for clean OHLCV)
-      await this.agenda.every('32 6 * * 1-5', 'daily-picks-scan', {}, {
+      // 6:00 AM IST, Monday-Friday (before daily picks at 8:45 AM)
+      await this.agenda.every('0 6 * * 1-5', 'sync-instrument-keys', {}, {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log(`${LOG} Scheduled: 6:32 AM IST, Mon-Fri`);
+      console.log(`${LOG} Scheduled: 6:00 AM IST, Mon-Fri`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
       throw error;
     }
   }
 
-  async triggerNow(opts = {}) {
-    if (!this.isInitialized) throw new Error('Daily picks job not initialized');
+  async triggerNow() {
+    if (!this.isInitialized) throw new Error('Instrument sync job not initialized');
 
     console.log(`${LOG} Manual trigger requested`);
-    const job = await this.agenda.now('manual-daily-picks-scan', opts);
+    const job = await this.agenda.now('sync-instrument-keys');
 
     return {
       success: true,
@@ -162,7 +138,7 @@ class DailyPicksJob {
   }
 }
 
-const dailyPicksJob = new DailyPicksJob();
+const instrumentSyncJob = new InstrumentSyncJob();
 
-export default dailyPicksJob;
-export { DailyPicksJob };
+export default instrumentSyncJob;
+export { InstrumentSyncJob };

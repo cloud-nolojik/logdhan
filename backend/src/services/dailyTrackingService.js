@@ -938,7 +938,7 @@ function simulateTrade(stock, snapshots, currentPrice) {
  * @returns {{ phase1Results: Object[], phase2Queue: Object[] }}
  */
 async function runPhase1(options = {}) {
-  const { targetDate, dryRun } = options;
+  const { targetDate, dryRun, forceEntrySignaled } = options;
   const runLabel = dryRun ? '[DAILY-TRACK-P1-DRYRUN]' : '[DAILY-TRACK-P1]';
   console.log(`${runLabel} Starting Phase 1: Status Update...`);
   if (targetDate) console.log(`${runLabel} Target date: ${targetDate}`);
@@ -1049,7 +1049,51 @@ async function runPhase1(options = {}) {
     const dailyData = dailyDataMap.get(stock.symbol);
 
     if (!dailyData || !dailyData.ltp || dailyData.ltp <= 0) {
-      console.log(`${runLabel} ⏭️ ${stock.symbol} - SKIP (no valid price data)`);
+      if (forceEntrySignaled) console.log(`${runLabel} ⏭️ ${stock.symbol} - SKIP forced signal (no valid price data)`);
+      else console.log(`${runLabel} ⏭️ ${stock.symbol} - SKIP (no valid price data)`);
+      continue;
+    }
+
+    // ── FORCE ENTRY_SIGNALED: Must come before terminal state check ──
+    if (forceEntrySignaled === true || forceEntrySignaled?.includes?.(stock.symbol)) {
+      const sim = stock.trade_simulation || { events: [] };
+      if (!sim.events) sim.events = [];
+
+      // Force to ENTRY_SIGNALED regardless of current status
+      if (sim.status !== 'ENTRY_SIGNALED') {
+        console.log(`${runLabel} 🔥 ${stock.symbol}: Overriding ${sim.status || 'N/A'} → ENTRY_SIGNALED`);
+        const signalPrice = stock.levels.entry;
+        const qty = Math.floor((sim.capital || 100000) / signalPrice);
+        sim.status = 'ENTRY_SIGNALED';
+        sim.signal_date = new Date();
+        sim.signal_close = signalPrice;
+        sim.capital = sim.capital || 100000;
+        sim.qty_total = qty;
+        sim.events.push({
+          date: new Date(), type: 'ENTRY_SIGNAL', price: signalPrice, qty, pnl: 0,
+          detail: `[FORCED] Entry: ₹${signalPrice.toFixed(2)}, Qty: ${qty}`
+        });
+        stock.trade_simulation = sim;
+        stock.tracking_status = 'ABOVE_ENTRY';
+        if (stock.grade !== 'A+' && stock.grade !== 'A') stock.grade = 'A+';
+        console.log(`${runLabel} 🔥 ${stock.symbol}: Set ENTRY_SIGNALED, tracking_status → ABOVE_ENTRY (Entry: ₹${signalPrice}, Qty: ${qty}, Grade: ${stock.grade}, LTP: ₹${dailyData.ltp})`);
+      } else {
+        // Still reset tracking_status in case it's stale (e.g., EXPIRED)
+        if (stock.tracking_status === 'EXPIRED' || stock.tracking_status === 'PARTIAL_EXIT') {
+          stock.tracking_status = 'ABOVE_ENTRY';
+          console.log(`${runLabel} 🔥 ${stock.symbol}: Already ENTRY_SIGNALED, tracking_status → ABOVE_ENTRY (Entry: ₹${stock.levels.entry}, LTP: ₹${dailyData.ltp})`);
+        } else {
+          console.log(`${runLabel} 🔥 ${stock.symbol}: Already ENTRY_SIGNALED (Entry: ₹${stock.levels.entry}, LTP: ₹${dailyData.ltp})`);
+        }
+      }
+
+      phase1Results.push({
+        symbol: stock.symbol, instrument_key: stock.instrument_key,
+        oldStatus: stock.tracking_status, newStatus: stock.tracking_status,
+        oldFlags: stock.tracking_flags || [], newFlags: stock.tracking_flags || [],
+        ltp: dailyData.ltp, statusChanged: false, phase2Triggered: false, phase2Reason: null,
+        simulation: { status: stock.trade_simulation?.status, total_pnl: stock.trade_simulation?.total_pnl || 0, total_return_pct: stock.trade_simulation?.total_return_pct || 0 }
+      });
       continue;
     }
 
@@ -1312,6 +1356,13 @@ async function runPhase1(options = {}) {
       stock.tracking_status = 'EXPIRED';
       stock.status_changed_at = processingDate;
       newStatus = 'EXPIRED';
+    }
+    else if (simStatus === 'ENTRY_SIGNALED' && stock.tracking_status === 'EXPIRED') {
+      // Edge case: simulation signaled entry but tracking_status is stale
+      stock.previous_status = stock.tracking_status;
+      stock.tracking_status = 'ABOVE_ENTRY';
+      stock.status_changed_at = processingDate;
+      newStatus = 'ABOVE_ENTRY';
     }
 
     // Update snapshot with simulation-corrected status
@@ -1582,11 +1633,11 @@ async function runPhase2(phase2Queue, watchlist = null) {
 
 /**
  * Run full daily tracking (Phase 1 + Phase 2)
- * @param {Object} options - { targetDate: string (YYYY-MM-DD), dryRun: boolean, forceReanalyze: boolean }
+ * @param {Object} options - { targetDate: string (YYYY-MM-DD), dryRun: boolean, forceReanalyze: boolean, forceEntrySignaled: string[] }
  * @returns {Object} - Full run results
  */
 async function runDailyTracking(options = {}) {
-  const { targetDate, dryRun } = options;
+  const { targetDate, dryRun, forceEntrySignaled } = options;
   const runLabel = dryRun ? '[DAILY-TRACK-DRYRUN]' : '[DAILY-TRACK]';
   const startTime = Date.now();
 
@@ -1599,7 +1650,7 @@ async function runDailyTracking(options = {}) {
 
   try {
     // Phase 1: Status updates
-    const { phase1Results, phase2Queue, stocksMap, watchlist } = await runPhase1({ targetDate, dryRun });
+    const { phase1Results, phase2Queue, stocksMap, watchlist } = await runPhase1({ targetDate, dryRun, forceEntrySignaled });
 
     // Kite Order Placement: Place GTT orders for ENTRY_SIGNALED stocks
     let kiteResults = null;

@@ -31,6 +31,7 @@ import priceCacheService from './services/priceCache.service.js'; // In-memory p
 import weekendScreeningJob from './services/weeklyPicks/weekendScreeningJob.js'; // weekend-screening (Sat 6PM IST)
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
+import instrumentSyncJob from './services/jobs/instrumentSyncJob.js'; // sync-instrument-keys (6:00 AM Mon-Fri)
 import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-picks-scan (8:45 AM Mon-Fri)
 import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // v2: ORB 9:30, validate+entry, monitor */3, tighten 14:00, exit 15:00
 import { initFillListener } from './services/dailyPicks/dailyPicksService.js'; // Postback → instant SL+target
@@ -293,6 +294,9 @@ app.listen(PORT, async () => {
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
   await initializeKiteOrderSyncJob(); // kite-order-sync (every 30 min during market hours)
 
+  // Instrument sync (6:00 AM Mon-Fri — before daily picks)
+  await instrumentSyncJob.initialize();
+
   // Daily picks jobs
   await initializeDailyPicksJob(); // daily-picks-scan (8:45 AM Mon-Fri)
   await initializeDailyEntryJob(); // daily-picks-entry 9:30, monitor */3, tighten 14:00, exit 15:00
@@ -317,6 +321,7 @@ process.on('SIGINT', async () => {
       dailyTrackingJob.shutdown(),
       kiteOrderSyncJob.shutdown(),
       kiteTokenRefreshJob.shutdown(),
+      instrumentSyncJob.shutdown(),
       dailyPicksJob.shutdown(),
       dailyEntryJob.shutdown()
     ]);
@@ -342,6 +347,7 @@ process.on('SIGTERM', async () => {
       dailyTrackingJob.shutdown(),
       kiteOrderSyncJob.shutdown(),
       kiteTokenRefreshJob.shutdown(),
+      instrumentSyncJob.shutdown(),
       dailyPicksJob.shutdown(),
       dailyEntryJob.shutdown()
     ]);

@@ -155,7 +155,7 @@ const kiteAuditLogSchema = new mongoose.Schema({
   // Metadata
   source: {
     type: String,
-    enum: ['AUTO', 'MANUAL', 'SCHEDULED', 'WEBHOOK', 'OAUTH', 'DAILY_PICKS'],
+    enum: ['AUTO', 'MANUAL', 'SCHEDULED', 'WEBHOOK', 'OAUTH', 'DAILY_PICKS', 'DAILY_TRACKING'],
     default: 'AUTO'
   },
   notes: {

@@ -1132,7 +1132,7 @@ async function placePreMarketEntries(doc) {
           tradingsymbol: pick.symbol,
           exchange: 'NSE',
           trigger_values: [triggerPrice],
-          last_price: pick.levels.entry,
+          last_price: pick.candle.close,
           orders: [{
             transaction_type: 'BUY',
             quantity: qty,
