@@ -1166,7 +1166,8 @@ async function placePreMarketEntries(doc) {
           });
         } catch (gttErr) {
           // GTT "Trigger already met" → price already above entry, place LIMIT order directly
-          if (gttErr.message?.includes('Trigger already met')) {
+          const kiteErrMsg = gttErr.response?.data?.message || gttErr.message || '';
+          if (kiteErrMsg.includes('Trigger already met')) {
             console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT trigger already met — placing LIMIT order instead`);
             const limitResult = await kiteOrderService.placeOrder({
               tradingsymbol: pick.symbol,
