@@ -1168,8 +1168,8 @@ async function placePreMarketEntries(doc) {
           // GTT "Trigger already met" → price already above entry, place LIMIT order directly
           const kiteErrMsg = gttErr.response?.data?.message || gttErr.message || '';
           if (kiteErrMsg.includes('Trigger already met')) {
-            console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT trigger already met — placing LIMIT order instead`);
-            const limitResult = await kiteOrderService.placeOrder({
+            console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT trigger already met — placing AMO LIMIT order instead`);
+            const amoResult = await kiteOrderService.placeAMOOrder({
               tradingsymbol: pick.symbol,
               exchange: 'NSE',
               transaction_type: 'BUY',
@@ -1182,20 +1182,20 @@ async function placePreMarketEntries(doc) {
               source: 'DAILY_PICKS'
             });
 
-            if (limitResult.success && limitResult.orderId) {
+            if (amoResult.success && amoResult.orderId) {
               pick.trade.status = 'ORDER_PLACED';
               pick.trade.qty = qty;
-              pick.kite.entry_order_id = limitResult.orderId;
-              pick.kite.kite_status = 'order_placed';
+              pick.kite.entry_order_id = amoResult.orderId;
+              pick.kite.kite_status = 'amo_placed';
               ordersPlaced++;
-              console.log(`${LOG} [Step 7.5] ┌── LIMIT ENTRY: ${pick.symbol} ──────────────────────`);
+              console.log(`${LOG} [Step 7.5] ┌── AMO LIMIT ENTRY: ${pick.symbol} ──────────────────────`);
               console.log(`${LOG} [Step 7.5] │ Direction: LONG | Scan: ${pick.scan_type} | Product: CNC`);
               console.log(`${LOG} [Step 7.5] │ Price: ₹${triggerPrice} | Qty: ${qty} | Capital: ₹${orderAmount}`);
               console.log(`${LOG} [Step 7.5] │ Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target} | R:R=${pick.levels.risk_reward}`);
-              console.log(`${LOG} [Step 7.5] │ Order ID: ${limitResult.orderId} (fallback from GTT)`);
+              console.log(`${LOG} [Step 7.5] │ Order ID: ${amoResult.orderId} (AMO fallback from GTT)`);
               console.log(`${LOG} [Step 7.5] └─────────────────────────────────────────────────────`);
             } else {
-              console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: LIMIT fallback failed — ${JSON.stringify(limitResult)}`);
+              console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: AMO LIMIT fallback failed — ${JSON.stringify(amoResult)}`);
               pick.trade.status = 'FAILED';
               pick.kite.kite_status = 'failed';
             }
