@@ -1141,9 +1141,8 @@ async function placePreMarketEntries(doc) {
     try {
       if (pick.direction === 'LONG') {
         // LONG → GTT single-leg + CNC (delivery)
-        // Kite rejects GTT if trigger_price === last_price, so nudge last_price one tick below
-        const tick = getNseTickSize(triggerPrice);
-        const lastPrice = roundToTick(triggerPrice - tick);
+        // Kite rejects GTT if trigger_price and last_price differ by less than 0.25%
+        const lastPrice = roundToTick(triggerPrice * 0.997);
         console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT LONG qty=${qty} trigger=₹${triggerPrice} last_price=₹${lastPrice} product=CNC`);
 
         const result = await kiteOrderService.placeGTT({
