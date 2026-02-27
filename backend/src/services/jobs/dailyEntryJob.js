@@ -1,14 +1,14 @@
 /**
- * Daily Entry Job — v2: ORB Validation + Instant Protection + Trailing
+ * Daily Entry Job — v2: Multi-Pass ORB Validation + Instant Protection + Trailing
  *
- * Six scheduled runs (Mon-Fri IST):
- * 1. 9:30 AM    — Fetch ORB OHLC + validate picks + place entries
- * 2. Every 3 min (10-14) — Monitor stop/target fills + trailing stops
- * 3. 14:00      — Tighten stops to breakeven for profitable positions
- * 4. 15:00      — Force-exit open positions + cancel unfilled orders
- *
- * Polling fallback for fill detection:
- * - Every 2 min (9-10) — Check fills for ORDER_PLACED picks (postback handles most, this is backup)
+ * Scheduled runs (Mon-Fri IST):
+ * 1. 9:30 AM    — ORB Pass 1 (15-min range): validate picks + place entries
+ * 2. 9:46 AM    — ORB Pass 2 (30-min range): retry failed picks with wider range
+ * 3. 10:01 AM   — ORB Pass 3 (45-min range, FINAL): last chance, then SKIPPED
+ * 4. Every 2 min (9-10) — Polling fallback for fill detection
+ * 5. Every 3 min (10-14) — Monitor stop/target fills + trailing stops
+ * 6. 14:00      — Tighten stops to breakeven for profitable positions
+ * 7. 15:00      — Force-exit open positions + cancel unfilled orders
  *
  * Manual triggers available for each step via API.
  */
@@ -108,47 +108,53 @@ class DailyEntryJob {
       }
     });
 
-    // Job 2: Fetch ORB OHLC + Validate picks + place entries at 9:30 AM
-    this.agenda.define('daily-picks-validate-entry', async (job) => {
-      if (this.runningJobs.has('validate-entry')) {
-        console.log(`${LOG} Validate+entry already running, skipping`);
+    // Job 2: Multi-pass ORB validate+entry — shared handler, 3 distinct job names
+    // Pass 1 (9:30) = 15-min ORB, Pass 2 (9:46) = 30-min, Pass 3 (10:01) = 45-min FINAL
+    // Note: agenda.every() enforces "single" per job name, so we define 3 separate names.
+    const orbValidateHandler = async (job, orbPass) => {
+      const jobKey = `validate-entry-pass${orbPass}`;
+
+      if (this.runningJobs.has(jobKey)) {
+        console.log(`${LOG} ${jobKey} already running, skipping`);
         return;
       }
 
-      this.runningJobs.add('validate-entry');
+      this.runningJobs.add(jobKey);
       try {
         const isTradingDay = await MarketHoursUtil.isTradingDay();
         if (!isTradingDay) {
-          console.log(`${LOG} Not a trading day — skipping validate+entry`);
+          console.log(`${LOG} Not a trading day — skipping pass ${orbPass}`);
           return { skipped: true, reason: 'not_trading_day' };
         }
 
-        // Step 1: Fetch ORB data (single OHLC call — instant)
-        console.log(`${LOG} [VALIDATE-ENTRY] Step 1: Fetching ORB OHLC...`);
-        const orbResult = await startOrbCollection();
+        console.log(`${LOG} [VALIDATE-ENTRY] Pass ${orbPass}: Fetching ORB OHLC...`);
+        const orbResult = await startOrbCollection({ orbPass });
         console.log(`${LOG} [VALIDATE-ENTRY] ORB result:`, JSON.stringify(orbResult));
 
         if (!orbResult.success) {
-          console.error(`${LOG} [VALIDATE-ENTRY] ORB fetch failed — skipping entry placement`);
+          console.error(`${LOG} [VALIDATE-ENTRY] ORB fetch failed — skipping pass ${orbPass}`);
           return { ...orbResult, orders: 0 };
         }
 
-        // Step 2: Validate + place entries
-        console.log(`${LOG} [VALIDATE-ENTRY] Step 2: Validating and placing entries...`);
-        const result = await validateAndPlaceEntries();
+        console.log(`${LOG} [VALIDATE-ENTRY] Pass ${orbPass}: Validating and placing entries...`);
+        const result = await validateAndPlaceEntries({ orbPass });
         this.stats.entriesValidated++;
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
-        console.log(`${LOG} [VALIDATE-ENTRY] Completed: validated=${result.validated} skipped=${result.skipped} orders=${result.orders}`);
+        console.log(`${LOG} [VALIDATE-ENTRY] Pass ${orbPass} done: validated=${result.validated} skipped=${result.skipped} retrying=${result.retrying || 0} orders=${result.orders}`);
         return result;
       } catch (error) {
-        console.error(`${LOG} Validate+entry failed:`, error);
+        console.error(`${LOG} Validate+entry pass ${orbPass} failed:`, error);
         this.stats.errors++;
         throw error;
       } finally {
-        this.runningJobs.delete('validate-entry');
+        this.runningJobs.delete(jobKey);
       }
-    });
+    };
+
+    this.agenda.define('daily-picks-validate-entry', async (job) => orbValidateHandler(job, 1));
+    this.agenda.define('daily-picks-validate-entry-pass2', async (job) => orbValidateHandler(job, 2));
+    this.agenda.define('daily-picks-validate-entry-pass3', async (job) => orbValidateHandler(job, 3));
 
     // Job 3: Polling fallback for fill detection (*/2 9-10)
     this.agenda.define('daily-picks-fill-fallback', async (job) => {
@@ -310,6 +316,8 @@ class DailyEntryJob {
           $in: [
             'daily-picks-orb-collect',
             'daily-picks-validate-entry',
+            'daily-picks-validate-entry-pass2',
+            'daily-picks-validate-entry-pass3',
             'daily-picks-cancel-expired', // legacy — clean up
             'daily-picks-fill-fallback',
             'daily-picks-monitor',
@@ -322,8 +330,19 @@ class DailyEntryJob {
         }
       });
 
-      // 9:30 AM IST — Fetch ORB OHLC + validate picks + place entries (all in one job)
+      // Multi-pass ORB validation: 3 passes with widening time windows
+      // Pass 1: 9:30 AM IST — 15-min ORB
       await this.agenda.every('30 9 * * 1-5', 'daily-picks-validate-entry', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+
+      // Pass 2: 9:46 AM IST — 30-min ORB (1 min buffer after 9:45 candle close)
+      await this.agenda.every('46 9 * * 1-5', 'daily-picks-validate-entry-pass2', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+
+      // Pass 3: 10:01 AM IST — 45-min ORB (FINAL, 1 min buffer after 10:00 candle close)
+      await this.agenda.every('1 10 * * 1-5', 'daily-picks-validate-entry-pass3', {}, {
         timezone: 'Asia/Kolkata'
       });
 

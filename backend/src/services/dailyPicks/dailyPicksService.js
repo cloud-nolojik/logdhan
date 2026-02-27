@@ -42,6 +42,11 @@ const LOG = '[DAILY-PICKS]';
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const MAX_OUTPUT_TOKENS = 5000;
 
+// Multi-pass ORB constants
+const MAX_ORB_PASS = 3;
+const ORB_PASS_LABELS = { 1: '15-min (9:30)', 2: '30-min (9:46)', 3: '45-min (10:01)' };
+const PERMANENT_FAIL_CHECKS = ['gap_check', 'gap_direction', 'nifty_alignment', 'no_orb_data'];
+
 let anthropic = null;
 function getAnthropicClient() {
   if (!anthropic) {
@@ -1297,12 +1302,15 @@ async function placePreMarketEntries(doc) {
 
 /**
  * Fetch ORB (Opening Range Breakout) data via single OHLC call.
- * Called at 9:30 AM — at that time, the day's OHLC IS the 15-min opening candle.
- * Stores ORB data on each pick's `orb` field.
+ * Multi-pass: Pass 1 (9:30) = 15-min range, Pass 2 (9:46) = 30-min, Pass 3 (10:01) = 45-min.
+ * At each time, the day's OHLC reflects the cumulative range since market open.
+ * Only updates picks still in PENDING/COLLECTING_ORB status.
  */
 async function startOrbCollection(options = {}) {
+  const { orbPass = 1 } = options;
+
   console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} Fetching ORB data (single OHLC call)`);
+  console.log(`${LOG} Fetching ORB data — Pass ${orbPass}: ${ORB_PASS_LABELS[orbPass] || orbPass}`);
   console.log(`${LOG} ════════════════════════════════════════`);
 
   const kiteEnabled = isKiteIntegrationEnabled();
@@ -1317,17 +1325,17 @@ async function startOrbCollection(options = {}) {
     return { success: true, message: 'No picks today' };
   }
 
-  // Accept PENDING or COLLECTING_ORB (in case of retry)
+  // Only fetch for picks still PENDING or COLLECTING_ORB
   const pendingPicks = doc.picks.filter(p =>
     p.trade.status === 'PENDING' || p.trade.status === 'COLLECTING_ORB'
   );
 
   if (pendingPicks.length === 0) {
-    console.log(`${LOG} No PENDING picks — skipping ORB`);
+    console.log(`${LOG} No PENDING picks for pass ${orbPass} — skipping ORB`);
     return { success: true, message: 'No pending picks' };
   }
 
-  console.log(`${LOG} Fetching ORB for ${pendingPicks.length} picks: ${pendingPicks.map(p => p.symbol).join(', ')}`);
+  console.log(`${LOG} Fetching ORB pass ${orbPass} for ${pendingPicks.length} picks: ${pendingPicks.map(p => p.symbol).join(', ')}`);
 
   const symbols = pendingPicks.map(p => p.symbol);
 
@@ -1340,10 +1348,13 @@ async function startOrbCollection(options = {}) {
     return { success: false, error: orbErr.message };
   }
 
-  // Store ORB data on each pick
+  // Store ORB data on each pick — only update PENDING picks
   for (const pick of pendingPicks) {
+    if (pick.trade.status !== 'PENDING' && pick.trade.status !== 'COLLECTING_ORB') continue;
+
     const orb = orbData[pick.symbol];
     if (orb) {
+      const existingPasses = pick.orb?.orb_passes || [];
       pick.orb = {
         high: orb.high,
         low: orb.low,
@@ -1351,14 +1362,17 @@ async function startOrbCollection(options = {}) {
         gap_percent: orb.gap_percent,
         orb_direction: orb.orb_direction,
         nifty_orb_direction: orbData['_NIFTY']?.orb_direction || 'NEUTRAL',
-        nifty_change_pct: orbData['_NIFTY']?.nifty_change_pct ?? 0
+        nifty_change_pct: orbData['_NIFTY']?.nifty_change_pct ?? 0,
+        orb_pass: orbPass,
+        orb_passes: existingPasses
       };
     }
   }
+  doc.markModified('picks');
   await doc.save();
 
-  console.log(`${LOG} ORB complete — data stored for ${Object.keys(orbData).filter(k => k !== '_NIFTY').length} symbols`);
-  return { success: true, symbolsCollected: Object.keys(orbData).length };
+  console.log(`${LOG} ORB pass ${orbPass} complete — data stored for ${Object.keys(orbData).filter(k => k !== '_NIFTY').length} symbols`);
+  return { success: true, symbolsCollected: Object.keys(orbData).length, orbPass };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1367,13 +1381,16 @@ async function startOrbCollection(options = {}) {
 
 /**
  * Validate picks against ORB data and place entries for validated picks.
- * Called at 9:30 AM after ORB collection completes.
+ * Multi-pass: orbPass 1 (9:30), 2 (9:46), 3 (10:01 FINAL).
+ * Permanent failures (gap, nifty) are skipped immediately.
+ * Retryable failures (R:R, range) stay PENDING for next pass.
  */
 async function validateAndPlaceEntries(options = {}) {
-  const { dryRun = false } = options;
+  const { dryRun = false, orbPass = 1 } = options;
+  const isFinalPass = orbPass >= MAX_ORB_PASS;
 
   console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} Validating picks + placing entries${dryRun ? ' [DRY RUN]' : ''}`);
+  console.log(`${LOG} Validating picks — Pass ${orbPass}: ${ORB_PASS_LABELS[orbPass]} ${isFinalPass ? '(FINAL)' : '(retry available)'}${dryRun ? ' [DRY RUN]' : ''}`);
   console.log(`${LOG} ════════════════════════════════════════`);
 
   if (!isKiteIntegrationEnabled()) {
@@ -1421,6 +1438,24 @@ async function validateAndPlaceEntries(options = {}) {
 
   validatePicks(eligiblePicks, orbData);
 
+  // Record pass history on each pick for analytics
+  for (const pick of eligiblePicks) {
+    if (!pick.orb) pick.orb = {};
+    if (!pick.orb.orb_passes) pick.orb.orb_passes = [];
+
+    const failedChecks = pick.validation?.skip_reason || null;
+    const isPermanentFail = failedChecks && failedChecks.split(', ').every(c => PERMANENT_FAIL_CHECKS.includes(c));
+
+    pick.orb.orb_passes.push({
+      pass: orbPass,
+      timestamp: new Date(),
+      orb_high: pick.orb?.high,
+      orb_low: pick.orb?.low,
+      result: pick.validation?.passed ? 'PASSED' : (isPermanentFail ? 'PERMANENT_FAIL' : 'FAILED'),
+      reason: failedChecks
+    });
+  }
+
   // Step 2: Update validated picks' entry to ORB breakout level (Crabel-style SL-M)
   for (const pick of eligiblePicks) {
     if (pick.validation?.passed && pick.validation.checks.orb_alignment?.new_entry) {
@@ -1444,16 +1479,27 @@ async function validateAndPlaceEntries(options = {}) {
   const skippedPicks = eligiblePicks.filter(p => !p.validation?.passed);
 
   for (const pick of skippedPicks) {
-    pick.trade.status = 'SKIPPED';
-    pick.trade.exit_reason = `validation_failed: ${pick.validation?.skip_reason || 'unknown'}`;
-    pick.kite.kite_status = 'skipped';
-    console.log(`${LOG} ${pick.symbol}: SKIPPED — ${pick.validation?.skip_reason}`);
+    const failedChecks = pick.validation?.skip_reason || '';
+    const isPermanentFail = failedChecks && failedChecks.split(', ').every(c => PERMANENT_FAIL_CHECKS.includes(c));
+
+    if (isFinalPass || isPermanentFail) {
+      pick.trade.status = 'SKIPPED';
+      pick.trade.exit_reason = `validation_failed_pass_${orbPass}: ${failedChecks}`;
+      pick.kite.kite_status = 'skipped';
+      const reason = isPermanentFail ? 'permanent' : 'final pass';
+      console.log(`${LOG} ${pick.symbol}: SKIPPED (${reason}, pass ${orbPass}) — ${failedChecks}`);
+    } else {
+      // Retryable failure — keep PENDING for next pass
+      pick.trade.status = 'PENDING';
+      console.log(`${LOG} ${pick.symbol}: FAILED pass ${orbPass} (retryable: ${failedChecks}) — will retry at pass ${orbPass + 1} (${ORB_PASS_LABELS[orbPass + 1]})`);
+    }
   }
 
+  const retryingPicks = skippedPicks.filter(p => p.trade.status === 'PENDING');
   if (validatedPicks.length === 0) {
-    console.log(`${LOG} All picks failed validation — no orders to place`);
+    console.log(`${LOG} All picks failed validation on pass ${orbPass} — ${retryingPicks.length} retrying, ${skippedPicks.length - retryingPicks.length} permanently skipped`);
     await doc.save();
-    return { success: true, message: 'All picks failed validation', orders: 0, validated: 0, skipped: skippedPicks.length };
+    return { success: true, message: `All picks failed pass ${orbPass}`, orders: 0, validated: 0, skipped: skippedPicks.length - retryingPicks.length, retrying: retryingPicks.length, orbPass };
   }
 
   // Mark as VALIDATED
@@ -1555,9 +1601,9 @@ async function validateAndPlaceEntries(options = {}) {
   }
 
   await doc.save();
-  console.log(`${LOG} Validation+entry: ${validatedPicks.length} validated, ${skippedPicks.length} skipped, ${ordersPlaced} orders placed`);
+  console.log(`${LOG} Pass ${orbPass} result: ${validatedPicks.length} validated, ${skippedPicks.length - retryingPicks.length} skipped, ${retryingPicks.length} retrying, ${ordersPlaced} orders placed`);
 
-  return { success: true, validated: validatedPicks.length, skipped: skippedPicks.length, orders: ordersPlaced };
+  return { success: true, validated: validatedPicks.length, skipped: skippedPicks.length - retryingPicks.length, retrying: retryingPicks.length, orders: ordersPlaced, orbPass };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

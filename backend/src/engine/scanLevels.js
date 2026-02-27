@@ -1815,12 +1815,15 @@ function calculate52wHighLevels(data) {
 
   // Target: Intraday → Daily R1/R2 (skip 1H swing — always below entry for 52W breakouts)
   //         Swing    → entry + 2×ATR
+  // 52W breakouts are momentum plays — target must be far enough to survive ORB adjustment.
+  // Minimum reward = 1.5×ATR, otherwise ORB entry (ORB_high + buffer) eats all the reward.
+  const minReward = 1.5 * atr;
   let target, target2_basis;
   if (isIntraday) {
-    if (isNum(dailyR1) && dailyR1 > entry) {
+    if (isNum(dailyR1) && dailyR1 > entry && (dailyR1 - entry) >= minReward) {
       target = dailyR1;
       target2_basis = 'daily_r1';
-    } else if (isNum(dailyR2) && dailyR2 > entry) {
+    } else if (isNum(dailyR2) && dailyR2 > entry && (dailyR2 - entry) >= minReward) {
       target = dailyR2;
       target2_basis = 'daily_r2';
     } else {

@@ -186,7 +186,7 @@ function validatePicks(picks, orbData) {
     console.log(`${LOG} │ ORB data: O=${orb.opening_price} H=${orb.high} L=${orb.low} gap=${orb.gap_percent}% dir=${orb.orb_direction}`);
     console.log(`${LOG} │ Pre-market levels: entry=${pick.levels.entry} stop=${pick.levels.stop} target=${pick.levels.target} R:R=${pick.levels.risk_reward}`);
 
-    // Populate ORB data on the pick
+    // Populate ORB data on the pick — preserve orb_pass/orb_passes from multi-pass tracking
     pick.orb = {
       high: orb.high,
       low: orb.low,
@@ -194,7 +194,9 @@ function validatePicks(picks, orbData) {
       gap_percent: orb.gap_percent,
       orb_direction: orb.orb_direction,
       nifty_orb_direction: niftyDir,
-      nifty_change_pct: niftyChangePct
+      nifty_change_pct: niftyChangePct,
+      orb_pass: pick.orb?.orb_pass || 1,
+      orb_passes: pick.orb?.orb_passes || []
     };
 
     const isBullish = pick.direction === 'LONG';

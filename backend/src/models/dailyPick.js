@@ -82,7 +82,7 @@ const pickSchema = new mongoose.Schema({
     }
   },
 
-  // ORB (Opening Range Breakout) data — collected 9:15-9:30 AM
+  // ORB (Opening Range Breakout) data — collected across passes (9:30, 9:46, 10:01)
   orb: {
     high: Number,
     low: Number,
@@ -90,7 +90,16 @@ const pickSchema = new mongoose.Schema({
     gap_percent: Number,
     orb_direction: { type: String, enum: ['UP', 'DOWN', 'NEUTRAL'] },
     nifty_orb_direction: { type: String, enum: ['UP', 'DOWN', 'NEUTRAL'] },
-    nifty_change_pct: Number
+    nifty_change_pct: Number,
+    orb_pass: { type: Number, default: 1 },
+    orb_passes: [{
+      pass: Number,
+      timestamp: Date,
+      orb_high: Number,
+      orb_low: Number,
+      result: { type: String, enum: ['PASSED', 'FAILED', 'PERMANENT_FAIL'] },
+      reason: String
+    }]
   },
 
   // Validation gate — checked at 9:30 AM before placing entry
