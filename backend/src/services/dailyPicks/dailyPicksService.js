@@ -1145,30 +1145,68 @@ async function placePreMarketEntries(doc) {
         const lastPrice = roundToTick(triggerPrice * 0.997);
         console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT LONG qty=${qty} trigger=₹${triggerPrice} last_price=₹${lastPrice} product=CNC`);
 
-        const result = await kiteOrderService.placeGTT({
-          type: 'single',
-          tradingsymbol: pick.symbol,
-          exchange: 'NSE',
-          trigger_values: [triggerPrice],
-          last_price: lastPrice,
-          orders: [{
-            transaction_type: 'BUY',
-            quantity: qty,
-            order_type: 'LIMIT',
-            product: 'CNC',
-            price: triggerPrice
-          }],
-          simulationId: `daily_pick_${pick.symbol}`,
-          orderType: 'ENTRY',
-          source: 'DAILY_PICKS'
-        });
+        let gttResult;
+        try {
+          gttResult = await kiteOrderService.placeGTT({
+            type: 'single',
+            tradingsymbol: pick.symbol,
+            exchange: 'NSE',
+            trigger_values: [triggerPrice],
+            last_price: lastPrice,
+            orders: [{
+              transaction_type: 'BUY',
+              quantity: qty,
+              order_type: 'LIMIT',
+              product: 'CNC',
+              price: triggerPrice
+            }],
+            simulationId: `daily_pick_${pick.symbol}`,
+            orderType: 'ENTRY',
+            source: 'DAILY_PICKS'
+          });
+        } catch (gttErr) {
+          // GTT "Trigger already met" → price already above entry, place LIMIT order directly
+          if (gttErr.message?.includes('Trigger already met')) {
+            console.log(`${LOG} [Step 7.5] ${pick.symbol}: GTT trigger already met — placing LIMIT order instead`);
+            const limitResult = await kiteOrderService.placeOrder({
+              tradingsymbol: pick.symbol,
+              exchange: 'NSE',
+              transaction_type: 'BUY',
+              order_type: 'LIMIT',
+              product: 'CNC',
+              quantity: qty,
+              price: triggerPrice,
+              simulationId: `daily_pick_${pick.symbol}`,
+              orderType: 'ENTRY',
+              source: 'DAILY_PICKS'
+            });
 
-        console.log(`${LOG} [Step 7.5] ${pick.symbol}: [DEBUG] placeGTT result=${JSON.stringify({ success: result.success, triggerId: result.triggerId })}`);
+            if (limitResult.success && limitResult.orderId) {
+              pick.trade.status = 'ORDER_PLACED';
+              pick.trade.qty = qty;
+              pick.kite.entry_order_id = limitResult.orderId;
+              pick.kite.kite_status = 'order_placed';
+              ordersPlaced++;
+              console.log(`${LOG} [Step 7.5] ┌── LIMIT ENTRY: ${pick.symbol} ──────────────────────`);
+              console.log(`${LOG} [Step 7.5] │ Direction: LONG | Scan: ${pick.scan_type} | Product: CNC`);
+              console.log(`${LOG} [Step 7.5] │ Price: ₹${triggerPrice} | Qty: ${qty} | Capital: ₹${orderAmount}`);
+              console.log(`${LOG} [Step 7.5] │ Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target} | R:R=${pick.levels.risk_reward}`);
+              console.log(`${LOG} [Step 7.5] │ Order ID: ${limitResult.orderId} (fallback from GTT)`);
+              console.log(`${LOG} [Step 7.5] └─────────────────────────────────────────────────────`);
+            } else {
+              console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: LIMIT fallback failed — ${JSON.stringify(limitResult)}`);
+              pick.trade.status = 'FAILED';
+              pick.kite.kite_status = 'failed';
+            }
+            continue;
+          }
+          throw gttErr; // Re-throw other GTT errors
+        }
 
-        if (result.success && result.triggerId) {
+        if (gttResult.success && gttResult.triggerId) {
           pick.trade.status = 'ORDER_PLACED';
           pick.trade.qty = qty;
-          pick.kite.entry_order_id = String(result.triggerId);
+          pick.kite.entry_order_id = String(gttResult.triggerId);
           pick.kite.kite_status = 'gtt_placed';
           ordersPlaced++;
 
@@ -1176,10 +1214,10 @@ async function placePreMarketEntries(doc) {
           console.log(`${LOG} [Step 7.5] │ Direction: LONG | Scan: ${pick.scan_type} | Product: CNC`);
           console.log(`${LOG} [Step 7.5] │ Trigger: ₹${triggerPrice} | Qty: ${qty} | Capital: ₹${orderAmount}`);
           console.log(`${LOG} [Step 7.5] │ Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target} | R:R=${pick.levels.risk_reward}`);
-          console.log(`${LOG} [Step 7.5] │ GTT Trigger ID: ${result.triggerId}`);
+          console.log(`${LOG} [Step 7.5] │ GTT Trigger ID: ${gttResult.triggerId}`);
           console.log(`${LOG} [Step 7.5] └─────────────────────────────────────────────────────`);
         } else {
-          console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: GTT placement failed — ${JSON.stringify(result)}`);
+          console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: GTT placement failed — ${JSON.stringify(gttResult)}`);
           pick.trade.status = 'FAILED';
           pick.kite.kite_status = 'failed';
         }
