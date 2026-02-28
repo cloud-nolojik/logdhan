@@ -102,7 +102,7 @@ async function runDailyPicks(options = {}) {
     }
 
     // Step 4: Score candidates (sorted by score descending, filtered by MIN_SCORE)
-    const scored = scoreCandidates(enriched);
+    const scored = scoreCandidates(enriched, marketContext.regime);
     console.log(`${LOG} Scored: ${scored.length} candidates passed min (${MIN_SCORE})`);
 
     if (scored.length === 0) {
@@ -263,11 +263,13 @@ async function getMarketContext() {
   // Regime from Nifty candles
   let regime = 'UNKNOWN';
   let niftyPrevClose = null;
+  let distancePct = null;
   try {
     const regimeResult = await fetchAndCheckRegime();
     regime = regimeResult.regime;
     niftyPrevClose = regimeResult.niftyLast;
-    console.log(`${LOG} Regime: ${regime} (Nifty: ${niftyPrevClose}, EMA50: ${regimeResult.ema50}, dist: ${regimeResult.distancePct}%)`);
+    distancePct = regimeResult.distancePct;
+    console.log(`${LOG} Regime: ${regime} (Nifty: ${niftyPrevClose}, EMA50: ${regimeResult.ema50}, dist: ${distancePct}%)`);
   } catch (err) {
     console.error(`${LOG} Regime check failed, defaulting to UNKNOWN:`, err.message);
   }
@@ -275,6 +277,7 @@ async function getMarketContext() {
   return {
     regime,
     nifty_prev_close: niftyPrevClose,
+    distance_pct: distancePct,
     decided_at: new Date()
   };
 }
@@ -582,11 +585,25 @@ function calculateConfluence(candidate) {
   return { bonus: 0, detail: 'no stop validation' };
 }
 
-function scoreCandidates(enrichedCandidates) {
-  console.log(`${LOG} [Step 4] Scoring ${enrichedCandidates.length} candidates...`);
+/**
+ * Check if a candidate's direction aligns with the current regime for score bonus.
+ *
+ * Only normal BULLISH/BEARISH qualify for the +5 bonus:
+ * - STRONG_BULLISH/STRONG_BEARISH: no bonus needed — counter-regime scans are already
+ *   hard-blocked at the scan selection level, so all surviving candidates are aligned.
+ * - NEUTRAL/UNKNOWN: no directional bias, no bonus.
+ */
+function isRegimeAligned(direction, regime) {
+  if (regime === 'BULLISH' && direction === 'LONG') return true;
+  if (regime === 'BEARISH' && direction === 'SHORT') return true;
+  return false;
+}
+
+function scoreCandidates(enrichedCandidates, regime) {
+  console.log(`${LOG} [Step 4] Scoring ${enrichedCandidates.length} candidates (regime: ${regime})...`);
 
   const scored = [];
-  let ema20Skipped = 0, ema20Penalized = 0, belowMinScore = 0, passedCount = 0;
+  let ema20Skipped = 0, ema20Penalized = 0, belowMinScore = 0, passedCount = 0, regimeBonusCount = 0;
   let vol5Count = 0, vol10Count = 0, vol15Count = 0, vol20Count = 0, vol25Count = 0;
 
   for (const c of enrichedCandidates) {
@@ -666,18 +683,28 @@ function scoreCandidates(enrichedCandidates) {
 
     if (score >= MIN_SCORE) {
       passedCount++;
-      scored.push({ ...c, rank_score: score });
+      const pick = { ...c, rank_score: score };
       console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [CIR:${cirPts}/25(${round2(cir)}%) VOL:${volPts}/25(${s.volume_ratio}x) RSI:${rsiPts}/20(${s.rsi}) ATR:${atrPts}/15(${s.atr_pct}%) CANDLE:${candlePts}/15(${s.candle_pattern})]`);
 
       // Confluence bonus: cluster detection across Daily / 1H / 4H pivots
       // Applied AFTER MIN_SCORE check — additive only (never reduces score)
       const confluenceResult = calculateConfluence(c);
       if (confluenceResult.bonus > 0) {
-        scored[scored.length - 1].rank_score += confluenceResult.bonus;
-        scored[scored.length - 1].confluence_score = confluenceResult.bonus;
-        scored[scored.length - 1].confluence_detail = confluenceResult.detail;
+        pick.rank_score += confluenceResult.bonus;
+        pick.confluence_score = confluenceResult.bonus;
+        pick.confluence_detail = confluenceResult.detail;
         console.log(`${LOG}   ↳ Confluence: +${confluenceResult.bonus} pts (${confluenceResult.detail})`);
       }
+
+      // Regime alignment bonus: +5 for direction matching regime
+      if (isRegimeAligned(c.direction, regime)) {
+        pick.rank_score += 5;
+        pick.regime_bonus = 5;
+        regimeBonusCount++;
+        console.log(`${LOG}   ↳ Regime: +5 pts (${regime} regime, ${c.direction})`);
+      }
+
+      scored.push(pick);
     } else {
       belowMinScore++;
       console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} < ${MIN_SCORE} [CIR:${cirPts} VOL:${volPts} RSI:${rsiPts} ATR:${atrPts} CANDLE:${candlePts}]`);
@@ -686,7 +713,7 @@ function scoreCandidates(enrichedCandidates) {
 
   // Scoring reconciliation — every candidate must be accounted for
   const totalProcessed = passedCount + belowMinScore + ema20Skipped;
-  console.log(`${LOG} [Step 4] RECONCILIATION: input=${enrichedCandidates.length} passed=${passedCount} belowMin=${belowMinScore} ema20Skip=${ema20Skipped} ema20Pen=${ema20Penalized} total=${totalProcessed}${totalProcessed !== enrichedCandidates.length ? ' ⚠️ MISMATCH' : ''}`);
+  console.log(`${LOG} [Step 4] RECONCILIATION: input=${enrichedCandidates.length} passed=${passedCount} belowMin=${belowMinScore} ema20Skip=${ema20Skipped} ema20Pen=${ema20Penalized} regimeBonus=${regimeBonusCount} total=${totalProcessed}${totalProcessed !== enrichedCandidates.length ? ' ⚠️ MISMATCH' : ''}`);
   console.log(`${LOG} [Step 4] VOL distribution: 25pts=${vol25Count} 20pts=${vol20Count} 15pts=${vol15Count} 10pts=${vol10Count} 5pts=${vol5Count}`);
 
   // Sort descending by score
@@ -975,6 +1002,7 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [])
     rank_score: p.rank_score,
     confluence_score: p.confluence_score || 0,
     confluence_detail: p.confluence_detail || null,
+    regime_bonus: p.regime_bonus || 0,
     levels: p.levels,
     trade: { status: 'PENDING' },
     kite: { kite_status: 'pending' },
@@ -1023,11 +1051,20 @@ async function sendNotification(marketContext, picks, doc) {
     const pickSummary = picks
       .map(p => `${p.symbol} ₹${p.levels.entry}`)
       .join(', ');
-    title = `Daily Picks: ${picks[0].direction === 'LONG' ? 'BUY' : 'SELL'} ${picks.length} stocks`;
+    const longCount = picks.filter(p => p.direction === 'LONG').length;
+    const shortCount = picks.filter(p => p.direction === 'SHORT').length;
+    if (longCount > 0 && shortCount > 0) {
+      title = `Daily Picks: ${longCount} BUY + ${shortCount} SELL`;
+    } else {
+      title = `Daily Picks: ${picks[0].direction === 'LONG' ? 'BUY' : 'SELL'} ${picks.length} stocks`;
+    }
     body = pickSummary;
-  } else if (marketContext.regime === 'BEARISH') {
+  } else if (marketContext.regime === 'BEARISH' || marketContext.regime === 'STRONG_BEARISH') {
     title = 'Daily Picks: No setups';
     body = 'Market weak today. No daily picks. Protect capital.';
+  } else if (marketContext.regime === 'STRONG_BULLISH') {
+    title = 'Daily Picks: No setups';
+    body = 'Strong bullish regime — no bearish setups qualified. Watch for pullback entries.';
   } else {
     title = 'Daily Picks: No setups';
     body = 'No quality setups found today. Sitting out.';

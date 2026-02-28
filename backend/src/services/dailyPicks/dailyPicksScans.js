@@ -2,8 +2,9 @@
  * Daily Picks — ChartInk Scan Formulas
  *
  * 8 scans for next-day +2% trade candidates.
- * Bullish scans (1-4): run in BULLISH/NEUTRAL/UNKNOWN regimes. 52W high runs in ALL regimes.
- * Bearish scans (5-8): run in BEARISH/NEUTRAL regimes. 52W low runs in ALL regimes.
+ * STRONG_BULLISH/STRONG_BEARISH (>3% from EMA50): hard-block counter-regime scans.
+ * BULLISH/BEARISH (1-3%): all 8 scans run, aligned scans get +5 score bonus.
+ * NEUTRAL/UNKNOWN: all 8 scans run, no bonus.
  *
  * ChartInk returns: { nsecode, bsecode, name, per_change, close, volume }
  * Enrichment (OHLCV, indicators) happens separately via Upstox.
@@ -194,12 +195,22 @@ export const SCAN_LABELS = {
 /**
  * Scan execution priority order per regime.
  * Scans are run in this order; deduplication keeps the first match.
+ *
+ * STRONG tiers: hard-block counter-regime (safety net for crashes/euphoria, ~5-10 days/year)
+ * Normal tiers: all 8 scans, scoring handles differentiation via +5 regime bonus
+ * NEUTRAL/UNKNOWN: all 8 scans, no bonus
  */
+const ALL_BULLISH = ['compression_bullish', 'pullback_at_support', 'fiftyTwoWeek_high', 'breakout_setup'];
+const ALL_BEARISH = ['compression_bearish', 'failed_at_resistance', 'fiftyTwoWeek_low', 'breakdown_setup'];
+const ALL_SCANS = [...ALL_BULLISH, ...ALL_BEARISH];
+
 export const SCAN_ORDER_BY_REGIME = {
-  BULLISH: ['compression_bullish', 'pullback_at_support', 'fiftyTwoWeek_high', 'breakout_setup'],
-  BEARISH: ['compression_bearish', 'failed_at_resistance', 'fiftyTwoWeek_low', 'breakdown_setup'],
-  NEUTRAL: ['compression_bullish', 'pullback_at_support', 'fiftyTwoWeek_high', 'breakout_setup', 'compression_bearish', 'failed_at_resistance', 'fiftyTwoWeek_low', 'breakdown_setup'],
-  UNKNOWN: ['compression_bullish', 'pullback_at_support', 'fiftyTwoWeek_high', 'breakout_setup']
+  STRONG_BULLISH: ALL_BULLISH,   // Hard block bearish (euphoria safety)
+  BULLISH: ALL_SCANS,            // All scans, aligned get +5 in scoring
+  NEUTRAL: ALL_SCANS,            // All scans, no bonus
+  BEARISH: ALL_SCANS,            // All scans, aligned get +5 in scoring
+  STRONG_BEARISH: ALL_BEARISH,   // Hard block bullish (crash safety)
+  UNKNOWN: ALL_SCANS             // Treat as neutral (no directional bias)
 };
 
 /**

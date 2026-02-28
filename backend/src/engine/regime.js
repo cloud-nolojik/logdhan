@@ -12,13 +12,19 @@ import { round2, isNum } from './helpers.js';
 const NIFTY_50_INSTRUMENT_KEY = 'NSE_INDEX|Nifty 50';
 
 /**
- * Regime types
+ * Regime types — 5-tier model
+ *
+ * STRONG tiers (>3% from EMA50): hard-block counter-regime scans (crash/euphoria safety net)
+ * Normal tiers (1-3%): all scans run, aligned scans get +5 score bonus
+ * NEUTRAL (±1%): all scans run, no bonus
  */
 export const REGIME = {
-  BULLISH: 'BULLISH',      // Nifty above 50 EMA
-  BEARISH: 'BEARISH',      // Nifty below 50 EMA
-  NEUTRAL: 'NEUTRAL',      // Within 1% of 50 EMA (choppy)
-  UNKNOWN: 'UNKNOWN'       // Couldn't determine
+  STRONG_BULLISH: 'STRONG_BULLISH',  // Nifty >3% above 50 EMA — block bearish scans
+  BULLISH: 'BULLISH',                // Nifty 1-3% above 50 EMA — +5 bonus to bullish
+  NEUTRAL: 'NEUTRAL',                // Within ±1% of 50 EMA (choppy)
+  BEARISH: 'BEARISH',                // Nifty 1-3% below 50 EMA — +5 bonus to bearish
+  STRONG_BEARISH: 'STRONG_BEARISH',  // Nifty >3% below 50 EMA — block bullish scans
+  UNKNOWN: 'UNKNOWN'                 // Couldn't determine
 };
 
 /**
@@ -62,15 +68,21 @@ export function checkMarketRegime({ niftyCandles }) {
   let regime;
   let description;
 
-  if (distancePct > 1) {
+  if (distancePct > 3) {
+    regime = REGIME.STRONG_BULLISH;
+    description = `Nifty ${round2(distancePct)}% above 50 EMA — strong bullish (bearish scans blocked)`;
+  } else if (distancePct > 1) {
     regime = REGIME.BULLISH;
-    description = `Nifty ${round2(distancePct)}% above 50 EMA - bullish regime`;
+    description = `Nifty ${round2(distancePct)}% above 50 EMA — bullish (+5 bonus to aligned)`;
+  } else if (distancePct < -3) {
+    regime = REGIME.STRONG_BEARISH;
+    description = `Nifty ${round2(Math.abs(distancePct))}% below 50 EMA — strong bearish (bullish scans blocked)`;
   } else if (distancePct < -1) {
     regime = REGIME.BEARISH;
-    description = `Nifty ${round2(Math.abs(distancePct))}% below 50 EMA - bearish regime`;
+    description = `Nifty ${round2(Math.abs(distancePct))}% below 50 EMA — bearish (+5 bonus to aligned)`;
   } else {
     regime = REGIME.NEUTRAL;
-    description = `Nifty within 1% of 50 EMA - neutral/choppy regime`;
+    description = `Nifty within 1% of 50 EMA — neutral/choppy`;
   }
 
   return {
@@ -116,7 +128,22 @@ export function getRegimeWarning(setupType, regimeCheck) {
     return null;
   }
 
-  const { regime, distancePct, description } = regimeCheck;
+  const { regime, distancePct } = regimeCheck;
+
+  // BUY in strong bearish market — CRITICAL (scans blocked)
+  if (setupType === 'BUY' && regime === REGIME.STRONG_BEARISH) {
+    return {
+      code: 'STRONG_BEARISH_REGIME',
+      severity: 'critical',
+      text: `Market is ${Math.abs(distancePct)}% below 50 EMA — bullish scans blocked in crash conditions`,
+      applies_when: ['entry'],
+      mitigation: [
+        'Do not initiate long positions',
+        'Wait for Nifty to recover above -3% from 50 EMA',
+        'Focus on cash preservation'
+      ]
+    };
+  }
 
   // BUY in bearish market
   if (setupType === 'BUY' && regime === REGIME.BEARISH) {
@@ -133,7 +160,22 @@ export function getRegimeWarning(setupType, regimeCheck) {
     };
   }
 
-  // SELL (short) in bullish market - less common but worth flagging
+  // SELL in strong bullish market — CRITICAL (scans blocked)
+  if (setupType === 'SELL' && regime === REGIME.STRONG_BULLISH) {
+    return {
+      code: 'STRONG_BULLISH_REGIME',
+      severity: 'critical',
+      text: `Market is ${distancePct}% above 50 EMA — bearish scans blocked in euphoric conditions`,
+      applies_when: ['entry'],
+      mitigation: [
+        'Do not initiate short positions',
+        'Wait for Nifty to cool below +3% from 50 EMA',
+        'Focus on riding the trend or cash'
+      ]
+    };
+  }
+
+  // SELL (short) in bullish market
   if (setupType === 'SELL' && regime === REGIME.BULLISH) {
     return {
       code: 'BULLISH_REGIME',

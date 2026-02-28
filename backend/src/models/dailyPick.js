@@ -30,9 +30,10 @@ const pickSchema = new mongoose.Schema({
     atr_pct: Number,
     candle_pattern: String        // bullish_engulfing, bearish_engulfing, hammer, bullish_candle, bearish_candle
   },
-  rank_score: { type: Number, min: 0, max: 115 },  // 100 base + 15 confluence max
+  rank_score: { type: Number, min: 0, max: 115 },  // 100 base + 5 confluence + 5 regime = 110 max
   confluence_score: { type: Number, default: 0 },
   confluence_detail: { type: String, default: null },
+  regime_bonus: { type: Number, default: 0 },
 
   // Levels
   levels: {
@@ -138,8 +139,9 @@ const dailyPickSchema = new mongoose.Schema({
 
   // Market context at decision time
   market_context: {
-    regime: { type: String, enum: ['BULLISH', 'BEARISH', 'NEUTRAL', 'UNKNOWN'] },
+    regime: { type: String, enum: ['STRONG_BULLISH', 'BULLISH', 'BEARISH', 'STRONG_BEARISH', 'NEUTRAL', 'UNKNOWN'] },
     nifty_prev_close: Number,
+    distance_pct: Number,
     decided_at: Date
   },
 
