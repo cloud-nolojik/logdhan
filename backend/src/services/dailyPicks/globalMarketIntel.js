@@ -2,9 +2,13 @@
  * Global Market Intelligence — Step 5.5 of Daily Picks Pipeline
  *
  * Runs at ~6:35 AM IST (AFTER ChartInk scans + enrichment + scoring + levels)
- * using Claude web search to fetch LIVE global events, sector outlook,
+ * using AI web search to fetch LIVE global events, sector outlook,
  * and market-moving news. Receives viable candidate symbols for stock-specific analysis.
  * Supports historical date override for backtesting.
+ *
+ * PROVIDER SWITCH: Set INTEL_PROVIDER below to choose between:
+ *   'openai'    — GPT-4.1 with web search (cheaper: ~₹55/month)
+ *   'claude'    — Claude Sonnet with web search (better quality: ~₹85/month)
  *
  * Why this exists:
  * - streetGainsScraper runs at 8:30 AM — 2 hours AFTER picks are selected
@@ -28,11 +32,20 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import ApiUsage from '../../models/apiUsage.js';
 import { v4 as uuidv4 } from 'uuid';
 import { mapSectorToIntelKey } from '../../utils/sectorMapping.js';
 
 const LOG = '[GLOBAL-INTEL]';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROVIDER SWITCH — Change this to swap between OpenAI and Claude for intel
+// ═══════════════════════════════════════════════════════════════════════════════
+// 'openai'  → GPT-4.1 + web search ($2/$8 per MTok + $10/1K searches)
+// 'claude'  → Claude Sonnet + web search ($3/$15 per MTok + $10/1K searches)
+const INTEL_PROVIDER = process.env.INTEL_PROVIDER || 'openai';
+const OPENAI_INTEL_MODEL = 'gpt-5.4';
 
 let _anthropic = null;
 function getAnthropicClient() {
@@ -41,6 +54,15 @@ function getAnthropicClient() {
     _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   }
   return _anthropic;
+}
+
+let _openai = null;
+function getOpenAIClient() {
+  if (!_openai) {
+    if (!process.env.OPENAI_API_KEY) return null;
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return _openai;
 }
 
 // Cache for today's intel (avoid re-fetching if pipeline retries)
@@ -74,12 +96,129 @@ async function fetchGlobalMarketIntel(dateOverride, candidateSymbols) {
     console.log(`${LOG} Intel cache expired (age: ${Math.round(cacheAge / 60000)}min > ${INTEL_CACHE_TTL_MS / 60000}min) — re-fetching`);
   }
 
+  const provider = INTEL_PROVIDER;
+  console.log(`${LOG} Using provider: ${provider.toUpperCase()}`);
+
+  let intel;
+  if (provider === 'openai') {
+    intel = await fetchIntelViaOpenAI(todayStr, isHistorical, candidateSymbols);
+  } else {
+    intel = await fetchIntelViaClaude(todayStr, isHistorical, candidateSymbols);
+  }
+
+  // Log summary (shared between providers)
+  logIntelSummary(intel, todayStr);
+
+  // Cache for today (with TTL tracking)
+  _intelCache = intel;
+  _intelCacheDate = todayStr;
+  _intelCacheTime = Date.now();
+
+  return intel;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROVIDER: OpenAI (GPT-4.1 + web_search_preview)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function fetchIntelViaOpenAI(todayStr, isHistorical, candidateSymbols) {
   const startTime = Date.now();
   const requestId = uuidv4().substring(0, 8);
 
   try {
-    console.log(`${LOG} Fetching ${isHistorical ? 'HISTORICAL' : 'LIVE'} global market intelligence via Claude web search for ${todayStr}...`);
+    const openai = getOpenAIClient();
+    if (!openai) {
+      console.log(`${LOG} OpenAI not configured — skipping`);
+      return getEmptyIntel();
+    }
 
+    const symbols = candidateSymbols || [];
+    const searchPrompt = isHistorical
+      ? buildHistoricalIntelPrompt(todayStr, symbols)
+      : buildIntelPrompt(todayStr, symbols);
+
+    console.log(`${LOG} Fetching ${isHistorical ? 'HISTORICAL' : 'LIVE'} intel via OpenAI ${OPENAI_INTEL_MODEL} web search for ${todayStr}...`);
+    console.log(`${LOG} Search prompt : ${searchPrompt}`);
+    // 90-second timeout — web search can take 30-60s normally
+    const INTEL_TIMEOUT_MS = 90000;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), INTEL_TIMEOUT_MS);
+
+    let response;
+    try {
+      response = await openai.responses.create({
+        model: OPENAI_INTEL_MODEL,
+        tools: [{ type: 'web_search_preview' }],
+        input: searchPrompt,
+      }, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const responseTime = Date.now() - startTime;
+    const usage = response.usage || {};
+
+    // Log API usage
+    try {
+      await ApiUsage.logUsage({
+        provider: 'OPENAI',
+        model: OPENAI_INTEL_MODEL,
+        feature: 'GLOBAL_MARKET_INTEL',
+        tokens: {
+          input: usage.input_tokens || 0,
+          output: usage.output_tokens || 0
+        },
+        request_id: requestId,
+        response_time_ms: responseTime,
+        success: true,
+        context: { description: `${isHistorical ? 'Historical' : 'Pre-scan'} global market intelligence for ${todayStr} (OpenAI)` }
+      });
+    } catch { /* non-fatal */ }
+
+    // Extract text from OpenAI response output items
+    const outputText = (response.output || [])
+      .filter(item => item.type === 'message')
+      .flatMap(item => (item.content || []))
+      .filter(block => block.type === 'output_text')
+      .map(block => block.text)
+      .join('\n') || '';
+
+    console.log(`${LOG} OpenAI web search completed (${responseTime}ms, tokens: ${usage.input_tokens || 0}+${usage.output_tokens || 0})`);
+
+    // Parse JSON from response (shared parser)
+    const intel = parseIntelResponse(outputText);
+    intel.source = `openai_${OPENAI_INTEL_MODEL}`;
+    return intel;
+
+  } catch (err) {
+    console.error(`${LOG} ❌ OpenAI web search failed (fail-open, continuing without intel):`, err.message);
+
+    try {
+      await ApiUsage.logUsage({
+        provider: 'OPENAI',
+        model: OPENAI_INTEL_MODEL,
+        feature: 'GLOBAL_MARKET_INTEL',
+        tokens: { input: 0, output: 0 },
+        request_id: requestId,
+        response_time_ms: Date.now() - startTime,
+        success: false,
+        context: { error: err.message }
+      });
+    } catch { /* non-fatal */ }
+
+    return getEmptyIntel();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROVIDER: Claude (Sonnet + web_search)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function fetchIntelViaClaude(todayStr, isHistorical, candidateSymbols) {
+  const startTime = Date.now();
+  const requestId = uuidv4().substring(0, 8);
+
+  try {
     const anthropic = getAnthropicClient();
     if (!anthropic) {
       console.log(`${LOG} Anthropic not configured — skipping`);
@@ -91,8 +230,9 @@ async function fetchGlobalMarketIntel(dateOverride, candidateSymbols) {
       ? buildHistoricalIntelPrompt(todayStr, symbols)
       : buildIntelPrompt(todayStr, symbols);
 
-    // 90-second timeout — Claude web search can take 30-60s normally.
-    // Without this, a hung request blocks the entire pipeline indefinitely.
+    console.log(`${LOG} Fetching ${isHistorical ? 'HISTORICAL' : 'LIVE'} intel via Claude Sonnet web search for ${todayStr}...`);
+
+    // 90-second timeout — Claude web search can take 30-60s normally
     const INTEL_TIMEOUT_MS = 90000;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), INTEL_TIMEOUT_MS);
@@ -134,59 +274,15 @@ async function fetchGlobalMarketIntel(dateOverride, candidateSymbols) {
       ?.filter(b => b.type === 'text')
       .map(b => b.text)
       .join('\n') || '';
-    console.log(`${LOG} Web search completed (${responseTime}ms, tokens: ${usage.input_tokens || 0}+${usage.output_tokens || 0})`);
+    console.log(`${LOG} Claude web search completed (${responseTime}ms, tokens: ${usage.input_tokens || 0}+${usage.output_tokens || 0})`);
 
-    // Parse JSON from response
+    // Parse JSON from response (shared parser)
     const intel = parseIntelResponse(outputText);
-
-    // Log summary
-    console.log(`${LOG} ═══════════════════════════════════════`);
-    console.log(`${LOG} GLOBAL MARKET INTELLIGENCE — ${todayStr}`);
-    console.log(`${LOG} ═══════════════════════════════════════`);
-    console.log(`${LOG} Market mood: ${intel.market_mood}`);
-    console.log(`${LOG} Risk level: ${intel.risk_level}`);
-
-    if (intel.sgx_nifty) {
-      console.log(`${LOG} SGX Nifty: ${intel.sgx_nifty.indication} (${intel.sgx_nifty.status})`);
-    }
-
-    if (intel.global_cues) {
-      console.log(`${LOG} US markets: ${intel.global_cues.us_markets} | Asia: ${intel.global_cues.asian_markets}`);
-      console.log(`${LOG} Dollar: ${intel.global_cues.dollar_index} | Crude: ${intel.global_cues.crude_oil}`);
-    }
-
-    if (intel.sectors && Object.keys(intel.sectors).length > 0) {
-      const hot = Object.entries(intel.sectors).filter(([, s]) => s.sentiment === 'BULLISH').map(([k]) => k);
-      const cold = Object.entries(intel.sectors).filter(([, s]) => s.sentiment === 'BEARISH').map(([k]) => k);
-      if (hot.length) console.log(`${LOG} Hot sectors: ${hot.join(', ')}`);
-      if (cold.length) console.log(`${LOG} Cold sectors: ${cold.join(', ')}`);
-    }
-
-    if (intel.major_events && intel.major_events.length > 0) {
-      for (const evt of intel.major_events) {
-        console.log(`${LOG} ⚡ EVENT: ${evt.event} (${evt.impact})`);
-      }
-    }
-
-    if (intel.stock_specific && Object.keys(intel.stock_specific).length > 0) {
-      console.log(`${LOG} ─── Stock-Specific News ───`);
-      for (const [sym, news] of Object.entries(intel.stock_specific)) {
-        console.log(`${LOG}   ${sym}: ${news.sentiment} (${news.impact}) — "${news.headline || 'no headline'}"`);
-      }
-    }
-
-    console.log(`${LOG} Trading recommendation: ${intel.trading_recommendation}${intel.recommendation_reason ? ` — ${intel.recommendation_reason}` : ''}`);
-    console.log(`${LOG} ═══════════════════════════════════════`);
-
-    // Cache for today (with TTL tracking)
-    _intelCache = intel;
-    _intelCacheDate = todayStr;
-    _intelCacheTime = Date.now();
-
+    intel.source = 'claude_websearch';
     return intel;
 
   } catch (err) {
-    console.error(`${LOG} ❌ Web search failed (fail-open, continuing without intel):`, err.message);
+    console.error(`${LOG} ❌ Claude web search failed (fail-open, continuing without intel):`, err.message);
 
     try {
       await ApiUsage.logUsage({
@@ -203,6 +299,50 @@ async function fetchGlobalMarketIntel(dateOverride, candidateSymbols) {
 
     return getEmptyIntel();
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHARED: Log intel summary (used by both providers)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function logIntelSummary(intel, todayStr) {
+  console.log(`${LOG} ═══════════════════════════════════════`);
+  console.log(`${LOG} GLOBAL MARKET INTELLIGENCE — ${todayStr} (via ${intel.source || 'unknown'})`);
+  console.log(`${LOG} ═══════════════════════════════════════`);
+  console.log(`${LOG} Market mood: ${intel.market_mood}`);
+  console.log(`${LOG} Risk level: ${intel.risk_level}`);
+
+  if (intel.sgx_nifty) {
+    console.log(`${LOG} SGX Nifty: ${intel.sgx_nifty.indication} (${intel.sgx_nifty.status})`);
+  }
+
+  if (intel.global_cues) {
+    console.log(`${LOG} US markets: ${intel.global_cues.us_markets} | Asia: ${intel.global_cues.asian_markets}`);
+    console.log(`${LOG} Dollar: ${intel.global_cues.dollar_index} | Crude: ${intel.global_cues.crude_oil}`);
+  }
+
+  if (intel.sectors && Object.keys(intel.sectors).length > 0) {
+    const hot = Object.entries(intel.sectors).filter(([, s]) => s.sentiment === 'BULLISH').map(([k]) => k);
+    const cold = Object.entries(intel.sectors).filter(([, s]) => s.sentiment === 'BEARISH').map(([k]) => k);
+    if (hot.length) console.log(`${LOG} Hot sectors: ${hot.join(', ')}`);
+    if (cold.length) console.log(`${LOG} Cold sectors: ${cold.join(', ')}`);
+  }
+
+  if (intel.major_events && intel.major_events.length > 0) {
+    for (const evt of intel.major_events) {
+      console.log(`${LOG} ⚡ EVENT: ${evt.event} (${evt.impact})`);
+    }
+  }
+
+  if (intel.stock_specific && Object.keys(intel.stock_specific).length > 0) {
+    console.log(`${LOG} ─── Stock-Specific News ───`);
+    for (const [sym, news] of Object.entries(intel.stock_specific)) {
+      console.log(`${LOG}   ${sym}: ${news.sentiment} (${news.impact}) — "${news.headline || 'no headline'}"`);
+    }
+  }
+
+  console.log(`${LOG} Trading recommendation: ${intel.trading_recommendation}${intel.recommendation_reason ? ` — ${intel.recommendation_reason}` : ''}`);
+  console.log(`${LOG} ═══════════════════════════════════════`);
 }
 
 /**
