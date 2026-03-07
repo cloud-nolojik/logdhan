@@ -1,5 +1,10 @@
 /**
  * Sector mapping and NIFTY index correlation utility
+ *
+ * CANONICAL SOURCE for mapSectorToIntelKey() — maps SECTOR_MAPPING keys
+ * (TECH, METALS, CEMENT, etc.) to intel prompt sector keys (IT, METAL, INFRA, etc.).
+ * Used by dailyPicksService.js, pipelineBacktest.js, and any future intel consumers.
+ * DO NOT create local copies of this mapping elsewhere.
  */
 
 // Major Indian sector classifications with representative stocks
@@ -148,6 +153,39 @@ export const SECTOR_MAPPING = {
         nifty_weight: 'Low'
     }
 };
+
+/**
+ * Map SECTOR_MAPPING keys to intel prompt sector keys.
+ * SECTOR_MAPPING uses: TECH, METALS, CEMENT, INDUSTRIAL, CHEMICALS, TELECOM, DEFENSE, TRANSPORT, FINSERVICES, COMMODITIES
+ * Intel prompts use: IT, BANKING, PHARMA, AUTO, METAL, REALTY, ENERGY, FMCG, INFRA
+ *
+ * This is the SINGLE SOURCE OF TRUTH — do not create local copies.
+ * Used by: dailyPicksService.js (Step 5.5), pipelineBacktest.js, globalMarketIntel.js
+ *
+ * @param {string} sectorKey - SECTOR_MAPPING key (e.g. 'TECH', 'METALS')
+ * @returns {string} Intel key (e.g. 'IT', 'METAL')
+ */
+export function mapSectorToIntelKey(sectorKey) {
+  const mapping = {
+    'TECH': 'IT',
+    'BANKING': 'BANKING',
+    'ENERGY': 'ENERGY',
+    'AUTO': 'AUTO',
+    'PHARMA': 'PHARMA',
+    'FMCG': 'FMCG',
+    'METALS': 'METAL',
+    'CEMENT': 'INFRA',
+    'REALTY': 'REALTY',
+    'INDUSTRIAL': 'INFRA',
+    'DEFENSE': 'INFRA',
+    'TRANSPORT': 'INFRA',
+    'CHEMICALS': 'PHARMA',
+    'TELECOM': 'IT',
+    'FINSERVICES': 'BANKING',
+    'COMMODITIES': 'ENERGY'
+  };
+  return mapping[sectorKey] || sectorKey || 'UNKNOWN';
+}
 
 /**
  * Determine sector for a given stock symbol or name

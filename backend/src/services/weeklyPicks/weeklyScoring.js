@@ -21,7 +21,9 @@ export { getGrade, GRADE_THRESHOLDS };
  * Uses the momentum scoring framework (100 pts total)
  */
 export function calculateAPlusMomentumScore(stock, levels = null, niftyReturn1M = 0, debug = false) {
-  return calculateSetupScore(stock, levels, niftyReturn1M, debug, 'a_plus_momentum');
+  const result = calculateSetupScore(stock, levels, niftyReturn1M, debug, 'a_plus_momentum');
+  console.log(`[WEEKLY-SCORE] ${stock.symbol || 'unknown'}: A+ Momentum score=${result.score} grade=${result.grade} (RSI=${stock.daily_rsi || '?'} vol_ratio=${stock.volume_ratio || '?'})`);
+  return result;
 }
 
 /**
@@ -29,7 +31,9 @@ export function calculateAPlusMomentumScore(stock, levels = null, niftyReturn1M 
  * Uses the pullback-specific scoring framework (inverted volume, EMA20 proximity, etc.)
  */
 export function calculatePullbackScore(stock, levels = null, niftyReturn1M = 0, debug = false) {
-  return calculateSetupScore(stock, levels, niftyReturn1M, debug, 'pullback');
+  const result = calculateSetupScore(stock, levels, niftyReturn1M, debug, 'pullback');
+  console.log(`[WEEKLY-SCORE] ${stock.symbol || 'unknown'}: Pullback score=${result.score} grade=${result.grade} (RSI=${stock.daily_rsi || '?'} vol_ratio=${stock.volume_ratio || '?'})`);
+  return result;
 }
 
 /**
@@ -37,7 +41,9 @@ export function calculatePullbackScore(stock, levels = null, niftyReturn1M = 0, 
  * Routes to the appropriate scoring framework based on scanType
  */
 export function calculateWeeklySetupScore(stock, levels = null, niftyReturn1M = 0, debug = false, scanType = 'a_plus_momentum') {
-  return calculateSetupScore(stock, levels, niftyReturn1M, debug, scanType);
+  const result = calculateSetupScore(stock, levels, niftyReturn1M, debug, scanType);
+  console.log(`[WEEKLY-SCORE] ${stock.symbol || 'unknown'}: ${scanType} score=${result.score} grade=${result.grade}`);
+  return result;
 }
 
 export default {

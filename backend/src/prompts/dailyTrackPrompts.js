@@ -10,7 +10,7 @@
 
 /**
  * Format news context for inclusion in the prompt
- * @param {Object|null} newsData - News data from DailyNewsStock
+ * @param {Object|null} newsData - News data (currently null — DailyNewsStock removed)
  * @returns {string|null} Formatted news context or null
  */
 function formatNewsContext(newsData) {

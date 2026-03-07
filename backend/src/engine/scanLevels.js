@@ -671,49 +671,40 @@ function find1HSwingTarget(params) {
  * @returns {object} Trading levels with validation
  */
 export function calculateTradingLevels(scanType, data) {
-  console.log(`🔍 [SCAN_LEVELS] calculateTradingLevels called with scanType="${scanType}"`);
-
   // ─────────────────────────────────────────────────────────────────────────
   // VALIDATE REQUIRED DATA
   // ─────────────────────────────────────────────────────────────────────────
   const validation = validateData(data);
   if (!validation.valid) {
-    console.log(`🔍 [SCAN_LEVELS] Validation FAILED: ${validation.reason}`);
+    console.log(`[SCAN-LEVELS] ${scanType}: data validation FAILED — ${validation.reason}`);
     return validation;
   }
-  console.log(`🔍 [SCAN_LEVELS] Validation passed`);
 
   const { atr } = data;
 
   let result;
 
-  console.log(`🔍 [SCAN_LEVELS] Switching on scanType: "${scanType?.toLowerCase()}"`);
   switch (scanType?.toLowerCase()) {
     case 'breakout':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculateBreakoutLevels`);
       result = calculateBreakoutLevels(data);
       break;
 
     case 'pullback':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculatePullbackLevels`);
       result = calculatePullbackLevels(data);
       break;
 
     case 'momentum':
     case 'momentum_carry':  // Alias for daily picks
-      console.log(`🔍 [SCAN_LEVELS] Calling calculateMomentumLevels`);
       result = calculateMomentumLevels(data);
       break;
 
     case 'consolidation_breakout':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculateConsolidationLevels`);
       result = calculateConsolidationLevels(data);
       break;
 
     case 'a_plus_momentum':
       // A+ Momentum: Uptrend + 3% weekly gain + near 20d high
       // Similar to momentum but with stronger confirmation (near highs)
-      console.log(`🔍 [SCAN_LEVELS] Calling calculateAPlusMomentumLevels`);
       result = calculateAPlusMomentumLevels(data);
       break;
 
@@ -722,56 +713,51 @@ export function calculateTradingLevels(scanType, data) {
     // ═══════════════════════════════════════════════════════════════════════════
 
     case 'fiftytwoweek_high':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculate52wHighLevels`);
       result = calculate52wHighLevels(data);
       break;
 
     case 'fiftytwoweek_low':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculate52wLowLevels`);
       result = calculate52wLowLevels(data);
       break;
 
     case 'breakdown_setup':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculateBreakdownLevels`);
       result = calculateBreakdownLevels(data);
       break;
 
     case 'momentum_carry_bearish':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculateMomentumBearishLevels`);
       result = calculateMomentumBearishLevels(data);
       break;
 
     case 'failed_at_resistance':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculateFailedResistanceLevels`);
       result = calculateFailedResistanceLevels(data);
       break;
 
     case 'compression_bearish':
-      console.log(`🔍 [SCAN_LEVELS] Calling calculateCompressionBearishLevels`);
       result = calculateCompressionBearishLevels(data);
       break;
 
     default:
-      console.log(`🔍 [SCAN_LEVELS] Unknown scan type: "${scanType}"`);
+      console.log(`[SCAN-LEVELS] Unknown scan type: "${scanType}" — rejected`);
       return {
         valid: false,
         reason: `Unknown scan type: ${scanType}`
       };
   }
 
-  console.log(`🔍 [SCAN_LEVELS] Result from calculation:`, JSON.stringify(result));
-
   if (!result.valid) {
-    console.log(`🔍 [SCAN_LEVELS] Calculation returned invalid: ${result.reason}`);
+    console.log(`[SCAN-LEVELS] ${scanType}: ${result.reason}`);
     return result;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // APPLY GUARDRAILS
   // ─────────────────────────────────────────────────────────────────────────
-  console.log(`🔍 [SCAN_LEVELS] Applying guardrails to: entry=${round2(result.entry)} stop=${round2(result.stop)} target=${round2(result.target)} atr=${round2(atr)} scanType=${scanType}`);
   const guarded = applyGuardrails(result.entry, result.stop, result.target, atr, scanType);
-  console.log(`🔍 [SCAN_LEVELS] Guardrails: valid=${guarded.valid} ${guarded.valid ? `entry=${round2(guarded.entry)} stop=${round2(guarded.stop)} target=${round2(guarded.target)} R:R=${guarded.riskReward} risk=${guarded.riskPercent}% reward=${guarded.rewardPercent}%` : `REJECTED: ${guarded.reason}`}`);
+  if (guarded.valid) {
+    console.log(`[SCAN-LEVELS] ${scanType}: entry=₹${round2(guarded.entry)} stop=₹${round2(guarded.stop)} target=₹${round2(guarded.target)} R:R=${guarded.riskReward} risk=${guarded.riskPercent}% mode=${result.mode || scanType}`);
+  } else {
+    console.log(`[SCAN-LEVELS] ${scanType}: GUARDRAILS REJECTED — ${guarded.reason} (raw: entry=${round2(result.entry)} stop=${round2(result.stop)} target=${round2(result.target)} atr=${round2(atr)})`);
+  }
 
   if (!guarded.valid) {
     return {
@@ -1813,11 +1799,12 @@ function calculate52wHighLevels(data) {
     stop = entry - atr;
   }
 
-  // Target: Intraday → Daily R1/R2 (skip 1H swing — always below entry for 52W breakouts)
+  // Target: Intraday → Daily R1/R2, fall back to 2.5×ATR (matches findStructuralTarget breakout logic)
   //         Swing    → entry + 2×ATR
-  // 52W breakouts are momentum plays — target must be far enough to survive ORB adjustment.
-  // Minimum reward = 1.5×ATR, otherwise ORB entry (ORB_high + buffer) eats all the reward.
-  const minReward = 1.5 * atr;
+  // 52W breakouts are momentum plays — the breakout itself provides edge.
+  // Reduced minReward to 1.0×ATR (from 1.5) to accept more candidates near 52W extremes
+  // where pivot levels compress. ATR fallback raised to 2.5× (from 2.0) for better R:R.
+  const minReward = 1.0 * atr;
   let target, target2_basis;
   if (isIntraday) {
     if (isNum(dailyR1) && dailyR1 > entry && (dailyR1 - entry) >= minReward) {
@@ -1827,8 +1814,8 @@ function calculate52wHighLevels(data) {
       target = dailyR2;
       target2_basis = 'daily_r2';
     } else {
-      target = entry + (2 * atr);
-      target2_basis = 'atr_2x';
+      target = entry + (2.5 * atr);
+      target2_basis = 'atr_25x';
     }
 
     // Validate R:R with chosen target
@@ -1920,19 +1907,22 @@ function calculate52wLowLevels(data) {
     stop = entry + atr;
   }
 
-  // Target: Intraday → Daily S1/S2 (skip 1H swing — always above entry for 52W breakdowns)
+  // Target: Intraday → Daily S1/S2, fall back to 2.5×ATR (matches 52W High logic)
   //         Swing    → entry − 2×ATR
+  // Reduced minReward to 1.0×ATR (from implicit none) for consistency with 52W High fix.
+  // ATR fallback raised to 2.5× (from 2.0) for better R:R.
+  const minReward = 1.0 * atr;
   let target, target2_basis;
   if (isIntraday) {
-    if (isNum(dailyS1) && dailyS1 < entry && dailyS1 > 0) {
+    if (isNum(dailyS1) && dailyS1 < entry && dailyS1 > 0 && (entry - dailyS1) >= minReward) {
       target = dailyS1;
       target2_basis = 'daily_s1';
-    } else if (isNum(dailyS2) && dailyS2 < entry && dailyS2 > 0) {
+    } else if (isNum(dailyS2) && dailyS2 < entry && dailyS2 > 0 && (entry - dailyS2) >= minReward) {
       target = dailyS2;
       target2_basis = 'daily_s2';
     } else {
-      target = entry - (2 * atr);
-      target2_basis = 'atr_2x';
+      target = entry - (2.5 * atr);
+      target2_basis = 'atr_25x';
     }
 
     // Validate R:R with chosen target

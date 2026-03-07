@@ -30,13 +30,13 @@ class KiteOrderService {
       const equity = margins.data?.equity || {};
 
       // Use equity.net — real available margin after all utilisation.
-      // Apply MIS leverage factor (2x) to reflect intraday buying power.
+      // Split into swing (CNC, no leverage) and intraday (MIS, 2x leverage) pools.
       const availableMargin = equity.net || 0;
       const availableCash = equity.available?.cash || 0;
-      const leveragedMargin = availableMargin * (kiteConfig.MIS_LEVERAGE_FACTOR || 1);
-      const usableAmount = leveragedMargin * kiteConfig.CAPITAL_USAGE_PERCENT;
-      const rawSwing = usableAmount * kiteConfig.SWING_CAPITAL_PERCENT;
-      const rawIntraday = usableAmount * kiteConfig.INTRADAY_CAPITAL_PERCENT;
+      const usableAmount = availableMargin * kiteConfig.CAPITAL_USAGE_PERCENT;
+      const rawSwing = usableAmount * kiteConfig.SWING_CAPITAL_PERCENT;           // 60% of usable — CNC, no leverage
+      const rawIntraday = usableAmount * kiteConfig.INTRADAY_CAPITAL_PERCENT      // 40% of usable — MIS base
+                          * (kiteConfig.MIS_LEVERAGE_FACTOR || 1);                // then apply 2x leverage
 
       // Subtract capital already committed to active GTTs and open orders (not yet executed)
       // GTTs don't block margin on Kite until triggered, so we must track this ourselves.
@@ -68,12 +68,12 @@ class KiteOrderService {
       const usableSwing = Math.max(0, rawSwing - pendingSwingValue);
       const usableIntraday = Math.max(0, rawIntraday - pendingIntradayValue);
 
-      console.log(`[KITE ORDER] Balance: net=₹${availableMargin} cash=₹${availableCash} leveraged=₹${leveragedMargin} (${kiteConfig.MIS_LEVERAGE_FACTOR}x) usable=₹${usableAmount} (${kiteConfig.CAPITAL_USAGE_PERCENT * 100}%)`);
+      console.log(`[KITE ORDER] Balance: net=₹${availableMargin} cash=₹${availableCash} usable=₹${usableAmount} (${kiteConfig.CAPITAL_USAGE_PERCENT * 100}%) | Swing(CNC): ₹${rawSwing} (no leverage) | Intraday(MIS): ₹${rawIntraday} (${kiteConfig.MIS_LEVERAGE_FACTOR}x leverage)`);
       console.log(`[KITE ORDER] Swing: raw=₹${rawSwing} pending=₹${pendingSwingValue} available=₹${usableSwing} | Intraday: raw=₹${rawIntraday} pending=₹${pendingIntradayValue} available=₹${usableIntraday}`);
 
       await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.BALANCE_CHECK, {
         status: 'SUCCESS',
-        response: { availableMargin, availableCash, leveragedMargin, usableAmount, rawSwing, rawIntraday, pendingSwingValue, pendingIntradayValue, usableSwing, usableIntraday },
+        response: { availableMargin, availableCash, usableAmount, rawSwing, rawIntraday, misLeverage: kiteConfig.MIS_LEVERAGE_FACTOR, pendingSwingValue, pendingIntradayValue, usableSwing, usableIntraday },
         source: 'AUTO'
       });
 
@@ -746,6 +746,23 @@ class KiteOrderService {
   }
 
   /**
+   * Get open positions from Kite (for reconciliation on startup)
+   */
+  async getPositions() {
+    try {
+      console.log('[KITE ORDER] Fetching positions...');
+      const positions = await this.kiteService.getPositions();
+      const dayPositions = positions?.data?.day || [];
+      const openCount = dayPositions.filter(p => p.quantity !== 0).length;
+      console.log(`[KITE ORDER] Positions: ${dayPositions.length} day entries, ${openCount} open`);
+      return positions;
+    } catch (error) {
+      console.error('[KITE ORDER] Positions fetch failed:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get order details from Kite
    */
   async getOrderDetails(orderId) {
@@ -796,6 +813,8 @@ class KiteOrderService {
       quantity,
       stockId,
       simulationId,
+      transactionType = kiteConfig.TRANSACTION_TYPES.SELL,
+      product = kiteConfig.PRODUCT_TYPES.CNC,
       orderType = 'STOP_LOSS'
     } = ocoData;
 
@@ -807,18 +826,18 @@ class KiteOrderService {
       orders: [
         // Stop Loss leg
         {
-          transaction_type: kiteConfig.TRANSACTION_TYPES.SELL,
+          transaction_type: transactionType,
           quantity: quantity,
           order_type: kiteConfig.ORDER_TYPES.LIMIT,
-          product: kiteConfig.PRODUCT_TYPES.CNC,
+          product: product,
           price: stopLoss * 0.99 // Slightly below trigger for execution
         },
         // Target leg
         {
-          transaction_type: kiteConfig.TRANSACTION_TYPES.SELL,
+          transaction_type: transactionType,
           quantity: quantity,
           order_type: kiteConfig.ORDER_TYPES.LIMIT,
-          product: kiteConfig.PRODUCT_TYPES.CNC,
+          product: product,
           price: target
         }
       ],

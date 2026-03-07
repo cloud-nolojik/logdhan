@@ -25,8 +25,8 @@ const kiteConfig = {
   ADMIN_USER_ID: process.env.KITE_ADMIN_USER_ID,
 
   // Capital management
-  CAPITAL_USAGE_PERCENT: 0.50,  // Use only 50% of available balance
-  MIS_LEVERAGE_FACTOR: 2,       // MIS leverage multiplier (Zerodha allows ~5x, using 2x conservatively)
+  CAPITAL_USAGE_PERCENT: 1.0,   // Use full available balance (risk managed by swing/intraday split)
+  MIS_LEVERAGE_FACTOR: 5,       // MIS leverage multiplier (Zerodha allows ~5x)
   MAX_ORDER_VALUE: 100000,      // ₹1 lakh max per order
   MAX_DAILY_ORDERS: 10,         // Max orders per day
   SWING_CAPITAL_PERCENT: 0.60,   // 60% of usable capital for swing (CNC/GTT)

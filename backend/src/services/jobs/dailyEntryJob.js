@@ -19,9 +19,11 @@ import {
   validateAndPlaceEntries,
   checkFillsFallback,
   monitorDailyPickOrders,
-  tightenStops
+  tightenStops,
+  gapProtectionCheck
 } from '../dailyPicks/dailyPicksService.js';
 import { runDailyExit } from '../dailyPicks/dailyPicksExitService.js';
+import { reconcilePositionsOnStartup } from '../dailyPicks/dailyPicksRiskService.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 
 const LOG = '[DAILY-ENTRY-JOB]';
@@ -70,6 +72,14 @@ class DailyEntryJob {
 
       this.isInitialized = true;
       console.log(`${LOG} Initialization complete`);
+
+      // Run startup recovery — reconcile open positions in case of mid-day restart
+      try {
+        const recoveryResult = await reconcilePositionsOnStartup();
+        console.log(`${LOG} Startup recovery: ${JSON.stringify(recoveryResult)}`);
+      } catch (recoveryErr) {
+        console.error(`${LOG} Startup recovery failed (non-fatal):`, recoveryErr.message);
+      }
     } catch (error) {
       console.error(`${LOG} Failed to initialize:`, error);
       throw error;
@@ -92,12 +102,13 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
+        const t0 = Date.now();
         console.log(`${LOG} [ORB-COLLECT] Calling startOrbCollection()...`);
         const result = await startOrbCollection();
         this.stats.orbCollections++;
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
-        console.log(`${LOG} [ORB-COLLECT] Completed:`, JSON.stringify(result));
+        console.log(`${LOG} [ORB-COLLECT] Completed in ${Date.now() - t0}ms:`, JSON.stringify(result));
         return result;
       } catch (error) {
         console.error(`${LOG} ORB collection failed:`, error);
@@ -127,9 +138,11 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
+        const t0 = Date.now();
         console.log(`${LOG} [VALIDATE-ENTRY] Pass ${orbPass}: Fetching ORB OHLC...`);
         const orbResult = await startOrbCollection({ orbPass });
-        console.log(`${LOG} [VALIDATE-ENTRY] ORB result:`, JSON.stringify(orbResult));
+        const orbMs = Date.now() - t0;
+        console.log(`${LOG} [VALIDATE-ENTRY] ORB fetch done in ${orbMs}ms:`, JSON.stringify(orbResult));
 
         if (!orbResult.success) {
           console.error(`${LOG} [VALIDATE-ENTRY] ORB fetch failed — skipping pass ${orbPass}`);
@@ -141,7 +154,8 @@ class DailyEntryJob {
         this.stats.entriesValidated++;
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
-        console.log(`${LOG} [VALIDATE-ENTRY] Pass ${orbPass} done: validated=${result.validated} skipped=${result.skipped} retrying=${result.retrying || 0} orders=${result.orders}`);
+        const totalMs = Date.now() - t0;
+        console.log(`${LOG} [VALIDATE-ENTRY] Pass ${orbPass} done in ${totalMs}ms: validated=${result.validated} skipped=${result.skipped} retrying=${result.retrying || 0} orders=${result.orders}`);
         return result;
       } catch (error) {
         console.error(`${LOG} Validate+entry pass ${orbPass} failed:`, error);
@@ -155,6 +169,31 @@ class DailyEntryJob {
     this.agenda.define('daily-picks-validate-entry', async (job) => orbValidateHandler(job, 1));
     this.agenda.define('daily-picks-validate-entry-pass2', async (job) => orbValidateHandler(job, 2));
     this.agenda.define('daily-picks-validate-entry-pass3', async (job) => orbValidateHandler(job, 3));
+
+    // Job 2.5: Gap protection — cancel AMO entries if stock gaps >2% at open
+    this.agenda.define('daily-picks-gap-protection', async (job) => {
+      if (this.runningJobs.has('gap-protection')) {
+        console.log(`${LOG} Gap protection already running, skipping`);
+        return;
+      }
+
+      this.runningJobs.add('gap-protection');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) return { skipped: true, reason: 'not_trading_day' };
+
+        console.log(`${LOG} [GAP-PROTECT] Checking for excessive gaps at open...`);
+        const result = await gapProtectionCheck();
+        console.log(`${LOG} [GAP-PROTECT] Completed: cancelled=${result.cancelled ?? result.message}`);
+        return result;
+      } catch (error) {
+        console.error(`${LOG} Gap protection failed:`, error);
+        this.stats.errors++;
+        throw error;
+      } finally {
+        this.runningJobs.delete('gap-protection');
+      }
+    });
 
     // Job 3: Polling fallback for fill detection (*/2 9-10)
     this.agenda.define('daily-picks-fill-fallback', async (job) => {
@@ -198,11 +237,12 @@ class DailyEntryJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
+        const t0 = Date.now();
         console.log(`${LOG} [MONITOR] Calling monitorDailyPickOrders()...`);
         const result = await monitorDailyPickOrders();
         this.stats.monitorRuns++;
         this.stats.lastRunAt = new Date();
-        console.log(`${LOG} [MONITOR] Completed: active=${result.active ?? result.message}`);
+        console.log(`${LOG} [MONITOR] Completed in ${Date.now() - t0}ms: active=${result.active ?? result.message}`);
         return result;
       } catch (error) {
         console.error(`${LOG} Monitor failed:`, error);
@@ -315,6 +355,7 @@ class DailyEntryJob {
         name: {
           $in: [
             'daily-picks-orb-collect',
+            'daily-picks-gap-protection',
             'daily-picks-validate-entry',
             'daily-picks-validate-entry-pass2',
             'daily-picks-validate-entry-pass3',
@@ -328,6 +369,11 @@ class DailyEntryJob {
             'daily-picks-fill-check'
           ]
         }
+      });
+
+      // 9:16 AM IST — Gap protection: cancel AMO entries with excessive gap at open
+      await this.agenda.every('16 9 * * 1-5', 'daily-picks-gap-protection', {}, {
+        timezone: 'Asia/Kolkata'
       });
 
       // Multi-pass ORB validation: 3 passes with widening time windows
@@ -366,7 +412,17 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log(`${LOG} Scheduled: ORB+validate+entry 9:30, fill-fallback */2 9-10, monitor */3 10-14, tighten 14:00, exit 15:00 (Mon-Fri IST)`);
+      console.log(`${LOG} ═══════════════════════════════════════`);
+      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST):`);
+      console.log(`${LOG}   09:16 — Gap protection (cancel AMO if gap > 2%)`);
+      console.log(`${LOG}   09:30 — ORB Pass 1 (15-min range) → validate + SL-M entry`);
+      console.log(`${LOG}   09:46 — ORB Pass 2 (30-min range) → retry failed picks`);
+      console.log(`${LOG}   10:01 — ORB Pass 3 (45-min FINAL) → last chance entry`);
+      console.log(`${LOG}   */2 9-10 — Fill detection fallback (polling)`);
+      console.log(`${LOG}   */3 10-14 — Monitor: trailing, partial booking, sideways exit`);
+      console.log(`${LOG}   14:00 — Tighten stops to breakeven`);
+      console.log(`${LOG}   15:00 — Force-exit all positions`);
+      console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
       throw error;

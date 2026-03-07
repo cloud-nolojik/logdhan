@@ -201,12 +201,16 @@ class WeeklyTrackAnalysisJob {
     }
 
     this.isRunning = true;
+    const jobT0 = Date.now();
+
+    // Check if today is a trading day
+    const isTradingDay = MarketHoursUtil.isTradingDay ? MarketHoursUtil.isTradingDay() : true;
+    const istTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
     console.log(`\n${'='.repeat(60)}`);
     console.log(`${runLabel} POSITION MANAGEMENT ANALYSIS STARTED`);
     console.log(`${'='.repeat(60)}`);
-    console.log(`${runLabel} Job ID: ${jobId}`);
-    console.log(`${runLabel} Time: ${new Date().toISOString()}`);
+    console.log(`${runLabel} Job ID: ${jobId} | IST: ${istTime} | Trading Day: ${isTradingDay}`);
     console.log(`${runLabel} Force Reanalyze: ${forceReanalyze}`);
 
     const result = {
@@ -237,8 +241,11 @@ class WeeklyTrackAnalysisJob {
 
       // Step 2: Fetch prices for all stocks
       console.log(`\n${runLabel} Step 2: Fetching current prices...`);
+      const priceT0 = Date.now();
       const instrumentKeys = uniqueStocks.map(s => s.instrument_key);
       const priceMap = await priceCacheService.getLatestPrices(instrumentKeys);
+      const pricesFound = Object.values(priceMap).filter(p => p && !isNaN(p) && p > 0).length;
+      console.log(`${runLabel} Prices fetched in ${Date.now() - priceT0}ms — ${pricesFound}/${instrumentKeys.length} valid prices`);
 
       // Step 3: Analyze each stock
       console.log(`\n${runLabel} Step 3: Running position management analysis...`);
@@ -263,11 +270,9 @@ class WeeklyTrackAnalysisJob {
 
             if (analysisResult.cached) {
               result.cached++;
-              console.log(`${runLabel} ⏭️ ${stock.trading_symbol} - CACHE HIT`);
             } else if (analysisResult.success) {
               result.successful++;
               this.stats.aiCallsSuccess++;
-              console.log(`${runLabel} ✅ ${stock.trading_symbol} - ${analysisResult.status?.label || 'ANALYZED'}`);
             } else {
               result.failed++;
               this.stats.aiCallsFailed++;
@@ -286,14 +291,14 @@ class WeeklyTrackAnalysisJob {
       await Promise.all(analysisTasks);
 
       // Summary
+      const jobDuration = ((Date.now() - jobT0) / 1000).toFixed(1);
       console.log(`\n${runLabel} ${'─'.repeat(40)}`);
-      console.log(`${runLabel} ANALYSIS COMPLETE`);
+      console.log(`${runLabel} ANALYSIS COMPLETE in ${jobDuration}s`);
       console.log(`${runLabel} ${'─'.repeat(40)}`);
-      console.log(`${runLabel} Total stocks: ${uniqueStocks.length}`);
-      console.log(`${runLabel} ✅ Successful: ${result.successful}`);
-      console.log(`${runLabel} ⏭️ Cached: ${result.cached}`);
-      console.log(`${runLabel} ⏭️ Skipped: ${result.skipped}`);
-      console.log(`${runLabel} ❌ Failed: ${result.failed}`);
+      console.log(`${runLabel} Total: ${uniqueStocks.length} | OK: ${result.successful} | Cached: ${result.cached} | Skip: ${result.skipped} | Fail: ${result.failed}`);
+      if (result.errors.length > 0) {
+        console.log(`${runLabel} Errors: ${result.errors.map(e => `${e.symbol}(${e.error.substring(0, 50)})`).join(', ')}`);
+      }
       console.log(`${'='.repeat(60)}\n`);
 
       this.stats.stocksAnalyzed += result.stocksAnalyzed;
@@ -372,11 +377,10 @@ class WeeklyTrackAnalysisJob {
     const { forceReanalyze = false } = options;
     const { instrument_key, trading_symbol, name } = stock;
 
-    console.log(`[POSITION-MGMT] 📍 A1: Starting analyzeStock for ${trading_symbol}`);
+    const stockT0 = Date.now();
 
     // Check if today's analysis already exists
     const todayStart = this.getTodayStart();
-    console.log(`[POSITION-MGMT] 📍 A2: Checking existing analysis since ${todayStart}`);
 
     const existingAnalysis = await StockAnalysis.findOne({
       instrument_key,
@@ -386,12 +390,10 @@ class WeeklyTrackAnalysisJob {
     });
 
     if (existingAnalysis && !forceReanalyze) {
-      console.log(`[POSITION-MGMT] 📍 A3: Found cached analysis, returning`);
       return { cached: true, success: true };
     }
 
     // 1. Get original swing analysis (for entry/stop/target levels)
-    console.log(`[POSITION-MGMT] 📍 A4: Looking for swing analysis...`);
     const swingAnalysis = await StockAnalysis.findOne({
       instrument_key,
       analysis_type: 'swing',
@@ -399,16 +401,16 @@ class WeeklyTrackAnalysisJob {
     }).sort({ created_at: -1 }).lean();
 
     if (!swingAnalysis) {
-      console.log(`[POSITION-MGMT] ❌ A5: No swing analysis found!`);
+      console.log(`[POSITION-MGMT] ${trading_symbol} — NO swing analysis found, skipping`);
       return {
         success: false,
         error: 'No swing analysis found - cannot generate position management'
       };
     }
-    console.log(`[POSITION-MGMT] 📍 A5: Found swing analysis: ${swingAnalysis._id}`);
+    const swingAge = Math.round((Date.now() - new Date(swingAnalysis.created_at).getTime()) / (1000 * 60 * 60 * 24));
+    console.log(`[POSITION-MGMT] ${trading_symbol} — swing analysis found (${swingAge}d old, id=${swingAnalysis._id})`);
 
     // 2. Get today's candle data
-    console.log(`[POSITION-MGMT] 📍 A6: Fetching candle data...`);
     let todayCandle = null;
     try {
       const candles = await candleFetcherService.fetchCandlesFromAPI(
@@ -421,15 +423,13 @@ class WeeklyTrackAnalysisJob {
       if (candles && candles.length > 0) {
         todayCandle = candles[candles.length - 1]; // Most recent candle
       }
-      console.log(`[POSITION-MGMT] 📍 A6: Got ${candles?.length || 0} candles`);
     } catch (error) {
-      console.warn(`[POSITION-MGMT] ⚠️ Could not fetch candles for ${trading_symbol}: ${error.message}`);
+      console.warn(`[POSITION-MGMT] ${trading_symbol} — candle fetch failed: ${error.message}`);
     }
 
     // Fallback if no candle data - use currentPrice or swing analysis entry as last resort
     if (!todayCandle) {
       const fallbackPrice = currentPrice || swingAnalysis.current_price || swingAnalysis.analysis_data?.market_summary?.last;
-      console.log(`[POSITION-MGMT] 📍 A6: Using fallback candle with price ${fallbackPrice}`);
       todayCandle = {
         open: fallbackPrice,
         high: fallbackPrice,
@@ -440,10 +440,8 @@ class WeeklyTrackAnalysisJob {
 
     // Use candle close as the definitive current price
     const finalCurrentPrice = todayCandle.close || currentPrice || swingAnalysis.current_price;
-    console.log(`[POSITION-MGMT] 📍 A6b: Final current price: ${finalCurrentPrice}`);
 
     // 3. Extract original levels from swing analysis
-    console.log(`[POSITION-MGMT] 📍 A7: Extracting levels from swing analysis...`);
     const strategy = swingAnalysis.analysis_data?.strategies?.[0];
     const tradingPlan = swingAnalysis.analysis_data?.trading_plan;
 
@@ -454,33 +452,39 @@ class WeeklyTrackAnalysisJob {
       riskReward: tradingPlan?.risk_reward || strategy?.riskReward
     };
 
-    console.log(`[POSITION-MGMT] 📍 A7: Levels:`, originalLevels);
-
     // Validate we have required levels
     if (!originalLevels.entry || !originalLevels.stop || !originalLevels.target) {
-      console.log(`[POSITION-MGMT] ❌ A8: Missing levels!`);
+      console.log(`[POSITION-MGMT] ${trading_symbol} — MISSING levels (entry=${originalLevels.entry} stop=${originalLevels.stop} target=${originalLevels.target})`);
       return {
         success: false,
         error: 'Missing entry/stop/target levels in swing analysis'
       };
     }
 
+    // KEY REVIEW LOG: Price position relative to levels
+    const entryDist = originalLevels.entry ? ((finalCurrentPrice - originalLevels.entry) / originalLevels.entry * 100).toFixed(2) : '?';
+    const stopDist = originalLevels.stop ? ((finalCurrentPrice - originalLevels.stop) / originalLevels.stop * 100).toFixed(2) : '?';
+    const targetDist = originalLevels.target ? ((originalLevels.target - finalCurrentPrice) / finalCurrentPrice * 100).toFixed(2) : '?';
+    const dayChangePct = todayCandle.open ? ((todayCandle.close - todayCandle.open) / todayCandle.open * 100).toFixed(2) : '?';
+    const isAboveEntry = finalCurrentPrice > originalLevels.entry;
+    const zone = finalCurrentPrice <= originalLevels.stop ? 'BELOW_STOP' :
+                 finalCurrentPrice < originalLevels.entry ? 'BETWEEN_STOP_ENTRY' :
+                 finalCurrentPrice >= originalLevels.target ? 'AT_TARGET' : 'IN_TRADE';
+    console.log(`[POSITION-MGMT] ${trading_symbol} — ₹${finalCurrentPrice} | day=${dayChangePct}% | entry=₹${originalLevels.entry}(${entryDist}%) stop=₹${originalLevels.stop}(${stopDist}%) target=₹${originalLevels.target}(${targetDist}%away) | zone=${zone}`);
+
     // 4. Get RSI from indicators if available
-    console.log(`[POSITION-MGMT] 📍 A8: Getting RSI...`);
     let rsi = null;
     try {
       const marketData = await candleFetcherService.getMarketDataForTriggers(instrument_key, []);
       rsi = marketData?.indicators?.['1d']?.rsi || marketData?.indicators?.['1h']?.rsi || null;
-      console.log(`[POSITION-MGMT] 📍 A8: RSI = ${rsi}`);
     } catch (error) {
-      console.log(`[POSITION-MGMT] ⚠️ A8: RSI fetch failed, continuing...`);
+      // RSI is optional, continue without it
     }
 
     // 5. Get market context (Nifty change)
     let niftyChangePct = null;
 
     // 6. Build prompt (GLOBAL - shows both if_holding + if_watching)
-    console.log(`[POSITION-MGMT] 📍 A9: Building prompt...`);
     const generatedAtIst = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
     const { system, user } = await buildPositionManagementPrompt({
@@ -505,13 +509,15 @@ class WeeklyTrackAnalysisJob {
     });
 
     // 7. Call AI
-    console.log(`[POSITION-MGMT] 📍 A10: Calling AI...`);
+    const aiT0 = Date.now();
     let analysisData;
     try {
       analysisData = await this.callAI(system, user);
-      console.log(`[POSITION-MGMT] 📍 A10: AI returned:`, analysisData?.status?.label || 'unknown');
+      const aiMs = Date.now() - aiT0;
+      const rec = analysisData?.recommendation;
+      console.log(`[POSITION-MGMT] ${trading_symbol} — AI done in ${aiMs}ms | status=${analysisData?.status?.label || '?'} action=${rec?.action || '?'} urgency=${rec?.urgency || '?'} conviction=${rec?.conviction || '?'} RSI=${rsi || '?'}`);
     } catch (aiError) {
-      console.log(`[POSITION-MGMT] ❌ A10: AI call failed:`, aiError.message);
+      console.log(`[POSITION-MGMT] ${trading_symbol} — AI FAILED in ${Date.now() - aiT0}ms: ${aiError.message}`);
       return {
         success: false,
         error: `AI call failed: ${aiError.message}`
@@ -520,10 +526,8 @@ class WeeklyTrackAnalysisJob {
 
     // 8. Calculate valid_until (next day 9 AM IST)
     const validUntil = this.getNextDay9AM();
-    console.log(`[POSITION-MGMT] 📍 A11: Valid until ${validUntil}`);
 
     // 9. Store in StockAnalysis
-    console.log(`[POSITION-MGMT] 📍 A12: Saving to DB with price ${finalCurrentPrice}...`);
     const savedAnalysis = await StockAnalysis.findOneAndUpdate(
       {
         instrument_key,
@@ -551,7 +555,7 @@ class WeeklyTrackAnalysisJob {
       },
       { upsert: true, new: true }
     );
-    console.log(`[POSITION-MGMT] ✅ A13: Saved analysis: ${savedAnalysis._id}`);
+    console.log(`[POSITION-MGMT] ${trading_symbol} — saved (id=${savedAnalysis._id}) total=${Date.now() - stockT0}ms`);
 
     return {
       success: true,
@@ -583,6 +587,8 @@ class WeeklyTrackAnalysisJob {
       ];
     }
 
+    console.log(`[POSITION-MGMT] AI model=${model} isO1=${isO1Model}`);
+
     const maxRetries = 3;
     let lastError;
 
@@ -606,6 +612,10 @@ class WeeklyTrackAnalysisJob {
         );
 
         const content = response.data.choices[0]?.message?.content;
+        const usage = response.data.usage;
+        if (usage) {
+          console.log(`[POSITION-MGMT] AI tokens: prompt=${usage.prompt_tokens} completion=${usage.completion_tokens} total=${usage.total_tokens}`);
+        }
         if (!content) {
           throw new Error('Empty response from AI');
         }

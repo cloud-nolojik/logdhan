@@ -1,6 +1,5 @@
 import logger from '../utils/logger.js';
 import aiReviewService from '../services/aiAnalyze.service.js';
-import intradayAnalyzeService from '../services/intradayAnalyze.service.js';
 import onDemandAnalysisService from '../services/onDemandAnalysisService.js';
 import candleFetcherService from '../services/candleFetcher.service.js';
 import priceCacheService from '../services/priceCache.service.js';
@@ -196,42 +195,11 @@ export const analyzeStock = async (req, res) => {
     }
 
     if (analysis_type === 'intraday') {
-      // Use intradayAnalyzeService for news-based intraday analysis
-      logger.info(`[AI ROUTE] Routing to intradayAnalyzeService for ${stock_symbol}`);
-
-      const result = await intradayAnalyzeService.getOrGenerateAnalysis({
-        instrumentKey: instrument_key,
-        symbol: stock_symbol,
-        forceRefresh: forceFresh
-      });
-
-      if (!result.success) {
-        return res.status(400).json({
-          success: false,
-          error: result.error,
-          message: result.message || 'Intraday analysis not available for this stock'
-        });
-      }
-
-      // Return intraday analysis result
-      const analysis = result.analysis;
-      return res.status(200).json({
-        success: true,
-        status: 'completed',
-        message: result.from_cache ? 'Intraday plan retrieved from cache' : 'Intraday plan generated successfully',
-        data: {
-          _id: analysis._id,
-          instrument_key: analysis.instrument_key,
-          stock_name: analysis.stock_name,
-          stock_symbol: analysis.stock_symbol,
-          analysis_type: 'intraday',
-          current_price: getLatestPrice(analysis.instrument_key, analysis.current_price),
-          analysis_data: analysis.analysis_data,
-          status: analysis.status,
-          valid_until: analysis.valid_until,
-          created_at: analysis.created_at
-        },
-        from_cache: result.from_cache
+      // Intraday analysis removed — was dependent on DailyNewsStock (now removed)
+      return res.status(410).json({
+        success: false,
+        error: 'feature_removed',
+        message: 'Intraday news-based analysis has been deprecated. Use daily picks instead.'
       });
     }
 

@@ -61,14 +61,16 @@ const pickSchema = new mongoose.Schema({
     entry_time: Date,
     exit_price: Number,
     exit_time: Date,
-    exit_reason: String,          // target_hit, stop_hit, time_exit_3pm, manual
+    exit_reason: String,          // target_hit, stop_hit, time_exit_3pm, sideways, manual
     exit_price_source: {
       type: String,
       enum: ['order_fill', 'ltp_approximate']
     },
     qty: Number,
     pnl: Number,
-    return_pct: Number
+    return_pct: Number,
+    partial_exit_qty: Number,     // Qty sold via partial profit booking
+    partial_exit_price: Number    // Price at partial profit booking
   },
 
   // Kite order tracking
@@ -129,7 +131,15 @@ const pickSchema = new mongoose.Schema({
 
   // AI insight (optional, generated for top 3 picks)
   ai_insight: { type: String, default: null },
-  ai_generated: { type: Boolean, default: false }
+  ai_generated: { type: Boolean, default: false },
+
+  // News sentiment (from globalMarketIntel via newsSentimentFilter)
+  news_sentiment: {
+    type: String,
+    enum: ['BULLISH', 'NEUTRAL', 'BEARISH', null],
+    default: null
+  },
+  news_adjustment: { type: Number, default: 0 }
 }, { _id: true });
 
 const dailyPickSchema = new mongoose.Schema({
@@ -142,7 +152,14 @@ const dailyPickSchema = new mongoose.Schema({
     regime: { type: String, enum: ['STRONG_BULLISH', 'BULLISH', 'BEARISH', 'STRONG_BEARISH', 'NEUTRAL', 'UNKNOWN'] },
     nifty_prev_close: Number,
     distance_pct: Number,
-    decided_at: Date
+    decided_at: Date,
+    news_mood: { type: String, enum: ['BULLISH', 'BEARISH', 'MIXED', null], default: null },
+    news_breadth: {
+      bullish: Number,
+      bearish: Number,
+      neutral: Number,
+      total: Number
+    }
   },
 
   // Selected picks (max 3)
@@ -167,6 +184,49 @@ const dailyPickSchema = new mongoose.Schema({
     best_pick: String,
     worst_pick: String
   },
+
+  // Full global market intelligence snapshot (from Claude web search)
+  // Stored for audit trail, debugging, and backtest replay
+  global_intel: {
+    market_mood: { type: String, enum: ['BULLISH', 'BEARISH', 'CAUTIOUS', 'NEUTRAL'], default: 'NEUTRAL' },
+    risk_level: { type: String, enum: ['LOW', 'MEDIUM', 'HIGH', 'EXTREME'], default: 'MEDIUM' },
+    risk_reason: String,
+    trading_recommendation: { type: String, enum: ['NORMAL', 'REDUCE_SIZE', 'AVOID_SHORTS', 'AVOID_LONGS', 'STAY_OUT'], default: 'NORMAL' },
+    recommendation_reason: String,
+    sgx_nifty: {
+      indication: String,
+      status: { type: String, enum: ['POSITIVE', 'NEGATIVE', 'FLAT'] },
+      points: Number
+    },
+    global_cues: {
+      us_markets: String,
+      us_detail: String,
+      indian_impact: String,
+      asian_markets: String,
+      asian_detail: String,
+      dollar_index: String,
+      rupee_impact: String,
+      crude_oil: String,
+      crude_price: Number,
+      crude_indian_impact: String
+    },
+    institutional: {
+      fii_trend: String,
+      fii_value_cr: Number,
+      dii_trend: String,
+      dii_value_cr: Number
+    },
+    sectors: { type: mongoose.Schema.Types.Mixed, default: {} },
+    major_events: [{ type: mongoose.Schema.Types.Mixed }],
+    stock_specific: { type: mongoose.Schema.Types.Mixed, default: {} },
+    fetched_at: Date,
+    source: String
+  },
+
+  // Circuit breaker persistence (survives server restarts)
+  circuit_breaker_tripped: { type: Boolean, default: false },
+  circuit_breaker_reason: { type: String, default: null },
+  circuit_breaker_at: { type: Date, default: null },
 
   // Candidate review table — all scored candidates with decisions (for admin review)
   candidates_review: [{

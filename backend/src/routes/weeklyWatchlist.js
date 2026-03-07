@@ -794,16 +794,20 @@ function calculateCardDisplay(stock, livePrice, dailyTrackAnalysis = null) {
  * - 15-min Intraday Monitor Job (stop/T1/T2 alerts during market hours)
  */
 router.get("/", auth, async (req, res) => {
+  const t0 = Date.now();
   try {
     const watchlist = await WeeklyWatchlist.getCurrentWeek();
 
     if (!watchlist) {
+      console.log(`[WEEKLY-WATCHLIST] GET / — no active watchlist (${Date.now() - t0}ms)`);
       return res.json({
         success: true,
         watchlist: null,
         message: "No watchlist for current week. Add stocks to create one."
       });
     }
+
+    console.log(`[WEEKLY-WATCHLIST] GET / — ${watchlist.stocks.length} stocks, week=${watchlist.week_start?.toISOString().split('T')[0] || '?'}`);
 
     // Fetch prices, analyses, and orders in parallel (all independent queries)
     const instrumentKeys = watchlist.stocks.map(stock => stock.instrument_key);
@@ -929,6 +933,13 @@ router.get("/", auth, async (req, res) => {
       ? Math.floor((Date.now() - new Date(oldestPriceUpdate).getTime()) / 1000)
       : null;
 
+    const journeyStats = enrichedStocks.reduce((acc, s) => {
+      const js = s.card_display?.journey_status || 'unknown';
+      acc[js] = (acc[js] || 0) + 1;
+      return acc;
+    }, {});
+    console.log(`[WEEKLY-WATCHLIST] GET / — enriched ${enrichedStocks.length} stocks in ${Date.now() - t0}ms (priceAge=${pricesCacheAge}s journeys=${JSON.stringify(journeyStats)})`);
+
     res.json({
       success: true,
       watchlist: {
@@ -940,7 +951,7 @@ router.get("/", auth, async (req, res) => {
       prices_cache_age_seconds: pricesCacheAge
     });
   } catch (error) {
-    console.error("Error fetching weekly watchlist:", error);
+    console.error(`[WEEKLY-WATCHLIST] GET / FAILED in ${Date.now() - t0}ms:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -969,6 +980,8 @@ router.post("/add-stock", auth, async (req, res) => {
       entry_zone = getEntryZone(screening_data);
     }
 
+    console.log(`[WEEKLY-WATCHLIST] POST /add-stock — ${symbol} (score=${setup_score} reason=${reason || 'Manual add'})`);
+
     const result = await WeeklyWatchlist.addStockToWeek(req.user._id, {
       instrument_key,
       symbol,
@@ -981,8 +994,11 @@ router.post("/add-stock", auth, async (req, res) => {
     });
 
     if (!result.added) {
+      console.warn(`[WEEKLY-WATCHLIST] POST /add-stock — ${symbol} REJECTED: ${result.reason}`);
       return res.status(400).json({ success: false, error: result.reason });
     }
+
+    console.log(`[WEEKLY-WATCHLIST] POST /add-stock — ${symbol} ADDED (score=${setup_score} entry_zone=${entry_zone ? `₹${entry_zone.low}-₹${entry_zone.high}` : 'none'})`);
 
     res.json({
       success: true,
@@ -993,7 +1009,7 @@ router.post("/add-stock", auth, async (req, res) => {
       watchlist: result.watchlist
     });
   } catch (error) {
-    console.error("Error adding stock to watchlist:", error);
+    console.error(`[WEEKLY-WATCHLIST] POST /add-stock FAILED:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1024,12 +1040,15 @@ router.post("/:stockId/update-status", auth, async (req, res) => {
       return res.status(404).json({ success: false, error: "Stock not found in watchlist" });
     }
 
+    const prevStatus = stock.status;
     stock.status = status;
     await watchlist.save();
 
+    console.log(`[WEEKLY-WATCHLIST] POST /:stockId/update-status — ${stock.symbol}: ${prevStatus} → ${status}`);
+
     res.json({ success: true, message: `Status updated to ${status}`, stock });
   } catch (error) {
-    console.error("Error updating stock status:", error);
+    console.error(`[WEEKLY-WATCHLIST] POST /update-status FAILED:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1118,9 +1137,11 @@ router.delete("/:stockId", auth, async (req, res) => {
     watchlist.stocks.pull(req.params.stockId);
     await watchlist.save();
 
+    console.log(`[WEEKLY-WATCHLIST] DELETE /:stockId — ${symbol} REMOVED from watchlist`);
+
     res.json({ success: true, message: `${symbol} removed from watchlist` });
   } catch (error) {
-    console.error("Error removing stock:", error);
+    console.error(`[WEEKLY-WATCHLIST] DELETE /:stockId FAILED:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1200,13 +1221,15 @@ router.post("/complete-week", auth, async (req, res) => {
 
     await watchlist.completeWeek();
 
+    console.log(`[WEEKLY-WATCHLIST] POST /complete-week — week=${watchlist.week_start?.toISOString().split('T')[0] || '?'} stocks=${watchlist.stocks.length} entered=${watchlist.week_summary?.stocks_entered || 0} triggered=${watchlist.week_summary?.stocks_triggered || 0}`);
+
     res.json({
       success: true,
       message: "Week completed",
       summary: watchlist.week_summary
     });
   } catch (error) {
-    console.error("Error completing week:", error);
+    console.error(`[WEEKLY-WATCHLIST] POST /complete-week FAILED:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });

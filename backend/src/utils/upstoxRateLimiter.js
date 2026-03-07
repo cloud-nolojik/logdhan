@@ -76,7 +76,7 @@ async function rateLimitedGet(url, config = {}, options = {}) {
   const counts = limiter.counts();
 
   if (counts.QUEUED > 0) {
-    console.log(`${LOG} ⏳ QUEUED GET ${shortUrl} caller=${caller} (queue=${counts.QUEUED}, running=${counts.RUNNING})`);
+  //  console.log(`${LOG} ⏳ QUEUED GET ${shortUrl} caller=${caller} (queue=${counts.QUEUED}, running=${counts.RUNNING})`);
   }
 
   // Bottleneck queues this — if 8 requests are in-flight, this waits
@@ -90,7 +90,7 @@ async function rateLimitedGet(url, config = {}, options = {}) {
         const response = await axios.get(url, config);
         const elapsed = Date.now() - startTime;
         metrics.successfulRequests++;
-        console.log(`${LOG} ✅ GET ${shortUrl} caller=${caller} ${response.status} ${elapsed}ms`);
+      //  console.log(`${LOG} ✅ GET ${shortUrl} caller=${caller} ${response.status} ${elapsed}ms`);
         return response;
       } catch (error) {
         lastError = error;
@@ -101,10 +101,10 @@ async function rateLimitedGet(url, config = {}, options = {}) {
           metrics.rateLimitHits++;
           metrics.retriedRequests++;
           const delay = Math.min(BASE_DELAY_MS * Math.pow(BACKOFF_FACTOR, attempt), MAX_DELAY_MS);
-          console.warn(
-            `${LOG} ⚠️ ${status} GET ${shortUrl} caller=${caller} (attempt ${attempt + 1}/${MAX_RETRIES + 1}). ` +
-            `Pausing limiter for ${delay}ms then retrying...`
-          );
+          // console.warn(
+          //   `${LOG} ⚠️ ${status} GET ${shortUrl} caller=${caller} (attempt ${attempt + 1}/${MAX_RETRIES + 1}). ` +
+          //   `Pausing limiter for ${delay}ms then retrying...`
+          // );
           // Cloudflare 429 = IP-level ban — all requests will fail, not just this one.
           // Pause the limiter (reservoir=0) so other queued requests don't waste slots on guaranteed 429s.
           // The backoff does block this slot, which is intentional — after the pause lifts,
@@ -142,7 +142,7 @@ async function rateLimitedPost(url, data, config = {}, options = {}) {
       const response = await axios.post(url, data, config);
       const elapsed = Date.now() - startTime;
       metrics.successfulRequests++;
-      console.log(`${LOG} ✅ POST ${shortUrl} caller=${caller} ${response.status} ${elapsed}ms`);
+      // console.log(`${LOG} ✅ POST ${shortUrl} caller=${caller} ${response.status} ${elapsed}ms`);
       return response;
     } catch (error) {
       const elapsed = Date.now() - startTime;
@@ -168,7 +168,7 @@ async function rateLimitedDelete(url, config = {}, options = {}) {
       const response = await axios.delete(url, config);
       const elapsed = Date.now() - startTime;
       metrics.successfulRequests++;
-      console.log(`${LOG} ✅ DELETE ${shortUrl} caller=${caller} ${response.status} ${elapsed}ms`);
+      // console.log(`${LOG} ✅ DELETE ${shortUrl} caller=${caller} ${response.status} ${elapsed}ms`);
       return response;
     } catch (error) {
       const elapsed = Date.now() - startTime;

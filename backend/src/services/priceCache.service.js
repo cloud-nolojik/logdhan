@@ -569,7 +569,7 @@ class PriceCacheService {
             const now = new Date();
             const istNow = MarketHoursUtil.toIST(now);
             previousDayCloseDate = istNow.toISOString().split('T')[0]; // "YYYY-MM-DD"
-            console.log(`[PRICE CACHE] Got previous_day_close for ${instrumentKey}: ${previousDayClose} (date: ${previousDayCloseDate})`);
+           // console.log(`[PRICE CACHE] Got previous_day_close for ${instrumentKey}: ${previousDayClose} (date: ${previousDayCloseDate})`);
           }
         } catch (error) {
           console.warn(`⚠️ [DB STORE] Failed to fetch daily candles for ${instrumentKey}: ${error.message}`);
@@ -577,7 +577,7 @@ class PriceCacheService {
       } else {
         // Use existing previous_day_close from DB
         previousDayClose = existingDoc.previous_day_close;
-        console.log(`[PRICE CACHE] Using cached previous_day_close for ${instrumentKey}: ${previousDayClose}`);
+        //console.log(`[PRICE CACHE] Using cached previous_day_close for ${instrumentKey}: ${previousDayClose}`);
       }
 
       // Prepare price data

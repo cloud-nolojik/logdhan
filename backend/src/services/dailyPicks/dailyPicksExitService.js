@@ -175,8 +175,8 @@ async function runDailyExit(options = {}) {
         continue;
       }
 
-      // Direction-aware product: LONG = CNC (GTT delivery), SHORT = MIS (AMO intraday)
-      const exitProduct = pick.direction === 'LONG' ? 'CNC' : 'MIS';
+      // All daily picks now use MIS (intraday)
+      const exitProduct = 'MIS';
 
       let exitOrderId = null;
       try {
@@ -223,7 +223,7 @@ async function runDailyExit(options = {}) {
             throw new Error('Retry also failed');
           }
         } catch (retryErr) {
-          const autoExitNote = exitProduct === 'MIS' ? ' Exchange auto-exit at 3:20 PM (MIS).' : ' CNC position — NO auto-exit, MUST close manually!';
+          const autoExitNote = ' Exchange auto-exit at 3:20 PM (MIS).';
           console.error(`${LOG} ⚠️ CRITICAL: ${pick.symbol} — FAILED TO EXIT. Manual exit required.${autoExitNote}`);
           // Send admin alert
           try {

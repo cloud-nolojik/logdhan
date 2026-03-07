@@ -44,7 +44,11 @@ export const WEEKLY_SCAN_ARCHETYPE = {
  * @returns {Promise<Array>}
  */
 export async function runAPlusNextWeekScan() {
-  return runChartinkScan(WEEKLY_SCAN_QUERIES.a_plus_momentum);
+  console.log('[WEEKLY-SCAN] Running A+ Momentum scan (52W breakout)...');
+  const t0 = Date.now();
+  const results = await runChartinkScan(WEEKLY_SCAN_QUERIES.a_plus_momentum);
+  console.log(`[WEEKLY-SCAN] A+ Momentum: ${results.length} stocks found in ${Date.now() - t0}ms${results.length > 0 ? ': ' + results.slice(0, 15).map(s => s.nsecode || s.symbol).join(', ') + (results.length > 15 ? '...' : '') : ''}`);
+  return results;
 }
 
 /**
@@ -52,7 +56,11 @@ export async function runAPlusNextWeekScan() {
  * @returns {Promise<Array>}
  */
 export async function runPullbackScan() {
-  return runChartinkScan(WEEKLY_SCAN_QUERIES.pullback);
+  console.log('[WEEKLY-SCAN] Running Pullback scan (EMA20 retest)...');
+  const t0 = Date.now();
+  const results = await runChartinkScan(WEEKLY_SCAN_QUERIES.pullback);
+  console.log(`[WEEKLY-SCAN] Pullback: ${results.length} stocks found in ${Date.now() - t0}ms${results.length > 0 ? ': ' + results.slice(0, 15).map(s => s.nsecode || s.symbol).join(', ') + (results.length > 15 ? '...' : '') : ''}`);
+  return results;
 }
 
 /**
@@ -60,15 +68,19 @@ export async function runPullbackScan() {
  * @returns {Promise<{ a_plus_momentum: Array, combined: Array }>}
  */
 export async function runCombinedScan() {
+  console.log('[WEEKLY-SCAN] ═══════════════════════════════════════');
+  console.log('[WEEKLY-SCAN] Running combined weekly scan...');
   try {
     const results = await runAPlusNextWeekScan();
 
+    console.log(`[WEEKLY-SCAN] Combined result: ${results.length} total candidates`);
+    console.log('[WEEKLY-SCAN] ═══════════════════════════════════════');
     return {
       a_plus_momentum: results,
       combined: results.map(stock => ({ ...stock, scan_type: 'a_plus_momentum' }))
     };
   } catch (error) {
-    console.error('Error running combined scan:', error.message);
+    console.error('[WEEKLY-SCAN] ❌ Combined scan failed:', error.message);
     throw error;
   }
 }

@@ -85,6 +85,11 @@ export function checkMarketRegime({ niftyCandles }) {
     description = `Nifty within 1% of 50 EMA — neutral/choppy`;
   }
 
+  console.log(`[REGIME] ═══════════════════════════════════════`);
+  console.log(`[REGIME] Nifty last=${round2(niftyLast)} EMA50=${round2(ema50)} distance=${distancePct}%`);
+  console.log(`[REGIME] Regime: ${regime} — ${description}`);
+  console.log(`[REGIME] ═══════════════════════════════════════`);
+
   return {
     regime,
     niftyLast: round2(niftyLast),
@@ -125,6 +130,7 @@ function calculateEMA(data, period) {
  */
 export function getRegimeWarning(setupType, regimeCheck) {
   if (!regimeCheck || regimeCheck.regime === REGIME.UNKNOWN) {
+    console.log(`[REGIME] getRegimeWarning(${setupType}): no regime data — skipping`);
     return null;
   }
 
@@ -132,6 +138,7 @@ export function getRegimeWarning(setupType, regimeCheck) {
 
   // BUY in strong bearish market — CRITICAL (scans blocked)
   if (setupType === 'BUY' && regime === REGIME.STRONG_BEARISH) {
+    console.log(`[REGIME] ⛔ CRITICAL: ${setupType} in ${regime} (${distancePct}% from EMA50) — BLOCKED`);
     return {
       code: 'STRONG_BEARISH_REGIME',
       severity: 'critical',
@@ -147,6 +154,7 @@ export function getRegimeWarning(setupType, regimeCheck) {
 
   // BUY in bearish market
   if (setupType === 'BUY' && regime === REGIME.BEARISH) {
+    console.log(`[REGIME] ⚠️ HIGH: ${setupType} in ${regime} (${distancePct}% from EMA50) — reduce 50%`);
     return {
       code: 'BEARISH_REGIME',
       severity: 'high',
@@ -162,6 +170,7 @@ export function getRegimeWarning(setupType, regimeCheck) {
 
   // SELL in strong bullish market — CRITICAL (scans blocked)
   if (setupType === 'SELL' && regime === REGIME.STRONG_BULLISH) {
+    console.log(`[REGIME] ⛔ CRITICAL: ${setupType} in ${regime} (${distancePct}% from EMA50) — BLOCKED`);
     return {
       code: 'STRONG_BULLISH_REGIME',
       severity: 'critical',
@@ -177,6 +186,7 @@ export function getRegimeWarning(setupType, regimeCheck) {
 
   // SELL (short) in bullish market
   if (setupType === 'SELL' && regime === REGIME.BULLISH) {
+    console.log(`[REGIME] ⚠️ MEDIUM: ${setupType} in ${regime} (${distancePct}% from EMA50) — use tight stops`);
     return {
       code: 'BULLISH_REGIME',
       severity: 'medium',
@@ -191,6 +201,7 @@ export function getRegimeWarning(setupType, regimeCheck) {
 
   // Neutral regime - add caution for any setup
   if (regime === REGIME.NEUTRAL) {
+    console.log(`[REGIME] Warning: ${setupType} in NEUTRAL regime — choppy conditions (severity: low)`);
     return {
       code: 'CHOPPY_REGIME',
       severity: 'low',
@@ -203,6 +214,7 @@ export function getRegimeWarning(setupType, regimeCheck) {
     };
   }
 
+  console.log(`[REGIME] ${setupType} aligned with ${regime} regime — no warning`);
   return null;
 }
 

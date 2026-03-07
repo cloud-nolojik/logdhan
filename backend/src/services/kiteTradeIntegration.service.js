@@ -81,50 +81,58 @@ async function processSimulationForKiteOrders(phase1Results, stocksMap) {
 
     console.log(`[KITE-INTEGRATION] Breakout signals (after touch filter): ${breakoutSignals.length}`);
 
-    // Only place GTTs for top-confidence stocks (A+ or A grade)
-    const highConfidenceSignals = breakoutSignals.filter(result => {
+    // Filter by grade — accept B+ and above (matches screening threshold of 60)
+    // A+/A get full allocation, B+ gets reduced (50%) capital
+    const GRADE_CONFIG = { 'A+': 1.0, 'A': 1.0, 'B+': 0.5 };
+    const eligibleSignals = breakoutSignals.filter(result => {
       const stock = stocksMap.get(result.symbol);
       const grade = stock?.grade;
-      if (grade === 'A+' || grade === 'A') return true;
-      console.log(`[KITE-INTEGRATION] ${result.symbol}: Skipping GTT — grade ${grade || 'ungraded'} below threshold (need A+ or A)`);
+      if (grade in GRADE_CONFIG) return true;
+      console.log(`[KITE-INTEGRATION] ${result.symbol}: Skipping GTT — grade ${grade || 'ungraded'} below threshold (need B+ or above)`);
       results.ordersSkipped++;
       return false;
     });
 
-    console.log(`[KITE-INTEGRATION] High confidence signals (A+/A): ${highConfidenceSignals.length}`);
+    console.log(`[KITE-INTEGRATION] Eligible signals (B+ and above): ${eligibleSignals.length}`);
 
-    if (highConfidenceSignals.length === 0) {
-      console.log('[KITE-INTEGRATION] No high-confidence breakout signals to process');
+    if (eligibleSignals.length === 0) {
+      console.log('[KITE-INTEGRATION] No eligible breakout signals to process');
       console.log('[KITE-INTEGRATION] ════════════════════════════════════════');
       return results;
     }
 
-    console.log(`[KITE-INTEGRATION] Found ${highConfidenceSignals.length} high-confidence breakout stocks`);
+    console.log(`[KITE-INTEGRATION] Found ${eligibleSignals.length} eligible breakout stocks`);
 
     // Get available balance and calculate score-weighted allocation
     const balance = await kiteOrderService.getAvailableBalance();
 
     const MAX_WEIGHT = 0.45;
-    const totalScore = highConfidenceSignals.reduce((sum, r) => {
+    const totalScore = eligibleSignals.reduce((sum, r) => {
       const stock = stocksMap.get(r.symbol);
       return sum + (stock?.setup_score || 50);
     }, 0);
-    const rawWeights = highConfidenceSignals.map(r => {
+    const rawWeights = eligibleSignals.map(r => {
       const stock = stocksMap.get(r.symbol);
       return Math.min((stock?.setup_score || 50) / totalScore, MAX_WEIGHT);
     });
     const weightSum = rawWeights.reduce((s, w) => s + w, 0);
-    const allocations = highConfidenceSignals.map((r, i) => ({
-      result: r,
-      capital: Math.floor(balance.usableSwing * (rawWeights[i] / weightSum))
-    }));
+    const allocations = eligibleSignals.map((r, i) => {
+      const stock = stocksMap.get(r.symbol);
+      const gradeMultiplier = GRADE_CONFIG[stock?.grade] || 0.5;
+      const baseCap = Math.floor(balance.usableSwing * (rawWeights[i] / weightSum));
+      const capital = Math.floor(baseCap * gradeMultiplier);
+      if (gradeMultiplier < 1.0) {
+        console.log(`[KITE-INTEGRATION] ${r.symbol}: Grade ${stock?.grade} — capital reduced to ${(gradeMultiplier * 100)}% (₹${capital} of ₹${baseCap})`);
+      }
+      return { result: r, capital };
+    });
 
     console.log(`[KITE-INTEGRATION] Balance: ₹${balance.available.toFixed(2)}, ` +
                 `Swing budget: ₹${balance.usableSwing.toFixed(2)}, ` +
-                `Score-weighted across ${highConfidenceSignals.length} stocks (totalScore=${totalScore})`);
+                `Score-weighted across ${eligibleSignals.length} stocks (totalScore=${totalScore})`);
 
     // Send notification before placing orders
-    await sendOrderNotification(highConfidenceSignals, balance);
+    await sendOrderNotification(eligibleSignals, balance);
 
     // Process each high-confidence breakout entry signal — entry GTT ONLY (no OCO)
     // OCO is placed later by processPostEntryOrders() after sim confirms actual ENTRY

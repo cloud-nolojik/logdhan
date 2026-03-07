@@ -183,7 +183,8 @@ function validatePicks(picks, orbData) {
       continue;
     }
 
-    console.log(`${LOG} │ ORB data: O=${orb.opening_price} H=${orb.high} L=${orb.low} gap=${orb.gap_percent}% dir=${orb.orb_direction}`);
+    const orbDate = orb.date || '';
+    console.log(`${LOG} │ ORB data: ${orbDate ? `[${orbDate}] ` : ''}O=${orb.opening_price} H=${orb.high} L=${orb.low} gap=${orb.gap_percent}% dir=${orb.orb_direction}`);
     console.log(`${LOG} │ Pre-market levels: entry=${pick.levels.entry} stop=${pick.levels.stop} target=${pick.levels.target} R:R=${pick.levels.risk_reward}`);
 
     // Populate ORB data on the pick — preserve orb_pass/orb_passes from multi-pass tracking
@@ -249,16 +250,20 @@ function validatePicks(picks, orbData) {
     console.log(`${LOG} │   reward = |target(${originalTarget}) - orbEntry(${orbEntry})| = ${round2(reward)}`);
     console.log(`${LOG} │   newRR = ${round2(reward)} / ${round2(risk)} = ${newRR} (min: ${MIN_ORB_RR}) → ${checks.orb_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
 
-    // Check 4: Nifty alignment — >0.3% opposing move blocks trade
-    const niftyOpposes = (isBullish && niftyChangePct < -NIFTY_THRESHOLD_PCT) ||
-                         (!isBullish && niftyChangePct > NIFTY_THRESHOLD_PCT);
+    // Check 4: Nifty alignment — opposing move blocks trade
+    // Regime-aligned trades (e.g. SHORT in BEARISH) get wider threshold (0.5%)
+    // to tolerate normal morning relief rallies that don't invalidate the thesis
+    const niftyThreshold = pick.regime_aligned ? 0.5 : NIFTY_THRESHOLD_PCT;
+    const niftyOpposes = (isBullish && niftyChangePct < -niftyThreshold) ||
+                         (!isBullish && niftyChangePct > niftyThreshold);
     checks.nifty_alignment = {
       passed: !niftyOpposes,
       nifty_dir: niftyDir,
       nifty_change_pct: niftyChangePct,
-      threshold: NIFTY_THRESHOLD_PCT
+      threshold: niftyThreshold,
+      regime_aligned: !!pick.regime_aligned
     };
-    console.log(`${LOG} │ Check 4 NIFTY: dir=${niftyDir} change=${niftyChangePct}% vs ${isBullish ? 'LONG' : 'SHORT'} (threshold: ±${NIFTY_THRESHOLD_PCT}%) → ${checks.nifty_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`${LOG} │ Check 4 NIFTY: dir=${niftyDir} change=${niftyChangePct}% vs ${isBullish ? 'LONG' : 'SHORT'} (threshold: ±${niftyThreshold}%${pick.regime_aligned ? ' regime-aligned' : ''}) → ${checks.nifty_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
 
     // Check 5: ORB range width — ensure ORB isn't too volatile for breakout entry
     const orbRange = orb.high - orb.low;

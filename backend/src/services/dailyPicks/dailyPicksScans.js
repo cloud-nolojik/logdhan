@@ -15,8 +15,8 @@
     // BULLISH SCANS — Stocks likely to move 2%+ UP today
     // ═══════════════════════════════════════════════════════════════
     // 
-    // ⏰ TIMING: These scans run at 8:45 AM IST (pre-market)
-    // At 8:45 AM, Chartink's "latest" = yesterday's completed candle
+    // ⏰ TIMING: These scans run at 6:32 AM IST (pre-market)
+    // At 6:32 AM, Chartink's "latest" = yesterday's completed candle
     // So we use: latest (=yesterday), 1 day ago (=2 days back), 2 days ago (=3 days back)
     // ═══════════════════════════════════════════════════════════════
 

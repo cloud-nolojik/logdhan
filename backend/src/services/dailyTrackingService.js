@@ -18,7 +18,6 @@
 
 import WeeklyWatchlist from '../models/weeklyWatchlist.js';
 import StockAnalysis from '../models/stockAnalysis.js';
-import DailyNewsStock from '../models/dailyNewsStock.js';
 import { getDailyAnalysisData } from './technicalData.service.js';
 import { getDailyCandlesForRange } from '../utils/stockDb.js';
 import { buildDailyTrackPrompt } from '../prompts/dailyTrackPrompts.js';
@@ -73,72 +72,57 @@ function calculateStatus(dailyData, levels, symbol = 'UNKNOWN') {
   const t2 = target2;    // T2: Main target (70% of remaining if T3 exists, else 100%)
   const t3 = target3;    // T3: Extension target (optional - final 30%)
 
-  console.log(`[STATUS-CALC] ${symbol}: LTP=${ltp}, Entry=${entry}, EntryRange=[${entryLow?.toFixed(2)}-${entryHigh?.toFixed(2)}]`);
-  console.log(`[STATUS-CALC] ${symbol}: Stop=${stop}, T1=${t1 || 'N/A'}, T2=${t2}, T3=${t3 || 'N/A'}, Archetype=${archetype || 'standard'}`);
-
   // Priority order matters — check terminal states first
+  let result;
 
   // 1. Stop hit (terminal for the week)
   if (ltp < stop) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} < Stop ${stop} -> STOPPED_OUT`);
-    return 'STOPPED_OUT';
+    result = 'STOPPED_OUT';
   }
-
   // 2. T3 hit (if exists) — full target achieved
-  if (t3 && ltp >= t3) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= T3 ${t3} -> TARGET3_HIT`);
-    return 'TARGET3_HIT';
+  else if (t3 && ltp >= t3) {
+    result = 'TARGET3_HIT';
   }
-
   // 3. T2 hit — main target
-  if (t2 && ltp >= t2) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= T2 ${t2} -> TARGET2_HIT`);
-    return 'TARGET2_HIT';
+  else if (t2 && ltp >= t2) {
+    result = 'TARGET2_HIT';
   }
-
   // 4. T1 hit — 50% booked, trailing remainder
-  if (t1 && ltp >= t1) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} >= T1 ${t1} -> TARGET1_HIT`);
-    return 'TARGET1_HIT';
+  else if (t1 && ltp >= t1) {
+    result = 'TARGET1_HIT';
   }
-
   // 5. Entry zone (price within entry range)
-  if (ltp >= entryLow && ltp <= entryHigh) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} in entry range [${entryLow.toFixed(2)}-${entryHigh.toFixed(2)}] -> ENTRY_ZONE`);
-    return 'ENTRY_ZONE';
+  else if (ltp >= entryLow && ltp <= entryHigh) {
+    result = 'ENTRY_ZONE';
   }
-
   // 6. 52W breakout retest (archetype-aware)
-  //    For 52W breakout stocks: if price pulls back to old 52W high area
-  //    Retest zone: between stop+2% and entry low
-  if (archetype === '52w_breakout') {
-    const retestZoneBottom = stop * 1.02; // 2% above stop
+  else if (archetype === '52w_breakout') {
+    const retestZoneBottom = stop * 1.02;
     const retestZoneTop = entryLow;
-    console.log(`[STATUS-CALC] ${symbol}: 52W breakout - checking retest zone [${retestZoneBottom.toFixed(2)}-${retestZoneTop.toFixed(2)}]`);
     if (ltp >= retestZoneBottom && ltp < retestZoneTop) {
-      console.log(`[STATUS-CALC] ${symbol}: In retest zone -> RETEST_ZONE`);
-      return 'RETEST_ZONE';
+      result = 'RETEST_ZONE';
     }
   }
 
-  // 7. Above entry but below T1 (running, no action needed)
-  const upperBound = t1 || t2;
-  if (ltp > entryHigh && upperBound && ltp < upperBound) {
-    console.log(`[STATUS-CALC] ${symbol}: LTP ${ltp} > EntryHigh ${entryHigh.toFixed(2)} and < ${t1 ? 'T1' : 'T2'} ${upperBound} -> ABOVE_ENTRY`);
-    return 'ABOVE_ENTRY';
+  if (!result) {
+    // 7. Above entry but below T1 (running, no action needed)
+    const upperBound = t1 || t2;
+    if (ltp > entryHigh && upperBound && ltp < upperBound) {
+      result = 'ABOVE_ENTRY';
+    }
+    // 8. Approaching entry (within 2% above entry)
+    else {
+      const distanceFromEntry = ((ltp - entry) / entry) * 100;
+      if (distanceFromEntry > 0 && distanceFromEntry <= 2) {
+        result = 'APPROACHING';
+      } else {
+        result = 'WATCHING';
+      }
+    }
   }
 
-  // 7. Approaching entry (within 2% above entry)
-  const distanceFromEntry = ((ltp - entry) / entry) * 100;
-  console.log(`[STATUS-CALC] ${symbol}: Distance from entry = ${distanceFromEntry.toFixed(2)}%`);
-  if (distanceFromEntry > 0 && distanceFromEntry <= 2) {
-    console.log(`[STATUS-CALC] ${symbol}: Within 2% above entry -> APPROACHING`);
-    return 'APPROACHING';
-  }
-
-  // 8. Default — still watching
-  console.log(`[STATUS-CALC] ${symbol}: No condition matched -> WATCHING`);
-  return 'WATCHING';
+  console.log(`[STATUS-CALC] ${symbol}: LTP=₹${ltp} | E=₹${entry} S=₹${stop} T1=${t1 || '-'} T2=${t2} T3=${t3 || '-'} → ${result}`);
+  return result;
 }
 
 /**
@@ -152,52 +136,40 @@ function calculateFlags(dailyData, levels, symbol = 'UNKNOWN') {
   const { daily_rsi, todays_volume, avg_volume_50d, ltp, open, prev_close } = dailyData;
   const { entry } = levels;
 
-  console.log(`[FLAGS-CALC] ${symbol}: RSI=${daily_rsi?.toFixed(1)}, LTP=${ltp}, Open=${open}, Entry=${entry}`);
-  console.log(`[FLAGS-CALC] ${symbol}: Volume=${todays_volume}, AvgVol50d=${avg_volume_50d}`);
-  console.log(`[FLAGS-CALC] ${symbol}: prev_close=${prev_close} (from daily data, previous day)`);
-
   // RSI flags
   if (daily_rsi >= 75) {
-    console.log(`[FLAGS-CALC] ${symbol}: RSI ${daily_rsi} >= 75 -> RSI_EXIT`);
     flags.push('RSI_EXIT');
   } else if (daily_rsi >= 72) {
-    console.log(`[FLAGS-CALC] ${symbol}: RSI ${daily_rsi} >= 72 -> RSI_DANGER`);
     flags.push('RSI_DANGER');
   }
 
   // Volume spike (2x or more above 50-day average)
   if (avg_volume_50d > 0 && todays_volume >= avg_volume_50d * 2) {
-    const ratio = (todays_volume / avg_volume_50d).toFixed(1);
-    console.log(`[FLAGS-CALC] ${symbol}: Volume ${todays_volume} is ${ratio}x avg -> VOLUME_SPIKE`);
     flags.push('VOLUME_SPIKE');
   }
 
   // Approaching entry (within 2% above entry) — only when OUTSIDE entry zone.
-  // calculateStatus() handles ENTRY_ZONE; this flag covers the "getting close" range.
   const entryLow = levels.entryRange?.[0] || entry * 0.99;
   const entryHigh = levels.entryRange?.[1] || entry * 1.01;
   const inEntryZone = ltp >= entryLow && ltp <= entryHigh;
   const distFromEntry = ((ltp - entry) / entry) * 100;
-  console.log(`[FLAGS-CALC] ${symbol}: Distance from entry = ${distFromEntry.toFixed(2)}%, inEntryZone=${inEntryZone}`);
   if (!inEntryZone && distFromEntry > 0 && distFromEntry <= 2) {
-    console.log(`[FLAGS-CALC] ${symbol}: Within 2% above entry, outside entry zone -> APPROACHING_ENTRY`);
     flags.push('APPROACHING_ENTRY');
   }
 
   // Gap down detection (today's open significantly below previous day's close)
-  // Uses prev_close from daily candle data (NOT from saved snapshot)
   if (prev_close && prev_close > 0 && open && open > 0) {
-    const gapPct = ((open - prev_close) / prev_close) * 100;
-    console.log(`[FLAGS-CALC] ${symbol}: Today open=${open}, Prev day close=${prev_close}, Gap=${gapPct.toFixed(2)}%`);
     if (open < prev_close * 0.97) {
-      console.log(`[FLAGS-CALC] ${symbol}: Gap down > 3% -> GAP_DOWN`);
+      const gapPct = ((open - prev_close) / prev_close * 100).toFixed(1);
       flags.push('GAP_DOWN');
+      console.log(`[FLAGS-CALC] ${symbol}: Gap down ${gapPct}% (open=₹${open} vs prev_close=₹${prev_close})`);
     }
-  } else {
-    console.log(`[FLAGS-CALC] ${symbol}: No prev_close or open data - skipping gap detection`);
   }
 
-  console.log(`[FLAGS-CALC] ${symbol}: Final flags = [${flags.join(', ')}]`);
+  // Only log if flags were found (no noise for clean stocks)
+  if (flags.length > 0) {
+    console.log(`[FLAGS-CALC] ${symbol}: RSI=${daily_rsi?.toFixed(1) || '?'} Vol=${avg_volume_50d > 0 ? (todays_volume / avg_volume_50d).toFixed(1) + 'x' : '?'} → [${flags.join(', ')}]`);
+  }
   return flags;
 }
 
@@ -661,9 +633,6 @@ function simulateTrade(stock, snapshots, currentPrice) {
     // ══════════════════════════════════════════════
     // CHECK STOP LOSS (always check first — worst case)
     // ══════════════════════════════════════════════
-    console.log(`[STOP-CHECK] ${stock.symbol}: Day ${date} | Low=${low} | trailing_stop=${sim.trailing_stop} | original_stop=${stop} | sim.status=${sim.status} | qty_remaining=${sim.qty_remaining}`);
-    console.log(`[STOP-CHECK] ${stock.symbol}: Will trigger STOPPED_OUT? ${low <= sim.trailing_stop} (low ${low} <= trailing_stop ${sim.trailing_stop})`);
-    console.log(`[STOP-CHECK] ${stock.symbol}: Events so far:`, sim.events.map(e => e.type).join(', '));
     if (low <= sim.trailing_stop) {
       const exitPrice = sim.trailing_stop;
       const pnl = (exitPrice - sim.entry_price) * sim.qty_remaining;
@@ -1101,14 +1070,9 @@ async function runPhase1(options = {}) {
     // Trade story is complete — just save today's snapshot for historical record
     const simTerminalStates = ['FULL_EXIT', 'STOPPED_OUT'];
     if (simTerminalStates.includes(stock.trade_simulation?.status)) {
-      console.log(`${runLabel} ⏭️ ${stock.symbol} — trade ${stock.trade_simulation.status}, saving snapshot only`);
-      console.log(`${runLabel} [DEBUG] ${stock.symbol} trade_simulation from DB:`, JSON.stringify({
-        status: stock.trade_simulation.status,
-        entry_price: stock.trade_simulation.entry_price,
-        trailing_stop: stock.trade_simulation.trailing_stop,
-        events: stock.trade_simulation.events?.slice(-2) // last 2 events
-      }, null, 2));
-      console.log(`${runLabel} [DEBUG] ${stock.symbol} levels from DB:`, JSON.stringify(stock.levels, null, 2));
+      const termPnl = stock.trade_simulation.total_pnl || 0;
+      const termPnlStr = termPnl >= 0 ? `+₹${termPnl.toLocaleString('en-IN')}` : `-₹${Math.abs(termPnl).toLocaleString('en-IN')}`;
+      console.log(`${runLabel} ⏭️ ${stock.symbol} — ${stock.trade_simulation.status} (${termPnlStr}), snapshot only`);
 
       // Build minimal snapshot for historical record
       const existingSnapshotIndex = stock.daily_snapshots?.findIndex(
@@ -1206,48 +1170,18 @@ async function runPhase1(options = {}) {
       ? stock.daily_snapshots[stock.daily_snapshots.length - 1]
       : null;
 
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`[DAILY-TRACK-P1] Processing: ${stock.symbol}`);
-    console.log(`${'='.repeat(60)}`);
-    console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Daily data received:`, {
-      ltp: dailyData.ltp,
-      open: dailyData.open,
-      high: dailyData.high,
-      low: dailyData.low,
-      prev_close: dailyData.prev_close,
-      daily_rsi: dailyData.daily_rsi,
-      todays_volume: dailyData.todays_volume,
-      avg_volume_50d: dailyData.avg_volume_50d
-    });
-    console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Levels:`, {
-      entry: stock.levels.entry,
-      entryRange: stock.levels.entryRange,
-      stop: stock.levels.stop,
-      target1: stock.levels.target1,         // T1 (50% booking)
-      target1_basis: stock.levels.target1_basis,
-      target2: stock.levels.target2,         // T2 (main target)
-      target2_basis: stock.levels.target2_basis,
-      target3: stock.levels.target3,         // T3 (extension, optional)
-      archetype: stock.levels.archetype
-    });
-    console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Previous snapshot:`, prevSnapshot ? {
-      date: prevSnapshot.date,
-      close: prevSnapshot.close,
-      tracking_status: prevSnapshot.tracking_status,
-      tracking_flags: prevSnapshot.tracking_flags
-    } : 'None');
+    // Compact per-stock input log (replaces verbose object dumps)
+    const prevStatus = prevSnapshot?.tracking_status || 'NEW';
+    const dayChg = dailyData.prev_close ? ((dailyData.ltp - dailyData.prev_close) / dailyData.prev_close * 100).toFixed(1) : '?';
+    const volRatio = dailyData.avg_volume_50d > 0 ? (dailyData.todays_volume / dailyData.avg_volume_50d).toFixed(1) + 'x' : '?';
+    console.log(`[DAILY-TRACK-P1] ${stock.symbol}: ₹${dailyData.ltp} (${dayChg}%) | RSI=${dailyData.daily_rsi?.toFixed(1) || '?'} Vol=${volRatio} | prev=${prevStatus} | E=₹${stock.levels.entry} S=₹${stock.levels.stop} T1=${stock.levels.target1 || '-'} T2=₹${stock.levels.target2}`);
 
     // Calculate new status and flags
     const oldStatus = stock.tracking_status || 'WATCHING';
     const oldFlags = stock.tracking_flags || [];
 
-    console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Old status=${oldStatus}, Old flags=[${oldFlags.join(', ')}]`);
-
     let newStatus = calculateStatus(dailyData, stock.levels, stock.symbol);
     const newFlags = calculateFlags(dailyData, stock.levels, stock.symbol);
-
-    console.log(`[DAILY-TRACK-P1] ${stock.symbol}: NEW status=${newStatus}, NEW flags=[${newFlags.join(', ')}]`);
-    console.log(`[DAILY-TRACK-P1] ${stock.symbol}: Status changed? ${newStatus !== oldStatus ? 'YES' : 'NO'}`);
 
     // Calculate distance percentages (target2 is the main target)
     const distFromEntry = ((dailyData.ltp - stock.levels.entry) / stock.levels.entry) * 100;
@@ -1314,10 +1248,14 @@ async function runPhase1(options = {}) {
     }));
     stock.trade_simulation = simulateTrade(stock, allSnapshots, dailyData.ltp);
 
-    // Log simulation result
+    // Log simulation result with event summary
     const simStatus = stock.trade_simulation.status;
     const pnl = stock.trade_simulation.total_pnl;
     const pnlStr = pnl >= 0 ? `+₹${pnl.toLocaleString('en-IN')}` : `-₹${Math.abs(pnl).toLocaleString('en-IN')}`;
+    const simEvents = stock.trade_simulation.events?.map(e => e.type).join('→') || 'none';
+    const qtyRemain = stock.trade_simulation.qty_remaining || 0;
+    const peakPct = stock.trade_simulation.peak_gain_pct || 0;
+    console.log(`[DAILY-TRACK-SIM] ${stock.symbol}: ${simStatus} | P&L=${pnlStr} (${stock.trade_simulation.total_return_pct}%) | peak=${peakPct}% | qty_left=${qtyRemain} | events=[${simEvents}]`);
 
     // ── SYNC tracking_status WITH SIMULATION STATES ──
     // Simulation is the source of truth for trade outcomes
@@ -1597,7 +1535,10 @@ async function runPhase2(phase2Queue, watchlist = null) {
         }
       }
 
-      console.log(`${runLabel} ✅ ${stock.symbol}: AI analysis saved (${duration}ms)`);
+      const tokensIn = response.usage?.input_tokens || 0;
+      const tokensOut = response.usage?.output_tokens || 0;
+      const action = analysisData?.action_recommendation?.action || analysisData?.status_assessment || '?';
+      console.log(`${runLabel} ✅ ${stock.symbol}: ${action} | ${duration}ms | tokens=${tokensIn}+${tokensOut} | trigger="${triggerReason.substring(0, 60)}"`);
 
       results.push({
         symbol: stock.symbol,
@@ -1654,27 +1595,18 @@ async function runDailyTracking(options = {}) {
 
     // Kite Order Placement: Place GTT orders for ENTRY_SIGNALED stocks
     let kiteResults = null;
-    console.log(`${runLabel} 🔄 Checking Kite integration...`);
-    console.log(`${runLabel}    dryRun: ${dryRun}`);
-    console.log(`${runLabel}    isKiteIntegrationEnabled: ${isKiteIntegrationEnabled()}`);
-    console.log(`${runLabel}    phase1Results count: ${phase1Results?.length || 0}`);
-    console.log(`${runLabel}    stocksMap size: ${stocksMap?.size || 0}`);
+    console.log(`${runLabel} Kite: enabled=${isKiteIntegrationEnabled()} dryRun=${dryRun} stocks=${phase1Results?.length || 0}`);
 
     if (!dryRun && isKiteIntegrationEnabled()) {
       try {
-        console.log(`${runLabel} 🔄 Processing Kite orders for entry signals...`);
         kiteResults = await processSimulationForKiteOrders(phase1Results, stocksMap);
-        console.log(`${runLabel} 📊 Kite results:`, JSON.stringify(kiteResults, null, 2));
         if (kiteResults.ordersPlaced > 0) {
-          console.log(`${runLabel} ✅ Kite: ${kiteResults.ordersPlaced} GTT orders placed`);
+          console.log(`${runLabel} Kite: ${kiteResults.ordersPlaced} GTT orders placed`);
         } else if (kiteResults.skipped) {
-          console.log(`${runLabel} ⏭️ Kite: Skipped - ${kiteResults.reason}`);
-        } else {
-          console.log(`${runLabel} ℹ️ Kite: No entry signals to process`);
+          console.log(`${runLabel} Kite: Skipped — ${kiteResults.reason}`);
         }
       } catch (kiteError) {
-        console.error(`${runLabel} ❌ Kite order placement failed:`, kiteError.message);
-        console.error(`${runLabel} ❌ Kite error stack:`, kiteError.stack);
+        console.error(`${runLabel} Kite order placement failed:`, kiteError.message);
         // Don't fail the entire job if Kite fails
       }
     } else {
@@ -1781,35 +1713,11 @@ async function runDailyTracking(options = {}) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Fetch today's news for a stock from DailyNewsStock collection
- * @param {string} symbol - Stock trading symbol
- * @param {string} instrumentKey - Stock instrument key
- * @returns {Promise<Object|null>} News data or null if none found
+ * Fetch recent news for a stock (stub — DailyNewsStock removed, globalMarketIntel handles news for daily picks)
+ * @returns {Promise<null>} Always returns null
  */
 async function fetchRecentNewsForStock(symbol, instrumentKey) {
-  try {
-    // Look for today's news (daily tracking runs same day as news scrape)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const news = await DailyNewsStock.findOne({
-      $or: [
-        { instrument_key: instrumentKey },
-        { symbol: symbol.toUpperCase() }
-      ],
-      scrape_date: { $gte: today }
-    }).sort({ scrape_date: -1 }).lean();
-
-    if (!news || !news.news_items || news.news_items.length === 0) {
-      return null;
-    }
-
-    console.log(`[DAILY-TRACK-P2] Found ${news.news_items.length} news items for ${symbol}`);
-    return news;
-  } catch (error) {
-    console.error(`[DAILY-TRACK-P2] Error fetching news for ${symbol}:`, error.message);
-    return null;
-  }
+  return null;
 }
 
 /**

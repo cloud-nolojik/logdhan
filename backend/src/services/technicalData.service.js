@@ -1044,12 +1044,22 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     const recentCandles52w = dailyCandles.slice(-tradingDays52w);
     const high52w = Math.max(...recentCandles52w.map(c => c[2]));
 
-    // Calculate weekly pivots from aggregated weekly candles
+    // Calculate weekly pivots and trend from aggregated weekly candles
     const weeklyCandles = aggregateToWeekly(dailyCandles);
     let weeklyPivot = null;
+    let weeklyEma20 = 0;
+    let weeklyClose = 0;
+    let weeklyTrendBullish = null; // true/false/null (null = insufficient data)
     if (weeklyCandles.length >= 2) {
       const prevWeek = weeklyCandles[weeklyCandles.length - 2];
       weeklyPivot = calcClassicPivots(prevWeek[2], prevWeek[3], prevWeek[4]);
+    }
+    if (weeklyCandles.length >= 20) {
+      // Calculate weekly EMA20 for multi-timeframe confirmation
+      const weeklyIndicators = indicatorsEngine.calculate(weeklyCandles);
+      weeklyEma20 = round2(weeklyIndicators.ema20) || 0;
+      weeklyClose = round2(weeklyCandles[weeklyCandles.length - 1][4]) || 0;
+      weeklyTrendBullish = weeklyClose > weeklyEma20;
     }
 
     // Fetch hourly pivots for intraday confluence scoring
@@ -1098,7 +1108,11 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       weekly_s2: weeklyPivot?.s2 || null,
       hourly_1h_pivots: hourlyPivots.hourly_1h_pivots,
       hourly_4h_pivots: hourlyPivots.hourly_4h_pivots,
-      swing_levels_1h: hourlyPivots.swing_levels_1h
+      swing_levels_1h: hourlyPivots.swing_levels_1h,
+      // Multi-timeframe: weekly trend for confirmation
+      weekly_ema20: weeklyEma20,
+      weekly_close: weeklyClose,
+      weekly_trend_bullish: weeklyTrendBullish
     };
   } catch (error) {
     console.error(`[DailyAnalysis] Error calculating data for ${symbol}:`, error.message);

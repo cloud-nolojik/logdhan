@@ -13,15 +13,35 @@ export function getISTMidnight(referenceDate = new Date()) {
 }
 
 /**
- * Calculate PnL for a pick after exit
+ * Calculate PnL for a pick after exit (mutates pick.trade in-place).
+ * Handles partial booking if pick.trade.partial_exit_qty is set.
+ *
+ * NOTE: For pure (non-mutating) P&L calculation, prefer computePnl() from tradingDecisions.js.
+ * This function exists because the live system stores state on the pick object directly.
  */
 export function calculatePnl(pick) {
   const { entry_price, exit_price, qty } = pick.trade;
   if (!entry_price || !exit_price || !qty) return;
 
-  const multiplier = pick.direction === 'LONG' ? 1 : -1;
-  pick.trade.pnl = round2((exit_price - entry_price) * qty * multiplier);
-  pick.trade.return_pct = round2(((exit_price - entry_price) / entry_price) * 100 * multiplier);
+  const isBullish = pick.direction === 'LONG';
+  const partialQty = pick.trade.partial_exit_qty || 0;
+  const partialPrice = pick.trade.partial_exit_price || 0;
+
+  if (partialQty > 0 && partialPrice > 0) {
+    const safePartialQty = Math.min(partialQty, qty);
+    const partialPnl = (isBullish ? partialPrice - entry_price : entry_price - partialPrice) * safePartialQty;
+    const remainingQty = Math.max(0, qty - safePartialQty);
+    const remainingPnl = (isBullish ? exit_price - entry_price : entry_price - exit_price) * remainingQty;
+    pick.trade.pnl = round2(partialPnl + remainingPnl);
+  } else {
+    const multiplier = isBullish ? 1 : -1;
+    pick.trade.pnl = round2((exit_price - entry_price) * qty * multiplier);
+  }
+
+  const multiplier = isBullish ? 1 : -1;
+  pick.trade.return_pct = entry_price > 0
+    ? round2((pick.trade.pnl / (entry_price * qty)) * 100)
+    : 0;
 }
 
 /**

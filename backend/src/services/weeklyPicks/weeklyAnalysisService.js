@@ -19,7 +19,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
 import StockAnalysis from '../../models/stockAnalysis.js';
-import DailyNewsStock from '../../models/dailyNewsStock.js';
 import ApiUsage from '../../models/apiUsage.js';
 import fundamentalDataService from '../fundamentalDataService.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
@@ -199,11 +198,17 @@ async function generateWeeklyAnalysis(stock, options = {}) {
   try {
     // Step 1: Fetch fundamental data
     console.log(`[WEEKLY ANALYSIS] [${requestId}] Fetching fundamentals from Screener.in...`);
+    const fundT0 = Date.now();
     const fundamentals = await fundamentalDataService.fetchFundamentalData(stock.symbol);
+    const fundMs = Date.now() - fundT0;
+    if (fundamentals?.error) {
+      console.warn(`[WEEKLY ANALYSIS] [${requestId}] Fundamentals fetch FAILED for ${stock.symbol} in ${fundMs}ms: ${fundamentals.error}`);
+    } else {
+      console.log(`[WEEKLY ANALYSIS] [${requestId}] Fundamentals fetched for ${stock.symbol} in ${fundMs}ms (pledge=${fundamentals?.promoterPledge ?? '?'}% PE=${fundamentals?.pe ?? '?'})`);
+    }
 
-    // Step 1.5: Fetch recent news (last 3 days) for this stock
-    console.log(`[WEEKLY ANALYSIS] [${requestId}] Fetching recent news...`);
-    const recentNews = await fetchRecentNews(stock.symbol, stock.instrument_key);
+    // Step 1.5: News context (DailyNewsStock removed — globalMarketIntel handles news for daily picks)
+    const recentNews = null;
 
     // Step 2: Build prompt
     const userMessage = buildUserMessage(stock, fundamentals, { ...options, recentNews });
@@ -213,6 +218,7 @@ async function generateWeeklyAnalysis(stock, options = {}) {
     const response = await callClaude(userMessage, requestId);
 
     // Step 4: Parse response into analysis_data
+    console.log(`[WEEKLY ANALYSIS] [${requestId}] Parsing Claude response for ${stock.symbol} (stop_reason=${response.stop_reason}, tokens=${response.usage?.input_tokens || '?'}+${response.usage?.output_tokens || '?'})`);
     const analysisData = parseClaudeResponse(response.content, stock);
 
     // Step 5: Build analysis_meta (server-side metadata)
@@ -316,17 +322,19 @@ async function generateMultipleAnalyses(stocks, maxStocks = 4, options = {}) {
 
   for (let i = 0; i < topStocks.length; i++) {
     const stock = topStocks[i];
+    const stockT0 = Date.now();
     try {
-      console.log(`[WEEKLY ANALYSIS] [${i + 1}/${topStocks.length}] ${stock.symbol}...`);
+      console.log(`[WEEKLY ANALYSIS] [${i + 1}/${topStocks.length}] ${stock.symbol} (score=${stock.setup_score} grade=${stock.grade} scan=${stock.scan_type})...`);
       const analysis = await generateWeeklyAnalysis(stock, options);
       results.push(analysis);
+      console.log(`[WEEKLY ANALYSIS] [${i + 1}/${topStocks.length}] ${stock.symbol} done in ${Date.now() - stockT0}ms — status=${analysis?.status || '?'} verdict=${analysis?.analysis_data?.verdict?.action || '?'}`);
 
       // Delay between API calls to respect rate limits
       if (i < topStocks.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
     } catch (error) {
-      console.error(`[WEEKLY ANALYSIS] [${i + 1}/${topStocks.length}] ❌ ${stock.symbol}: ${error.message}`);
+      console.error(`[WEEKLY ANALYSIS] [${i + 1}/${topStocks.length}] ❌ ${stock.symbol} failed in ${Date.now() - stockT0}ms: ${error.message}`);
       results.push(null);
     }
   }
@@ -735,6 +743,7 @@ function parseClaudeResponse(content, stock) {
   let parsed;
   try {
     parsed = JSON.parse(textContent);
+    console.log(`[WEEKLY ANALYSIS] JSON parsed OK for ${stock.symbol}: verdict=${parsed.verdict?.action || '?'} confidence=${parsed.verdict?.confidence || '?'} sentiment=${parsed.overall_sentiment || '?'} factors=${parsed.sentiment_analysis?.key_factors?.length || 0}`);
   } catch (parseError) {
     console.error('[WEEKLY ANALYSIS] JSON parse failed. First 500 chars:', textContent.substring(0, 500));
     throw new Error(`JSON parse error: ${parseError.message}`);
@@ -905,70 +914,12 @@ function buildAnalysisMeta(stock, fundamentals, response, startTime, recentNews 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Fetch recent news for a stock from DailyNewsStock collection
- * Returns news from the last 3 days (useful for weekend analysis covering Friday news)
- * @param {string} symbol - Stock trading symbol
- * @param {string} instrumentKey - Stock instrument key
- * @returns {Promise<Object|null>} Recent news data or null if none found
- */
-async function fetchRecentNews(symbol, instrumentKey) {
-  try {
-    // Look for news in the last 3 days
-    const threeDaysAgo = new Date();
-    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-
-    // Query by instrument_key first (more reliable), fallback to symbol
-    const news = await DailyNewsStock.findOne({
-      $or: [
-        { instrument_key: instrumentKey },
-        { symbol: symbol.toUpperCase() }
-      ],
-      scrape_date: { $gte: threeDaysAgo }
-    }).sort({ scrape_date: -1 }).lean();
-
-    if (!news || !news.news_items || news.news_items.length === 0) {
-      console.log(`[WEEKLY ANALYSIS] No recent news found for ${symbol}`);
-      return null;
-    }
-
-    console.log(`[WEEKLY ANALYSIS] Found ${news.news_items.length} recent news items for ${symbol}`);
-    return news;
-  } catch (error) {
-    console.error(`[WEEKLY ANALYSIS] Error fetching news for ${symbol}:`, error.message);
-    return null;
-  }
-}
-
-/**
- * Format recent news for the prompt
- * @param {Object} newsData - News data from DailyNewsStock
- * @returns {string} Formatted news context for the prompt
+ * Format recent news for the prompt (stub — DailyNewsStock removed, globalMarketIntel handles news for daily picks)
+ * @param {Object} newsData - News data (currently always null)
+ * @returns {string|null} Always returns null
  */
 function formatNewsForPrompt(newsData) {
-  if (!newsData || !newsData.news_items || newsData.news_items.length === 0) {
-    return null;
-  }
-
-  const scrapeDate = new Date(newsData.scrape_date);
-  const dateStr = scrapeDate.toISOString().split('T')[0];
-
-  const headlines = newsData.news_items.map(item => {
-    const sentiment = item.sentiment ? `[${item.sentiment}]` : '';
-    const impact = item.impact ? `[${item.impact} IMPACT]` : '';
-    return `- ${item.headline} ${sentiment} ${impact}`.trim();
-  }).join('\n');
-
-  return `
-=== RECENT NEWS (from ${dateStr}) ===
-Aggregate Sentiment: ${newsData.aggregate_sentiment || 'N/A'}
-Aggregate Impact: ${newsData.aggregate_impact || 'N/A'}
-Confidence Score: ${newsData.confidence_score ? (newsData.confidence_score * 100).toFixed(0) + '%' : 'N/A'}
-
-Headlines:
-${headlines}
-
-⚠️ Factor this news into your analysis. Positive earnings, major deals, or SEBI actions should influence your verdict and confidence. Negative news may warrant SKIP or reduced confidence.
-`.trim();
+  return null;
 }
 
 /**
@@ -1238,11 +1189,18 @@ function shouldRunWeeklyAnalysis() {
   const hour = istNow.getUTCHours();
 
   // Saturday 4 PM IST onwards (10 AM UTC)
-  if (day === 6 && hour >= 10) return true;
+  if (day === 6 && hour >= 10) {
+    console.log(`[WEEKLY ANALYSIS] shouldRunWeeklyAnalysis: YES (Saturday ${hour}:xx IST)`);
+    return true;
+  }
 
   // Sunday before 6 PM IST (before 12:30 PM UTC)
-  if (day === 0 && hour < 13) return true;
+  if (day === 0 && hour < 13) {
+    console.log(`[WEEKLY ANALYSIS] shouldRunWeeklyAnalysis: YES (Sunday ${hour}:xx IST)`);
+    return true;
+  }
 
+  console.log(`[WEEKLY ANALYSIS] shouldRunWeeklyAnalysis: NO (day=${day} hour=${hour} IST — outside Sat 4PM-Sun 6PM window)`);
   return false;
 }
 
