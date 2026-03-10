@@ -869,16 +869,13 @@ function calculateBreakoutLevels(data) {
   // Entry: Above resistance with buffer for confirmation (0.2 ATR)
   const entry = resistanceLevel + (0.2 * atr);
 
-  // Stop: PDL − 0.15% buffer (intraday) or ATR-based (swing)
+  // Stop: Below breakout level (intraday) or ATR-based (swing)
+  // Intraday: if price falls back below the resistance it broke, the breakout failed.
+  // PDL is too wide for intraday — often 2-4% away, destroying R:R.
+  // ORB low would be ideal but isn't available pre-market; resistance level is the best proxy.
   let stop;
   if (isIntraday) {
-    stop = roundToTick(prevLow * (1 - 0.0015));
-    // Fallback: if risk > 3%, use EMA20 as tighter stop
-    const riskPct = ((entry - stop) / entry) * 100;
-    if (riskPct > 3.0 && isNum(ema20) && ema20 > 0 && ema20 < entry) {
-      stop = roundToTick(ema20 * (1 - 0.0015));
-      console.log(`  [Breakout] PDL stop risk ${round2(riskPct)}% > 3%, using EMA20 stop: ${round2(stop)}`);
-    }
+    stop = roundToTick(resistanceLevel - (0.1 * atr));
   } else {
     const breakoutZoneBottom = resistanceLevel * 0.97;
     const stopBase = Math.max(ema20, breakoutZoneBottom);
@@ -1306,10 +1303,13 @@ function calculateConsolidationLevels(data) {
   // Entry range for slippage
   const entryRange = [roundToTick(entry), roundToTick(entry + 0.2 * atr)];
 
-  // Stop: PDL − 0.15% buffer (intraday) or consolidation-based (swing)
+  // Stop: Pattern low - buffer (intraday uses tight NR7/inside day low, not PDL)
+  // For NR7/inside day, the pattern low IS prevLow (the narrow range low).
+  // PDL would be too wide — a narrow range means risk should be narrow too.
+  // This gives clean 2:1 R:R on consolidation trades.
   let stop;
   if (isIntraday) {
-    stop = roundToTick(prevLow * (1 - 0.0015));
+    stop = roundToTick(prevLow - (0.1 * atr));
   } else {
     const has10DRange = isNum(high10D) && isNum(low10D) && high10D > low10D;
     const consolidationLow = has10DRange ? Math.min(low10D, prevLow) : prevLow;
@@ -2001,16 +2001,13 @@ function calculateBreakdownLevels(data) {
   const entry = prevLow - (0.15 * atr);
   const entryRange = [roundToTick(entry - 0.3 * atr), roundToTick(entry)];
 
-  // Stop: PDH + 0.15% buffer (intraday) or swing-high based (swing)
+  // Stop: Above breakdown level (intraday) or swing-high based (swing)
+  // Intraday: if price recovers above the support it broke, the breakdown failed.
+  // PDH is too wide — use the breakdown level (low20D or prevLow) as stop.
+  const supportLevel = isNum(low20D) && low20D > 0 ? low20D : prevLow;
   let stop;
   if (isIntraday) {
-    stop = roundToTick(prevHigh * (1 + 0.0015));
-    // Fallback: if risk > 3%, use EMA20 as tighter stop
-    const riskPct = ((stop - entry) / entry) * 100;
-    if (riskPct > 3.0 && isNum(ema20) && ema20 > 0 && ema20 > entry) {
-      stop = roundToTick(ema20 * (1 + 0.0015));
-      console.log(`  [Breakdown] PDH stop risk ${round2(riskPct)}% > 3%, using EMA20 stop: ${round2(stop)}`);
-    }
+    stop = roundToTick(supportLevel + (0.1 * atr));
   } else {
     let swingHigh = high5D || high10D || prevClose * 1.03;
     const maxStop = entry * 1.05;
@@ -2278,10 +2275,12 @@ function calculateCompressionBearishLevels(data) {
   const entry = prevLow - (0.1 * atr);
   const entryRange = [roundToTick(entry - 0.2 * atr), roundToTick(entry)];
 
-  // Stop: PDH + 0.15% buffer (intraday) or consolidation-based (swing)
+  // Stop: Pattern high + buffer (intraday uses tight NR7/inside day high, not PDH)
+  // For NR7/inside day, the pattern high IS prevHigh (the narrow range high).
+  // This gives clean 2:1 R:R on compression trades.
   let stop;
   if (isIntraday) {
-    stop = roundToTick(prevHigh * (1 + 0.0015));
+    stop = roundToTick(prevHigh + (0.1 * atr));
   } else {
     const has10DRange = isNum(high10D) && isNum(low10D) && high10D > low10D;
     const consolidationHigh = has10DRange ? Math.max(high10D, prevHigh) : prevHigh;

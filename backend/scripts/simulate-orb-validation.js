@@ -222,7 +222,8 @@ async function main() {
   console.log('Running REAL validatePicks()...');
   console.log('════════════════════════════════════════\n');
 
-  validatePicks(pickClones, orbData);
+  const regime = doc.market_context?.regime || 'STRONG_BULL';
+  validatePicks(pickClones, orbData, regime);
 
   // ── Print results ──
   console.log('\n════════════════════════════════════════');

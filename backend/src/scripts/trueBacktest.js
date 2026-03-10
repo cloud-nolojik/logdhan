@@ -147,7 +147,7 @@ async function main() {
       const stockCandles = await fetch5minCandles(instKey, dateStr);
       await sleep(200);
 
-      const sim = simulatePick(pick, stockCandles, niftyCandles, opts.capital);
+      const sim = simulatePick(pick, stockCandles, niftyCandles, opts.capital, null, regime);
 
       // Print timeline in verbose mode, summary otherwise
       if (opts.verbose) {

@@ -35,7 +35,7 @@ import {
 export const SIM = {
   GAP_PROTECTION_MAX_PCT: C.GAP_PROTECTION_MAX_PCT,
   ORB_BUFFER_PCT: C.ORB_BUFFER_PCT,
-  MIN_ORB_RR: C.MIN_ORB_RR,
+  MIN_ORB_RR_BY_REGIME: C.MIN_ORB_RR_BY_REGIME,
   MAX_ORB_RANGE_PCT: C.MAX_ORB_RANGE_PCT,
   NIFTY_THRESHOLD_PCT: C.NIFTY_THRESHOLD_PCT,
   SLIPPAGE_BUFFER_PCT: C.SLIPPAGE_BUFFER_PCT,
@@ -219,7 +219,7 @@ export function buildORBDataFromCandles(stockCandles, niftyCandles, pick, passNu
 // SIMULATION ENGINE — uses REAL validatePicks() for ORB, custom tick replay for monitoring
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export function simulatePick(pick, stockCandles, niftyCandles, capital, allPicks = null) {
+export function simulatePick(pick, stockCandles, niftyCandles, capital, allPicks = null, regime = 'STRONG_BULL') {
   const result = {
     symbol: pick.symbol,
     direction: pick.direction,
@@ -291,7 +291,7 @@ export function simulatePick(pick, stockCandles, niftyCandles, capital, allPicks
       validation: null
     };
 
-    const validated = validatePicks([mockPick], orbData);
+    const validated = validatePicks([mockPick], orbData, regime);
     const vPick = validated[0];
 
     const passed = vPick.validation?.passed;
@@ -389,6 +389,7 @@ export function simulatePick(pick, stockCandles, niftyCandles, capital, allPicks
   let currentStop = originalStop;
   let currentTarget = originalTarget;
   let partialBooked = false;
+  let breakevenMoved = false;
   let exited = false;
 
   // Track extreme price since entry: highest high (LONG) / lowest low (SHORT) for Chandelier Exit
@@ -471,6 +472,21 @@ export function simulatePick(pick, stockCandles, niftyCandles, capital, allPicks
       currentStop = result.entryPrice; // SL → breakeven
       partialBooked = true;
       result.timeline.push(`[BACKTEST] ${t.timeStr} PARTIAL_BOOK: ${partial.bookQty}qty at ₹${round2(partial.bookLevel)} (+₹${result.partialPnl}) SL→breakeven`);
+    }
+
+    // ── +1R BREAKEVEN (price-based) ──
+    const originalRisk = Math.abs(result.entryPrice - originalStop);
+    const currentProfit = isBullish ? currentPrice - result.entryPrice : result.entryPrice - currentPrice;
+    const profitR = originalRisk > 0 ? currentProfit / originalRisk : 0;
+    if (profitR >= 1.0 && !breakevenMoved) {
+      const beStop = result.entryPrice;
+      const shouldMove = isBullish ? beStop > currentStop : beStop < currentStop;
+      if (shouldMove) {
+        result.trailingHistory.push({ time: t.timeStr, oldStop: currentStop, newStop: beStop, price: currentPrice, reason: 'breakeven_1R' });
+        result.timeline.push(`[BACKTEST] ${t.timeStr} +1R BE: SL ₹${round2(currentStop)}→₹${round2(beStop)} (${round2(profitR)}R)`);
+        currentStop = beStop;
+      }
+      breakevenMoved = true;
     }
 
     // ── DYNAMIC TRAILING STOPS (Chandelier Exit via shared engine) ──

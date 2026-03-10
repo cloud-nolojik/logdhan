@@ -24,8 +24,14 @@ export const GAP_PROTECTION_MAX_PCT = 2.0;
 
 /** 0.1% above ORB high (longs) / below ORB low (shorts) */
 export const ORB_BUFFER_PCT = 0.001;
-/** Minimum R:R with ORB-adjusted entry */
-export const MIN_ORB_RR = 1.2;
+/** Tiered min R:R by regime — demand better R:R when conviction is lower */
+export const MIN_ORB_RR_BY_REGIME = {
+  STRONG_BULL: 1.5,
+  STRONG_BEAR: 1.5,
+  WEAK_BULL: 1.8,
+  WEAK_BEAR: 1.8,
+  NEUTRAL: 2.0,
+};
 /** ORB range > 3% of stock price = too volatile, skip */
 export const MAX_ORB_RANGE_PCT = 3.0;
 /** >0.3% opposing NIFTY move blocks trade */

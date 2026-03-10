@@ -20,7 +20,6 @@ import {
   checkFillsFallback,
   monitorDailyPickOrders,
   tightenStops,
-  gapProtectionCheck
 } from '../dailyPicks/dailyPicksService.js';
 import { runDailyExit } from '../dailyPicks/dailyPicksExitService.js';
 import { reconcilePositionsOnStartup } from '../dailyPicks/dailyPicksRiskService.js';
@@ -169,31 +168,6 @@ class DailyEntryJob {
     this.agenda.define('daily-picks-validate-entry', async (job) => orbValidateHandler(job, 1));
     this.agenda.define('daily-picks-validate-entry-pass2', async (job) => orbValidateHandler(job, 2));
     this.agenda.define('daily-picks-validate-entry-pass3', async (job) => orbValidateHandler(job, 3));
-
-    // Job 2.5: Gap protection — cancel AMO entries if stock gaps >2% at open
-    this.agenda.define('daily-picks-gap-protection', async (job) => {
-      if (this.runningJobs.has('gap-protection')) {
-        console.log(`${LOG} Gap protection already running, skipping`);
-        return;
-      }
-
-      this.runningJobs.add('gap-protection');
-      try {
-        const isTradingDay = await MarketHoursUtil.isTradingDay();
-        if (!isTradingDay) return { skipped: true, reason: 'not_trading_day' };
-
-        console.log(`${LOG} [GAP-PROTECT] Checking for excessive gaps at open...`);
-        const result = await gapProtectionCheck();
-        console.log(`${LOG} [GAP-PROTECT] Completed: cancelled=${result.cancelled ?? result.message}`);
-        return result;
-      } catch (error) {
-        console.error(`${LOG} Gap protection failed:`, error);
-        this.stats.errors++;
-        throw error;
-      } finally {
-        this.runningJobs.delete('gap-protection');
-      }
-    });
 
     // Job 3: Polling fallback for fill detection (*/2 9-10)
     this.agenda.define('daily-picks-fill-fallback', async (job) => {
@@ -355,11 +329,11 @@ class DailyEntryJob {
         name: {
           $in: [
             'daily-picks-orb-collect',
-            'daily-picks-gap-protection',
             'daily-picks-validate-entry',
             'daily-picks-validate-entry-pass2',
             'daily-picks-validate-entry-pass3',
             'daily-picks-cancel-expired', // legacy — clean up
+            'daily-picks-gap-protection', // removed — no AMO gap protection
             'daily-picks-fill-fallback',
             'daily-picks-monitor',
             'daily-picks-tighten',
@@ -369,11 +343,6 @@ class DailyEntryJob {
             'daily-picks-fill-check'
           ]
         }
-      });
-
-      // 9:16 AM IST — Gap protection: cancel AMO entries with excessive gap at open
-      await this.agenda.every('16 9 * * 1-5', 'daily-picks-gap-protection', {}, {
-        timezone: 'Asia/Kolkata'
       });
 
       // Multi-pass ORB validation: 3 passes with widening time windows
@@ -414,7 +383,6 @@ class DailyEntryJob {
 
       console.log(`${LOG} ═══════════════════════════════════════`);
       console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST):`);
-      console.log(`${LOG}   09:16 — Gap protection (cancel AMO if gap > 2%)`);
       console.log(`${LOG}   09:30 — ORB Pass 1 (15-min range) → validate + SL-M entry`);
       console.log(`${LOG}   09:46 — ORB Pass 2 (30-min range) → retry failed picks`);
       console.log(`${LOG}   10:01 — ORB Pass 3 (45-min FINAL) → last chance entry`);

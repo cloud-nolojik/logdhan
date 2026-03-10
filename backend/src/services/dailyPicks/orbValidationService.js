@@ -12,12 +12,12 @@
 
 import kiteOrderService from '../kiteOrder.service.js';
 import { round2 } from './dailyPicksHelpers.js';
+import { MIN_ORB_RR_BY_REGIME } from './dailyPicksConstants.js';
 
 const LOG = '[ORB]';
 
 // Crabel-style ORB constants
 const ORB_BUFFER_PCT = 0.001;       // 0.1% above ORB high (longs) / below ORB low (shorts)
-const MIN_ORB_RR = 1.2;             // Minimum R:R with ORB-adjusted entry (matches pre-market gate)
 const NIFTY_THRESHOLD_PCT = 0.3;    // >0.3% opposing NIFTY move blocks trade
 const MAX_ORB_RANGE_PCT = 3.0;      // ORB range > 3% of stock price = too volatile
 
@@ -124,12 +124,16 @@ async function collectOpeningRange(symbols, picks) {
  * @param {Object} orbData — Output from collectOpeningRange()
  * @returns {Array} — Same picks array with orb + validation fields populated
  */
-function validatePicks(picks, orbData) {
+function validatePicks(picks, orbData, regime) {
+  if (!MIN_ORB_RR_BY_REGIME[regime]) {
+    throw new Error(`[ORB] validatePicks called with unknown regime "${regime}" — must be one of: ${Object.keys(MIN_ORB_RR_BY_REGIME).join(', ')}`);
+  }
   const niftyOrb = orbData['_NIFTY'];
   const niftyDir = niftyOrb?.orb_direction || 'NEUTRAL';
   const niftyChangePct = niftyOrb?.nifty_change_pct ?? 0;
+  const minRR = MIN_ORB_RR_BY_REGIME[regime];
 
-  console.log(`${LOG} Validating ${picks.length} picks (NIFTY dir: ${niftyDir} change: ${niftyChangePct}%)`);
+  console.log(`${LOG} Validating ${picks.length} picks (NIFTY dir: ${niftyDir} change: ${niftyChangePct}% regime: ${regime} minRR: ${minRR})`);
 
   // TEMPORARY: Skip all validation when FORCE_CONDITIONS_MET is true (for testing order placement)
   // if (process.env.FORCE_CONDITIONS_MET === 'true') {
@@ -233,13 +237,13 @@ function validatePicks(picks, orbData) {
     const newRR = risk > 0 ? round2(reward / risk) : 0;
 
     checks.orb_alignment = {
-      passed: newRR >= MIN_ORB_RR,
+      passed: newRR >= minRR,
       scan_bias: pick.direction,
       orb_dir: orb.orb_direction,
       new_entry: orbEntry,
       original_entry: pick.levels.entry,
       new_rr: newRR,
-      min_rr: MIN_ORB_RR,
+      min_rr: minRR,
       orb_high: orb.high,
       orb_low: orb.low
     };
@@ -248,7 +252,7 @@ function validatePicks(picks, orbData) {
     console.log(`${LOG} │   originalStop=${originalStop} originalTarget=${originalTarget}`);
     console.log(`${LOG} │   risk = |orbEntry(${orbEntry}) - stop(${originalStop})| = ${round2(risk)}`);
     console.log(`${LOG} │   reward = |target(${originalTarget}) - orbEntry(${orbEntry})| = ${round2(reward)}`);
-    console.log(`${LOG} │   newRR = ${round2(reward)} / ${round2(risk)} = ${newRR} (min: ${MIN_ORB_RR}) → ${checks.orb_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`${LOG} │   newRR = ${round2(reward)} / ${round2(risk)} = ${newRR} (min: ${minRR} [${regime}]) → ${checks.orb_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
 
     // Check 4: Nifty alignment — opposing move blocks trade
     // Regime-aligned trades (e.g. SHORT in BEARISH) get wider threshold (0.5%)

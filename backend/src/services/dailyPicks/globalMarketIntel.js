@@ -1,7 +1,7 @@
 /**
  * Global Market Intelligence — Step 5.5 of Daily Picks Pipeline
  *
- * Runs at ~6:35 AM IST (AFTER ChartInk scans + enrichment + scoring + levels)
+ * Runs at ~8:40 AM IST (AFTER ChartInk scans + enrichment + scoring + levels)
  * using AI web search to fetch LIVE global events, sector outlook,
  * and market-moving news. Receives viable candidate symbols for stock-specific analysis.
  * Supports historical date override for backtesting.
@@ -17,7 +17,8 @@
  *
  * What it fetches:
  * 1. Global events: US Fed, RBI policy, budget, wars, sanctions, etc.
- * 2. Overnight market moves: US markets, Asian markets, SGX Nifty
+ * 2. Overnight market moves: US markets, Asian markets
+ * 2b. SGX Nifty pre-market indication (scraped directly from sgxnifty.org)
  * 3. Sector outlook: which sectors likely to do well/poorly today
  * 4. FII/DII flows: institutional activity from previous session
  * 5. Stock-specific news: earnings, results, SEBI actions for candidates
@@ -28,11 +29,12 @@
  * - Stock-specific news → score adjustments per candidate (+10/-15)
  * - Global risk events → can halt trading entirely (STAY_OUT)
  *
- * Fail-open: if web search fails, pipeline continues without intel
+ * Fail-closed: if web search fails, pipeline stops and sends a notification
  */
 
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import axios from 'axios';
 import ApiUsage from '../../models/apiUsage.js';
 import { v4 as uuidv4 } from 'uuid';
 import { mapSectorToIntelKey } from '../../utils/sectorMapping.js';
@@ -65,6 +67,116 @@ function getOpenAIClient() {
   return _openai;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SGX NIFTY SCRAPER — Direct web scrape from sgxnifty.org
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function fetchSGXNiftyData() {
+  try {
+    console.log(`${LOG} Fetching SGX Nifty data from sgxnifty.org...`);
+    const { data: html } = await axios.get('https://sgxnifty.org/', {
+      timeout: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+
+    // Extract chartIntradayData JSON from embedded script
+    // Use a bracket-counting approach to find the exact end of the JSON array,
+    // since the non-greedy regex can fail when the array contains nested objects
+    let lastPrice = null;
+    let lastTimestamp = null;
+    const intradayStart = html.match(/var\s+chartIntradayData\s*=\s*\[/);
+    if (intradayStart) {
+      const startIdx = intradayStart.index + intradayStart[0].length - 1; // position of '['
+      let depth = 0;
+      let endIdx = -1;
+      for (let i = startIdx; i < html.length; i++) {
+        if (html[i] === '[') depth++;
+        else if (html[i] === ']') {
+          depth--;
+          if (depth === 0) { endIdx = i + 1; break; }
+        }
+      }
+      if (endIdx > startIdx) {
+        const intradayData = JSON.parse(html.slice(startIdx, endIdx));
+        if (intradayData.length > 0) {
+          const latest = intradayData[intradayData.length - 1];
+          lastPrice = parseFloat(latest.value);
+          lastTimestamp = latest.date;
+        }
+      }
+    }
+
+    // Extract quote details from HTML table cells
+    // The page uses <td class="main-change ..."> for Last Trade/Change/Change%
+    // and <td class="main-sub"> for High/Low/Open
+    const changeValues = [];
+    const changeCellRegex = /<td\s+class="main-change[^"]*"[^>]*>([\s\S]*?)<\/td>/g;
+    let cellMatch;
+    while ((cellMatch = changeCellRegex.exec(html)) !== null) {
+      changeValues.push(cellMatch[1].replace(/<[^>]*>/g, '').trim());
+    }
+    const subValues = [];
+    const subCellRegex = /<td\s+class="main-sub"[^>]*>([\s\S]*?)<\/td>/g;
+    while ((cellMatch = subCellRegex.exec(html)) !== null) {
+      subValues.push(cellMatch[1].replace(/<[^>]*>/g, '').trim());
+    }
+
+    // changeValues: [0]=Last Trade "24,306.0", [1]=Change "-59.0", [2]=Change% "-0.24%"
+    // subValues:    [0]=High "24,472.0", [1]=Low "24,146.5", [2]=Open "24,300.5"
+    let change = changeValues[1] ? parseFloat(changeValues[1].replace(/,/g, '')) : null;
+    const changePctRaw = changeValues[2] ? changeValues[2].replace(/[^0-9.+-]/g, '') : null;
+    let changePctNum = changePctRaw ? parseFloat(changePctRaw) : null;
+    const highVal = subValues[0] ? parseFloat(subValues[0].replace(/,/g, '')) : null;
+    const lowVal = subValues[1] ? parseFloat(subValues[1].replace(/,/g, '')) : null;
+    const openVal = subValues[2] ? parseFloat(subValues[2].replace(/,/g, '')) : null;
+
+    // Fallback: compute change from open + lastPrice if table parsing failed
+    if (change === null && lastPrice !== null && openVal !== null && openVal > 0) {
+      change = parseFloat((lastPrice - openVal).toFixed(2));
+      changePctNum = parseFloat(((change / openVal) * 100).toFixed(2));
+      console.log(`${LOG} SGX Change computed from open/last: ${openVal} → ${lastPrice} = ${change >= 0 ? '+' : ''}${change} (${changePctNum >= 0 ? '+' : ''}${changePctNum}%)`);
+    }
+
+    // Determine status
+    let status = 'FLAT';
+    if (changePctNum !== null) {
+      if (changePctNum > 0.1) status = 'POSITIVE';
+      else if (changePctNum < -0.1) status = 'NEGATIVE';
+    } else if (change !== null) {
+      if (change > 10) status = 'POSITIVE';
+      else if (change < -10) status = 'NEGATIVE';
+    }
+
+    const indication = changePctNum !== null
+      ? `${changePctNum >= 0 ? '+' : ''}${changePctNum.toFixed(2)}%`
+      : (change !== null ? `${change >= 0 ? '+' : ''}${change}` : 'N/A');
+
+    const result = {
+      indication,
+      status,
+      points: change,
+      change_pct: changePctNum ?? 0,
+      last_price: lastPrice,
+      high: highVal,
+      low: lowVal,
+      open: openVal,
+      timestamp: lastTimestamp,
+      source: 'sgxnifty.org'
+    };
+
+    // Validate that we got meaningful data — price is mandatory
+    if (lastPrice === null) {
+      throw new Error('Could not extract SGX Nifty price from page — HTML structure may have changed');
+    }
+
+    console.log(`${LOG} SGX Nifty scraped: ${result.last_price} (${result.indication}, ${result.status})`);
+    return result;
+  } catch (err) {
+    console.error(`${LOG} ❌ SGX Nifty scrape FAILED: ${err.message}`);
+    throw new Error(`SGX Nifty data is critical for trading decisions — scrape failed: ${err.message}`);
+  }
+}
+
 // Cache for today's intel (avoid re-fetching if pipeline retries)
 // TTL: 2 hours — stale intel can mislead afternoon decisions
 const INTEL_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -82,7 +194,7 @@ let _intelCacheTime = null;
  *                                         so Claude can give stock-specific impact analysis.
  * @returns {Object} Global market intelligence data
  */
-async function fetchGlobalMarketIntel(dateOverride, candidateSymbols) {
+async function fetchGlobalMarketIntel(dateOverride, candidateSymbols, prefetchedSGXData) {
   const todayStr = dateOverride || getISTDateStr();
   const isHistorical = !!dateOverride && dateOverride !== getISTDateStr();
 
@@ -99,12 +211,29 @@ async function fetchGlobalMarketIntel(dateOverride, candidateSymbols) {
   const provider = INTEL_PROVIDER;
   console.log(`${LOG} Using provider: ${provider.toUpperCase()}`);
 
+  // Use pre-fetched SGX data from Step 1 if available, otherwise fetch fresh
+  let sgxData = prefetchedSGXData || null;
   let intel;
-  if (provider === 'openai') {
-    intel = await fetchIntelViaOpenAI(todayStr, isHistorical, candidateSymbols);
+  if (sgxData) {
+    console.log(`${LOG} Using pre-fetched SGX Nifty data from Step 1 (price: ${sgxData.last_price})`);
+    intel = await (provider === 'openai'
+      ? fetchIntelViaOpenAI(todayStr, isHistorical, candidateSymbols)
+      : fetchIntelViaClaude(todayStr, isHistorical, candidateSymbols));
   } else {
-    intel = await fetchIntelViaClaude(todayStr, isHistorical, candidateSymbols);
+    // Fallback: fetch SGX + AI in parallel (for midday re-check or standalone calls)
+    [sgxData, intel] = await Promise.all([
+      isHistorical ? Promise.resolve(null) : fetchSGXNiftyData(),
+      provider === 'openai'
+        ? fetchIntelViaOpenAI(todayStr, isHistorical, candidateSymbols)
+        : fetchIntelViaClaude(todayStr, isHistorical, candidateSymbols)
+    ]);
   }
+
+  // SGX Nifty is CRITICAL for live trading — pipeline must not proceed without it
+  if (!isHistorical && !sgxData) {
+    throw new Error('SGX Nifty data is critical — cannot proceed without pre-market indication');
+  }
+  intel.sgx_nifty = sgxData;
 
   // Log summary (shared between providers)
   logIntelSummary(intel, todayStr);
@@ -128,8 +257,7 @@ async function fetchIntelViaOpenAI(todayStr, isHistorical, candidateSymbols) {
   try {
     const openai = getOpenAIClient();
     if (!openai) {
-      console.log(`${LOG} OpenAI not configured — skipping`);
-      return getEmptyIntel();
+      throw new Error('OpenAI API key not configured');
     }
 
     const symbols = candidateSymbols || [];
@@ -191,7 +319,7 @@ async function fetchIntelViaOpenAI(todayStr, isHistorical, candidateSymbols) {
     return intel;
 
   } catch (err) {
-    console.error(`${LOG} ❌ OpenAI web search failed (fail-open, continuing without intel):`, err.message);
+    console.error(`${LOG} ❌ OpenAI web search failed:`, err.message);
 
     try {
       await ApiUsage.logUsage({
@@ -206,7 +334,7 @@ async function fetchIntelViaOpenAI(todayStr, isHistorical, candidateSymbols) {
       });
     } catch { /* non-fatal */ }
 
-    return getEmptyIntel();
+    throw err;
   }
 }
 
@@ -221,8 +349,7 @@ async function fetchIntelViaClaude(todayStr, isHistorical, candidateSymbols) {
   try {
     const anthropic = getAnthropicClient();
     if (!anthropic) {
-      console.log(`${LOG} Anthropic not configured — skipping`);
-      return getEmptyIntel();
+      throw new Error('Anthropic API key not configured');
     }
 
     const symbols = candidateSymbols || [];
@@ -282,7 +409,7 @@ async function fetchIntelViaClaude(todayStr, isHistorical, candidateSymbols) {
     return intel;
 
   } catch (err) {
-    console.error(`${LOG} ❌ Claude web search failed (fail-open, continuing without intel):`, err.message);
+    console.error(`${LOG} ❌ Claude web search failed:`, err.message);
 
     try {
       await ApiUsage.logUsage({
@@ -297,7 +424,7 @@ async function fetchIntelViaClaude(todayStr, isHistorical, candidateSymbols) {
       });
     } catch { /* non-fatal */ }
 
-    return getEmptyIntel();
+    throw err;
   }
 }
 
@@ -313,7 +440,8 @@ function logIntelSummary(intel, todayStr) {
   console.log(`${LOG} Risk level: ${intel.risk_level}`);
 
   if (intel.sgx_nifty) {
-    console.log(`${LOG} SGX Nifty: ${intel.sgx_nifty.indication} (${intel.sgx_nifty.status})`);
+    const sgx = intel.sgx_nifty;
+    console.log(`${LOG} SGX Nifty: ${sgx.last_price || 'N/A'} ${sgx.indication} (${sgx.status})${sgx.source ? ` [${sgx.source}]` : ''}`);
   }
 
   if (intel.global_cues) {
@@ -354,25 +482,23 @@ function buildHistoricalIntelPrompt(dateStr, candidateSymbols) {
     ? `\n\nCANDIDATE STOCKS FOR THIS DAY (from ChartInk scans):\n${candidateSymbols.join(', ')}\n\nFor stock_specific: search for news/events on ${dateStr} that specifically affect these stocks (earnings, results, SEBI actions, sector-specific events, M&A, management changes). Only include stocks with ACTUAL news.`
     : '';
 
-  return `I run an intraday trading system on the Indian stock market (NSE). I need to reconstruct what global and domestic conditions looked like at 6:30 AM IST on ${dateStr} — a PAST date. This is for backtesting.
+  return `I run an intraday trading system on the Indian stock market (NSE). I need to reconstruct what global and domestic conditions looked like at 8:40 AM IST on ${dateStr} — a PAST date. This is for backtesting.
 
 Search for news from ${dateStr} and tell me HOW it impacts Indian stocks specifically:
 
-1. **SGX/GIFT Nifty futures** — what was the pre-market indication? This is the #1 signal for Indian market open direction.
-2. **US markets overnight** — how did S&P 500, Nasdaq, Dow close? More importantly: which Indian sectors does this affect? (e.g., Nasdaq rally → Indian IT stocks up, US banking stress → Indian bank stocks affected)
-3. **Asian markets** — Nikkei, Hang Seng, SGX at the time. Impact on Indian market sentiment.
-4. **Dollar/Rupee** — DXY strength/weakness. Strong dollar = FII outflows from India = bearish. Weak dollar = FII inflows = bullish.
-5. **Crude oil** — Price direction. High crude = bearish for India (import dependent). Oil up = OMC stocks down, ONGC up.
-6. **FII/DII flows** — Were FIIs buying or selling Indian equities in the previous session? This drives next-day sentiment.
-7. **Major events** — RBI policy, Union Budget, elections, global crises, tariffs, sanctions that impact Indian markets.
-8. **Indian sector outlook** — Based on all the above, which NSE sectors are likely bullish/bearish on ${dateStr}? Be specific about WHY (e.g., "BANKING bearish because RBI kept rates high" not just "BANKING bearish").${stockList}
+1. **US markets overnight** — how did S&P 500, Nasdaq, Dow close? More importantly: which Indian sectors does this affect? (e.g., Nasdaq rally → Indian IT stocks up, US banking stress → Indian bank stocks affected)
+2. **Asian markets** — Nikkei, Hang Seng at the time. Impact on Indian market sentiment.
+3. **Dollar/Rupee** — DXY strength/weakness. Strong dollar = FII outflows from India = bearish. Weak dollar = FII inflows = bullish.
+4. **Crude oil** — Price direction. High crude = bearish for India (import dependent). Oil up = OMC stocks down, ONGC up.
+5. **FII/DII flows** — Were FIIs buying or selling Indian equities in the previous session? This drives next-day sentiment.
+6. **Major events** — RBI policy, Union Budget, elections, global crises, tariffs, sanctions that impact Indian markets.
+7. **Indian sector outlook** — Based on all the above, which NSE sectors are likely bullish/bearish on ${dateStr}? Be specific about WHY (e.g., "BANKING bearish because RBI kept rates high" not just "BANKING bearish").${stockList}
 
 Return a JSON object:
 {
   "market_mood": "BULLISH" | "BEARISH" | "CAUTIOUS" | "NEUTRAL",
   "risk_level": "LOW" | "MEDIUM" | "HIGH" | "EXTREME",
   "risk_reason": "How this specifically affects Indian market trading",
-  "sgx_nifty": { "indication": "+0.5%", "status": "POSITIVE" | "NEGATIVE" | "FLAT", "points": number },
   "global_cues": {
     "us_markets": "POSITIVE" | "NEGATIVE" | "MIXED" | "CLOSED",
     "us_detail": "S&P +0.5%, Nasdaq +0.8%",
@@ -404,6 +530,8 @@ Return a JSON object:
   "trading_recommendation": "NORMAL" | "REDUCE_SIZE" | "AVOID_SHORTS" | "AVOID_LONGS" | "STAY_OUT",
   "recommendation_reason": "Why this recommendation, in Indian market context"
 }
+
+NOTE: Do NOT include sgx_nifty in the response — SGX Nifty data is fetched separately.
 
 **CRITICAL:** This is for ${dateStr} specifically. Every sector reason and every recommendation must explain the Indian stock market impact, not just state the global fact. "US Nasdaq up 1%" is useless — "US Nasdaq up 1% → Indian IT stocks (TCS, INFY, WIPRO) likely to gap up" is useful.`;
 }
@@ -418,25 +546,23 @@ function buildIntelPrompt(dateStr, candidateSymbols) {
     ? `\n\nCANDIDATE STOCKS FOR TODAY (from ChartInk scans):\n${symbols.join(', ')}\n\nFor stock_specific: search for news/events TODAY that specifically affect these stocks (earnings, results, SEBI actions, sector-specific events, M&A, management changes). Only include stocks with ACTUAL news.`
     : '';
 
-  return `I run an intraday trading system on the Indian stock market (NSE). I need REAL-TIME intelligence for trading decisions at 6:30 AM IST on ${dateStr}.
+  return `I run an intraday trading system on the Indian stock market (NSE). I need REAL-TIME intelligence for trading decisions at 8:40 AM IST on ${dateStr}.
 
 Search for the LATEST news and tell me HOW it impacts Indian stocks specifically:
 
-1. **SGX/GIFT Nifty futures** — what is the pre-market indication RIGHT NOW? This is the #1 signal for Indian market open direction.
-2. **US markets overnight** — how did S&P 500, Nasdaq, Dow close? More importantly: which Indian sectors does this affect? (e.g., Nasdaq rally → Indian IT stocks up, US banking stress → Indian bank stocks affected)
-3. **Asian markets** — Nikkei, Hang Seng, SGX live. Impact on Indian market sentiment.
-4. **Dollar/Rupee** — DXY strength/weakness. Strong dollar = FII outflows from India = bearish. Weak dollar = FII inflows = bullish.
-5. **Crude oil** — Price direction. High crude = bearish for India (import dependent). Oil up = OMC stocks down, ONGC up.
-6. **FII/DII flows** — Were FIIs buying or selling Indian equities in the previous session? This drives today's sentiment.
-7. **Major events** — RBI policy, Union Budget, elections, global crises, tariffs, sanctions that impact Indian markets TODAY.
-8. **Indian sector outlook** — Based on all the above, which NSE sectors are likely bullish/bearish today? Be specific about WHY (e.g., "BANKING bearish because RBI kept rates high" not just "BANKING bearish").${stockList}
+1. **US markets overnight** — how did S&P 500, Nasdaq, Dow close? More importantly: which Indian sectors does this affect? (e.g., Nasdaq rally → Indian IT stocks up, US banking stress → Indian bank stocks affected)
+2. **Asian markets** — Nikkei, Hang Seng live. Impact on Indian market sentiment.
+3. **Dollar/Rupee** — DXY strength/weakness. Strong dollar = FII outflows from India = bearish. Weak dollar = FII inflows = bullish.
+4. **Crude oil** — Price direction. High crude = bearish for India (import dependent). Oil up = OMC stocks down, ONGC up.
+5. **FII/DII flows** — Were FIIs buying or selling Indian equities in the previous session? This drives today's sentiment.
+6. **Major events** — RBI policy, Union Budget, elections, global crises, tariffs, sanctions that impact Indian markets TODAY.
+7. **Indian sector outlook** — Based on all the above, which NSE sectors are likely bullish/bearish today? Be specific about WHY (e.g., "BANKING bearish because RBI kept rates high" not just "BANKING bearish").${stockList}
 
 Return a JSON object:
 {
   "market_mood": "BULLISH" | "BEARISH" | "CAUTIOUS" | "NEUTRAL",
   "risk_level": "LOW" | "MEDIUM" | "HIGH" | "EXTREME",
   "risk_reason": "How this specifically affects Indian market trading",
-  "sgx_nifty": { "indication": "+0.5%", "status": "POSITIVE" | "NEGATIVE" | "FLAT", "points": number },
   "global_cues": {
     "us_markets": "POSITIVE" | "NEGATIVE" | "MIXED" | "CLOSED",
     "us_detail": "S&P +0.5%, Nasdaq +0.8%",
@@ -469,8 +595,10 @@ Return a JSON object:
   "recommendation_reason": "Why this recommendation, in Indian market context"
 }
 
+NOTE: Do NOT include sgx_nifty in the response — SGX Nifty data is fetched separately via direct scraping.
+
 **CRITICAL:** Every sector reason and every recommendation must explain the Indian stock market impact, not just state the global fact. "US Nasdaq up 1%" is useless — "US Nasdaq up 1% → Indian IT stocks (TCS, INFY, WIPRO) likely to gap up" is useful.
-SGX/GIFT Nifty futures are the most important pre-market signal. Be specific with numbers — don't say "positive", say "+0.5%".
+Be specific with numbers — don't say "positive", say "+0.5%".
 For risk_level: EXTREME = black swan/crisis, HIGH = major event day, MEDIUM = some headwinds, LOW = normal.
 trading_recommendation: "STAY_OUT" only for extreme events (budget day, RBI policy day).`;
 }
@@ -481,8 +609,7 @@ trading_recommendation: "STAY_OUT" only for extreme events (budget day, RBI poli
 function parseIntelResponse(text) {
   try {
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
-      console.error(`${LOG} parseIntelResponse: empty or non-string input`);
-      return getEmptyIntel();
+      throw new Error('Intel response was empty or non-string');
     }
 
     // Try to extract JSON from markdown code blocks or raw text
@@ -527,7 +654,7 @@ function parseIntelResponse(text) {
   } catch (err) {
     console.error(`${LOG} Failed to parse intel response: ${err.message}`);
     console.error(`${LOG} Raw response (first 500 chars): ${text.substring(0, 500)}`);
-    return getEmptyIntel();
+    throw new Error(`Failed to parse intel response: ${err.message}`);
   }
 }
 
@@ -637,23 +764,6 @@ function clearIntelCache() {
   _intelCacheTime = null;
 }
 
-function getEmptyIntel() {
-  return {
-    market_mood: 'NEUTRAL',
-    risk_level: 'MEDIUM',
-    risk_reason: null,
-    sgx_nifty: null,
-    global_cues: null,
-    institutional: null,
-    sectors: {},
-    major_events: [],
-    stock_specific: {},
-    trading_recommendation: 'NORMAL',
-    recommendation_reason: null,
-    fetched_at: new Date().toISOString(),
-    source: 'empty_fallback'
-  };
-}
 
 function getISTDateStr() {
   const now = new Date();
@@ -664,6 +774,7 @@ function getISTDateStr() {
 
 export {
   fetchGlobalMarketIntel,
+  fetchSGXNiftyData,
   getSectorSentimentForStock,
   getStockSpecificNews,
   shouldAvoidTrading,

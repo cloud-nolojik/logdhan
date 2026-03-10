@@ -1,7 +1,7 @@
 /**
  * Daily Picks Service — Core Orchestrator
  *
- * Handles: scan → enrich → score → levels → intel → select → save → notify (6:32 AM IST)
+ * Handles: scan → enrich → score → levels → intel → select → save → notify (8:40 AM IST)
  *          ORB validation + entry placement (9:15 AM - 10:01 AM, multi-pass)
  *          fill check + SL/target placement (9:45 AM)
  *          order monitoring every 15 min (10:00 AM - 2:45 PM)
@@ -30,7 +30,7 @@ import { collectOpeningRange, validatePicks } from './orbValidationService.js';
 import { checkCircuitBreaker, resetCircuitBreaker, reconcilePositionsOnStartup } from './dailyPicksRiskService.js';
 import { filterEarningsStocks } from './earningsFilter.js';
 // newsSentimentFilter.js is DEPRECATED — scoring now done inline at Step 5.5 using constants below
-import { fetchGlobalMarketIntel, shouldAvoidTrading, getTradingAdjustment, clearIntelCache } from './globalMarketIntel.js';
+import { fetchGlobalMarketIntel, fetchSGXNiftyData, shouldAvoidTrading, getTradingAdjustment, clearIntelCache } from './globalMarketIntel.js';
 import scanLevels from '../../engine/scanLevels.js';
 import { SECTOR_MAPPING, mapSectorToIntelKey } from '../../utils/sectorMapping.js';
 import {
@@ -66,6 +66,31 @@ const SCAN_DELAY_MS = 2000;
 const MIN_SCORE = 60;
 const LOG = '[DAILY-PICKS]';
 
+// Scan priority bonus — rewards stocks caught by higher-priority scans in strong regimes
+// WEAK_BULL/WEAK_BEAR/NEUTRAL: all scans equal weight (0 bonus)
+const SCAN_PRIORITY_BONUS = {
+  STRONG_BULL: {
+    breakout_setup: 10,
+    fiftyTwoWeek_high: 8,
+    bull_flag: 6,
+    volume_shocker_bullish: 5,
+    pullback_at_support: 3,
+    compression_bullish: 2,
+    nr7_bullish: 1,
+    inside_day_bullish: 0,
+  },
+  STRONG_BEAR: {
+    breakdown_setup: 10,
+    fiftyTwoWeek_low: 8,
+    bear_flag: 6,
+    volume_shocker_bearish: 5,
+    failed_at_resistance: 3,
+    compression_bearish: 2,
+    nr7_bearish: 1,
+    inside_day_bearish: 0,
+  }
+};
+
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const MAX_OUTPUT_TOKENS = 5000;
 
@@ -88,12 +113,12 @@ function getAnthropicClient() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAIN ORCHESTRATOR — 6:32 AM
+// MAIN ORCHESTRATOR — 8:40 AM
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Run daily picks scan, enrich, score, save, and notify.
- * Called at 6:32 AM IST before market open.
+ * Called at 8:40 AM IST before market open.
  */
 async function runDailyPicks(options = {}) {
   const { dryRun = false } = options;
@@ -112,9 +137,17 @@ async function runDailyPicks(options = {}) {
     // so we can pass viable candidate symbols for stock-specific Indian market analysis.
     // See Step 5.5 below.
 
-    // Step 1: Market context
+    // Step 1: Market context (regime + SGX Nifty combined)
     const marketContext = await getMarketContext();
-    console.log(`${LOG} Market regime: ${marketContext.regime}`);
+    console.log(`${LOG} Market regime: ${marketContext.regime} (structure: ${marketContext.structure_regime})`);
+
+    // CONFLICT regime = structure bearish + SGX green → SIT OUT entirely
+    if (marketContext.regime === 'CONFLICT') {
+      console.log(`${LOG} ⛔ CONFLICT REGIME — structure bearish but SGX bullish. Sitting out today.`);
+      const doc = await saveToDB(marketContext, [], { candidates: [], bullish_count: 0, bearish_count: 0 });
+      await sendNotification(marketContext, [], doc);
+      return { success: true, picks: 0, doc, halted: true, reason: 'CONFLICT regime — mixed signals, sitting out' };
+    }
 
     // Step 2: Run scans based on regime
     const scanResult = await runScans(marketContext);
@@ -127,9 +160,23 @@ async function runDailyPicks(options = {}) {
       return { success: true, picks: 0, doc };
     }
 
+    // Step 2.5: Earnings/event filter — remove stocks with upcoming board meetings
+    // Runs BEFORE enrichment to avoid wasting Upstox API calls on stocks we'll discard
+    const { filtered: earningsFiltered, removed: earningsRemoved } = await filterEarningsStocks(scanResult.candidates);
+    if (earningsRemoved.length > 0) {
+      console.log(`${LOG} [Step 2.5] Earnings filter: ${earningsRemoved.length} removed (${earningsRemoved.map(r => r.symbol).join(', ')}), ${earningsFiltered.length} remaining`);
+    }
+
+    if (earningsFiltered.length === 0) {
+      console.log(`${LOG} All candidates removed by earnings filter. Saving empty doc.`);
+      const doc = await saveToDB(marketContext, [], scanResult);
+      await sendNotification(marketContext, [], doc);
+      return { success: true, picks: 0, doc };
+    }
+
     // Step 3: Enrich with OHLCV + indicators
-    const enriched = await enrichCandidates(scanResult.candidates);
-    console.log(`${LOG} Enriched ${enriched.length}/${scanResult.candidates.length} candidates`);
+    const enriched = await enrichCandidates(earningsFiltered);
+    console.log(`${LOG} Enriched ${enriched.length}/${earningsFiltered.length} candidates`);
 
     if (enriched.length === 0) {
       console.log(`${LOG} All candidates failed enrichment. Saving empty doc.`);
@@ -138,16 +185,10 @@ async function runDailyPicks(options = {}) {
       return { success: true, picks: 0, doc };
     }
 
-    // Step 3.5: Earnings/event filter — remove stocks with upcoming board meetings
-    const { filtered: earningsFiltered, removed: earningsRemoved } = await filterEarningsStocks(enriched);
-    if (earningsRemoved.length > 0) {
-      console.log(`${LOG} [Step 3.5] Earnings filter: ${earningsRemoved.length} removed (${earningsRemoved.map(r => r.symbol).join(', ')}), ${earningsFiltered.length} remaining`);
-    }
-
     // Step 4: Score candidates (sorted by score descending, filtered by MIN_SCORE)
     // NOTE: News + sector sentiment from global intel is applied AFTER scoring at Step 5.5,
     // once we have viable candidates to pass to Claude for stock-specific analysis.
-    const scored = scoreCandidates(earningsFiltered, marketContext.regime);
+    const scored = scoreCandidates(enriched, marketContext.regime);
     console.log(`${LOG} Scored: ${scored.length} candidates passed min (${MIN_SCORE})`);
 
     if (scored.length === 0) {
@@ -248,7 +289,24 @@ async function runDailyPicks(options = {}) {
     // Claude gets the exact stock list and returns India-focused, stock-specific analysis.
     const viableSymbols = allViable.map(v => v.symbol);
     console.log(`${LOG} [Step 5.5] Fetching global intel with ${viableSymbols.length} viable candidate symbols...`);
-    const globalIntel = await fetchGlobalMarketIntel(undefined, viableSymbols);
+    let globalIntel;
+    try {
+      globalIntel = await fetchGlobalMarketIntel(undefined, viableSymbols, marketContext.sgx_data);
+    } catch (intelErr) {
+      console.error(`${LOG} ❌ Global intel FAILED — stopping pipeline: ${intelErr.message}`);
+      try {
+        const adminUserId = kiteConfig.ADMIN_USER_ID;
+        if (adminUserId) {
+          await firebaseService.sendToUser(adminUserId,
+            'Daily Picks: Global Intel FAILED',
+            `Pipeline stopped — global market intel fetch failed: ${intelErr.message}`,
+            { type: 'DAILY_PICKS', route: '/daily-picks' }
+          );
+        }
+      } catch { /* notification failure is non-critical */ }
+      const doc = await saveToDB(marketContext, [], scanResult, candidatesReview, null);
+      return { success: false, picks: 0, doc, error: `Global intel failed: ${intelErr.message}` };
+    }
 
     // Check if we should avoid trading entirely (budget day, RBI policy, global crisis)
     const avoidCheck = shouldAvoidTrading();
@@ -340,7 +398,10 @@ async function runDailyPicks(options = {}) {
 
     // Select top picks with scan-type diversity:
     // Pick the best from each scan type first, then fill remaining slots by score.
-    const picksWithLevels = selectDiversePicks(allViable, MAX_DAILY_PICKS);
+    // Use combined regime's maxTrades if available, otherwise fall back to MAX_DAILY_PICKS
+    const maxPicksToday = marketContext.max_trades != null ? Math.min(marketContext.max_trades, MAX_DAILY_PICKS) : MAX_DAILY_PICKS;
+    console.log(`${LOG} [Step 6] Max picks today: ${maxPicksToday} (regime=${marketContext.regime}, cap=${MAX_DAILY_PICKS})`);
+    const picksWithLevels = selectDiversePicks(allViable, maxPicksToday);
     console.log(`${LOG} Selected ${picksWithLevels.length} picks (diversity-weighted) from ${allViable.length} viable`);
 
     // Sync candidatesReview with intel-adjusted scores and mark selected picks
@@ -374,10 +435,6 @@ async function runDailyPicks(options = {}) {
     const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, globalIntel);
     console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
 
-    // Step 7.5: Place pre-market entries (GTT for LONG, AMO for SHORT)
-    const preMarketResult = await placePreMarketEntries(doc);
-    console.log(`${LOG} [Step 7.5] Pre-market entries: ${preMarketResult.ordersPlaced} placed`);
-
     // Step 8: Send notification
     console.log(`${LOG} [Step 8] Sending notification...`);
     await sendNotification(marketContext, picksWithInsights, doc);
@@ -395,6 +452,22 @@ async function runDailyPicks(options = {}) {
 
   } catch (error) {
     console.error(`${LOG} ❌ Fatal error in runDailyPicks:`, error.message);
+
+    // Send push notification on pipeline failure
+    try {
+      const adminUserId = kiteConfig.ADMIN_USER_ID;
+      if (adminUserId) {
+        await firebaseService.sendToUser(adminUserId,
+          'Daily Picks: PIPELINE FAILED',
+          error.message,
+          { type: 'DAILY_PICKS_ERROR', route: '/daily-picks' }
+        );
+        console.log(`${LOG} Failure notification sent`);
+      }
+    } catch (notifErr) {
+      console.error(`${LOG} Failure notification also failed:`, notifErr.message);
+    }
+
     throw error;
   }
 }
@@ -404,28 +477,80 @@ async function runDailyPicks(options = {}) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function getMarketContext() {
-  console.log(`${LOG} [Step 1] Fetching market context...`);
+  console.log(`${LOG} [Step 1] Fetching market context (regime + SGX Nifty)...`);
 
-  // Regime from Nifty candles
-  let regime = 'UNKNOWN';
-  let niftyPrevClose = null;
-  let distancePct = null;
-  try {
-    const regimeResult = await fetchAndCheckRegime();
-    regime = regimeResult.regime;
-    niftyPrevClose = regimeResult.niftyLast;
-    distancePct = regimeResult.distancePct;
-    console.log(`${LOG} Regime: ${regime} (Nifty: ${niftyPrevClose}, EMA50: ${regimeResult.ema50}, dist: ${distancePct}%)`);
-  } catch (err) {
-    console.error(`${LOG} Regime check failed, defaulting to UNKNOWN:`, err.message);
-  }
+  // Fetch structure (Nifty vs 50 EMA) and sentiment (SGX/GIFT Nifty) in parallel
+  // Both are critical — if either fails, pipeline halts
+  const [regimeResult, sgxData] = await Promise.all([
+    fetchAndCheckRegime(),
+    fetchSGXNiftyData()
+  ]);
+
+  const { regime: structureRegime, niftyLast, ema50, distancePct } = regimeResult;
+  console.log(`${LOG} Structure: ${structureRegime} (Nifty: ${niftyLast}, EMA50: ${ema50}, dist: ${distancePct}%)`);
+  console.log(`${LOG} Sentiment: SGX/GIFT Nifty change=${sgxData.change_pct}% price=${sgxData.last_price}`);
+
+  // Combine structure + sentiment into a single regime
+  const combined = getCombinedRegime(niftyLast, ema50, sgxData.change_pct);
+
+  console.log(`${LOG} ═══════════════════════════════════════`);
+  console.log(`${LOG} Combined Regime: ${combined.regime} (structure=${structureRegime}, sgx=${sgxData.change_pct}%)`);
+  console.log(`${LOG} Size multiplier: ${combined.sizeMultiplier}x | Max trades: ${combined.maxTrades}`);
+  console.log(`${LOG} ═══════════════════════════════════════`);
 
   return {
-    regime,
-    nifty_prev_close: niftyPrevClose,
+    regime: combined.regime,
+    structure_regime: structureRegime,
+    nifty_prev_close: niftyLast,
     distance_pct: distancePct,
+    ema50,
+    sgx_data: sgxData,
+    size_multiplier: combined.sizeMultiplier,
+    max_trades: combined.maxTrades,
     decided_at: new Date()
   };
+}
+
+/**
+ * Combine structure (Nifty vs 50 EMA) + sentiment (GIFT Nifty change%)
+ * into a single regime with position sizing guidance.
+ *
+ * Structure = GATE (which direction is allowed)
+ * Sentiment = MODIFIER (confidence/sizing)
+ *
+ * 0.3% threshold for GIFT Nifty — Indian pre-market is less volatile.
+ */
+function getCombinedRegime(niftyClose, ema50, giftNiftyChangePct) {
+  if (!niftyClose || !ema50) {
+    throw new Error('Nifty structure data (close + EMA50) is critical — cannot determine regime');
+  }
+
+  const structureBull = niftyClose > ema50 * 1.003;
+  const structureBear = niftyClose < ema50 * 0.997;
+  const sentimentBull = giftNiftyChangePct > 0.3;
+  const sentimentBear = giftNiftyChangePct < -0.3;
+
+  if (structureBull && sentimentBull) {
+    return { regime: 'STRONG_BULL', sizeMultiplier: 1.0, maxTrades: 3 };
+  }
+  if (structureBull && sentimentBear) {
+    return { regime: 'WEAK_BULL', sizeMultiplier: 0.6, maxTrades: 2 };
+  }
+  if (structureBear && sentimentBear) {
+    return { regime: 'STRONG_BEAR', sizeMultiplier: 1.0, maxTrades: 3 };
+  }
+  if (structureBear && sentimentBull) {
+    return { regime: 'CONFLICT', sizeMultiplier: 0.0, maxTrades: 0 };
+  }
+  // Structure has direction but SGX is flat (between -0.3% and +0.3%)
+  if (structureBull) {
+    return { regime: 'WEAK_BULL', sizeMultiplier: 0.6, maxTrades: 2 };
+  }
+  if (structureBear) {
+    return { regime: 'WEAK_BEAR', sizeMultiplier: 0.6, maxTrades: 2 };
+  }
+  // True NEUTRAL: structure near EMA + sentiment flat
+  return { regime: 'NEUTRAL', sizeMultiplier: 0.5, maxTrades: 1 };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -434,7 +559,7 @@ async function getMarketContext() {
 
 async function runScans(marketContext) {
   const { regime } = marketContext;
-  const scanOrder = SCAN_ORDER_BY_REGIME[regime] || SCAN_ORDER_BY_REGIME.UNKNOWN;
+  const scanOrder = SCAN_ORDER_BY_REGIME[regime];
 
   console.log(`${LOG} [Step 2] Running ${scanOrder.length} scans for ${regime} regime: ${scanOrder.join(', ')}`);
 
@@ -506,6 +631,27 @@ async function runScans(marketContext) {
     } catch (err) {
       console.error(`${LOG} Scan ${scanName} failed:`, err.message);
       // Continue with remaining scans
+    }
+  }
+
+  // NEUTRAL cross-direction dedup: if same stock appears in both bullish and
+  // bearish scans, it has no directional conviction — remove it
+  if (regime === 'NEUTRAL' && candidates.length > 0) {
+    const longSymbols = new Set(candidates.filter(c => c.direction === 'LONG').map(c => c.symbol));
+    const shortSymbols = new Set(candidates.filter(c => c.direction === 'SHORT').map(c => c.symbol));
+    const conflicted = [...longSymbols].filter(s => shortSymbols.has(s));
+    if (conflicted.length > 0) {
+      console.log(`${LOG} [Step 2] NEUTRAL cross-direction dedup: removing ${conflicted.length} conflicted stocks (${conflicted.join(', ')})`);
+      const conflictedSet = new Set(conflicted);
+      const before = candidates.length;
+      for (let i = candidates.length - 1; i >= 0; i--) {
+        if (conflictedSet.has(candidates[i].symbol)) {
+          if (candidates[i].direction === 'LONG') bullishCount--;
+          else bearishCount--;
+          candidates.splice(i, 1);
+        }
+      }
+      console.log(`${LOG} [Step 2] Removed ${before - candidates.length} candidates, ${candidates.length} remaining`);
     }
   }
 
@@ -746,6 +892,11 @@ function calculateConfluence(candidate) {
 function isRegimeAligned(direction, regime) {
   if (regime === 'BULLISH' && direction === 'LONG') return true;
   if (regime === 'BEARISH' && direction === 'SHORT') return true;
+  // Combined regime types
+  if (regime === 'STRONG_BULL' && direction === 'LONG') return true;
+  if (regime === 'WEAK_BULL' && direction === 'LONG') return true;
+  if (regime === 'WEAK_BEAR' && direction === 'SHORT') return true;
+  if (regime === 'STRONG_BEAR' && direction === 'SHORT') return true;
   return false;
 }
 
@@ -847,6 +998,15 @@ function scoreCandidates(enrichedCandidates, regime) {
         console.log(`${LOG}   ↳ Confluence: +${confluenceResult.bonus} pts (${confluenceResult.detail})`);
       }
 
+      // Scan priority bonus: rewards stocks caught by higher-priority scans
+      // Only applies in STRONG regimes where scan order encodes conviction
+      const scanBonus = SCAN_PRIORITY_BONUS[regime]?.[c.scan_type] ?? 0;
+      if (scanBonus > 0) {
+        pick.rank_score += scanBonus;
+        pick.scan_priority_bonus = scanBonus;
+        console.log(`${LOG}   ↳ Scan priority: +${scanBonus} pts (${c.scan_type} in ${regime})`);
+      }
+
       // Regime alignment bonus: +5 for direction matching regime
       if (isRegimeAligned(c.direction, regime)) {
         pick.rank_score += 5;
@@ -856,8 +1016,14 @@ function scoreCandidates(enrichedCandidates, regime) {
         console.log(`${LOG}   ↳ Regime: +5 pts (${regime} regime, ${c.direction})`);
       } else if (regime && regime !== 'NEUTRAL' && regime !== 'UNKNOWN') {
         // Counter-regime trade — attach warning for position sizing
+        // Map combined regime types back to structure regimes for warning lookup
+        const warningRegime = regime === 'STRONG_BULL' ? 'STRONG_BULLISH'
+          : regime === 'WEAK_BULL' ? 'BULLISH'
+          : regime === 'WEAK_BEAR' ? 'BEARISH'
+          : regime === 'STRONG_BEAR' ? 'STRONG_BEARISH'
+          : regime;
         const setupType = c.direction === 'LONG' ? 'BUY' : 'SELL';
-        const warning = getRegimeWarning(setupType, { regime, distancePct: 0 });
+        const warning = getRegimeWarning(setupType, { regime: warningRegime, distancePct: 0 });
         if (warning) {
           pick.regime_warning = warning;
           pick.regime_aligned = false;
@@ -1155,7 +1321,7 @@ Generate 1-2 sentence insights for each pick.`
 
 async function saveToDB(marketContext, picks, scanResult, candidatesReview = [], globalIntel = null) {
   // Determine scan_date and trading_date based on when we're running:
-  // - 6:32 AM scheduled run: scan_date = yesterday, trading_date = today
+  // - 8:40 AM scheduled run: scan_date = yesterday, trading_date = today
   // - Manual evening run:    scan_date = today,     trading_date = next trading day
   const now = new Date();
   const istHour = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
@@ -1163,7 +1329,7 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [],
 
   let scanDate, tradingDate;
   if (istHour < 15) {
-    // Before market close (scheduled 6:32 AM run or manual pre-market)
+    // Before market close (scheduled 8:40 AM run or manual pre-market)
     // ChartInk "latest" = yesterday's candle, we trade today
     scanDate = new Date(todayMidnight);
     scanDate.setDate(scanDate.getDate() - 1);
@@ -1263,10 +1429,13 @@ async function sendNotification(marketContext, picks, doc) {
       title = `Daily Picks: ${picks[0].direction === 'LONG' ? 'BUY' : 'SELL'} ${picks.length} stocks`;
     }
     body = pickSummary;
-  } else if (marketContext.regime === 'BEARISH' || marketContext.regime === 'STRONG_BEARISH') {
+  } else if (marketContext.regime === 'CONFLICT') {
+    title = 'Daily Picks: CONFLICT — Sitting Out';
+    body = 'Structure bearish but SGX bullish — mixed signals. No trades today.';
+  } else if (marketContext.regime === 'BEARISH' || marketContext.regime === 'STRONG_BEARISH' || marketContext.regime === 'STRONG_BEAR' || marketContext.regime === 'WEAK_BEAR') {
     title = 'Daily Picks: No setups';
     body = 'Market weak today. No daily picks. Protect capital.';
-  } else if (marketContext.regime === 'STRONG_BULLISH') {
+  } else if (marketContext.regime === 'STRONG_BULLISH' || marketContext.regime === 'STRONG_BULL') {
     title = 'Daily Picks: No setups';
     body = 'Strong bullish regime — no bearish setups qualified. Watch for pullback entries.';
   } else {
@@ -1847,7 +2016,7 @@ async function validateAndPlaceEntries(options = {}) {
     pick.regime_aligned = isRegimeAligned(pick.direction, regime);
   }
 
-  validatePicks(eligiblePicks, orbData);
+  validatePicks(eligiblePicks, orbData, regime);
 
   // Record pass history on each pick for analytics
   for (const pick of eligiblePicks) {
@@ -2731,10 +2900,40 @@ async function monitorDailyPickOrders(options = {}) {
             }
         }
 
+        // ── 1b. +1R BREAKEVEN (price-based, not time-based) ──
+        // Move stop to breakeven as soon as profit reaches 1R (original risk distance)
+        const isBullish = pick.direction === 'LONG';
+        const originalRisk = Math.abs(pick.trade.entry_price - pick.levels.stop);
+        const currentProfit = isBullish
+          ? currentPrice - pick.trade.entry_price
+          : pick.trade.entry_price - currentPrice;
+        const profitR = originalRisk > 0 ? currentProfit / originalRisk : 0;
+
+        if (profitR >= 1.0 && !pick._breakeven_moved) {
+          const currentStop = pick.levels.stop;
+          const beStop = pick.trade.entry_price;
+          const shouldMove = isBullish ? beStop > currentStop : beStop < currentStop;
+
+          if (shouldMove) {
+            try {
+              await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: beStop });
+              if (!pick.trailing_history) pick.trailing_history = [];
+              pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: beStop, price_at_trail: currentPrice, reason: 'breakeven_1R' });
+              pick.levels.stop = beStop;
+              pick._breakeven_moved = true;
+              statusChanged = true;
+              console.log(`${LOG} [+1R BE] ${pick.symbol}: Profit ${round2(profitR)}R — stop moved to breakeven ₹${currentStop} → ₹${beStop}`);
+            } catch (err) {
+              console.error(`${LOG} [+1R BE] ${pick.symbol}: modifyOrder failed:`, err.message);
+            }
+          } else {
+            pick._breakeven_moved = true; // Already at/above breakeven
+          }
+        }
+
         // ── 2. DYNAMIC TRAILING STOPS (Chandelier Exit via shared engine) ──
         // Tracks highest high since entry, trails using ATR-based multiplier
         // Falls back to fixed ratio if ATR not available
-        const isBullish = pick.direction === 'LONG';
 
         // Track highest high / lowest low on the pick object (persists across monitor cycles)
         if (!pick._extreme_price) pick._extreme_price = pick.trade.entry_price;
@@ -2975,23 +3174,45 @@ function getStockSector(symbol) {
 
 // mapSectorToIntelKey imported from ../../utils/sectorMapping.js — single source of truth
 
-const MAX_PICKS_PER_SECTOR = 1; // Cap: max 1 pick per sector to avoid correlated positions
 
 function selectDiversePicks(viable, maxPicks) {
   console.log(`${LOG} [Diversity] Selecting ${maxPicks} from ${viable.length} viable candidates`);
 
-  if (viable.length <= maxPicks) {
-    // Even if we have fewer candidates than maxPicks, apply sector cap
-    const sectorFiltered = applySectorCap(viable);
-    if (sectorFiltered.length < viable.length) {
-      console.log(`${LOG} [Diversity] Sector cap reduced ${viable.length} → ${sectorFiltered.length}`);
+  // ── STEP 1: Sector cap on the full pool FIRST ──
+  // Keep only the highest-scored stock per sector. This pre-cleans the pool
+  // so Round 1 and Round 2 never select two correlated stocks.
+  const sectorBest = {};
+  const sectorDropped = [];
+  // viable is already sorted by rank_score descending from Step 5.5 re-sort
+  for (const pick of viable) {
+    const sector = getStockSector(pick.symbol);
+    if (sector === 'UNKNOWN' || !sectorBest[sector]) {
+      sectorBest[`${sector}_${pick.symbol}`] = pick; // UNKNOWN can have multiple
+      if (sector !== 'UNKNOWN') sectorBest[sector] = pick;
+    } else {
+      sectorDropped.push({ symbol: pick.symbol, sector, score: pick.rank_score, keptSymbol: sectorBest[sector].symbol });
     }
-    return sectorFiltered.slice(0, maxPicks);
+  }
+  // Build sector-filtered pool (preserving score order)
+  const keptSymbols = new Set();
+  for (const key of Object.keys(sectorBest)) {
+    keptSymbols.add(sectorBest[key].symbol);
+  }
+  const sectorFiltered = viable.filter(p => keptSymbols.has(p.symbol));
+
+  if (sectorDropped.length > 0) {
+    console.log(`${LOG} [Diversity] Sector cap: ${viable.length} → ${sectorFiltered.length} (dropped ${sectorDropped.length}: ${sectorDropped.map(d => `${d.symbol}[${d.sector}] kept ${d.keptSymbol}`).join(', ')})`);
   }
 
-  // Group by scan_type, each group already sorted by rank_score (inherited from scored)
+  if (sectorFiltered.length <= maxPicks) {
+    console.log(`${LOG} [Diversity] ${sectorFiltered.length} ≤ ${maxPicks} slots — taking all`);
+    logDiversityBreakdown(sectorFiltered);
+    return sectorFiltered;
+  }
+
+  // ── STEP 2: Round 1 — One per scan type from clean pool ──
   const byType = {};
-  for (const pick of viable) {
+  for (const pick of sectorFiltered) {
     const key = pick.scan_type;
     if (!byType[key]) byType[key] = [];
     byType[key].push(pick);
@@ -3002,7 +3223,7 @@ function selectDiversePicks(viable, maxPicks) {
   const selected = [];
   const usedSymbols = new Set();
 
-  // Round 1: Best candidate from each scan type (ordered by highest top-score)
+  // Sort scan type groups by their best candidate's score
   const typesByBest = Object.entries(byType)
     .sort((a, b) => b[1][0].rank_score - a[1][0].rank_score);
 
@@ -3020,9 +3241,9 @@ function selectDiversePicks(viable, maxPicks) {
     }
   }
 
-  // Round 2: Fill remaining slots by score across all types
+  // ── STEP 3: Round 2 — Fill remaining slots by score ──
   if (selected.length < maxPicks) {
-    const remaining = viable.filter(p => !usedSymbols.has(p.symbol));
+    const remaining = sectorFiltered.filter(p => !usedSymbols.has(p.symbol));
     console.log(`${LOG} [Diversity] Round 2 — filling ${maxPicks - selected.length} remaining slots from ${remaining.length} candidates by score`);
     for (const pick of remaining) {
       if (selected.length >= maxPicks) break;
@@ -3032,47 +3253,23 @@ function selectDiversePicks(viable, maxPicks) {
     }
   }
 
-  // Apply sector correlation cap — max 1 pick per sector
-  const finalSelected = applySectorCap(selected);
+  logDiversityBreakdown(selected);
+  return selected;
+}
 
-  // Log diversity breakdown
+function logDiversityBreakdown(picks) {
   const typeCounts = {};
   const sectorCounts = {};
-  for (const p of finalSelected) {
+  for (const p of picks) {
     typeCounts[p.scan_type] = (typeCounts[p.scan_type] || 0) + 1;
     const sector = getStockSector(p.symbol);
     sectorCounts[sector] = (sectorCounts[sector] || 0) + 1;
   }
-  console.log(`${LOG} [Diversity] Final picks: ${finalSelected.map(s => `${s.symbol}(${s.scan_type}:${s.rank_score}:${getStockSector(s.symbol)})`).join(', ')}`);
+  console.log(`${LOG} [Diversity] Final picks: ${picks.map(s => `${s.symbol}(${s.scan_type}:${s.rank_score}:${getStockSector(s.symbol)})`).join(', ')}`);
   console.log(`${LOG} [Diversity] Type distribution: ${Object.entries(typeCounts).map(([k, v]) => `${k}=${v}`).join(', ')}`);
   console.log(`${LOG} [Diversity] Sector distribution: ${Object.entries(sectorCounts).map(([k, v]) => `${k}=${v}`).join(', ')}`);
-
-  return finalSelected;
 }
 
-/**
- * Apply sector correlation cap — keep max MAX_PICKS_PER_SECTOR per sector.
- * When duplicates exist, keep the higher-scored one.
- */
-function applySectorCap(picks) {
-  const sectorCount = {};
-  const result = [];
-  const dropped = [];
-
-  for (const pick of picks) {
-    const sector = getStockSector(pick.symbol);
-    sectorCount[sector] = (sectorCount[sector] || 0) + 1;
-
-    if (sector === 'UNKNOWN' || sectorCount[sector] <= MAX_PICKS_PER_SECTOR) {
-      result.push(pick);
-    } else {
-      dropped.push(pick);
-      console.log(`${LOG} [Sector-Cap] ${pick.symbol}: Dropped — sector ${sector} already has ${MAX_PICKS_PER_SECTOR} pick(s)`);
-    }
-  }
-
-  return result;
-}
 
 /**
  * Detect candle pattern from OHLC data
@@ -3151,7 +3348,6 @@ export {
   getMarketContext,
   detectCandlePattern,
   selectDiversePicks,
-  applySectorCap,
   getStockSector,
   MAX_DAILY_PICKS
 };
@@ -3170,7 +3366,6 @@ export default {
   getMarketContext,
   detectCandlePattern,
   selectDiversePicks,
-  applySectorCap,
   getStockSector,
   MAX_DAILY_PICKS
 };

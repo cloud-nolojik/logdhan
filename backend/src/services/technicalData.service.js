@@ -99,6 +99,7 @@ async function isCandleDataOutdated(candles, timeframe) {
     // Extract date directly from timestamp string to avoid UTC conversion
     // Timestamps are IST (e.g., "2026-02-24T00:00:00+05:30") — parsing through
     // new Date() converts to UTC ("2026-02-23T18:30:00Z") which shifts the date back
+    // Upstox API returns candles in ascending order (oldest first), so last element is the latest
     const latestCandle = candles[candles.length - 1];
     const rawTimestamp = latestCandle.timestamp || latestCandle[0];
     const latestCandleDateStr = typeof rawTimestamp === 'string'
@@ -155,12 +156,20 @@ async function fetchFromUpstox(instrumentKey, timeframe, days = 365) {
   try {
     const response = await rateLimitedGet(url, {
       headers: {
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache, no-store',
       },
       timeout: 15000
     }, { caller: 'fetchFromUpstox' });
 
     const candles = response.data?.data?.candles || [];
+
+    // Log raw API response for debugging (first 3 and last 3 candles)
+    if (candles.length > 0) {
+      const first3 = candles.slice(0, 3).map(c => c[0]);
+      const last3 = candles.slice(-3).map(c => c[0]);
+      console.log(`[CandleData] fetchFromUpstox RAW response: ${candles.length} candles, first=[${first3.join(', ')}], last=[${last3.join(', ')}]`);
+    }
 
     // Upstox returns newest first, reverse to oldest first
     return { candles: candles.reverse(), status: 200 };
@@ -246,8 +255,10 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
       return [];
     }
 
-    const lastApi = apiCandles[apiCandles.length - 1];
-    console.log(`[CandleData] ${symbol}: API fresh ${apiCandles.length} candles, last=${lastApi?.[0]}`);
+    // Upstox API returns candles in ascending order (oldest first)
+    const oldestApi = apiCandles[0];
+    const latestApi = apiCandles[apiCandles.length - 1];
+    console.log(`[CandleData] ${symbol}: API fresh ${apiCandles.length} candles, latest=${latestApi?.[0]}, oldest=${oldestApi?.[0]}`);
 
     // Step 4: Save to DB for future use
     const candleDataForDb = apiCandles.map(c => ({
@@ -278,9 +289,11 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
     // Step 5: Verify API data is actually fresh after saving
     const isStillOutdated = await isCandleDataOutdated(candleDataForDb, dbTimeframe);
     if (isStillOutdated) {
-      const lastApiDateStr = typeof lastApi?.[0] === 'string' ? lastApi[0].split('T')[0] : 'unknown';
+      const latestApiDateStr = typeof latestApi?.[0] === 'string' ? latestApi[0].split('T')[0] : 'unknown';
       const expectedDateStr = await MarketHoursUtil.getLastCompletedTradingDay();
-      console.warn(`[CandleData] ${symbol}: ⚠️ API data still outdated after fetch (last=${lastApiDateStr}, expected=${expectedDateStr}) — API may not have updated yet`);
+      const msg = `${symbol}: API data still outdated after fetch (latest=${latestApiDateStr}, expected=${expectedDateStr})`;
+      console.error(`[CandleData] ⛔ ${msg}`);
+      throw new Error(msg);
     }
 
     return apiCandles;

@@ -4,13 +4,13 @@
  * Checks NSE corporate announcements for upcoming board meetings / results
  * that could cause unpredictable gaps and invalidate technical setups.
  *
- * Stocks with earnings in the next 4 days are flagged for removal from daily picks.
+ * Stocks with risky events (earnings, dividends, buybacks, fund raising)
+ * in the next 4 days are removed from daily picks.
  *
- * Data source: NSE India corporate events calendar
- * Fallback: lightweight ChartInk corporate action flag (if available in scan data)
+ * Data source: NSE India corporate board meetings API
+ * API: https://www.nseindia.com/api/corporate-board-meetings?index=equities
+ * Fail-open: if NSE is unreachable, all candidates pass through.
  */
-
-import { round2 } from './dailyPicksHelpers.js';
 
 const LOG = '[EARNINGS-FILTER]';
 
@@ -30,7 +30,8 @@ const EARNINGS_LOOKAHEAD_DAYS = 4;         // Block stocks with events in next 4
  * Uses a best-effort approach — if NSE is unreachable, returns empty (fail-open).
  */
 async function fetchUpcomingEarnings() {
-  const now = new Date();
+  // All date comparisons in IST — NSE dates are Indian market dates
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   const today = now.toISOString().split('T')[0];
 
   // Return cached data if still fresh
@@ -74,18 +75,27 @@ async function fetchUpcomingEarnings() {
 
     for (const event of events) {
       try {
-        const meetingDate = new Date(event.bm_date || event.meetingDate || event.date);
-        const symbol = event.symbol || event.bm_symbol || '';
-        const purpose = (event.bm_purpose || event.purpose || '').toLowerCase();
+        // NSE format: bm_date = "17-Mar-2026" (DD-MMM-YYYY)
+        const meetingDate = new Date(event.bm_date);
+        if (isNaN(meetingDate.getTime())) continue;
 
-        // Only filter for results/earnings announcements, not routine meetings
-        const isEarnings = purpose.includes('result') ||
-                          purpose.includes('financial') ||
-                          purpose.includes('quarterly') ||
-                          purpose.includes('annual') ||
-                          purpose.includes('dividend');
+        const symbol = event.bm_symbol || '';
+        // bm_purpose has structured values: "Financial Results", "Dividend", "Buyback", etc.
+        // bm_desc has free-text detail. Check both for comprehensive matching.
+        const purpose = (event.bm_purpose || '').toLowerCase();
+        const desc = (event.bm_desc || '').toLowerCase();
+        const combined = purpose + ' ' + desc;
 
-        if (isEarnings && meetingDate >= now && meetingDate <= cutoffDate && symbol) {
+        // Filter events that cause unpredictable gaps — earnings, dividends, buybacks, fund raising
+        const isRisky = combined.includes('result') ||
+                        combined.includes('financial') ||
+                        combined.includes('quarterly') ||
+                        combined.includes('annual') ||
+                        combined.includes('dividend') ||
+                        combined.includes('buyback') ||
+                        combined.includes('fund rais');
+
+        if (isRisky && meetingDate >= now && meetingDate <= cutoffDate && symbol) {
           earningsSymbols.add(symbol.toUpperCase());
         }
       } catch (_) { /* skip malformed entries */ }

@@ -450,7 +450,7 @@ async function main() {
       await sleep(200);
 
       console.log(`${LOG}   [F${pi+1}] Simulating ${pick.symbol} ${pick.direction} (entry=${pick.levels?.entry} stop=${pick.levels?.stop} target=${pick.levels?.target})...`);
-      const sim = simulatePick(pick, stockCandles, niftyCandles, opts.capital, selectedPicks);
+      const sim = simulatePick(pick, stockCandles, niftyCandles, opts.capital, selectedPicks, regime);
 
       // Print timeline
       if (opts.verbose) {
