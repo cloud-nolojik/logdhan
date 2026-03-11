@@ -1076,9 +1076,9 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     }
 
     // Fetch hourly pivots for intraday confluence scoring
-    const hourlyPivots = skipIntraday
-      ? { hourly_1h_pivots: null, hourly_4h_pivots: null, swing_levels_1h: null }
-      : await fetchHourlyPivots(instrumentKey, latestDailyCandle[0]);
+    // Always fetch — swing_levels_1h uses historical 1H candles (available after hours),
+    // only 1H/4H pivots for current trading day need market open (they gracefully return null)
+    const hourlyPivots = await fetchHourlyPivots(instrumentKey, latestDailyCandle[0]);
 
     // === FINGERPRINT: Single debug line with all scoring-critical values ===
     console.log(`[ENRICH-DEBUG] ${symbol}: src=${dataSource} candles=${dailyCandles.length} | O=${open} H=${high} L=${low} C=${ltp} prevC=${prevClose} vol=${todayVolume} avgVol50=${avgVolume50d} | RSI=${dailyIndicators.rsi14} EMA20=${dailyIndicators.ema20} ATR=${dailyIndicators.atr} | pivot=${dailyPivot?.pivot} 1hP=${hourlyPivots.hourly_1h_pivots?.pivot || 'null'} 4hP=${hourlyPivots.hourly_4h_pivots?.pivot || 'null'}`);
