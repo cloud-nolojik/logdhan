@@ -20,6 +20,63 @@ import { getIstDayRange } from '../utils/tradingDay.js';
 
 const router = express.Router();
 
+// ─── Sanitize global intel text for mobile display ───────────────────────────
+// Strips markdown links [text](url), raw URLs, and trims long text fields
+// so the mobile app shows clean, readable summaries.
+const MAX_REASON_CHARS = 280;   // ~3 lines on mobile
+const MAX_DETAIL_CHARS = 180;   // ~2 lines on mobile
+const MAX_IMPACT_CHARS = 120;   // single line
+
+function cleanText(text, maxLen) {
+  if (!text || typeof text !== 'string') return text;
+  let clean = text
+    // Strip markdown links: [text](url) → text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    // Strip raw URLs
+    .replace(/https?:\/\/[^\s)]+/g, '')
+    // Clean up leftover parentheses from stripped URLs
+    .replace(/\(\s*\)/g, '')
+    // Collapse multiple spaces
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (maxLen && clean.length > maxLen) {
+    clean = clean.substring(0, maxLen).replace(/\s+\S*$/, '') + '…';
+  }
+  return clean;
+}
+
+function sanitizeIntelForMobile(intel) {
+  if (!intel) return intel;
+  const cleaned = { ...intel };
+
+  // Clean top-level text fields
+  cleaned.risk_reason = cleanText(cleaned.risk_reason, MAX_REASON_CHARS);
+  cleaned.recommendation_reason = cleanText(cleaned.recommendation_reason, MAX_REASON_CHARS);
+
+  // Clean global cues detail fields
+  if (cleaned.global_cues) {
+    cleaned.global_cues = {
+      ...cleaned.global_cues,
+      us_detail: cleanText(cleaned.global_cues.us_detail, MAX_DETAIL_CHARS),
+      indian_impact: cleanText(cleaned.global_cues.indian_impact, MAX_DETAIL_CHARS),
+      asian_detail: cleanText(cleaned.global_cues.asian_detail, MAX_DETAIL_CHARS),
+      rupee_impact: cleanText(cleaned.global_cues.rupee_impact, MAX_IMPACT_CHARS),
+      crude_indian_impact: cleanText(cleaned.global_cues.crude_indian_impact, MAX_IMPACT_CHARS)
+    };
+  }
+
+  // Clean major events
+  if (cleaned.major_events && Array.isArray(cleaned.major_events)) {
+    cleaned.major_events = cleaned.major_events.map(evt => ({
+      ...evt,
+      event: cleanText(evt.event, MAX_DETAIL_CHARS),
+      indian_impact: cleanText(evt.indian_impact, MAX_IMPACT_CHARS)
+    }));
+  }
+
+  return cleaned;
+}
+
 const ALLOWED_MOBILE = '919008108650';
 const mobileAuth = (req, res, next) => {
   if (req.user?.mobileNumber !== ALLOWED_MOBILE) {
@@ -41,7 +98,7 @@ router.get('/today', auth, async (req, res) => {
     if (!doc || !doc.picks || doc.picks.length === 0) {
       const emptyContext = { ...(doc?.market_context || {}) };
       if (doc?.global_intel) {
-        emptyContext.global_intel = doc.global_intel;
+        emptyContext.global_intel = sanitizeIntelForMobile(doc.global_intel);
       }
       return res.json({
         success: true,
@@ -119,8 +176,9 @@ router.get('/today', auth, async (req, res) => {
     }
 
     // Attach global intel (stored as top-level field) into market_context for the app
+    // Clean text fields: strip markdown links, raw URLs, and limit length for mobile display
     if (doc.global_intel) {
-      marketContext.global_intel = doc.global_intel;
+      marketContext.global_intel = sanitizeIntelForMobile(doc.global_intel);
     }
     res.json({
       success: true,
