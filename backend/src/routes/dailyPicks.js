@@ -39,11 +39,15 @@ router.get('/today', auth, async (req, res) => {
     const doc = await DailyPick.findOne({ trading_date: today }).lean();
 
     if (!doc || !doc.picks || doc.picks.length === 0) {
+      const emptyContext = { ...(doc?.market_context || {}) };
+      if (doc?.global_intel) {
+        emptyContext.global_intel = doc.global_intel;
+      }
       return res.json({
         success: true,
         data: {
           picks: [],
-          market_context: doc?.market_context || {},
+          market_context: emptyContext,
           message: 'No setups today'
         }
       });
@@ -112,6 +116,11 @@ router.get('/today', auth, async (req, res) => {
       }
     } catch (err) {
       console.warn('[DAILY-PICKS-API] Nifty price fetch failed:', err.message);
+    }
+
+    // Attach global intel (stored as top-level field) into market_context for the app
+    if (doc.global_intel) {
+      marketContext.global_intel = doc.global_intel;
     }
     res.json({
       success: true,
