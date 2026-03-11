@@ -21,15 +21,12 @@ import { getIstDayRange } from '../utils/tradingDay.js';
 const router = express.Router();
 
 // ─── Sanitize global intel text for mobile display ───────────────────────────
-// Strips markdown links [text](url), raw URLs, and trims long text fields
-// so the mobile app shows clean, readable summaries.
-const MAX_REASON_CHARS = 280;   // ~3 lines on mobile
-const MAX_DETAIL_CHARS = 180;   // ~2 lines on mobile
-const MAX_IMPACT_CHARS = 120;   // single line
+// Strips markdown links [text](url) and raw URLs so the mobile app shows
+// clean, readable text. Full content is preserved (no truncation).
 
-function cleanText(text, maxLen) {
+function cleanText(text) {
   if (!text || typeof text !== 'string') return text;
-  let clean = text
+  return text
     // Strip markdown links: [text](url) → text
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     // Strip raw URLs
@@ -39,29 +36,25 @@ function cleanText(text, maxLen) {
     // Collapse multiple spaces
     .replace(/\s{2,}/g, ' ')
     .trim();
-  if (maxLen && clean.length > maxLen) {
-    clean = clean.substring(0, maxLen).replace(/\s+\S*$/, '') + '…';
-  }
-  return clean;
 }
 
 function sanitizeIntelForMobile(intel) {
   if (!intel) return intel;
   const cleaned = { ...intel };
 
-  // Clean top-level text fields
-  cleaned.risk_reason = cleanText(cleaned.risk_reason, MAX_REASON_CHARS);
-  cleaned.recommendation_reason = cleanText(cleaned.recommendation_reason, MAX_REASON_CHARS);
+  // Clean top-level text fields (strip URLs/markdown only, no truncation)
+  cleaned.risk_reason = cleanText(cleaned.risk_reason);
+  cleaned.recommendation_reason = cleanText(cleaned.recommendation_reason);
 
   // Clean global cues detail fields
   if (cleaned.global_cues) {
     cleaned.global_cues = {
       ...cleaned.global_cues,
-      us_detail: cleanText(cleaned.global_cues.us_detail, MAX_DETAIL_CHARS),
-      indian_impact: cleanText(cleaned.global_cues.indian_impact, MAX_DETAIL_CHARS),
-      asian_detail: cleanText(cleaned.global_cues.asian_detail, MAX_DETAIL_CHARS),
-      rupee_impact: cleanText(cleaned.global_cues.rupee_impact, MAX_IMPACT_CHARS),
-      crude_indian_impact: cleanText(cleaned.global_cues.crude_indian_impact, MAX_IMPACT_CHARS)
+      us_detail: cleanText(cleaned.global_cues.us_detail),
+      indian_impact: cleanText(cleaned.global_cues.indian_impact),
+      asian_detail: cleanText(cleaned.global_cues.asian_detail),
+      rupee_impact: cleanText(cleaned.global_cues.rupee_impact),
+      crude_indian_impact: cleanText(cleaned.global_cues.crude_indian_impact)
     };
   }
 
@@ -69,8 +62,8 @@ function sanitizeIntelForMobile(intel) {
   if (cleaned.major_events && Array.isArray(cleaned.major_events)) {
     cleaned.major_events = cleaned.major_events.map(evt => ({
       ...evt,
-      event: cleanText(evt.event, MAX_DETAIL_CHARS),
-      indian_impact: cleanText(evt.indian_impact, MAX_IMPACT_CHARS)
+      event: cleanText(evt.event),
+      indian_impact: cleanText(evt.indian_impact)
     }));
   }
 
