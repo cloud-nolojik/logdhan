@@ -175,7 +175,7 @@ async function runDailyPicks(options = {}) {
     }
 
     // Step 3: Enrich with OHLCV + indicators
-    const enriched = await enrichCandidates(earningsFiltered);
+    const enriched = await enrichCandidates(earningsFiltered, { allowOutdatedCandle });
     console.log(`${LOG} Enriched ${enriched.length}/${earningsFiltered.length} candidates`);
 
     if (enriched.length === 0) {
@@ -666,13 +666,13 @@ async function runScans(marketContext) {
 // STEP 3: ENRICH CANDIDATES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function enrichCandidates(candidates) {
+async function enrichCandidates(candidates, { allowOutdatedCandle = false } = {}) {
   const symbols = candidates.map(c => c.symbol);
   console.log(`${LOG} [Step 3] Enriching ${symbols.length} candidates: ${symbols.join(', ')}`);
 
   let analysisData;
   try {
-    analysisData = await getDailyAnalysisData(symbols);
+    analysisData = await getDailyAnalysisData(symbols, { allowOutdated: allowOutdatedCandle });
   } catch (err) {
     console.error(`${LOG} getDailyAnalysisData failed:`, err.message);
     return [];

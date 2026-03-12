@@ -952,11 +952,11 @@ async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
  * @param {string} instrumentKey - Instrument key
  * @param {number|null} bulkLivePrice - Optional live price from bulk fetch (priceCacheService)
  */
-async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = null, skipIntraday = false) {
+async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = null, skipIntraday = false, allowOutdated = false) {
   try {
     // Fetch historical daily candles for RSI, pivots, avg volume
     console.log(`[DailyStock] ${symbol}: calling getCandleData(${instrumentKey}, '1d')...`);
-    const dailyCandles = await getCandleData(instrumentKey, symbol, '1d');
+    const dailyCandles = await getCandleData(instrumentKey, symbol, '1d', { allowOutdated });
     console.log(`[DailyStock] ${symbol}: getCandleData returned ${dailyCandles.length} candles`);
 
     if (dailyCandles.length === 0) {
@@ -1165,7 +1165,7 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
  * @param {Array<string>} symbols - Array of trading symbols
  * @returns {Object} Daily analysis response
  */
-export async function getDailyAnalysisData(symbols, { skipIntraday = true } = {}) {
+export async function getDailyAnalysisData(symbols, { skipIntraday = true, allowOutdated = false } = {}) {
   const startTime = Date.now();
 
   // Check if market is open
@@ -1178,7 +1178,7 @@ export async function getDailyAnalysisData(symbols, { skipIntraday = true } = {}
   // Get NIFTY data - use live intraday for current level
   const niftyKey = 'NSE_INDEX|Nifty 50';
   const [niftyCandles, niftyLive] = await Promise.all([
-    getCandleData(niftyKey, 'NIFTY50', '1d'),
+    getCandleData(niftyKey, 'NIFTY50', '1d', { allowOutdated }),
     skipIntraday ? Promise.resolve(null) : fetchLiveIntradayData(niftyKey)
   ]);
 
@@ -1225,7 +1225,7 @@ export async function getDailyAnalysisData(symbols, { skipIntraday = true } = {}
 
     // Pass live price from bulk fetch if available
     const livePrice = livePriceMap[stockInfo.instrumentKey];
-    return calculateDailyStockData(symbol, stockInfo.instrumentKey, livePrice, skipIntraday);
+    return calculateDailyStockData(symbol, stockInfo.instrumentKey, livePrice, skipIntraday, allowOutdated);
   });
 
   // Generate IST timestamp
