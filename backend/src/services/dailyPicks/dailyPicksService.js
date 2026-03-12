@@ -793,21 +793,28 @@ function check1HStructuralConflict(candidate) {
   const sym = candidate.symbol;
   const isLong = candidate.direction === 'LONG';
 
+  // ATR-aware conflict threshold: max(0.5×ATR, 1% of price) — adapts to volatility.
+  // On high-ATR days, a fixed 2% can be within normal noise. Using 0.5×ATR
+  // gives wider breathing room for volatile stocks while keeping tight for low-vol.
+  const atr = ohlcv.atr || 0;
+
   if (isLong) {
-    // LONG: approximate entry = PDH (prevHigh). Reject if resistance within 2% above it.
     const pdh = ohlcv.high;
-    const conflictZone = resistanceZones.find(z => z.midpoint > pdh && z.midpoint <= pdh * 1.02);
+    const conflictBuffer = Math.max(0.5 * atr, pdh * 0.01);
+    const conflictZone = resistanceZones.find(z => z.midpoint > pdh && z.midpoint <= pdh + conflictBuffer);
     if (conflictZone) {
-      const reason = `1H structural conflict: resistance at ₹${round2(conflictZone.midpoint)} within 2% above entry zone (PDH ₹${round2(pdh)})`;
+      const distPct = round2(((conflictZone.midpoint - pdh) / pdh) * 100);
+      const reason = `1H structural conflict: resistance at ₹${round2(conflictZone.midpoint)} within ${distPct}% above entry zone (PDH ₹${round2(pdh)}, threshold=0.5×ATR ₹${round2(conflictBuffer)})`;
       console.log(`${LOG} [ConflictCheck] ${sym}: REJECTED — ${reason}`);
       return { rejected: true, reason };
     }
   } else {
-    // SHORT: approximate entry = PDL (prevLow). Reject if support within 2% below it.
     const pdl = ohlcv.low;
-    const conflictZone = supportZones.find(z => z.midpoint < pdl && z.midpoint >= pdl * 0.98);
+    const conflictBuffer = Math.max(0.5 * atr, pdl * 0.01);
+    const conflictZone = supportZones.find(z => z.midpoint < pdl && z.midpoint >= pdl - conflictBuffer);
     if (conflictZone) {
-      const reason = `1H structural conflict: support at ₹${round2(conflictZone.midpoint)} within 2% below entry zone (PDL ₹${round2(pdl)})`;
+      const distPct = round2(((pdl - conflictZone.midpoint) / pdl) * 100);
+      const reason = `1H structural conflict: support at ₹${round2(conflictZone.midpoint)} within ${distPct}% below entry zone (PDL ₹${round2(pdl)}, threshold=0.5×ATR ₹${round2(conflictBuffer)})`;
       console.log(`${LOG} [ConflictCheck] ${sym}: REJECTED — ${reason}`);
       return { rejected: true, reason };
     }
@@ -1159,7 +1166,13 @@ function calculateLevels(pick) {
 
     // 1H swing levels for structural targets
     resistanceZones: _ohlcv.swing_levels_1h?.resistanceZones || [],
-    supportZones: _ohlcv.swing_levels_1h?.supportZones || []
+    supportZones: _ohlcv.swing_levels_1h?.supportZones || [],
+
+    // 1H pivot levels (R1/R2/S1/S2 from classic pivot formula on 1H candle)
+    hourlyR1: _ohlcv.hourly_1h_pivots?.r1 || null,
+    hourlyR2: _ohlcv.hourly_1h_pivots?.r2 || null,
+    hourlyS1: _ohlcv.hourly_1h_pivots?.s1 || null,
+    hourlyS2: _ohlcv.hourly_1h_pivots?.s2 || null
   };
 
   // Map daily picks scan type to engine archetype (e.g. breakout_setup → breakout)
