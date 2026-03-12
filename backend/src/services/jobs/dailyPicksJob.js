@@ -127,7 +127,7 @@ class DailyPicksJob {
       await this.agenda.cancel({ name: 'daily-picks-scan' });
 
       // 8:40 AM IST, Monday-Friday (before market open for clean OHLCV)
-      await this.agenda.every('40 8 * * 1-5', 'daily-picks-scan', {}, {
+      await this.agenda.every('40 8 * * 1-5', 'daily-picks-scan', { allowOutdatedCandle: false }, {
         timezone: 'Asia/Kolkata'
       });
 
