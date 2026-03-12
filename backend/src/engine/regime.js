@@ -224,12 +224,12 @@ export function getRegimeWarning(setupType, regimeCheck) {
  *
  * @returns {Promise<Object>} Regime check result
  */
-export async function fetchAndCheckRegime() {
+export async function fetchAndCheckRegime({ allowOutdated = false } = {}) {
   try {
     // Use getCandleData which handles DB cache, outdated checks, and Cloudflare cache-busting
     const { getCandleData } = await import('../services/technicalData.service.js');
 
-    const candles = await getCandleData(NIFTY_50_INSTRUMENT_KEY, 'NIFTY50', '1d');
+    const candles = await getCandleData(NIFTY_50_INSTRUMENT_KEY, 'NIFTY50', '1d', { allowOutdated });
 
     if (candles && candles.length >= 50) {
       return checkMarketRegime({ niftyCandles: candles });

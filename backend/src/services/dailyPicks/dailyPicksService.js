@@ -121,7 +121,7 @@ function getAnthropicClient() {
  * Called at 8:40 AM IST before market open.
  */
 async function runDailyPicks(options = {}) {
-  const { dryRun = false } = options;
+  const { dryRun = false, allowOutdatedCandle = false } = options;
   const startTime = Date.now();
 
   console.log(`${LOG} ════════════════════════════════════════`);
@@ -138,7 +138,7 @@ async function runDailyPicks(options = {}) {
     // See Step 5.5 below.
 
     // Step 1: Market context (regime + SGX Nifty combined)
-    const marketContext = await getMarketContext();
+    const marketContext = await getMarketContext({ allowOutdatedCandle });
     console.log(`${LOG} Market regime: ${marketContext.regime} (structure: ${marketContext.structure_regime})`);
 
     // CONFLICT regime = structure bearish + SGX green → SIT OUT entirely
@@ -476,13 +476,13 @@ async function runDailyPicks(options = {}) {
 // STEP 1: MARKET CONTEXT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function getMarketContext() {
+async function getMarketContext({ allowOutdatedCandle = false } = {}) {
   console.log(`${LOG} [Step 1] Fetching market context (regime + SGX Nifty)...`);
 
   // Fetch structure (Nifty vs 50 EMA) and sentiment (SGX/GIFT Nifty) in parallel
   // Both are critical — if either fails, pipeline halts
   const [regimeResult, sgxData] = await Promise.all([
-    fetchAndCheckRegime(),
+    fetchAndCheckRegime({ allowOutdated: allowOutdatedCandle }),
     fetchSGXNiftyData()
   ]);
 

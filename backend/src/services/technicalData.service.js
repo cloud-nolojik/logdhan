@@ -187,7 +187,7 @@ async function fetchFromUpstox(instrumentKey, timeframe, days = 365) {
  * @param {string} timeframe - '1d' or '1w'
  * @returns {Array} Array of candles in format [timestamp, open, high, low, close, volume]
  */
-async function getCandleData(instrumentKey, symbol, timeframe) {
+async function getCandleData(instrumentKey, symbol, timeframe, { allowOutdated = false } = {}) {
   const dbTimeframe = timeframe === '1w' ? '1w' : '1d';
   const upstoxTimeframe = timeframe === '1w' ? 'week' : 'day';
 
@@ -292,6 +292,10 @@ async function getCandleData(instrumentKey, symbol, timeframe) {
       const latestApiDateStr = typeof latestApi?.[0] === 'string' ? latestApi[0].split('T')[0] : 'unknown';
       const expectedDateStr = await MarketHoursUtil.getLastCompletedTradingDay();
       const msg = `${symbol}: API data still outdated after fetch (latest=${latestApiDateStr}, expected=${expectedDateStr})`;
+      if (allowOutdated) {
+        console.warn(`[CandleData] ⚠️ ${msg} — allowOutdated=true, proceeding with latest available`);
+        return apiCandles;
+      }
       console.error(`[CandleData] ⛔ ${msg}`);
       throw new Error(msg);
     }
