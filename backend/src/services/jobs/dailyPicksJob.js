@@ -73,7 +73,8 @@ class DailyPicksJob {
           return { skipped: true, reason: 'not_trading_day' };
         }
 
-        const result = await runDailyPicks();
+        const opts = job.attrs.data || {};
+        const result = await runDailyPicks(opts);
 
         this.stats.runsCompleted++;
         this.stats.lastRunAt = new Date();
