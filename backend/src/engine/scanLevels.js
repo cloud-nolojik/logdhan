@@ -898,25 +898,34 @@ function calculateBreakoutLevels(data) {
 
     // Fallback: fixed 3% if daily pivots fail
     if (!targetResult || targetResult.rejected) {
-      console.log(`  [Breakout] Daily pivots failed, trying fixed 3%: ${targetResult?.reason || 'no daily data'}`);
-      const target = roundToTick(entry * 1.03);
-      const reward = Math.abs(target - entry);
-      const rr = risk > 0 ? reward / risk : 0;
-
-      if (rr >= minRR) {
-        console.log(`  [Breakout] Using fixed 3% target: ${target} (entry=${round2(entry)}, R:R=${rr.toFixed(1)})`);
-        targetResult = {
-          target2: target,
-          target3: null,
-          target2_basis: 'fixed_3pct',
-          reason: `Fixed 3% target at ${round2(target)}, R:R ${round2(rr)}:1`
-        };
-      } else {
+      // Guard: if risk is invalid, reject immediately with clear reason
+      if (!isNum(risk) || risk <= 0) {
         targetResult = {
           rejected: true,
-          noData: true,
-          reason: `Breakout REJECTED: Daily pivots and fixed 3% both failed R:R (3% R:R ${rr.toFixed(1)}:1 < ${minRR}:1)`
+          noData: false,
+          reason: `Invalid risk ${round2(risk)} (stop <= entry), entry=${round2(entry)} stop=${round2(stop)}`
         };
+      } else {
+        console.log(`  [Breakout] Daily pivots failed, trying fixed 3%: ${targetResult?.reason || 'no daily data'}`);
+        const target = roundToTick(entry * 1.03);
+        const reward = Math.abs(target - entry);
+        const rr = reward / risk;
+
+        if (rr >= minRR) {
+          console.log(`  [Breakout] Using fixed 3% target: ${target} (entry=${round2(entry)}, R:R=${rr.toFixed(1)})`);
+          targetResult = {
+            target2: target,
+            target3: null,
+            target2_basis: 'fixed_3pct',
+            reason: `Fixed 3% target at ${round2(target)}, R:R ${round2(rr)}:1`
+          };
+        } else {
+          targetResult = {
+            rejected: true,
+            noData: true,
+            reason: `Daily pivots and fixed 3% both failed R:R (3% R:R ${rr.toFixed(1)}:1 < ${minRR}:1)`
+          };
+        }
       }
     }
   } else {
@@ -2003,8 +2012,13 @@ function calculateBreakdownLevels(data) {
 
   // Stop: Above breakdown level (intraday) or swing-high based (swing)
   // Intraday: if price recovers above the support it broke, the breakdown failed.
-  // PDH is too wide — use the breakdown level (low20D or prevLow) as stop.
-  const supportLevel = isNum(low20D) && low20D > 0 ? low20D : prevLow;
+  // PDH is too wide — use the breakdown level as stop.
+  // FIX: For intraday, always use prevLow as the broken level.
+  // low20D can be far below prevLow (e.g. stock bounced from a lower low weeks ago),
+  // causing stop < entry and invalid negative risk (R:R = 0.0:1).
+  const supportLevel = isIntraday
+    ? prevLow  // Intraday: prevLow is the level that just broke
+    : (isNum(low20D) && low20D > 0 ? low20D : prevLow);
   let stop;
   if (isIntraday) {
     stop = roundToTick(supportLevel + (0.1 * atr));
@@ -2027,25 +2041,34 @@ function calculateBreakdownLevels(data) {
 
     // Fallback: fixed 3% if daily pivots fail
     if (!targetResult || targetResult.rejected) {
-      console.log(`  [Breakdown] Daily pivots failed, trying fixed 3%: ${targetResult?.reason || 'no daily data'}`);
-      const target = roundToTick(entry * 0.97);
-      const reward = Math.abs(target - entry);
-      const rr = risk > 0 ? reward / risk : 0;
-
-      if (rr >= minRR) {
-        console.log(`  [Breakdown] Using fixed 3% target: ${target} (entry=${round2(entry)}, R:R=${rr.toFixed(1)})`);
-        targetResult = {
-          target2: target,
-          target3: null,
-          target2_basis: 'fixed_3pct',
-          reason: `Fixed 3% target at ${round2(target)}, R:R ${round2(rr)}:1`
-        };
-      } else {
+      // Guard: if risk is invalid, reject immediately with clear reason
+      if (!isNum(risk) || risk <= 0) {
         targetResult = {
           rejected: true,
-          noData: true,
-          reason: `Breakdown REJECTED: Daily pivots and fixed 3% both failed R:R (3% R:R ${rr.toFixed(1)}:1 < ${minRR}:1)`
+          noData: false,
+          reason: `Invalid risk ${round2(risk)} (stop <= entry), entry=${round2(entry)} stop=${round2(stop)}`
         };
+      } else {
+        console.log(`  [Breakdown] Daily pivots failed, trying fixed 3%: ${targetResult?.reason || 'no daily data'}`);
+        const target = roundToTick(entry * 0.97);
+        const reward = Math.abs(target - entry);
+        const rr = reward / risk;
+
+        if (rr >= minRR) {
+          console.log(`  [Breakdown] Using fixed 3% target: ${target} (entry=${round2(entry)}, R:R=${rr.toFixed(1)})`);
+          targetResult = {
+            target2: target,
+            target3: null,
+            target2_basis: 'fixed_3pct',
+            reason: `Fixed 3% target at ${round2(target)}, R:R ${round2(rr)}:1`
+          };
+        } else {
+          targetResult = {
+            rejected: true,
+            noData: true,
+            reason: `Daily pivots and fixed 3% both failed R:R (3% R:R ${rr.toFixed(1)}:1 < ${minRR}:1)`
+          };
+        }
       }
     }
   } else {
