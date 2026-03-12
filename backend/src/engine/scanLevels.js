@@ -1152,7 +1152,7 @@ function calculatePullbackLevels(data) {
     targetResult = findIntradayLongTarget({
       entry, risk, resistanceZones,
       hourlyR1, hourlyR2, dailyR1, dailyR2, previousDayHigh,
-      minRR, priority: 'structure_first', useFallbackPct: true
+      minRR, priority: 'structure_first', useFallbackPct: false
     });
   } else {
     targetResult = findPullbackTarget({
@@ -1285,7 +1285,7 @@ function calculateMomentumLevels(data) {
     targetResult = findIntradayLongTarget({
       entry, risk, resistanceZones,
       hourlyR1, hourlyR2, dailyR1, dailyR2, previousDayHigh,
-      minRR, useFallbackPct: true
+      minRR, useFallbackPct: false
     });
   } else {
     targetResult = findStructuralTarget({
@@ -1374,7 +1374,7 @@ function calculateConsolidationLevels(data) {
     targetResult = findIntradayLongTarget({
       entry, risk, resistanceZones,
       hourlyR1, hourlyR2, dailyR1, dailyR2, previousDayHigh,
-      minRR, priority: 'structure_first', useFallbackPct: true
+      minRR, priority: 'structure_first', useFallbackPct: false
     });
   } else {
     targetResult = findStructuralTarget({
@@ -1483,7 +1483,7 @@ function calculateAPlusMomentumLevels(data) {
     targetResult = findIntradayLongTarget({
       entry, risk, resistanceZones,
       hourlyR1, hourlyR2, dailyR1, dailyR2, previousDayHigh,
-      minRR, priority: 'structure_first', useFallbackPct: true
+      minRR, priority: 'structure_first', useFallbackPct: false
     });
   } else {
     targetResult = findStructuralTarget({
@@ -2154,7 +2154,7 @@ function calculateMomentumBearishLevels(data) {
     targetResult = findIntradayShortTarget({
       entry, risk, supportZones,
       hourlyS1, hourlyS2, dailyS1, dailyS2, previousDayLow,
-      minRR, useFallbackPct: true
+      minRR, useFallbackPct: false
     });
   } else {
     targetResult = findShortStructuralTarget({
@@ -2231,7 +2231,7 @@ function calculateFailedResistanceLevels(data) {
     targetResult = findIntradayShortTarget({
       entry, risk, supportZones,
       hourlyS1, hourlyS2, dailyS1, dailyS2, previousDayLow,
-      minRR, priority: 'structure_first', useFallbackPct: true
+      minRR, priority: 'structure_first', useFallbackPct: false
     });
   } else {
     targetResult = findShortStructuralTarget({
@@ -2308,7 +2308,7 @@ function calculateCompressionBearishLevels(data) {
     targetResult = findIntradayShortTarget({
       entry, risk, supportZones,
       hourlyS1, hourlyS2, dailyS1, dailyS2, previousDayLow,
-      minRR, priority: 'structure_first', useFallbackPct: true
+      minRR, priority: 'structure_first', useFallbackPct: false
     });
   } else {
     targetResult = findShortStructuralTarget({
