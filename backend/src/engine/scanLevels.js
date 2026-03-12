@@ -1051,7 +1051,9 @@ function calculatePullbackLevels(data) {
     high52W,
     isIntraday,
     previousDayHigh,
-    resistanceZones
+    resistanceZones,
+    hourlyR1,
+    hourlyR2
   } = data;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1276,7 +1278,7 @@ function calculateMomentumLevels(data) {
   const risk = entry - stop;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TARGET: Intraday → 1H swing → Hourly R1/R2 → Daily R1/R2 → PDH → Fixed 3% → REJECT
+  // TARGET: Intraday → 1H swing → Hourly R1/R2 → Daily R1/R2 → PDH → REJECT
   //         Swing    → Weekly ladder
   // ═══════════════════════════════════════════════════════════════════════════
   let targetResult;
@@ -2146,7 +2148,7 @@ function calculateMomentumBearishLevels(data) {
 
   const risk = stop - entry;
 
-  // Target: Intraday → 1H swing → Hourly S1/S2 → Daily S1/S2 → PDL → Fixed 3% → REJECT
+  // Target: Intraday → 1H swing → Hourly S1/S2 → Daily S1/S2 → PDL → REJECT
   //         Swing    → Weekly support ladder
   let targetResult;
   if (isIntraday) {
