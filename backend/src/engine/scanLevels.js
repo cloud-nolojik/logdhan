@@ -1537,7 +1537,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   const adjustments = [];
 
   // Detect if this is a SHORT trade based on scan type
-  const isShortTrade = ['breakdown_setup', 'momentum_carry_bearish', 'failed_at_resistance', 'compression_bearish', 'fiftyTwoWeek_low'].includes(scanType);
+  const isShortTrade = ['breakdown_setup', 'momentum_carry_bearish', 'failed_at_resistance', 'compression_bearish', 'fiftytwoweek_low'].includes(scanType?.toLowerCase());
 
   // ─────────────────────────────────────────────────────────────────────────
   // GUARD A: Sanity check - all values must be positive
