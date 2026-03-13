@@ -1,7 +1,7 @@
 /**
  * Daily Picks — ChartInk Scan Formulas
  *
- * 16 scans for next-day +2% trade candidates (8 bullish + 8 bearish).
+ * 17 scans for next-day +2% trade candidates (8 bullish + 8 bearish + 1 counter-regime).
  * STRONG_BULLISH/STRONG_BEARISH (>3% from EMA50): hard-block counter-regime scans.
  * BULLISH/BEARISH (1-3%): all 16 scans run, aligned scans get +5 score bonus.
  * NEUTRAL/UNKNOWN: all 16 scans run, no bonus.
@@ -317,6 +317,25 @@
         latest high - latest low > latest close * 0.01 and
         market cap >= 1000
       ) )`
+    },
+
+    // ═══════════════════════════════════════════════════════════════
+    // COUNTER-REGIME SCANS — Defensive rotation plays
+    // ═══════════════════════════════════════════════════════════════
+
+    // Scan 17: Relative Strength Long (Bear Market)
+    // Defensive stocks (pharma/FMCG/IT) holding above key MAs while Nifty falls
+    // WHY IT WORKS: Sector rotation into defensive names during broad selloffs; these outperform when fear peaks
+    relative_strength_long: {
+      type: 'bullish',
+      query: `( {cash} (
+        latest close > latest ema( close, 50 ) and
+        latest ema( close, 20 ) > latest ema( close, 50 ) and
+        latest close > latest sma( close, 200 ) and
+        latest rsi( 14 ) > 50 and latest rsi( 14 ) < 70 and
+        latest volume > latest sma( volume, 50 ) * 0.8 and
+        market cap >= 5000
+      ) )`
     }
   };
 
@@ -339,7 +358,8 @@ export const SCAN_LABELS = {
   volume_shocker_bearish: 'Volume Shocker Bear',
   nr7_bearish: 'NR7 Coiled Bear',
   inside_day_bearish: 'Inside Day Bear',
-  bear_flag: 'Bear Flag'
+  bear_flag: 'Bear Flag',
+  relative_strength_long: 'RS Long (Bear Mkt)'
 };
 
 /**
@@ -377,8 +397,8 @@ export const SCAN_ORDER_BY_REGIME = {
   NEUTRAL: ['nr7_bullish', 'nr7_bearish', 'inside_day_bullish', 'inside_day_bearish'],
   // WEAK_BEAR: compression-only bearish — structure bearish but SGX flat
   WEAK_BEAR: [...BEARISH_COMPRESSION],
-  // STRONG_BEAR: momentum-first bearish — trend is falling, ride it down
-  STRONG_BEAR: [...BEARISH_MOMENTUM, ...BEARISH_COMPRESSION],
+  // STRONG_BEAR: momentum-first bearish + 1 defensive RS long (last, lowest priority)
+  STRONG_BEAR: [...BEARISH_MOMENTUM, ...BEARISH_COMPRESSION, 'relative_strength_long'],
   // CONFLICT: structure bearish + SGX green → contradictory, sit out
   CONFLICT: [],
 };
@@ -406,5 +426,6 @@ export const SCAN_ARCHETYPE = {
   volume_shocker_bearish: 'breakdown_setup',      // Volume surge down = breakdown
   nr7_bearish: 'compression_bearish',             // NR7 in downtrend = compression breakdown
   inside_day_bearish: 'compression_bearish',      // Inside day in downtrend = compression breakdown
-  bear_flag: 'breakdown_setup'                    // Flag continuation down = breakdown
+  bear_flag: 'breakdown_setup',                    // Flag continuation down = breakdown
+  relative_strength_long: 'pullback'               // RS long uses pullback level calculation
 };

@@ -11,8 +11,9 @@
  */
 
 import kiteOrderService from '../kiteOrder.service.js';
+import { rateLimitedGet } from '../../utils/upstoxRateLimiter.js';
 import { round2 } from './dailyPicksHelpers.js';
-import { MIN_ORB_RR_BY_REGIME } from './dailyPicksConstants.js';
+import { MIN_ORB_RR_BY_REGIME, GAP_DIRECTION_THRESHOLD_PCT, GAP_FADE_MAX_PASS, GAP_SIZE_ADVERSE_MAX_PCT, GAP_SIZE_ALIGNED_MAX_PCT, MIN_ORB_VOLUME_RATIO, TRADING_CANDLES_PER_DAY } from './dailyPicksConstants.js';
 
 const LOG = '[ORB]';
 
@@ -20,6 +21,76 @@ const LOG = '[ORB]';
 const ORB_BUFFER_PCT = 0.001;       // 0.1% above ORB high (longs) / below ORB low (shorts)
 const NIFTY_THRESHOLD_PCT = 0.3;    // >0.3% opposing NIFTY move blocks trade
 const MAX_ORB_RANGE_PCT = 3.0;      // ORB range > 3% of stock price = too volatile
+
+/**
+ * Compute volume ratio from actual volume, candle count, and 50-day average.
+ * Shared by fetchOrbVolume() and simulation scripts.
+ *
+ * @param {number} actualVol — Total volume across candles
+ * @param {number} candleCount — Number of 15-min candles
+ * @param {number} avgVol50d — 50-day average daily volume
+ * @returns {{ ratio: number, actual: number, expected: number, candle_count: number }}
+ */
+function computeVolumeRatio(actualVol, candleCount, avgVol50d) {
+  const expectedVolPerCandle = Math.round(avgVol50d / TRADING_CANDLES_PER_DAY);
+  const expectedVol = expectedVolPerCandle * candleCount;
+  const ratio = expectedVol > 0 ? round2(actualVol / expectedVol) : 0;
+  return { ratio, actual: actualVol, expected: expectedVol, candle_count: candleCount };
+}
+
+/**
+ * Fetch intraday volume from Upstox 15-minute candles.
+ * Sums actual volume across ALL available candles (cumulative) and compares
+ * against expected volume scaled by the same candle count.
+ *
+ * Pass 1 (9:30): 1 candle  → actual_1 / expected_1
+ * Pass 2 (9:46): 2 candles → (actual_1 + actual_2) / (expected_1 * 2)
+ * Pass 3 (10:01): 3 candles → (actual_1 + actual_2 + actual_3) / (expected_1 * 3)
+ *
+ * This avoids penalizing stocks with thin opening volume that pick up afterwards.
+ *
+ * @param {Array} picks — Pick objects with instrument_key and _ohlcv.avg_volume_50d
+ * @returns {Object} — Map { symbol: { ratio, actual, expected, candle_count } } or null
+ */
+async function fetchOrbVolume(picks) {
+  const volumeMap = {};
+
+  for (const pick of picks) {
+    const instrumentKey = pick.instrument_key;
+    const avgVol50d = pick._ohlcv?.avg_volume_50d || 0;
+
+    if (!instrumentKey || !avgVol50d) {
+      console.log(`${LOG} [VOL] ${pick.symbol}: skipping volume fetch — no instrument_key or avg_volume`);
+      continue;
+    }
+
+    try {
+      const url = `https://api.upstox.com/v3/historical-candle/intraday/${instrumentKey}/minutes/15`;
+      const response = await rateLimitedGet(url, {
+        headers: { 'Accept': 'application/json' },
+        timeout: 5000,
+      }, { caller: 'orbValidation.fetchOrbVolume' });
+
+      const candles = response?.data?.data?.candles;
+      if (!candles || candles.length === 0) {
+        console.log(`${LOG} [VOL] ${pick.symbol}: no intraday candles returned — auto-pass`);
+        continue;
+      }
+
+      // Sum volume across all available candles (Upstox returns newest first, index 5 = volume)
+      const candleCount = candles.length;
+      const actualVol = candles.reduce((sum, c) => sum + (c[5] || 0), 0);
+
+      const volResult = computeVolumeRatio(actualVol, candleCount, avgVol50d);
+      volumeMap[pick.symbol] = volResult;
+      console.log(`${LOG} [VOL] ${pick.symbol}: ${candleCount} candles, actualVol=${actualVol} expectedVol=${volResult.expected} ratio=${volResult.ratio}x (avgVol50d=${avgVol50d})`);
+    } catch (err) {
+      console.warn(`${LOG} [VOL] ${pick.symbol}: fetch failed (${err.message}) — auto-pass`);
+    }
+  }
+
+  return Object.keys(volumeMap).length > 0 ? volumeMap : null;
+}
 
 /**
  * Collect Opening Range data by fetching OHLC at 9:30 AM.
@@ -41,7 +112,13 @@ async function collectOpeningRange(symbols, picks) {
   console.log(`${LOG} Instruments: ${instruments.join(', ')}`);
 
   // Single OHLC call — at 9:30 AM, day OHLC = 15-min opening range
+  console.log(`${LOG} [DEBUG] Calling kiteOrderService.getOHLC() with ${instruments.length} instruments...`);
   const ohlcData = await kiteOrderService.getOHLC(instruments);
+  const ohlcKeys = Object.keys(ohlcData || {});
+  console.log(`${LOG} [DEBUG] getOHLC() returned ${ohlcKeys.length} keys: ${ohlcKeys.join(', ') || 'EMPTY'}`);
+  if (ohlcKeys.length === 0) {
+    console.error(`${LOG} [ERROR] getOHLC() returned empty data — no OHLC for any instrument`);
+  }
 
   // Prev close map for gap calculation
   const prevCloseMap = {};
@@ -67,32 +144,34 @@ async function collectOpeningRange(symbols, picks) {
     const prevClose = prevCloseMap[sym];
     const gapPct = prevClose ? round2(((open - prevClose) / prevClose) * 100) : 0;
 
-    // ORB direction: close of 15-min candle vs open (kept for audit/logging)
+    // ORB direction: LTP vs open (Kite's `close` = prev day close, not candle close)
     let orbDirection = 'NEUTRAL';
-    if (close > open * 1.001) orbDirection = 'UP';
-    else if (close < open * 0.999) orbDirection = 'DOWN';
+    if (ltp > open * 1.001) orbDirection = 'UP';
+    else if (ltp < open * 0.999) orbDirection = 'DOWN';
 
     resultMap[sym] = {
       high: round2(high),
       low: round2(low),
       opening_price: round2(open),
+      ltp: round2(ltp),
       gap_percent: gapPct,
       orb_direction: orbDirection
     };
 
-    console.log(`${LOG} ${sym}: O=${open} H=${high} L=${low} C=${close} LTP=${ltp} gap=${gapPct}% dir=${orbDirection}`);
+    console.log(`${LOG} ${sym}: O=${open} H=${high} L=${low} LTP=${ltp} prevClose=${close} gap=${gapPct}% dir=${orbDirection}`);
   }
 
   // NIFTY ORB
   const niftyData = ohlcData['NSE:NIFTY 50'];
   if (niftyData?.ohlc) {
-    const { open, high, low, close } = niftyData.ohlc;
+    const { open, high, low } = niftyData.ohlc;
+    const niftyLtp = niftyData.last_price;
 
     let niftyDir = 'NEUTRAL';
-    if (close > open * 1.001) niftyDir = 'UP';
-    else if (close < open * 0.999) niftyDir = 'DOWN';
+    if (niftyLtp > open * 1.001) niftyDir = 'UP';
+    else if (niftyLtp < open * 0.999) niftyDir = 'DOWN';
 
-    const niftyChangePct = open > 0 ? round2(((close - open) / open) * 100) : 0;
+    const niftyChangePct = open > 0 ? round2(((niftyLtp - open) / open) * 100) : 0;
 
     resultMap['_NIFTY'] = {
       high: round2(high),
@@ -102,10 +181,16 @@ async function collectOpeningRange(symbols, picks) {
       nifty_change_pct: niftyChangePct
     };
 
-    console.log(`${LOG} NIFTY: O=${open} H=${high} L=${low} C=${close} dir=${niftyDir} change=${niftyChangePct}%`);
+    console.log(`${LOG} NIFTY: O=${open} H=${high} L=${low} LTP=${niftyLtp} dir=${niftyDir} change=${niftyChangePct}%`);
   }
 
-  console.log(`${LOG} ORB data collected for ${Object.keys(resultMap).filter(k => k !== '_NIFTY').length} symbols`);
+  const collectedSymbols = Object.keys(resultMap).filter(k => k !== '_NIFTY');
+  const skippedSymbols = symbols.filter(s => !resultMap[s]);
+  console.log(`${LOG} ORB data collected for ${collectedSymbols.length}/${symbols.length} symbols: ${collectedSymbols.join(', ') || 'NONE'}`);
+  if (skippedSymbols.length > 0) {
+    console.warn(`${LOG} [WARN] No OHLC data for ${skippedSymbols.length} symbols: ${skippedSymbols.join(', ')}`);
+  }
+  console.log(`${LOG} [DEBUG] NIFTY data: ${resultMap['_NIFTY'] ? 'present' : 'MISSING'}`);
   return resultMap;
 }
 
@@ -113,18 +198,20 @@ async function collectOpeningRange(symbols, picks) {
  * Validate picks against ORB data. Called at 9:30 AM after OHLC fetch.
  *
  * Crabel-style: 5 checks per pick, then SL-M orders at ORB breakout levels.
- * 1. Gap size        — abs(gap_percent) < 1.5%
+ * 1. Gap size        — asymmetric: aligned < 3%, adverse < 1.5%
  * 2. Gap direction   — gap must not oppose scan bias (LONG + gap < -1% = fail)
  * 3. ORB R:R check   — R:R >= 1.5 with ORB breakout entry vs original stop/target
  * 4. Nifty alignment — NIFTY opposing move > 0.3% blocks trade
  * 5. ORB range width — ORB range < 3% of stock price (too volatile = fail)
- * 6. Volume check    — Auto-pass (OHLC doesn't provide volume)
+ * 6. Volume check    — 15m vol vs avg_50d/25 ratio >= 0.8 (Upstox intraday)
  *
  * @param {Array} picks — Array of pick sub-documents from DailyPick
  * @param {Object} orbData — Output from collectOpeningRange()
+ * @param {string} regime — Market regime (STRONG_BULL, WEAK_BEAR, etc.)
+ * @param {number} orbPass — Current ORB pass number (1, 2, or 3)
  * @returns {Array} — Same picks array with orb + validation fields populated
  */
-function validatePicks(picks, orbData, regime) {
+function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null) {
   if (!MIN_ORB_RR_BY_REGIME[regime]) {
     throw new Error(`[ORB] validatePicks called with unknown regime "${regime}" — must be one of: ${Object.keys(MIN_ORB_RR_BY_REGIME).join(', ')}`);
   }
@@ -207,22 +294,51 @@ function validatePicks(picks, orbData, regime) {
     const isBullish = pick.direction === 'LONG';
     const checks = {};
 
-    // Check 1: Gap size < 1.5%
+    // Check 1: Gap size — direction-aware threshold (P3 asymmetric)
+    // Aligned gaps (LONG + gap up, SHORT + gap down) get wider door per Crabel continuation
+    // Adverse gaps (LONG + gap down, SHORT + gap up) use tighter threshold
+    const gapAligned = (isBullish && orb.gap_percent > 0) || (!isBullish && orb.gap_percent < 0);
+    const gapThreshold = gapAligned ? GAP_SIZE_ALIGNED_MAX_PCT : GAP_SIZE_ADVERSE_MAX_PCT;
     checks.gap_check = {
-      passed: Math.abs(orb.gap_percent) < 1.5,
-      value: orb.gap_percent
+      passed: Math.abs(orb.gap_percent) < gapThreshold,
+      value: orb.gap_percent,
+      threshold: gapThreshold,
+      gap_aligned: gapAligned
     };
-    console.log(`${LOG} │ Check 1 GAP SIZE: |${orb.gap_percent}%| < 1.5% → ${checks.gap_check.passed ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`${LOG} │ Check 1 GAP SIZE: |${orb.gap_percent}%| < ${gapThreshold}% (${gapAligned ? 'aligned' : 'adverse'}) → ${checks.gap_check.passed ? '✅ PASS' : '❌ FAIL'}`);
     console.log(`${LOG} │   gap = (open(${orb.opening_price}) - entry(${pick.levels.entry})) / entry × 100`);
 
     // Check 2: Gap direction must not oppose scan bias
-    const gapOpposesDirection = (isBullish && orb.gap_percent < -1.0) || (!isBullish && orb.gap_percent > 1.0);
+    const gapOpposesDirection = (isBullish && orb.gap_percent < -GAP_DIRECTION_THRESHOLD_PCT) || (!isBullish && orb.gap_percent > GAP_DIRECTION_THRESHOLD_PCT);
     checks.gap_direction = {
       passed: !gapOpposesDirection,
       value: orb.gap_percent,
       direction: isBullish ? 'LONG' : 'SHORT'
     };
-    console.log(`${LOG} │ Check 2 GAP DIR: ${isBullish ? 'LONG' : 'SHORT'} bias, gap=${orb.gap_percent}% → ${checks.gap_direction.passed ? '✅ PASS' : '❌ FAIL (gap opposes direction)'}`);
+    console.log(`${LOG} │ Check 2 GAP DIR: ${isBullish ? 'LONG' : 'SHORT'} bias, gap=${orb.gap_percent}% (threshold: ±${GAP_DIRECTION_THRESHOLD_PCT}%) → ${checks.gap_direction.passed ? '✅ PASS' : '❌ FAIL (gap opposes direction)'}`);
+
+    // Gap-fade override: on Pass 2+, if Check 2 failed but LTP has faded back
+    // through the original entry price, the gap has reversed and thesis is alive.
+    // Edge Case 1 gate: LTP < open alone isn't enough — require LTP past original entry.
+    let gapFadeTriggered = false;
+    if (!checks.gap_direction.passed && orbPass > 1 && orbPass <= GAP_FADE_MAX_PASS && orb.ltp) {
+      const originalEntry = pick.levels.entry;
+      const ltpPastEntry = (isBullish && orb.ltp > originalEntry) || (!isBullish && orb.ltp < originalEntry);
+
+      if (ltpPastEntry) {
+        checks.gap_direction.passed = true;
+        checks.gap_direction.gap_fade = true;
+        checks.gap_direction.ltp = orb.ltp;
+        checks.gap_direction.original_entry = originalEntry;
+        gapFadeTriggered = true;
+        console.log(`${LOG} │ Check 2 GAP-FADE OVERRIDE: LTP=${orb.ltp} has faded past entry=${originalEntry} → ✅ PASS (gap_fade)`);
+      } else {
+        checks.gap_direction.gap_fade = false;
+        checks.gap_direction.ltp = orb.ltp;
+        checks.gap_direction.original_entry = originalEntry;
+        console.log(`${LOG} │ Check 2 GAP-FADE: LTP=${orb.ltp} has NOT faded past entry=${originalEntry} — fade incomplete`);
+      }
+    }
 
     // Check 3: ORB breakout R:R check (Crabel-style SL-M entry)
     // Entry = ORB high + 0.1% buffer (LONG) or ORB low - 0.1% buffer (SHORT)
@@ -279,12 +395,21 @@ function validatePicks(picks, orbData, regime) {
     };
     console.log(`${LOG} │ Check 5 ORB RANGE: (H(${orb.high}) - L(${orb.low})) / L × 100 = ${orbRangePct}% (max: ${MAX_ORB_RANGE_PCT}%) → ${checks.entry_still_valid.passed ? '✅ PASS' : '❌ FAIL'}`);
 
-    // Check 6: Volume — auto-pass (OHLC doesn't provide volume data)
+    // Check 6: Volume gate — compare 15m opening volume to expected daily average
+    const volData = orbVolumeMap?.[pick.symbol];
     checks.volume_check = {
-      passed: true,
-      ratio: null
+      passed: !volData ? true : volData.ratio >= MIN_ORB_VOLUME_RATIO,
+      ratio: volData?.ratio || null,
+      actual: volData?.actual || null,
+      expected: volData?.expected || null,
+      candle_count: volData?.candle_count || null,
+      threshold: MIN_ORB_VOLUME_RATIO
     };
-    console.log(`${LOG} │ Check 6 VOLUME: auto-pass ✅`);
+    if (!volData) {
+      console.log(`${LOG} │ Check 6 VOLUME: auto-pass (no data) ✅`);
+    } else {
+      console.log(`${LOG} │ Check 6 VOLUME: ${volData.candle_count} candles, vol=${volData.actual} vs expected=${volData.expected} (ratio=${volData.ratio}x, min=${MIN_ORB_VOLUME_RATIO}) → ${checks.volume_check.passed ? '✅ PASS' : '❌ FAIL (thin volume)'}`);
+    }
 
     // Determine overall pass/fail
     const allPassed = Object.values(checks).every(c => c.passed);
@@ -300,13 +425,13 @@ function validatePicks(picks, orbData, regime) {
     };
 
     console.log(`${LOG} │ ═══════════════════════════════════`);
-    console.log(`${LOG} │ RESULT: ${allPassed ? '✅ PASSED' : '❌ FAILED'}${skipReason ? ` (failed: ${skipReason})` : ''}`);
+    console.log(`${LOG} │ RESULT: ${allPassed ? '✅ PASSED' : '❌ FAILED'}${gapFadeTriggered ? ' (via gap-fade)' : ''}${skipReason ? ` (failed: ${skipReason})` : ''}`);
     console.log(`${LOG} └────────────────────────────────────`);
   }
 
   return picks;
 }
 
-export { collectOpeningRange, validatePicks };
+export { collectOpeningRange, validatePicks, fetchOrbVolume, computeVolumeRatio };
 
-export default { collectOpeningRange, validatePicks };
+export default { collectOpeningRange, validatePicks, fetchOrbVolume, computeVolumeRatio };

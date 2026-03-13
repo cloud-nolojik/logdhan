@@ -26,7 +26,7 @@ import priceCacheService from '../priceCache.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import kiteConfig from '../../config/kite.config.js';
 import { getISTMidnight, calculatePnl, updateDailyResults, round2, roundToTick, getNseTickSize, delay } from './dailyPicksHelpers.js';
-import { collectOpeningRange, validatePicks } from './orbValidationService.js';
+import { collectOpeningRange, validatePicks, fetchOrbVolume } from './orbValidationService.js';
 import { checkCircuitBreaker, resetCircuitBreaker, reconcilePositionsOnStartup } from './dailyPicksRiskService.js';
 import { filterEarningsStocks } from './earningsFilter.js';
 // newsSentimentFilter.js is DEPRECATED — scoring now done inline at Step 5.5 using constants below
@@ -53,6 +53,13 @@ import {
   INTEL_STOCK_NEWS_OPPOSING_HIGH,
   INTEL_SECTOR_ALIGNED,
   INTEL_SECTOR_OPPOSING,
+  EXHAUSTION_PENALTY,
+  EXHAUSTION_CONSECUTIVE_DAYS,
+  EXHAUSTION_EMA20_DIST_PCT,
+  NR7_BONUS,
+  NR7_NEUTRAL_BONUS,
+  MAX_COUNTER_REGIME_PICKS,
+  COUNTER_REGIME_MIN_SCORE,
 } from './dailyPicksConstants.js';
 import { computeDynamicTrail, checkPartialBooking, checkSidewaysExit } from './tradingDecisions.js';
 
@@ -99,7 +106,9 @@ const MAX_ORB_PASS = 3;
 const ORB_PASS_LABELS = { 1: '15-min (9:30)', 2: '30-min (9:46)', 3: '45-min (10:01)' };
 // nifty_alignment removed from permanent — Nifty direction changes throughout morning,
 // a 9:30 AM relief rally doesn't invalidate the thesis at 9:46 or 10:01
-const PERMANENT_FAIL_CHECKS = ['gap_check', 'gap_direction', 'no_orb_data'];
+// gap_direction removed from permanent — gap-fade path: if stock gaps against direction
+// but LTP fades back through original entry by Pass 2/3, the trade thesis is alive
+const PERMANENT_FAIL_CHECKS = ['gap_check', 'no_orb_data'];
 
 let anthropic = null;
 function getAnthropicClient() {
@@ -401,7 +410,7 @@ async function runDailyPicks(options = {}) {
     // Use combined regime's maxTrades if available, otherwise fall back to MAX_DAILY_PICKS
     const maxPicksToday = marketContext.max_trades != null ? Math.min(marketContext.max_trades, MAX_DAILY_PICKS) : MAX_DAILY_PICKS;
     console.log(`${LOG} [Step 6] Max picks today: ${maxPicksToday} (regime=${marketContext.regime}, cap=${MAX_DAILY_PICKS})`);
-    const picksWithLevels = selectDiversePicks(allViable, maxPicksToday);
+    const picksWithLevels = selectDiversePicks(allViable, maxPicksToday, marketContext.regime);
     console.log(`${LOG} Selected ${picksWithLevels.length} picks (diversity-weighted) from ${allViable.length} viable`);
 
     // Sync candidatesReview with intel-adjusted scores and mark selected picks
@@ -762,7 +771,10 @@ async function enrichCandidates(candidates, { allowOutdatedCandle = false } = {}
         // Multi-timeframe: weekly trend confirmation
         weekly_ema20: stock.weekly_ema20 || 0,
         weekly_close: stock.weekly_close || 0,
-        weekly_trend_bullish: stock.weekly_trend_bullish
+        weekly_trend_bullish: stock.weekly_trend_bullish,
+        // Exhaustion detection
+        consecutive_up_days: stock.consecutive_up_days || 0,
+        consecutive_down_days: stock.consecutive_down_days || 0
       }
     });
   }
@@ -990,9 +1002,33 @@ function scoreCandidates(enrichedCandidates, regime) {
       }
     }
 
-    if (score >= MIN_SCORE) {
+    // Exhaustion detection — triple-gate: consecutive days + EMA20 extension + extreme RSI
+    // Penalizes stocks that have run too far too fast (likely to reverse at open)
+    if (ema20 && ema20 > 0) {
+      const ema20Dist = Math.abs(((c._ohlcv.close - ema20) / ema20) * 100);
+      const consUp = c._ohlcv?.consecutive_up_days || 0;
+      const consDown = c._ohlcv?.consecutive_down_days || 0;
+      const rsi = s.rsi || 0;
+
+      const isExhaustedLong = c.direction === 'LONG' && consUp >= EXHAUSTION_CONSECUTIVE_DAYS && ema20Dist > EXHAUSTION_EMA20_DIST_PCT && rsi > 70;
+      const isExhaustedShort = c.direction === 'SHORT' && consDown >= EXHAUSTION_CONSECUTIVE_DAYS && ema20Dist > EXHAUSTION_EMA20_DIST_PCT && rsi < 30;
+
+      if (isExhaustedLong || isExhaustedShort) {
+        score -= EXHAUSTION_PENALTY;
+        console.log(`${LOG} ⚠️ ${c.symbol}: -${EXHAUSTION_PENALTY} pts EXHAUSTION (${isExhaustedLong ? `${consUp} up days` : `${consDown} down days`}, ${round2(ema20Dist)}% from EMA20, RSI=${rsi})`);
+      }
+    }
+
+    // Counter-regime gate: RS LONGs in STRONG_BEAR need higher score to qualify
+    const isCounterRegime = c.scan_type === 'relative_strength_long' && regime === 'STRONG_BEAR';
+    const effectiveMinScore = isCounterRegime ? COUNTER_REGIME_MIN_SCORE : MIN_SCORE;
+
+    if (score >= effectiveMinScore) {
       passedCount++;
-      const pick = { ...c, rank_score: score };
+      const pick = { ...c, rank_score: score, counter_regime: isCounterRegime || undefined };
+      if (isCounterRegime) {
+        console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [COUNTER-REGIME: min=${COUNTER_REGIME_MIN_SCORE}]`);
+      }
       console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [CIR:${cirPts}/25(${round2(cir)}%) VOL:${volPts}/25(${s.volume_ratio}x) RSI:${rsiPts}/20(${s.rsi}) ATR:${atrPts}/15(${s.atr_pct}%) CANDLE:${candlePts}/15(${s.candle_pattern})]`);
 
       // Confluence bonus: cluster detection across Daily / 1H / 4H pivots
@@ -1057,6 +1093,17 @@ function scoreCandidates(enrichedCandidates, regime) {
           weeklyContraCount++;
           console.log(`${LOG}   ↳ Weekly trend: -10 pts (${c.direction} CONTRA weekly ${weeklyTrend ? 'bullish' : 'bearish'}, close=₹${c._ohlcv.weekly_close} vs EMA20=₹${c._ohlcv.weekly_ema20})`);
         }
+      }
+
+      // NR7 / Inside Day scoring bonus — these compression setups deserve a boost,
+      // especially in NEUTRAL where they're the highest-quality setups available
+      const isNR7OrInside = ['nr7_bullish', 'nr7_bearish', 'inside_day_bullish', 'inside_day_bearish']
+        .includes(c.scan_type);
+      if (isNR7OrInside) {
+        const nr7Bonus = regime === 'NEUTRAL' ? NR7_NEUTRAL_BONUS : NR7_BONUS;
+        pick.rank_score += nr7Bonus;
+        pick.nr7_bonus = nr7Bonus;
+        console.log(`${LOG}   ↳ NR7/Inside: +${nr7Bonus} pts (${c.scan_type} in ${regime})`);
       }
 
       // NOTE: News + sector sentiment adjustments are now applied at Step 5.5 (after intel fetch),
@@ -1871,9 +1918,9 @@ async function startOrbCollection(options = {}) {
     return { success: true, message: 'No picks today' };
   }
 
-  // Only fetch for picks still PENDING or COLLECTING_ORB
+  // Only fetch for picks still PENDING, COLLECTING_ORB, or GAP_FADE_WATCH
   const pendingPicks = doc.picks.filter(p =>
-    p.trade.status === 'PENDING' || p.trade.status === 'COLLECTING_ORB'
+    p.trade.status === 'PENDING' || p.trade.status === 'COLLECTING_ORB' || p.trade.status === 'GAP_FADE_WATCH'
   );
 
   if (pendingPicks.length === 0) {
@@ -1895,8 +1942,14 @@ async function startOrbCollection(options = {}) {
   }
 
   // Store ORB data on each pick — only update PENDING picks
+  let storedCount = 0;
+  let skippedCount = 0;
   for (const pick of pendingPicks) {
-    if (pick.trade.status !== 'PENDING' && pick.trade.status !== 'COLLECTING_ORB') continue;
+    if (pick.trade.status !== 'PENDING' && pick.trade.status !== 'COLLECTING_ORB') {
+      console.log(`${LOG} [DEBUG] ${pick.symbol}: skipping ORB store — status=${pick.trade.status} (not PENDING/COLLECTING_ORB)`);
+      skippedCount++;
+      continue;
+    }
 
     const orb = orbData[pick.symbol];
     if (orb) {
@@ -1912,13 +1965,26 @@ async function startOrbCollection(options = {}) {
         orb_pass: orbPass,
         orb_passes: existingPasses
       };
+      storedCount++;
+      console.log(`${LOG} [DEBUG] ${pick.symbol}: ORB stored — H=${orb.high} L=${orb.low} O=${orb.opening_price} gap=${orb.gap_percent}% dir=${orb.orb_direction}`);
+    } else {
+      console.warn(`${LOG} [WARN] ${pick.symbol}: NO ORB data in response — symbol missing from OHLC result`);
     }
   }
-  doc.markModified('picks');
-  await doc.save();
 
-  console.log(`${LOG} ORB pass ${orbPass} complete — data stored for ${Object.keys(orbData).filter(k => k !== '_NIFTY').length} symbols`);
-  return { success: true, symbolsCollected: Object.keys(orbData).length, orbPass };
+  console.log(`${LOG} [DEBUG] Saving doc — ${storedCount} picks with ORB data, ${skippedCount} skipped (wrong status)`);
+  doc.markModified('picks');
+  try {
+    await doc.save();
+    console.log(`${LOG} [DEBUG] doc.save() SUCCESS — updatedAt=${doc.updatedAt}`);
+  } catch (saveErr) {
+    console.error(`${LOG} [ERROR] doc.save() FAILED in startOrbCollection: ${saveErr.message}`);
+    console.error(`${LOG} [ERROR] Mongoose validation errors:`, saveErr.errors ? JSON.stringify(Object.keys(saveErr.errors)) : 'none');
+    return { success: false, error: `doc.save() failed: ${saveErr.message}` };
+  }
+
+  console.log(`${LOG} ORB pass ${orbPass} complete — data stored for ${storedCount} symbols`);
+  return { success: true, symbolsCollected: Object.keys(orbData).length, storedCount, orbPass };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1944,16 +2010,20 @@ async function validateAndPlaceEntries(options = {}) {
     return { success: true, message: 'Kite not enabled', orders: 0, validated: 0, skipped: 0 };
   }
 
+  console.log(`${LOG} [DEBUG] Loading today's DailyPick doc...`);
   const doc = await DailyPick.findToday();
   if (!doc) {
     console.log(`${LOG} No DailyPick doc for today — nothing to place`);
     return { success: true, message: 'No picks today', orders: 0, validated: 0, skipped: 0 };
   }
+  console.log(`${LOG} [DEBUG] Doc loaded — ${doc.picks.length} total picks, updatedAt=${doc.updatedAt}`);
 
-  // Accept both COLLECTING_ORB (normal flow) and PENDING (if ORB collection was skipped/manual)
+  // Accept COLLECTING_ORB (normal flow), PENDING (if ORB collection was skipped/manual),
+  // and GAP_FADE_WATCH (gap-direction failures monitoring for fade-through-entry)
   const eligiblePicks = doc.picks.filter(p =>
-    p.trade.status === 'COLLECTING_ORB' || p.trade.status === 'PENDING'
+    p.trade.status === 'COLLECTING_ORB' || p.trade.status === 'PENDING' || p.trade.status === 'GAP_FADE_WATCH'
   );
+  console.log(`${LOG} [DEBUG] Pick statuses: ${doc.picks.map(p => `${p.symbol}=${p.trade.status}`).join(', ')}`);
   if (eligiblePicks.length === 0) {
     console.log(`${LOG} No eligible picks for validation — skipping`);
     return { success: true, message: 'No eligible picks', orders: 0, validated: 0, skipped: 0 };
@@ -2007,6 +2077,7 @@ async function validateAndPlaceEntries(options = {}) {
     }
   } else {
     // Pass 1: use stored ORB data from startOrbCollection
+    console.log(`${LOG} [DEBUG] Pass 1: Loading stored ORB data from DB...`);
     for (const pick of eligiblePicks) {
       if (pick.orb?.high) {
         orbData[pick.symbol] = {
@@ -2015,12 +2086,17 @@ async function validateAndPlaceEntries(options = {}) {
           gap_percent: pick.orb.gap_percent,
           orb_direction: pick.orb.orb_direction
         };
+        console.log(`${LOG} [DEBUG] ${pick.symbol}: stored ORB found — H=${pick.orb.high} L=${pick.orb.low} dir=${pick.orb.orb_direction}`);
+      } else {
+        console.warn(`${LOG} [WARN] ${pick.symbol}: NO stored ORB data (orb.high is ${pick.orb?.high}) — startOrbCollection may have failed to save`);
       }
     }
     const firstWithNifty = eligiblePicks.find(p => p.orb?.nifty_orb_direction);
     if (firstWithNifty) {
       orbData['_NIFTY'] = { orb_direction: firstWithNifty.orb.nifty_orb_direction, nifty_change_pct: firstWithNifty.orb.nifty_change_pct ?? 0 };
     }
+    const orbDataKeys = Object.keys(orbData);
+    console.log(`${LOG} [DEBUG] orbData has ${orbDataKeys.length} keys: ${orbDataKeys.join(', ') || 'EMPTY — all validation will return no_orb_data'}`);
   }
 
   // Pass regime alignment info so nifty_alignment can use wider threshold for regime-aligned trades
@@ -2029,7 +2105,19 @@ async function validateAndPlaceEntries(options = {}) {
     pick.regime_aligned = isRegimeAligned(pick.direction, regime);
   }
 
-  validatePicks(eligiblePicks, orbData, regime);
+  // Fetch 15m volume from Upstox for Check 6 volume gate (auto-pass on failure)
+  let orbVolumeMap = null;
+  try {
+    console.log(`${LOG} [DEBUG] Fetching Upstox volume for ${eligiblePicks.length} picks...`);
+    orbVolumeMap = await fetchOrbVolume(eligiblePicks);
+    console.log(`${LOG} [DEBUG] fetchOrbVolume result: ${orbVolumeMap ? Object.keys(orbVolumeMap).join(', ') : 'null (all auto-pass)'}`);
+  } catch (volErr) {
+    console.warn(`${LOG} [WARN] fetchOrbVolume failed: ${volErr.message} — Check 6 will auto-pass`);
+  }
+
+  console.log(`${LOG} [DEBUG] Calling validatePicks() — regime=${regime}, orbPass=${orbPass}`);
+  validatePicks(eligiblePicks, orbData, regime, orbPass, orbVolumeMap);
+  console.log(`${LOG} [DEBUG] validatePicks() complete — results: ${eligiblePicks.map(p => `${p.symbol}=${p.validation?.passed ? 'PASS' : 'FAIL(' + (p.validation?.skip_reason || '?') + ')'}`).join(', ')}`);
 
   // Record pass history on each pick for analytics
   for (const pick of eligiblePicks) {
@@ -2074,24 +2162,45 @@ async function validateAndPlaceEntries(options = {}) {
   for (const pick of skippedPicks) {
     const failedChecks = pick.validation?.skip_reason || '';
     const isPermanentFail = failedChecks && failedChecks.split(', ').every(c => PERMANENT_FAIL_CHECKS.includes(c));
+    const isGapDirectionFail = failedChecks.split(', ').includes('gap_direction');
 
     if (isFinalPass || isPermanentFail) {
-      pick.trade.status = 'SKIPPED';
-      pick.trade.exit_reason = `validation_failed_pass_${orbPass}: ${failedChecks}`;
-      pick.kite.kite_status = 'skipped';
-      const reason = isPermanentFail ? 'permanent' : 'final pass';
-      console.log(`${LOG} ${pick.symbol}: SKIPPED (${reason}, pass ${orbPass}) — ${failedChecks}`);
+      // Gap-fade picks that never faded get a distinct terminal status
+      if (isGapDirectionFail && !isPermanentFail) {
+        pick.trade.status = 'GAP_FADE_EXPIRED';
+        pick.trade.exit_reason = `gap_fade_expired_pass_${orbPass}: LTP never faded through entry`;
+        pick.kite.kite_status = 'skipped';
+        console.log(`${LOG} ${pick.symbol}: GAP_FADE_EXPIRED (pass ${orbPass}) — gap never faded through entry=${pick.levels.entry}`);
+      } else {
+        pick.trade.status = 'SKIPPED';
+        pick.trade.exit_reason = `validation_failed_pass_${orbPass}: ${failedChecks}`;
+        pick.kite.kite_status = 'skipped';
+        const reason = isPermanentFail ? 'permanent' : 'final pass';
+        console.log(`${LOG} ${pick.symbol}: SKIPPED (${reason}, pass ${orbPass}) — ${failedChecks}`);
+      }
     } else {
-      // Retryable failure — keep PENDING for next pass
-      pick.trade.status = 'PENDING';
-      console.log(`${LOG} ${pick.symbol}: FAILED pass ${orbPass} (retryable: ${failedChecks}) — will retry at pass ${orbPass + 1} (${ORB_PASS_LABELS[orbPass + 1]})`);
+      // Retryable failure — track gap-fade watches distinctly
+      if (isGapDirectionFail) {
+        pick.trade.status = 'GAP_FADE_WATCH';
+        console.log(`${LOG} ${pick.symbol}: GAP_FADE_WATCH (pass ${orbPass}, gap=${pick.orb?.gap_percent}%) — monitoring for fade through entry=${pick.levels.entry} at pass ${orbPass + 1} (${ORB_PASS_LABELS[orbPass + 1]})`);
+      } else {
+        pick.trade.status = 'PENDING';
+        console.log(`${LOG} ${pick.symbol}: FAILED pass ${orbPass} (retryable: ${failedChecks}) — will retry at pass ${orbPass + 1} (${ORB_PASS_LABELS[orbPass + 1]})`);
+      }
     }
   }
 
   const retryingPicks = skippedPicks.filter(p => p.trade.status === 'PENDING');
   if (validatedPicks.length === 0) {
     console.log(`${LOG} All picks failed validation on pass ${orbPass} — ${retryingPicks.length} retrying, ${skippedPicks.length - retryingPicks.length} permanently skipped`);
-    await doc.save();
+    console.log(`${LOG} [DEBUG] Saving failed validation results — statuses: ${eligiblePicks.map(p => `${p.symbol}=${p.trade.status}`).join(', ')}`);
+    try {
+      await doc.save();
+      console.log(`${LOG} [DEBUG] doc.save() SUCCESS (all failed) — updatedAt=${doc.updatedAt}`);
+    } catch (saveErr) {
+      console.error(`${LOG} [ERROR] doc.save() FAILED after validation: ${saveErr.message}`);
+      console.error(`${LOG} [ERROR] Mongoose errors:`, saveErr.errors ? JSON.stringify(Object.keys(saveErr.errors)) : 'none');
+    }
     return { success: true, message: `All picks failed pass ${orbPass}`, orders: 0, validated: 0, skipped: skippedPicks.length - retryingPicks.length, retrying: retryingPicks.length, orbPass };
   }
 
@@ -2110,7 +2219,12 @@ async function validateAndPlaceEntries(options = {}) {
       pick.trade.exit_reason = `circuit_breaker: ${cbCheck.reason}`;
       pick.kite.kite_status = 'skipped';
     }
-    await doc.save();
+    try {
+      await doc.save();
+      console.log(`${LOG} [DEBUG] doc.save() SUCCESS (circuit breaker) — updatedAt=${doc.updatedAt}`);
+    } catch (saveErr) {
+      console.error(`${LOG} [ERROR] doc.save() FAILED (circuit breaker): ${saveErr.message}`);
+    }
     return { success: true, message: `Circuit breaker: ${cbCheck.reason}`, orders: 0, validated: validatedPicks.length, skipped: skippedPicks.length };
   }
 
@@ -2223,7 +2337,14 @@ async function validateAndPlaceEntries(options = {}) {
     }
   }
 
-  await doc.save();
+  console.log(`${LOG} [DEBUG] Saving after order placement — statuses: ${eligiblePicks.map(p => `${p.symbol}=${p.trade.status}`).join(', ')}`);
+  try {
+    await doc.save();
+    console.log(`${LOG} [DEBUG] doc.save() SUCCESS (after orders) — updatedAt=${doc.updatedAt}`);
+  } catch (saveErr) {
+    console.error(`${LOG} [ERROR] doc.save() FAILED after order placement: ${saveErr.message}`);
+    console.error(`${LOG} [ERROR] Mongoose errors:`, saveErr.errors ? JSON.stringify(Object.keys(saveErr.errors)) : 'none');
+  }
   console.log(`${LOG} Pass ${orbPass} result: ${validatedPicks.length} validated, ${skippedPicks.length - retryingPicks.length} skipped, ${retryingPicks.length} retrying, ${ordersPlaced} orders placed`);
 
   return { success: true, validated: validatedPicks.length, skipped: skippedPicks.length - retryingPicks.length, retrying: retryingPicks.length, orders: ordersPlaced, orbPass };
@@ -3188,8 +3309,8 @@ function getStockSector(symbol) {
 // mapSectorToIntelKey imported from ../../utils/sectorMapping.js — single source of truth
 
 
-function selectDiversePicks(viable, maxPicks) {
-  console.log(`${LOG} [Diversity] Selecting ${maxPicks} from ${viable.length} viable candidates`);
+function selectDiversePicks(viable, maxPicks, regime = 'UNKNOWN') {
+  console.log(`${LOG} [Diversity] Selecting ${maxPicks} from ${viable.length} viable candidates (regime=${regime})`);
 
   // ── STEP 1: Sector cap on the full pool FIRST ──
   // Keep only the highest-scored stock per sector. This pre-cleans the pool
@@ -3235,6 +3356,10 @@ function selectDiversePicks(viable, maxPicks) {
 
   const selected = [];
   const usedSymbols = new Set();
+  let counterRegimeCount = 0;
+
+  // Counter-regime check: enforce MAX_COUNTER_REGIME_PICKS cap
+  const isCounterRegimePick = (pick) => pick.counter_regime === true;
 
   // Sort scan type groups by their best candidate's score
   const typesByBest = Object.entries(byType)
@@ -3248,9 +3373,14 @@ function selectDiversePicks(viable, maxPicks) {
     }
     const best = picks.find(p => !usedSymbols.has(p.symbol));
     if (best) {
+      if (isCounterRegimePick(best) && counterRegimeCount >= MAX_COUNTER_REGIME_PICKS) {
+        console.log(`${LOG} [Diversity] Round 1: SKIPPED ${best.symbol} — counter-regime cap (${counterRegimeCount}/${MAX_COUNTER_REGIME_PICKS})`);
+        continue;
+      }
       selected.push(best);
       usedSymbols.add(best.symbol);
-      console.log(`${LOG} [Diversity] Round 1: picked ${best.symbol} from ${typeName} (score=${best.rank_score}, slot ${selected.length}/${maxPicks})`);
+      if (isCounterRegimePick(best)) counterRegimeCount++;
+      console.log(`${LOG} [Diversity] Round 1: picked ${best.symbol} from ${typeName} (score=${best.rank_score}, slot ${selected.length}/${maxPicks}${isCounterRegimePick(best) ? ' COUNTER-REGIME' : ''})`);
     }
   }
 
@@ -3260,9 +3390,14 @@ function selectDiversePicks(viable, maxPicks) {
     console.log(`${LOG} [Diversity] Round 2 — filling ${maxPicks - selected.length} remaining slots from ${remaining.length} candidates by score`);
     for (const pick of remaining) {
       if (selected.length >= maxPicks) break;
+      if (isCounterRegimePick(pick) && counterRegimeCount >= MAX_COUNTER_REGIME_PICKS) {
+        console.log(`${LOG} [Diversity] Round 2: SKIPPED ${pick.symbol} — counter-regime cap (${counterRegimeCount}/${MAX_COUNTER_REGIME_PICKS})`);
+        continue;
+      }
       selected.push(pick);
       usedSymbols.add(pick.symbol);
-      console.log(`${LOG} [Diversity] Round 2: picked ${pick.symbol} (${pick.scan_type}, score=${pick.rank_score}, slot ${selected.length}/${maxPicks})`);
+      if (isCounterRegimePick(pick)) counterRegimeCount++;
+      console.log(`${LOG} [Diversity] Round 2: picked ${pick.symbol} (${pick.scan_type}, score=${pick.rank_score}, slot ${selected.length}/${maxPicks}${isCounterRegimePick(pick) ? ' COUNTER-REGIME' : ''})`);
     }
   }
 

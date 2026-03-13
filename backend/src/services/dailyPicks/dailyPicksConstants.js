@@ -36,6 +36,14 @@ export const MIN_ORB_RR_BY_REGIME = {
 export const MAX_ORB_RANGE_PCT = 3.0;
 /** >0.3% opposing NIFTY move blocks trade */
 export const NIFTY_THRESHOLD_PCT = 0.3;
+/** Gap direction threshold — gap opposing scan bias beyond this % fails Check 2 */
+export const GAP_DIRECTION_THRESHOLD_PCT = 2.0;
+/** Maximum pass number at which gap-fade entries can trigger */
+export const GAP_FADE_MAX_PASS = 3;
+/** Check 1: Max gap size for ADVERSE gaps (gap opposes trade direction) */
+export const GAP_SIZE_ADVERSE_MAX_PCT = 1.5;
+/** Check 1: Max gap size for ALIGNED gaps (gap supports trade direction — Crabel continuation) */
+export const GAP_SIZE_ALIGNED_MAX_PCT = 3.0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SLIPPAGE
@@ -145,3 +153,45 @@ export const INTEL_STOCK_NEWS_OPPOSING_LOW = -6;
 export const INTEL_SECTOR_ALIGNED = 5;
 /** Sector sentiment opposing pick direction penalty */
 export const INTEL_SECTOR_OPPOSING = -5;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXHAUSTION DETECTION — Triple-gate: all 3 conditions required to penalize
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Score penalty for exhaustion candidates (25 pts — usually drops below MIN_SCORE) */
+export const EXHAUSTION_PENALTY = 25;
+/** Minimum consecutive same-direction days to trigger */
+export const EXHAUSTION_CONSECUTIVE_DAYS = 5;
+/** Minimum distance from EMA20 (%) to trigger */
+export const EXHAUSTION_EMA20_DIST_PCT = 8.0;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NR7 / INSIDE DAY SCORING BONUS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** NR7/Inside Day bonus in non-NEUTRAL regimes */
+export const NR7_BONUS = 8;
+/** NR7/Inside Day bonus in NEUTRAL regime (higher — they're the best setups) */
+export const NR7_NEUTRAL_BONUS = 12;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOLUME GATE (ORB Check 6) — Filters thin-volume news gaps
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COUNTER-REGIME TRADES — Guardrails for RS LONGs in STRONG_BEAR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Maximum counter-regime picks per day (e.g., LONGs in STRONG_BEAR) */
+export const MAX_COUNTER_REGIME_PICKS = 1;
+/** Higher MIN_SCORE for counter-regime trades (vs 60 normal) */
+export const COUNTER_REGIME_MIN_SCORE = 75;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOLUME GATE (ORB Check 6) — Filters thin-volume news gaps
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Minimum ratio of actual 15m volume vs expected (avg_vol_50d / candles_per_day) */
+export const MIN_ORB_VOLUME_RATIO = 0.8;
+/** Trading candles per day (6.25 hrs / 15 min = 25) */
+export const TRADING_CANDLES_PER_DAY = 25;

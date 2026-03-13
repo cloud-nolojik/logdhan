@@ -56,7 +56,7 @@ const backtestPickSchema = new mongoose.Schema({
   trade: {
     status: {
       type: String,
-      enum: ['PENDING', 'COLLECTING_ORB', 'VALIDATED', 'ORDER_PLACED', 'ENTERED', 'TARGET_HIT', 'STOPPED_OUT', 'TIME_EXIT', 'SKIPPED', 'FAILED', 'NO_FILL', 'NO_DATA'],
+      enum: ['PENDING', 'COLLECTING_ORB', 'GAP_FADE_WATCH', 'GAP_FADE_EXPIRED', 'VALIDATED', 'ORDER_PLACED', 'ENTERED', 'TARGET_HIT', 'STOPPED_OUT', 'TIME_EXIT', 'SKIPPED', 'FAILED', 'NO_FILL', 'NO_DATA'],
       default: 'PENDING'
     },
     entry_price: Number,

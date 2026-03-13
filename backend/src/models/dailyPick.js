@@ -54,7 +54,7 @@ const pickSchema = new mongoose.Schema({
   trade: {
     status: {
       type: String,
-      enum: ['PENDING', 'COLLECTING_ORB', 'VALIDATED', 'ORDER_PLACED', 'ENTERED', 'TARGET_HIT', 'STOPPED_OUT', 'TIME_EXIT', 'SKIPPED', 'FAILED'],
+      enum: ['PENDING', 'COLLECTING_ORB', 'GAP_FADE_WATCH', 'GAP_FADE_EXPIRED', 'VALIDATED', 'ORDER_PLACED', 'ENTERED', 'TARGET_HIT', 'STOPPED_OUT', 'TIME_EXIT', 'SKIPPED', 'FAILED'],
       default: 'PENDING'
     },
     entry_price: Number,          // Actual fill price from Kite

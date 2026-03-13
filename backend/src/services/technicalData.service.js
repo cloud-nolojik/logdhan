@@ -557,7 +557,10 @@ async function calculateStockData(symbol, instrumentKey, referenceDate = null) {
       // Returns (NEW: for scoring)
       return_1m: return1m,
       weekly_change_pct: weeklyChangePct,
-      distance_from_20dma_pct: distanceFrom20DmaPct
+      distance_from_20dma_pct: distanceFrom20DmaPct,
+      // Exhaustion detection
+      consecutive_up_days: dailyIndicators.consecutive_up_days || 0,
+      consecutive_down_days: dailyIndicators.consecutive_down_days || 0
     };
   } catch (error) {
     console.error(`[TechnicalData] Error calculating data for ${symbol}:`, error.message);
@@ -1129,7 +1132,10 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
       // Multi-timeframe: weekly trend for confirmation
       weekly_ema20: weeklyEma20,
       weekly_close: weeklyClose,
-      weekly_trend_bullish: weeklyTrendBullish
+      weekly_trend_bullish: weeklyTrendBullish,
+      // Exhaustion detection
+      consecutive_up_days: dailyIndicators.consecutive_up_days || 0,
+      consecutive_down_days: dailyIndicators.consecutive_down_days || 0
     };
   } catch (error) {
     console.error(`[DailyAnalysis] Error calculating data for ${symbol}:`, error.message);

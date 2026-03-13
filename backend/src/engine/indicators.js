@@ -59,6 +59,22 @@ export function calculate(candles, options = {}) {
     // Swing Levels (from candle data)
     calculateSwingLevels(normalized, indicators);
 
+    // Consecutive up/down days (for exhaustion detection)
+    if (normalized.length >= 2) {
+      let consecutiveUp = 0;
+      for (let i = normalized.length - 1; i >= 1; i--) {
+        if (normalized[i].close > normalized[i - 1].close) consecutiveUp++;
+        else break;
+      }
+      let consecutiveDown = 0;
+      for (let i = normalized.length - 1; i >= 1; i--) {
+        if (normalized[i].close < normalized[i - 1].close) consecutiveDown++;
+        else break;
+      }
+      indicators.consecutive_up_days = consecutiveUp;
+      indicators.consecutive_down_days = consecutiveDown;
+    }
+
     // Current Price Info
     const lastCandle = last(normalized);
     if (lastCandle) {
