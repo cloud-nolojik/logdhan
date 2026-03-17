@@ -150,9 +150,9 @@ async function runDailyPicks(options = {}) {
     const marketContext = await getMarketContext({ allowOutdatedCandle });
     console.log(`${LOG} Market regime: ${marketContext.regime} (structure: ${marketContext.structure_regime})`);
 
-    // CONFLICT regime = structure bearish + SGX green → SIT OUT entirely
+    // CONFLICT regime = structure bearish + SGX strongly bullish (≥1%) → SIT OUT entirely
     if (marketContext.regime === 'CONFLICT') {
-      console.log(`${LOG} ⛔ CONFLICT REGIME — structure bearish but SGX bullish. Sitting out today.`);
+      console.log(`${LOG} ⛔ CONFLICT REGIME — structure bearish but SGX strongly bullish (≥1%). Sitting out today.`);
       const doc = await saveToDB(marketContext, [], { candidates: [], bullish_count: 0, bearish_count: 0 });
       await sendNotification(marketContext, [], doc);
       return { success: true, picks: 0, doc, halted: true, reason: 'CONFLICT regime — mixed signals, sitting out' };
@@ -549,7 +549,12 @@ function getCombinedRegime(niftyClose, ema50, giftNiftyChangePct) {
     return { regime: 'STRONG_BEAR', sizeMultiplier: 1.0, maxTrades: 3 };
   }
   if (structureBear && sentimentBull) {
-    return { regime: 'CONFLICT', sizeMultiplier: 0.0, maxTrades: 0 };
+    // "Sell on rise" — small positive SGX in a bear market is a shorting opportunity, not a conflict.
+    // Only sit out if SGX signals a large gap-up (>1%) that could trigger a genuine reversal.
+    if (giftNiftyChangePct >= 1.0) {
+      return { regime: 'CONFLICT', sizeMultiplier: 0.0, maxTrades: 0 };
+    }
+    return { regime: 'WEAK_BEAR', sizeMultiplier: 0.6, maxTrades: 2 };
   }
   // Structure has direction but SGX is flat (between -0.3% and +0.3%)
   if (structureBull) {
