@@ -60,8 +60,8 @@ import {
   EXHAUSTION_PENALTY,
   EXHAUSTION_CONSECUTIVE_DAYS,
   EXHAUSTION_EMA20_DIST_PCT,
-  NR7_BONUS,
-  NR7_NEUTRAL_BONUS,
+  // NR7_BONUS, // removed — NR7 scans no longer in pipeline
+  // NR7_NEUTRAL_BONUS,
   MAX_COUNTER_REGIME_PICKS,
   COUNTER_REGIME_MIN_SCORE,
 } from './dailyPicksConstants.js';
@@ -80,46 +80,25 @@ const LOG = '[DAILY-PICKS]';
 // Scan priority bonus — rewards stocks caught by higher-priority scans in strong/extreme regimes
 // WEAK_BULL/WEAK_BEAR/NEUTRAL: all scans equal weight (0 bonus)
 const SCAN_PRIORITY_BONUS = {
-  // EXTREME regimes: reduced bonuses — market is overextended, don't chase momentum
   EXTREME_BULL: {
     fiftyTwoWeek_high: 6,
-    breakout_setup: 5,
-    bull_flag: 4,
-    volume_shocker_bullish: 3,
     pullback_at_support: 5,
-    compression_bullish: 4,
-    nr7_bullish: 2,
-    inside_day_bullish: 0,
+    volume_shocker_bullish: 3,
   },
   STRONG_BULL: {
-    breakout_setup: 10,
     fiftyTwoWeek_high: 8,
-    bull_flag: 6,
+    pullback_at_support: 5,
     volume_shocker_bullish: 5,
-    pullback_at_support: 3,
-    compression_bullish: 2,
-    nr7_bullish: 1,
-    inside_day_bullish: 0,
   },
   EXTREME_BEAR: {
     fiftyTwoWeek_low: 6,
-    breakdown_setup: 5,
-    bear_flag: 4,
-    volume_shocker_bearish: 3,
     failed_at_resistance: 5,
-    compression_bearish: 4,
-    nr7_bearish: 2,
-    inside_day_bearish: 0,
+    volume_shocker_bearish: 3,
   },
   STRONG_BEAR: {
-    breakdown_setup: 10,
     fiftyTwoWeek_low: 8,
-    bear_flag: 6,
+    failed_at_resistance: 5,
     volume_shocker_bearish: 5,
-    failed_at_resistance: 3,
-    compression_bearish: 2,
-    nr7_bearish: 1,
-    inside_day_bearish: 0,
   }
 };
 
@@ -389,7 +368,7 @@ async function runDailyPicks(options = {}) {
 
     // Step 7: Save to DB (includes full global intel snapshot)
     console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks`);
-    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, globalIntel);
+    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, null);
     console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
 
     // Step 8: Send notification
@@ -1144,26 +1123,24 @@ function isRegimeAligned(direction, regime) {
   return false;
 }
 
-// Scan-type-aware minimum R:R — different setups have different risk profiles
-// 52W and counter-trend scans need more cushion, reversal scans can accept tighter R:R
+// Scan-type-aware minimum R:R + minimum reward %
+// 52W scans: structural breakdowns need room. Reversal/volume: moderate.
+// Hard rule: even if R:R passes, reward must exceed minimum % to cover slippage/brokerage.
 const MIN_RR_BY_SCAN_TYPE = {
   fiftyTwoWeek_low:       2.0,
   fiftyTwoWeek_high:      2.0,
-  breakdown_setup:        1.5,
-  breakout_setup:         1.5,
-  bear_flag:              1.5,
-  bull_flag:              1.5,
+  failed_at_resistance:   1.5,
+  pullback_at_support:    1.5,
   volume_shocker_bearish: 1.5,
   volume_shocker_bullish: 1.5,
-  compression_bearish:    1.5,
-  compression_bullish:    1.5,
-  nr7_bearish:            1.5,
-  nr7_bullish:            1.5,
-  inside_day_bearish:     1.5,
-  inside_day_bullish:     1.5,
-  failed_at_resistance:   1.2,
-  pullback_at_support:    1.2,
-  relative_strength_long: 2.0,
+};
+const MIN_REWARD_PCT_BY_SCAN_TYPE = {
+  fiftyTwoWeek_low:       3.0,
+  fiftyTwoWeek_high:      3.0,
+  failed_at_resistance:   2.0,
+  pullback_at_support:    2.0,
+  volume_shocker_bearish: 2.0,
+  volume_shocker_bullish: 2.0,
 };
 
 // Graduated sector scoring — how strongly the sector confirms/contradicts the trade direction
@@ -1369,19 +1346,7 @@ function scoreCandidates(enrichedCandidates, regime) {
         }
       }
 
-      // NR7 / Inside Day scoring bonus — these compression setups deserve a boost,
-      // especially in NEUTRAL where they're the highest-quality setups available
-      const isNR7OrInside = ['nr7_bullish', 'nr7_bearish', 'inside_day_bullish', 'inside_day_bearish']
-        .includes(c.scan_type);
-      if (isNR7OrInside) {
-        const nr7Bonus = regime === 'NEUTRAL' ? NR7_NEUTRAL_BONUS : NR7_BONUS;
-        pick.rank_score += nr7Bonus;
-        pick.nr7_bonus = nr7Bonus;
-        console.log(`${LOG}   ↳ NR7/Inside: +${nr7Bonus} pts (${c.scan_type} in ${regime})`);
-      }
-
-      // NOTE: News + sector sentiment adjustments are now applied at Step 5.5 (after intel fetch),
-      // not here in scoring. This ensures intel has the candidate stock list for targeted search.
+      // NOTE: Step 5.5 (intel) is disabled — scoring is the final score adjustment.
 
       scored.push(pick);
     } else {
@@ -1537,6 +1502,15 @@ function calculateLevels(pick) {
   if (riskPercent > DAILY_PICKS_MAX_RISK) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED — Risk ${round2(riskPercent)}% exceeds daily picks cap (${DAILY_PICKS_MAX_RISK}%)`);
     pick._lastRejectionReason = `Risk ${round2(riskPercent)}% exceeds ${DAILY_PICKS_MAX_RISK}% cap`;
+    return null;
+  }
+
+  // Minimum absolute reward % — even good R:R is worthless if the move is too small
+  // A 3:1 R:R on a 1% move = ₹5 on a ₹500 stock, eaten by slippage/brokerage
+  const minRewardPct = MIN_REWARD_PCT_BY_SCAN_TYPE[scan_type] || 2.0;
+  if (rewardPercent < minRewardPct) {
+    console.log(`${LOG} [Levels] ${symbol}: REJECTED — Reward ${round2(rewardPercent)}% below minimum ${minRewardPct}% for ${scan_type} (R:R=${round2(riskReward)} was fine but move too small)`);
+    pick._lastRejectionReason = `Reward ${round2(rewardPercent)}% below ${minRewardPct}% minimum (move too small)`;
     return null;
   }
 
@@ -1963,7 +1937,7 @@ async function placePreMarketEntries(doc) {
 
   // Breakout/52W scans wait for ORB validation at 9:30 AM — entry ≈ current price, gap risk is high
   // Pullback/compression scans place pre-market — entry below current price, safe for LIMIT
-  const ORB_WAIT_SCANS = ['fiftyTwoWeek_high', 'fiftyTwoWeek_low', 'breakout_setup', 'breakdown_setup'];
+  const ORB_WAIT_SCANS = ['fiftyTwoWeek_high', 'fiftyTwoWeek_low', 'volume_shocker_bullish', 'volume_shocker_bearish'];
 
   let ordersPlaced = 0;
 

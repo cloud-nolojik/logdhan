@@ -58,7 +58,7 @@ class DailyPicksJob {
   }
 
   defineJobs() {
-    this.agenda.define('daily-pick-scan-1', async (job) => {
+    this.agenda.define('daily-pick-scan', async (job) => {
       if (this.isRunning) {
         console.log(`${LOG} Already running, skipping`);
         return;
@@ -92,7 +92,7 @@ class DailyPicksJob {
     });
 
     // Manual trigger
-    this.agenda.define('manual-daily-pick-scan-1', async (job) => {
+    this.agenda.define('manual-daily-pick-scan', async (job) => {
       if (this.isRunning) {
         console.log(`${LOG} Already running, skipping manual trigger`);
         return;
@@ -124,10 +124,10 @@ class DailyPicksJob {
 
   async scheduleRecurringJobs() {
     try {
-      await this.agenda.cancel({ name: 'daily-pick-scan-1' });
+      await this.agenda.cancel({ name: 'daily-pick-scan' });
 
       // 8:40 AM IST, Monday-Friday (before market open — yesterday's candle is correct and intentional)
-      await this.agenda.every('40 8 * * 1-5', 'daily-pick-scan-1', { allowOutdatedCandle: true }, {
+      await this.agenda.every('40 8 * * 1-5', 'daily-pick-scan', { allowOutdatedCandle: true }, {
         timezone: 'Asia/Kolkata'
       });
 
@@ -142,7 +142,7 @@ class DailyPicksJob {
     if (!this.isInitialized) throw new Error('Daily picks job not initialized');
 
     console.log(`${LOG} Manual trigger requested`);
-    const job = await this.agenda.now('manual-daily-pick-scan-1', opts);
+    const job = await this.agenda.now('manual-daily-pick-scan', opts);
 
     return {
       success: true,
