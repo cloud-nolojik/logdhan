@@ -113,7 +113,7 @@ async function isCandleDataOutdated(candles, timeframe) {
     const isOutdated = latestCandleDateStr < expectedDateStr;
 
     if (isOutdated) {
-      console.log(`[CandleData] OUTDATED: Latest candle=${latestCandleDateStr}, Expected at least=${expectedDateStr}`);
+      // console.log(`[CandleData] OUTDATED: Latest candle=${latestCandleDateStr}, Expected at least=${expectedDateStr}`);
     }
 
     return isOutdated;
@@ -151,7 +151,7 @@ async function fetchFromUpstox(instrumentKey, timeframe, days = 365) {
   // Cache-bust: Cloudflare CDN caches by URL and can serve stale index data to certain regions
   const cacheBust = `_t=${Date.now()}`;
   const url = `https://api.upstox.com/v2/historical-candle/${encodedKey}/${interval}/${toDateStr}/${fromDateStr}?${cacheBust}`;
-  console.log(`[CandleData] fetchFromUpstox: ${url}`);
+  // console.log(`[CandleData] fetchFromUpstox: ${url}`);
 
   try {
     const response = await rateLimitedGet(url, {
@@ -168,7 +168,7 @@ async function fetchFromUpstox(instrumentKey, timeframe, days = 365) {
     if (candles.length > 0) {
       const first3 = candles.slice(0, 3).map(c => c[0]);
       const last3 = candles.slice(-3).map(c => c[0]);
-      console.log(`[CandleData] fetchFromUpstox RAW response: ${candles.length} candles, first=[${first3.join(', ')}], last=[${last3.join(', ')}]`);
+      //console.log(`[CandleData] fetchFromUpstox RAW response: ${candles.length} candles, first=[${first3.join(', ')}], last=[${last3.join(', ')}]`);
     }
 
     // Upstox returns newest first, reverse to oldest first
@@ -193,7 +193,7 @@ async function getCandleData(instrumentKey, symbol, timeframe, { allowOutdated =
 
   try {
     // Step 1: Check DB for existing data
-    console.log(`[CandleData] ${symbol}: checking DB for ${instrumentKey} / ${dbTimeframe}`);
+  //  console.log(`[CandleData] ${symbol}: checking DB for ${instrumentKey} / ${dbTimeframe}`);
     const dbRecord = await PreFetchedData.findOne({
       instrument_key: instrumentKey,
       timeframe: dbTimeframe
@@ -202,7 +202,7 @@ async function getCandleData(instrumentKey, symbol, timeframe, { allowOutdated =
     // Step 2: Check if data exists and has the last completed trading day's candle
     if (dbRecord && dbRecord.candle_data?.length > 0) {
       const lastCandle = dbRecord.candle_data[dbRecord.candle_data.length - 1];
-      console.log(`[CandleData] ${symbol}: DB has ${dbRecord.candle_data.length} candles, last=${lastCandle?.timestamp}`);
+    //  console.log(`[CandleData] ${symbol}: DB has ${dbRecord.candle_data.length} candles, last=${lastCandle?.timestamp}`);
 
       const candleArray = dbRecord.candle_data.map(c => [
         c.timestamp,
@@ -214,19 +214,19 @@ async function getCandleData(instrumentKey, symbol, timeframe, { allowOutdated =
       ]);
 
       const isOutdated = await isCandleDataOutdated(dbRecord.candle_data, dbTimeframe);
-      console.log(`[CandleData] ${symbol}: isOutdated=${isOutdated}`);
+    //  console.log(`[CandleData] ${symbol}: isOutdated=${isOutdated}`);
 
       if (!isOutdated) {
-        console.log(`[CandleData] ${symbol}: CACHED — returning ${candleArray.length} candles`);
+        // console.log(`[CandleData] ${symbol}: CACHED — returning ${candleArray.length} candles`);
         return candleArray;
       }
 
     } else {
-      console.log(`[CandleData] ${symbol}: NO DB record found`);
+      // console.log(`[CandleData] ${symbol}: NO DB record found`);
     }
 
     // Step 3: Data missing or outdated - fetch from API
-    console.log(`[CandleData] ${symbol}: fetching from Upstox API (${upstoxTimeframe}, 400 days)...`);
+   // console.log(`[CandleData] ${symbol}: fetching from Upstox API (${upstoxTimeframe}, 400 days)...`);
     let fetchResult = await fetchFromUpstox(instrumentKey, upstoxTimeframe, 400);
     let apiCandles = fetchResult.candles;
     let activeKey = instrumentKey;
@@ -241,14 +241,14 @@ async function getCandleData(instrumentKey, symbol, timeframe, { allowOutdated =
       }).lean();
 
       if (freshStock && freshStock.instrument_key !== instrumentKey) {
-        console.log(`[CandleData] ${symbol}: Key changed: ${instrumentKey} → ${freshStock.instrument_key}`);
+        console.warn(`[CandleData] ${symbol}: Key changed: ${instrumentKey} → ${freshStock.instrument_key}`);
         activeKey = freshStock.instrument_key;
         fetchResult = await fetchFromUpstox(activeKey, upstoxTimeframe, 400);
         apiCandles = fetchResult.candles;
       }
     }
 
-    console.log(`[CandleData] ${symbol}: API returned ${apiCandles.length} candles`);
+   // console.log(`[CandleData] ${symbol}: API returned ${apiCandles.length} candles`);
 
     if (apiCandles.length === 0) {
       console.warn(`[CandleData] ${symbol}: API failed for ${activeKey} — skipping (stale DB data not used)`);
@@ -258,7 +258,7 @@ async function getCandleData(instrumentKey, symbol, timeframe, { allowOutdated =
     // Upstox API returns candles in ascending order (oldest first)
     const oldestApi = apiCandles[0];
     const latestApi = apiCandles[apiCandles.length - 1];
-    console.log(`[CandleData] ${symbol}: API fresh ${apiCandles.length} candles, latest=${latestApi?.[0]}, oldest=${oldestApi?.[0]}`);
+    // console.log(`[CandleData] ${symbol}: API fresh ${apiCandles.length} candles, latest=${latestApi?.[0]}, oldest=${oldestApi?.[0]}`);
 
     // Step 4: Save to DB for future use
     const candleDataForDb = apiCandles.map(c => ({
@@ -284,7 +284,7 @@ async function getCandleData(instrumentKey, symbol, timeframe, { allowOutdated =
       },
       { upsert: true }
     );
-    console.log(`[CandleData] ${symbol}: saved ${candleDataForDb.length} candles to DB`);
+   // console.log(`[CandleData] ${symbol}: saved ${candleDataForDb.length} candles to DB`);
 
     // Step 5: Verify API data is actually fresh after saving
     const isStillOutdated = await isCandleDataOutdated(candleDataForDb, dbTimeframe);
@@ -293,7 +293,7 @@ async function getCandleData(instrumentKey, symbol, timeframe, { allowOutdated =
       const expectedDateStr = await MarketHoursUtil.getLastCompletedTradingDay();
       const msg = `${symbol}: API data still outdated after fetch (latest=${latestApiDateStr}, expected=${expectedDateStr})`;
       if (allowOutdated) {
-        console.warn(`[CandleData] ⚠️ ${msg} — allowOutdated=true, proceeding with latest available`);
+        // Silent proceed — pre-market runs intentionally use yesterday's data
         return apiCandles;
       }
       console.error(`[CandleData] ⛔ ${msg}`);
@@ -391,7 +391,7 @@ async function calculateStockData(symbol, instrumentKey, referenceDate = null) {
     if (referenceDate && dailyCandles.length > 0) {
       const beforeCount = dailyCandles.length;
       dailyCandles = filterCandlesToDate(dailyCandles, referenceDate);
-      console.log(`[TechnicalData] ${symbol} - Filtered daily candles to ${referenceDate}: ${beforeCount} → ${dailyCandles.length}`);
+      // console.log(`[TechnicalData] ${symbol} - Filtered daily candles to ${referenceDate}: ${beforeCount} → ${dailyCandles.length}`);
     }
 
     if (dailyCandles.length === 0) {
@@ -399,7 +399,7 @@ async function calculateStockData(symbol, instrumentKey, referenceDate = null) {
       return { symbol, error: 'No daily candle data available' };
     }
 
-    console.log(`[TechnicalData] ${symbol} - Daily candles: ${dailyCandles.length}`);
+    // console.log(`[TechnicalData] ${symbol} - Daily candles: ${dailyCandles.length}`);
 
     // Get weekly candles - try DB/API first, fallback to aggregation
     let weeklyCandles = await getCandleData(instrumentKey, symbol, '1w');
@@ -410,11 +410,11 @@ async function calculateStockData(symbol, instrumentKey, referenceDate = null) {
     }
 
     if (weeklyCandles.length === 0) {
-      console.log(`[TechnicalData] No weekly data for ${symbol}, aggregating from daily...`);
+      // console.log(`[TechnicalData] No weekly data for ${symbol}, aggregating from daily...`);
       weeklyCandles = aggregateToWeekly(dailyCandles);
-      console.log(`[TechnicalData] ${symbol} - Aggregated weekly candles: ${weeklyCandles.length}`);
+      // console.log(`[TechnicalData] ${symbol} - Aggregated weekly candles: ${weeklyCandles.length}`);
     } else {
-      console.log(`[TechnicalData] ${symbol} - Weekly candles from DB/API: ${weeklyCandles.length}`);
+      // console.log(`[TechnicalData] ${symbol} - Weekly candles from DB/API: ${weeklyCandles.length}`);
     }
 
     // Calculate indicators
@@ -677,7 +677,7 @@ async function lookupInstrumentKeys(symbols) {
 
       if (stock) {
         symbolMap[symbol] = { instrumentKey: stock.instrument_key, name: stock.name };
-        console.log(`[Lookup] ${symbol}: NSE → ${stock.instrument_key}`);
+        //console.log(`[Lookup] ${symbol}: NSE → ${stock.instrument_key}`);
       } else {
         const bseStock = await Stock.findOne({
           trading_symbol: symbol.toUpperCase(),
@@ -687,7 +687,7 @@ async function lookupInstrumentKeys(symbols) {
 
         if (bseStock) {
           symbolMap[symbol] = { instrumentKey: bseStock.instrument_key, name: bseStock.name };
-          console.log(`[Lookup] ${symbol}: BSE → ${bseStock.instrument_key}`);
+         // console.log(`[Lookup] ${symbol}: BSE → ${bseStock.instrument_key}`);
         } else {
           symbolMap[symbol] = null;
           console.warn(`[Lookup] ${symbol}: NOT FOUND in NSE or BSE`);
@@ -710,7 +710,7 @@ async function lookupInstrumentKeys(symbols) {
 export async function getTechnicalData(symbols) {
   const startTime = Date.now();
 
-  console.log(`[TechnicalData] Processing ${symbols.length} symbols: ${symbols.join(', ')}`);
+  // console.log(`[TechnicalData] Processing ${symbols.length} symbols: ${symbols.join(', ')}`);
 
   // Look up instrument keys
   const symbolMap = await lookupInstrumentKeys(symbols);
@@ -806,7 +806,7 @@ function find1HSwingLevels(candles) {
   const lastDate = candles[candles.length - 1][0]?.split('T')[0];
   const firstTime = candles[0][0]?.split('T')[1]?.split('+')[0] || '';
   const lastTime = candles[candles.length - 1][0]?.split('T')[1]?.split('+')[0] || '';
-  console.log(`[SwingLevels] Using ${candles.length} candles from ${firstDate} ${firstTime} to ${lastDate} ${lastTime}`);
+ // console.log(`[SwingLevels] Using ${candles.length} candles from ${firstDate} ${firstTime} to ${lastDate} ${lastTime}`);
 
   const swingHighs = [];
   const swingLows = [];
@@ -861,12 +861,12 @@ function find1HSwingLevels(candles) {
   const resistanceZones = clusterLevels(swingHighs);
   const supportZones = clusterLevels(swingLows);
 
-  console.log(`[SwingLevels] Found ${swingHighs.length} swing highs → ${resistanceZones.length} resistance zones, ${swingLows.length} swing lows → ${supportZones.length} support zones`);
+  //console.log(`[SwingLevels] Found ${swingHighs.length} swing highs → ${resistanceZones.length} resistance zones, ${swingLows.length} swing lows → ${supportZones.length} support zones`);
   if (resistanceZones.length > 0) {
-    console.log(`[SwingLevels] Resistance zones: ${resistanceZones.map(z => z.midpoint).join(', ')}`);
+    // console.log(`[SwingLevels] Resistance zones: ${resistanceZones.map(z => z.midpoint).join(', ')}`);
   }
   if (supportZones.length > 0) {
-    console.log(`[SwingLevels] Support zones: ${supportZones.map(z => z.midpoint).join(', ')}`);
+    // console.log(`[SwingLevels] Support zones: ${supportZones.map(z => z.midpoint).join(', ')}`);
   }
 
   return { swingHighs, swingLows, resistanceZones, supportZones };
@@ -958,12 +958,12 @@ async function fetchHourlyPivots(instrumentKey, tradingDateStr) {
 async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = null, skipIntraday = false, allowOutdated = false) {
   try {
     // Fetch historical daily candles for RSI, pivots, avg volume
-    console.log(`[DailyStock] ${symbol}: calling getCandleData(${instrumentKey}, '1d')...`);
+    // console.log(`[DailyStock] ${symbol}: calling getCandleData(${instrumentKey}, '1d')...`);
     const dailyCandles = await getCandleData(instrumentKey, symbol, '1d', { allowOutdated });
-    console.log(`[DailyStock] ${symbol}: getCandleData returned ${dailyCandles.length} candles`);
+    // console.log(`[DailyStock] ${symbol}: getCandleData returned ${dailyCandles.length} candles`);
 
     if (dailyCandles.length === 0) {
-      console.log(`[DailyStock] ${symbol}: NO CANDLES — returning zeros`);
+      console.warn(`[DailyStock] ${symbol}: NO CANDLES — returning zeros`);
       return {
         symbol,
         instrument_key: instrumentKey,
@@ -1088,7 +1088,7 @@ async function calculateDailyStockData(symbol, instrumentKey, bulkLivePrice = nu
     const hourlyPivots = await fetchHourlyPivots(instrumentKey, latestDailyCandle[0]);
 
     // === FINGERPRINT: Single debug line with all scoring-critical values ===
-    console.log(`[ENRICH-DEBUG] ${symbol}: src=${dataSource} candles=${dailyCandles.length} | O=${open} H=${high} L=${low} C=${ltp} prevC=${prevClose} vol=${todayVolume} avgVol50=${avgVolume50d} | RSI=${dailyIndicators.rsi14} EMA20=${dailyIndicators.ema20} ATR=${dailyIndicators.atr} | pivot=${dailyPivot?.pivot} 1hP=${hourlyPivots.hourly_1h_pivots?.pivot || 'null'} 4hP=${hourlyPivots.hourly_4h_pivots?.pivot || 'null'}`);
+    // console.log(`[ENRICH-DEBUG] ${symbol}: src=${dataSource} candles=${dailyCandles.length} | O=${open} H=${high} L=${low} C=${ltp} prevC=${prevClose} vol=${todayVolume} avgVol50=${avgVolume50d} | RSI=${dailyIndicators.rsi14} EMA20=${dailyIndicators.ema20} ATR=${dailyIndicators.atr} | pivot=${dailyPivot?.pivot} 1hP=${hourlyPivots.hourly_1h_pivots?.pivot || 'null'} 4hP=${hourlyPivots.hourly_4h_pivots?.pivot || 'null'}`);
 
     return {
       symbol,

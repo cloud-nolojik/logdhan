@@ -26,11 +26,13 @@ export const GAP_PROTECTION_MAX_PCT = 2.0;
 export const ORB_BUFFER_PCT = 0.001;
 /** Tiered min R:R by regime — demand better R:R when conviction is lower */
 export const MIN_ORB_RR_BY_REGIME = {
+  EXTREME_BULL: 1.8,
   STRONG_BULL: 1.5,
-  STRONG_BEAR: 1.5,
   WEAK_BULL: 1.8,
-  WEAK_BEAR: 1.8,
   NEUTRAL: 2.0,
+  WEAK_BEAR: 1.8,
+  STRONG_BEAR: 1.5,
+  EXTREME_BEAR: 1.8,
 };
 /** ORB range > 3% of stock price = too volatile, skip */
 export const MAX_ORB_RANGE_PCT = 3.0;

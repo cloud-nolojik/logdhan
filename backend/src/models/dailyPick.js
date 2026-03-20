@@ -149,7 +149,7 @@ const dailyPickSchema = new mongoose.Schema({
 
   // Market context at decision time
   market_context: {
-    regime: { type: String, enum: ['STRONG_BULLISH', 'BULLISH', 'BEARISH', 'STRONG_BEARISH', 'NEUTRAL', 'UNKNOWN'] },
+    regime: { type: String, enum: ['EXTREME_BULL', 'STRONG_BULL', 'WEAK_BULL', 'NEUTRAL', 'WEAK_BEAR', 'STRONG_BEAR', 'EXTREME_BEAR', 'CONFLICT', 'RANGING', 'STRONG_BULLISH', 'BULLISH', 'BEARISH', 'STRONG_BEARISH', 'UNKNOWN'] },
     nifty_prev_close: Number,
     distance_pct: Number,
     decided_at: Date,

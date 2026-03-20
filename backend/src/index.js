@@ -32,7 +32,7 @@ import weekendScreeningJob from './services/weeklyPicks/weekendScreeningJob.js';
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
 import instrumentSyncJob from './services/jobs/instrumentSyncJob.js'; // sync-instrument-keys (6:00 AM Mon-Fri)
-import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-picks-scan (8:45 AM Mon-Fri)
+import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-pick-scan-1 (8:40 AM Mon-Fri)
 import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // v2: ORB 9:30, validate+entry, monitor */3, tighten 14:00, exit 15:00
 import { initFillListener } from './services/dailyPicks/dailyPicksService.js'; // Postback → instant SL+target
 
@@ -298,7 +298,7 @@ app.listen(PORT, async () => {
   await instrumentSyncJob.initialize();
 
   // Daily picks jobs
-  await initializeDailyPicksJob(); // daily-picks-scan (8:45 AM Mon-Fri)
+  await initializeDailyPicksJob(); // daily-pick-scan-1 (8:40 AM Mon-Fri)
   await initializeDailyEntryJob(); // daily-picks-entry 9:30, monitor */3, tighten 14:00, exit 15:00
 
   // Kite Connect token refresh job (6:00 AM IST daily)

@@ -479,7 +479,7 @@ function logIntelSummary(intel, todayStr) {
  */
 function buildHistoricalIntelPrompt(dateStr, candidateSymbols) {
   const stockList = candidateSymbols.length > 0
-    ? `\n\nCANDIDATE STOCKS FOR THIS DAY (from ChartInk scans):\n${candidateSymbols.join(', ')}\n\nFor stock_specific: search for news/events on ${dateStr} that specifically affect these stocks (earnings, results, SEBI actions, sector-specific events, M&A, management changes). Only include stocks with ACTUAL news.`
+    ? `\n\nCANDIDATE STOCKS FOR THIS DAY (from ChartInk scans):\n${candidateSymbols.join(', ')}\n\nFor stock_specific: ONLY include a stock if you can cite a SPECIFIC company event from ${dateStr} or the previous 48 hours:\n- Earnings/results announcement\n- FDA/regulatory approval or rejection\n- Management change (CEO/CFO appointment or resignation)\n- Order win/loss exceeding 5% of market cap\n- M&A announcement\n- SEBI action or investigation\n\nIf no such event exists for a stock, DO NOT include it in stock_specific. Do NOT include stocks based on sector macro, crude oil impact, or general bearish/bullish sentiment. Silence is better than synthesis — an empty stock_specific object is the correct response when there is no company-specific news.`
     : '';
 
   return `I run an intraday trading system on the Indian stock market (NSE). I need to reconstruct what global and domestic conditions looked like at 8:40 AM IST on ${dateStr} — a PAST date. This is for backtesting.
@@ -543,7 +543,7 @@ NOTE: Do NOT include sgx_nifty in the response — SGX Nifty data is fetched sep
 function buildIntelPrompt(dateStr, candidateSymbols) {
   const symbols = candidateSymbols || [];
   const stockList = symbols.length > 0
-    ? `\n\nCANDIDATE STOCKS FOR TODAY (from ChartInk scans):\n${symbols.join(', ')}\n\nFor stock_specific: search for news/events TODAY that specifically affect these stocks (earnings, results, SEBI actions, sector-specific events, M&A, management changes). Only include stocks with ACTUAL news.`
+    ? `\n\nCANDIDATE STOCKS FOR TODAY (from ChartInk scans):\n${symbols.join(', ')}\n\nFor stock_specific: ONLY include a stock if you can cite a SPECIFIC company event from TODAY or the previous 48 hours:\n- Earnings/results announcement\n- FDA/regulatory approval or rejection\n- Management change (CEO/CFO appointment or resignation)\n- Order win/loss exceeding 5% of market cap\n- M&A announcement\n- SEBI action or investigation\n\nIf no such event exists for a stock, DO NOT include it in stock_specific. Do NOT include stocks based on sector macro, crude oil impact, or general bearish/bullish sentiment. Silence is better than synthesis — an empty stock_specific object is the correct response when there is no company-specific news.`
     : '';
 
   return `I run an intraday trading system on the Indian stock market (NSE). I need REAL-TIME intelligence for trading decisions at 8:40 AM IST on ${dateStr}.

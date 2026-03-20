@@ -328,6 +328,7 @@
     // WHY IT WORKS: Sector rotation into defensive names during broad selloffs; these outperform when fear peaks
     relative_strength_long: {
       type: 'bullish',
+      regimeRestriction: ['WEAK_BEAR', 'STRONG_BEAR', 'EXTREME_BEAR'],
       query: `( {cash} (
         latest close > latest ema( close, 50 ) and
         latest ema( close, 20 ) > latest ema( close, 50 ) and
@@ -371,37 +372,46 @@ export const SCAN_LABELS = {
  * NEUTRAL/UNKNOWN: all 16 scans, no bonus
  */
 // ── Scan priority lists per regime ──
-// Order matters: first scan in the list gets run first, dedup keeps the first match.
-// Momentum scans: ride the trend when it's running
-const BULLISH_MOMENTUM = [
-  'breakout_setup', 'fiftyTwoWeek_high', 'bull_flag', 'volume_shocker_bullish'
-];
-// Compression scans: buy the dip / wait for clean setup
-const BULLISH_COMPRESSION = [
-  'pullback_at_support', 'compression_bullish', 'nr7_bullish', 'inside_day_bullish'
-];
-const BEARISH_MOMENTUM = [
-  'breakdown_setup', 'fiftyTwoWeek_low', 'bear_flag', 'volume_shocker_bearish'
-];
-const BEARISH_COMPRESSION = [
-  'failed_at_resistance', 'compression_bearish', 'nr7_bearish', 'inside_day_bearish'
-];
-
-export const SCAN_ORDER_BY_REGIME = {
-  // Combined regime (structure + SGX sentiment)
-  // STRONG_BULL: momentum-first bullish — trend is running, ride it
-  STRONG_BULL: [...BULLISH_MOMENTUM, ...BULLISH_COMPRESSION],
-  // WEAK_BULL: compression-only bullish — weak open = buy the dip, no momentum chasing
-  WEAK_BULL: [...BULLISH_COMPRESSION],
-  // NEUTRAL: choppy — only tightest compression setups with defined risk
-  NEUTRAL: ['nr7_bullish', 'nr7_bearish', 'inside_day_bullish', 'inside_day_bearish'],
-  // WEAK_BEAR: compression-only bearish — structure bearish but SGX flat
-  WEAK_BEAR: [...BEARISH_COMPRESSION],
-  // STRONG_BEAR: momentum-first bearish + 1 defensive RS long (last, lowest priority)
-  STRONG_BEAR: [...BEARISH_MOMENTUM, ...BEARISH_COMPRESSION, 'relative_strength_long'],
-  // CONFLICT: structure bearish + SGX green → contradictory, sit out
-  CONFLICT: [],
+/**
+ * Scan priority ladder — used by two-pass dedup to assign scan_type when a stock
+ * appears in multiple scans. Higher priority = stronger signal. Bearish first, then bullish.
+ *
+ * All scans run every day regardless of regime. The sector cross-filter (Step 2B) decides
+ * which candidates survive based on sector regime alignment — scan selection no longer
+ * does regime-based blocking.
+ */
+export const SCAN_PRIORITY = {
+  // Bearish — strongest to weakest
+  fiftyTwoWeek_low:       { rank: 1, direction: 'SHORT' },
+  breakdown_setup:        { rank: 2, direction: 'SHORT' },
+  bear_flag:              { rank: 3, direction: 'SHORT' },
+  volume_shocker_bearish: { rank: 4, direction: 'SHORT' },
+  failed_at_resistance:   { rank: 5, direction: 'SHORT' },
+  compression_bearish:    { rank: 6, direction: 'SHORT' },
+  nr7_bearish:            { rank: 7, direction: 'SHORT' },
+  inside_day_bearish:     { rank: 8, direction: 'SHORT' },
+  // Bullish — strongest to weakest
+  fiftyTwoWeek_high:      { rank: 1, direction: 'LONG' },
+  breakout_setup:         { rank: 2, direction: 'LONG' },
+  bull_flag:              { rank: 3, direction: 'LONG' },
+  volume_shocker_bullish: { rank: 4, direction: 'LONG' },
+  relative_strength_long: { rank: 5, direction: 'LONG' },
+  pullback_at_support:    { rank: 6, direction: 'LONG' },
+  compression_bullish:    { rank: 7, direction: 'LONG' },
+  nr7_bullish:            { rank: 8, direction: 'LONG' },
+  inside_day_bullish:     { rank: 9, direction: 'LONG' },
 };
+
+// Run order for ChartInk API calls — bearish first, then bullish (for log readability)
+export const ALL_SCAN_ORDER = [
+  // Bearish
+  'fiftyTwoWeek_low', 'breakdown_setup', 'bear_flag', 'volume_shocker_bearish',
+  'failed_at_resistance', 'compression_bearish', 'nr7_bearish', 'inside_day_bearish',
+  // Bullish
+  'fiftyTwoWeek_high', 'breakout_setup', 'bull_flag', 'volume_shocker_bullish',
+  'relative_strength_long', 'pullback_at_support', 'compression_bullish', 'nr7_bullish',
+  'inside_day_bullish',
+];
 
 /**
  * Map daily picks scan types to scanLevels engine archetypes.
