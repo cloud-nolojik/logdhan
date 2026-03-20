@@ -126,8 +126,8 @@ class DailyPicksJob {
     try {
       await this.agenda.cancel({ name: 'daily-pick-scan' });
 
-      // 8:40 AM IST, Monday-Friday (before market open — yesterday's candle is correct and intentional)
-      await this.agenda.every('40 8 * * 1-5', 'daily-pick-scan', { allowOutdatedCandle: true }, {
+      // 8:30 AM IST, Monday-Friday (before market open)
+      await this.agenda.every('30 8 * * 1-5', 'daily-pick-scan', { allowOutdatedCandle: false }, {
         timezone: 'Asia/Kolkata'
       });
 
