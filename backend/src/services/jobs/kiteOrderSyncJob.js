@@ -1,7 +1,7 @@
 /**
  * Kite Order Sync Job
  *
- * Polls every 30 minutes during market hours to detect entry GTT fills
+ * Polls every 5 minutes during market hours to detect entry GTT fills
  * and place OCO (SL+Target) immediately after confirmed fill.
  *
  * This solves the accidental short-sell problem: entry GTT is placed at 8 AM
@@ -164,13 +164,13 @@ class KiteOrderSyncJob {
         name: 'kite-order-sync'
       });
 
-      // Every 30 min from 9:00-15:30 IST, Mon-Fri
+      // Every 5 min from 9:00-15:30 IST, Mon-Fri
       // Covers market hours (9:15 AM - 3:30 PM)
-      await this.agenda.every('*/30 9-15 * * 1-5', 'kite-order-sync', {}, {
+      await this.agenda.every('*/5 9-15 * * 1-5', 'kite-order-sync', {}, {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log(`${LOG_PREFIX} Recurring job scheduled: every 30 min, 9:00-15:30 IST, Mon-Fri`);
+      console.log(`${LOG_PREFIX} Recurring job scheduled: every 5 min, 9:00-15:30 IST, Mon-Fri`);
 
     } catch (error) {
       console.error(`${LOG_PREFIX} Failed to schedule jobs:`, error);
