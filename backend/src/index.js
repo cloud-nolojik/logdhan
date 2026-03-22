@@ -32,8 +32,9 @@ import weekendScreeningJob from './services/weeklyPicks/weekendScreeningJob.js';
 import dailyTrackingJob from './services/jobs/dailyTrackingJob.js'; // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI for changes)
 import kiteOrderSyncJob from './services/jobs/kiteOrderSyncJob.js'; // kite-order-sync (every 30 min market hours)
 import instrumentSyncJob from './services/jobs/instrumentSyncJob.js'; // sync-instrument-keys (6:00 AM Mon-Fri)
-import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-pick-scan (8:40 AM Mon-Fri)
+import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-pick-scan (8:30 AM Mon-Fri)
 import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // v2: ORB 9:30, validate+entry, monitor */3, tighten 14:00, exit 15:00
+import morningBriefJob from './services/jobs/morningBriefJob.js'; // morning-brief (Monday 8:00 AM IST)
 import { initFillListener } from './services/dailyPicks/dailyPicksService.js'; // Postback → instant SL+target
 
 import authRoutes from './routes/auth.js';
@@ -264,6 +265,15 @@ async function initializeDailyPicksJob() {
   }
 }
 
+// Initialize morning brief job (Monday 8:00 AM IST — place GTTs for weekly setup stocks)
+async function initializeMorningBriefJob() {
+  try {
+    await morningBriefJob.initialize();
+  } catch (error) {
+    console.error('Failed to initialize morning brief job:', error);
+  }
+}
+
 // Initialize daily entry job (v2: ORB 9:15, validate+entry 9:30, monitor */3, tighten 14:00)
 async function initializeDailyEntryJob() {
   try {
@@ -293,6 +303,7 @@ app.listen(PORT, async () => {
   await initializeWeekendScreeningJob(); // weekend-screening (Sat 6PM IST)
   await initializeDailyTrackingJob(); // daily-tracking (4:00 PM Mon-Fri, Phase 1 status + Phase 2 AI)
   await initializeKiteOrderSyncJob(); // kite-order-sync (every 30 min during market hours)
+  await initializeMorningBriefJob(); // morning-brief (Monday 8:00 AM IST)
 
   // Instrument sync (6:00 AM Mon-Fri — before daily picks)
   await instrumentSyncJob.initialize();
@@ -323,7 +334,8 @@ process.on('SIGINT', async () => {
       kiteTokenRefreshJob.shutdown(),
       instrumentSyncJob.shutdown(),
       dailyPicksJob.shutdown(),
-      dailyEntryJob.shutdown()
+      dailyEntryJob.shutdown(),
+      morningBriefJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -349,7 +361,8 @@ process.on('SIGTERM', async () => {
       kiteTokenRefreshJob.shutdown(),
       instrumentSyncJob.shutdown(),
       dailyPicksJob.shutdown(),
-      dailyEntryJob.shutdown()
+      dailyEntryJob.shutdown(),
+      morningBriefJob.shutdown()
     ]);
 
     // Close MongoDB connection
