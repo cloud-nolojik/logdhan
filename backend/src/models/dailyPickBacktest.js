@@ -32,7 +32,7 @@ const backtestPickSchema = new mongoose.Schema({
     atr_pct: Number,
     candle_pattern: String
   },
-  rank_score: { type: Number, min: 0, max: 115 },
+  rank_score: { type: Number, min: 0, max: 200 },
   confluence_score: { type: Number, default: 0 },
   confluence_detail: { type: String, default: null },
   regime_bonus: { type: Number, default: 0 },

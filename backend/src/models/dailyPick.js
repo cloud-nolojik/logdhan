@@ -30,7 +30,7 @@ const pickSchema = new mongoose.Schema({
     atr_pct: Number,
     candle_pattern: String        // bullish_engulfing, bearish_engulfing, hammer, bullish_candle, bearish_candle
   },
-  rank_score: { type: Number, min: 0, max: 115 },  // 100 base + 5 confluence + 5 regime = 110 max
+  rank_score: { type: Number, min: 0, max: 2000 },
   confluence_score: { type: Number, default: 0 },
   confluence_detail: { type: String, default: null },
   regime_bonus: { type: Number, default: 0 },
