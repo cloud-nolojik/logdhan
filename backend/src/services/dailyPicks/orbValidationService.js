@@ -342,13 +342,29 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
 
     // Check 3: ORB breakout R:R check (Crabel-style SL-M entry)
     // Entry = ORB high + 0.1% buffer (LONG) or ORB low - 0.1% buffer (SHORT)
+    // Stop  = ORB opposite end + buffer (the ORB range defines intraday risk)
+    //         If ORB stop is wider than structural stop, use structural (tighter = better)
     const orbEntry = isBullish
       ? round2(orb.high * (1 + ORB_BUFFER_PCT))
       : round2(orb.low * (1 - ORB_BUFFER_PCT));
 
+    // ORB-based stop: opposite end of the opening range + buffer
+    const orbStop = isBullish
+      ? round2(orb.low * (1 - ORB_BUFFER_PCT))    // LONG: stop below ORB low
+      : round2(orb.high * (1 + ORB_BUFFER_PCT));   // SHORT: stop above ORB high
+
     const originalStop = pick.levels.stop;
     const originalTarget = pick.levels.target;
-    const risk = Math.abs(orbEntry - originalStop);
+
+    // Use the TIGHTER stop: ORB-based or structural (whichever limits risk more)
+    // For LONG: tighter = higher stop. For SHORT: tighter = lower stop.
+    const useOrbStop = isBullish
+      ? orbStop > originalStop   // LONG: ORB stop is higher (tighter) than structural
+      : orbStop < originalStop;  // SHORT: ORB stop is lower (tighter) than structural
+    const effectiveStop = useOrbStop ? orbStop : originalStop;
+    const stopSource = useOrbStop ? 'orb' : 'structural';
+
+    const risk = Math.abs(orbEntry - effectiveStop);
     const reward = Math.abs(originalTarget - orbEntry);
     const newRR = risk > 0 ? round2(reward / risk) : 0;
 
@@ -357,6 +373,10 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
       scan_bias: pick.direction,
       orb_dir: orb.orb_direction,
       new_entry: orbEntry,
+      new_stop: effectiveStop,
+      orb_stop: orbStop,
+      structural_stop: originalStop,
+      stop_source: stopSource,
       original_entry: pick.levels.entry,
       new_rr: newRR,
       min_rr: minRR,
@@ -365,15 +385,21 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
     };
     console.log(`${LOG} │ Check 3 ORB R:R:`);
     console.log(`${LOG} │   orbEntry = ${isBullish ? 'ORB_high' : 'ORB_low'}(${isBullish ? orb.high : orb.low}) × ${isBullish ? '1.001' : '0.999'} = ${orbEntry}`);
-    console.log(`${LOG} │   originalStop=${originalStop} originalTarget=${originalTarget}`);
-    console.log(`${LOG} │   risk = |orbEntry(${orbEntry}) - stop(${originalStop})| = ${round2(risk)}`);
+    console.log(`${LOG} │   orbStop = ${isBullish ? 'ORB_low' : 'ORB_high'}(${isBullish ? orb.low : orb.high}) × ${isBullish ? '0.999' : '1.001'} = ${orbStop} | structuralStop=${originalStop} → using ${stopSource} (${effectiveStop})`);
+    console.log(`${LOG} │   originalTarget=${originalTarget}`);
+    console.log(`${LOG} │   risk = |orbEntry(${orbEntry}) - stop(${effectiveStop})| = ${round2(risk)}`);
     console.log(`${LOG} │   reward = |target(${originalTarget}) - orbEntry(${orbEntry})| = ${round2(reward)}`);
     console.log(`${LOG} │   newRR = ${round2(reward)} / ${round2(risk)} = ${newRR} (min: ${minRR} [${regime}]) → ${checks.orb_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
 
     // Check 4: Nifty alignment — opposing move blocks trade
-    // Regime-aligned trades (e.g. SHORT in BEARISH) get wider threshold (0.5%)
-    // to tolerate normal morning relief rallies that don't invalidate the thesis
-    const niftyThreshold = pick.regime_aligned ? 0.5 : NIFTY_THRESHOLD_PCT;
+    // Regime-aligned trades get wider threshold to tolerate normal morning counter-moves:
+    //   STRONG/EXTREME regimes → 0.75% (e.g. morning relief rally in EXTREME_BEAR is normal)
+    //   WEAK regimes → 0.5%
+    // Counter-regime trades keep strict 0.3% threshold
+    const isStrongRegime = ['STRONG_BULL', 'STRONG_BEAR', 'EXTREME_BULL', 'EXTREME_BEAR'].includes(regime);
+    const niftyThreshold = pick.regime_aligned
+      ? (isStrongRegime ? 0.75 : 0.5)
+      : NIFTY_THRESHOLD_PCT;
     const niftyOpposes = (isBullish && niftyChangePct < -niftyThreshold) ||
                          (!isBullish && niftyChangePct > niftyThreshold);
     checks.nifty_alignment = {

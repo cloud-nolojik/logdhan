@@ -2388,10 +2388,14 @@ async function validateAndPlaceEntries(options = {}) {
     });
   }
 
-  // Step 2: Update validated picks' entry to ORB breakout level (Crabel-style SL-M)
+  // Step 2: Update validated picks' entry + stop to ORB breakout levels (Crabel-style)
+  // Entry → ORB breakout (high+buffer for LONG, low-buffer for SHORT)
+  // Stop  → ORB opposite end (tighter of ORB-based vs structural)
+  // Target → kept as structural (unchanged)
   for (const pick of eligiblePicks) {
     if (pick.validation?.passed && pick.validation.checks.orb_alignment?.new_entry) {
-      // Store original entry for audit trail before overwriting
+      const orbCheck = pick.validation.checks.orb_alignment;
+      // Store original levels for audit trail before overwriting
       pick.validation.original_levels = {
         entry: pick.levels.entry,
         stop: pick.levels.stop,
@@ -2399,8 +2403,18 @@ async function validateAndPlaceEntries(options = {}) {
       };
       pick.validation.levels_recalculated = true;
       // Update entry to ORB breakout level
-      pick.levels.entry = pick.validation.checks.orb_alignment.new_entry;
+      pick.levels.entry = orbCheck.new_entry;
       pick.levels.entry_type = pick.direction === 'LONG' ? 'buy_above' : 'sell_below';
+      // Update stop to ORB-based stop (tighter of ORB vs structural, decided in validation)
+      if (orbCheck.new_stop) {
+        pick.levels.stop = orbCheck.new_stop;
+        pick.levels.stop_source = orbCheck.stop_source;  // 'orb' or 'structural'
+        pick.levels.structural_stop = orbCheck.structural_stop;  // preserve for reference
+      }
+      // Recalculate R:R with new entry and stop
+      const risk = Math.abs(pick.levels.entry - pick.levels.stop);
+      const reward = Math.abs(pick.levels.target - pick.levels.entry);
+      pick.levels.risk_reward = risk > 0 ? Math.round((reward / risk) * 100) / 100 : 0;
     }
   }
   // Mongoose needs a nudge to detect nested changes on subdocument arrays
