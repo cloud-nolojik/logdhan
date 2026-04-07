@@ -81,6 +81,12 @@ const kiteConfig = {
     SL_M: 'SL-M',       // Stop Loss Market
   },
 
+  // Market protection (%) — required by Kite for MARKET and SL-M orders
+  // post SEBI retail-algo rules (effective 2026-04-01). Caps slippage from
+  // the reference price; orders that would fill outside this band are rejected.
+  // 1 = 1% (matches Kite web default since 2025-03-25).
+  DEFAULT_MARKET_PROTECTION: 1,
+
   // Product types
   PRODUCT_TYPES: {
     CNC: 'CNC',         // Cash & Carry (delivery)
