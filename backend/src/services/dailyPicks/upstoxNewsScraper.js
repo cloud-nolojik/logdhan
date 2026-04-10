@@ -20,7 +20,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import Anthropic from '@anthropic-ai/sdk';
-import Stock from '../../models/Stock.js';
+import Stock from '../../models/stock.js';
 
 const LOG = '[NEWS-SCRAPER]';
 const LISTING_URL = 'https://upstox.com/news/market-news/stocks/';
