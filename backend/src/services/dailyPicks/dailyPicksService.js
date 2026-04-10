@@ -312,11 +312,9 @@ async function runDailyPicks(options = {}) {
     }
 
     // Guard: skip intel + selection if levels engine rejected everything
+    // NOTE: Don't return early — Step 6.5 (news scraping) must still run
     if (allViable.length === 0) {
-      console.log(`${LOG} All ${scored.length} candidates rejected by levels engine. Skipping intel. Saving empty doc.`);
-      const doc = await saveToDB(marketContext, [], scanResult, candidatesReview, null);
-      await sendNotification(marketContext, [], doc);
-      return { success: true, picks: 0, doc };
+      console.log(`${LOG} All ${scored.length} candidates rejected by levels engine. Skipping intel + selection. News pipeline will still run.`);
     }
 
     // ── Step 5.5 (DISABLED): Global Market Intelligence via Claude/OpenAI ──
@@ -341,9 +339,14 @@ async function runDailyPicks(options = {}) {
     // Pick the best from each scan type first, then fill remaining slots by score.
     // Use combined regime's maxTrades if available, otherwise fall back to MAX_DAILY_PICKS
     const maxPicksToday = marketContext.max_trades != null ? Math.min(marketContext.max_trades, MAX_DAILY_PICKS) : MAX_DAILY_PICKS;
-    console.log(`${LOG} [Step 6] Max picks today: ${maxPicksToday} (regime=${marketContext.regime}, cap=${MAX_DAILY_PICKS})`);
-    const picksWithLevels = selectDiversePicks(allViable, maxPicksToday, marketContext.regime);
-    console.log(`${LOG} Selected ${picksWithLevels.length} picks (diversity-weighted) from ${allViable.length} viable`);
+    let picksWithLevels = [];
+    if (allViable.length > 0) {
+      console.log(`${LOG} [Step 6] Max picks today: ${maxPicksToday} (regime=${marketContext.regime}, cap=${MAX_DAILY_PICKS})`);
+      picksWithLevels = selectDiversePicks(allViable, maxPicksToday, marketContext.regime);
+      console.log(`${LOG} Selected ${picksWithLevels.length} picks (diversity-weighted) from ${allViable.length} viable`);
+    } else {
+      console.log(`${LOG} [Step 6] No viable ChartInk candidates — skipping selection.`);
+    }
 
     // Sync candidatesReview with intel-adjusted scores and mark selected picks
     const selectedSymbols = new Set(picksWithLevels.map(p => p.symbol));
@@ -359,17 +362,15 @@ async function runDailyPicks(options = {}) {
       }
     }
 
-    if (picksWithLevels.length === 0) {
-      console.log(`${LOG} All ${scored.length} candidates rejected by engine (no viable R:R). Saving empty doc.`);
-      const doc = await saveToDB(marketContext, [], scanResult, candidatesReview, globalIntel);
-      await sendNotification(marketContext, [], doc);
-      return { success: true, picks: 0, doc };
+    // Step 6: Generate AI insights (non-fatal) — skip if no viable picks
+    let picksWithInsights = [];
+    if (picksWithLevels.length > 0) {
+      console.log(`${LOG} [Step 6] Generating AI insights for ${picksWithLevels.length} picks: ${picksWithLevels.map(p => p.symbol).join(', ')}`);
+      picksWithInsights = await generatePickInsights(picksWithLevels, marketContext);
+      console.log(`${LOG} [Step 6] AI insights done: ${picksWithInsights.filter(p => p.ai_generated).length}/${picksWithInsights.length} generated`);
+    } else {
+      console.log(`${LOG} [Step 6] No viable ChartInk picks — skipping AI insights.`);
     }
-
-    // Step 6: Generate AI insights (non-fatal)
-    console.log(`${LOG} [Step 6] Generating AI insights for ${picksWithLevels.length} picks: ${picksWithLevels.map(p => p.symbol).join(', ')}`);
-    const picksWithInsights = await generatePickInsights(picksWithLevels, marketContext);
-    console.log(`${LOG} [Step 6] AI insights done: ${picksWithInsights.filter(p => p.ai_generated).length}/${picksWithInsights.length} generated`);
 
     // ── Step 6.5: Upstox "Stocks to Watch" — separate news pipeline ──
     // News stocks are shown in the app as their own section (not competing with top-3 ChartInk picks).
@@ -474,9 +475,12 @@ async function runDailyPicks(options = {}) {
     const elapsed = Date.now() - startTime;
     console.log(`${LOG} ════════════════════════════════════════`);
     console.log(`${LOG} ✅ PIPELINE COMPLETE in ${elapsed}ms`);
-    console.log(`${LOG} Pipeline summary: ${scanResult.candidates.length} scanned → ${enriched.length} enriched → ${scored.length} scored → ${allViable.length} viable → ${picksWithInsights.length} final picks`);
+    console.log(`${LOG} Pipeline summary: ${scanResult.candidates.length} scanned → ${enriched.length} enriched → ${scored.length} scored → ${allViable.length} viable → ${picksWithInsights.length} final picks + ${newsPicksProcessed.length} news picks`);
     for (const p of picksWithInsights) {
       console.log(`${LOG} FINAL PICK: ${p.symbol} | ${p.scan_type} | ${p.direction} | score=${p.rank_score} | entry=₹${p.levels.entry} stop=₹${p.levels.stop} target=₹${p.levels.target} R:R=${p.levels.risk_reward}`);
+    }
+    for (const np of newsPicksProcessed) {
+      console.log(`${LOG} NEWS PICK: ${np.symbol} | ${np.direction} | ${np.engine_status} | entry=₹${np.levels?.entry || 'N/A'} stop=₹${np.levels?.stop || 'N/A'} T1=₹${np.levels?.target1 || 'N/A'} T2=₹${np.levels?.target || 'N/A'} T3=₹${np.levels?.target3 || 'N/A'}`);
     }
     console.log(`${LOG} ════════════════════════════════════════`);
     return { success: true, picks: picksWithInsights.length, doc };
