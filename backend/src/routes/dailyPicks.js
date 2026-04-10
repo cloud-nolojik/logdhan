@@ -88,15 +88,34 @@ router.get('/today', auth, async (req, res) => {
 
     const doc = await DailyPick.findOne({ trading_date: today }).lean();
 
-    if (!doc || !doc.picks || doc.picks.length === 0) {
-      const emptyContext = { ...(doc?.market_context || {}) };
-      if (doc?.global_intel) {
+    if (!doc) {
+      return res.json({
+        success: true,
+        data: {
+          picks: [],
+          news_picks: [],
+          news_article: null,
+          market_context: {},
+          message: 'No setups today'
+        }
+      });
+    }
+
+    // If no ChartInk picks AND no news picks, return early with empty state
+    const hasChartinkPicks = doc.picks && doc.picks.length > 0;
+    const hasNewsPicks = doc.news_picks && doc.news_picks.length > 0;
+
+    if (!hasChartinkPicks && !hasNewsPicks) {
+      const emptyContext = { ...(doc.market_context || {}) };
+      if (doc.global_intel) {
         emptyContext.global_intel = sanitizeIntelForMobile(doc.global_intel);
       }
       return res.json({
         success: true,
         data: {
           picks: [],
+          news_picks: [],
+          news_article: doc.news_article || null,
           market_context: emptyContext,
           message: 'No setups today'
         }
