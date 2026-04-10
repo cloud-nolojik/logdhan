@@ -139,7 +139,16 @@ const pickSchema = new mongoose.Schema({
     enum: ['BULLISH', 'NEUTRAL', 'BEARISH', null],
     default: null
   },
-  news_adjustment: { type: Number, default: 0 }
+  news_adjustment: { type: Number, default: 0 },
+
+  // Upstox "Stocks to Watch" news context (populated for news_upstox_* scan types)
+  news_context: {
+    source: { type: String, default: null },        // e.g. 'upstox_stocks_to_watch'
+    sentiment: { type: String, default: null },      // BULLISH / BEARISH from article
+    reason: { type: String, default: null },          // AI-extracted reason
+    key_data: { type: String, default: null },        // Key numbers/facts from article
+    article_name: { type: String, default: null },    // Company name as in article
+  }
 }, { _id: true });
 
 const dailyPickSchema = new mongoose.Schema({
@@ -162,8 +171,56 @@ const dailyPickSchema = new mongoose.Schema({
     }
   },
 
-  // Selected picks (max 3)
+  // Selected picks (max 3 from ChartInk scans)
   picks: [pickSchema],
+
+  // Upstox "Stocks to Watch" news picks — ALL scraped stocks shown (not filtered by top-3 cap)
+  // Each has entry/stop/target from the levels engine, but none are excluded for R:R
+  news_picks: [{
+    symbol: { type: String, required: true },
+    instrument_key: String,
+    stock_name: String,
+    direction: { type: String, enum: ['LONG', 'SHORT'] },
+    levels: {
+      entry: Number,
+      stop: Number,
+      target: Number,       // Main target (target2 from engine)
+      target1: Number,      // Conservative target
+      target3: Number,      // Aggressive target
+      risk_pct: Number,
+      reward_pct: Number,
+      risk_reward: Number,
+      mode: String,
+      reason: String,
+    },
+    rank_score: Number,
+    scan_scores: {
+      close_in_range_pct: Number,
+      volume_ratio: Number,
+      rsi: Number,
+      atr_pct: Number,
+      candle_pattern: String,
+    },
+    news_context: {
+      source: String,
+      sentiment: String,
+      reason: String,
+      key_data: String,
+      article_name: String,
+    },
+    // Whether the engine confirmed the news direction (technical alignment)
+    technically_confirmed: { type: Boolean, default: false },
+    engine_status: { type: String, enum: ['VIABLE', 'WEAK_RR', 'NO_LEVELS', 'NO_DATA'], default: 'NO_DATA' },
+  }],
+
+  // Metadata for the news article scraped today
+  news_article: {
+    url: String,
+    title: String,
+    scraped_at: Date,
+    total_stocks_found: Number,
+    total_mapped: Number,
+  },
 
   // Scan summary
   summary: {

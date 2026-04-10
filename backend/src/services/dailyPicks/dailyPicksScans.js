@@ -159,6 +159,8 @@ export const SCAN_LABELS = {
   pullback_at_support: 'Pullback Support',
   volume_shocker_bearish: 'Volume Shocker Bear',
   volume_shocker_bullish: 'Volume Shocker Bull',
+  news_upstox_bullish: 'News Watch Bull',
+  news_upstox_bearish: 'News Watch Bear',
 };
 
 /**
@@ -172,10 +174,12 @@ export const SCAN_PRIORITY = {
   fiftyTwoWeek_low:       { rank: 1, direction: 'SHORT' },
   failed_at_resistance:   { rank: 2, direction: 'SHORT' },
   volume_shocker_bearish: { rank: 3, direction: 'SHORT' },
+  news_upstox_bearish:    { rank: 4, direction: 'SHORT' },
   // Bullish — strongest to weakest
   fiftyTwoWeek_high:      { rank: 1, direction: 'LONG' },
   pullback_at_support:    { rank: 2, direction: 'LONG' },
   volume_shocker_bullish: { rank: 3, direction: 'LONG' },
+  news_upstox_bullish:    { rank: 4, direction: 'LONG' },
 };
 
 // Run order for ChartInk API calls — bearish first, then bullish
@@ -195,4 +199,7 @@ export const SCAN_ARCHETYPE = {
   fiftyTwoWeek_high: 'fiftyTwoWeek_high',
   pullback_at_support: 'pullback',
   volume_shocker_bullish: 'breakout',
+  // News-based: use generic breakout/breakdown — engine adapts entry/stop/target
+  news_upstox_bullish: 'breakout',
+  news_upstox_bearish: 'breakdown_setup',
 };

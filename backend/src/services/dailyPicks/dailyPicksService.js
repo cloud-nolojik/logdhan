@@ -31,6 +31,7 @@ import { checkCircuitBreaker, resetCircuitBreaker, reconcilePositionsOnStartup }
 import { filterEarningsStocks } from './earningsFilter.js';
 // newsSentimentFilter.js is DEPRECATED — scoring now done inline at Step 5.5 using constants below
 import { fetchSGXNiftyData, clearIntelCache } from './globalMarketIntel.js';
+import { scrapeUpstoxNewsForCandidates } from './upstoxNewsScraper.js';
 // Intel imports — kept for future re-enable. Currently replaced by checkEconomicCalendar.
 // import { fetchGlobalMarketIntel, shouldAvoidTrading, getTradingAdjustment } from './globalMarketIntel.js';
 import scanLevels from '../../engine/scanLevels.js';
@@ -84,21 +85,25 @@ const SCAN_PRIORITY_BONUS = {
     fiftyTwoWeek_high: 6,
     pullback_at_support: 5,
     volume_shocker_bullish: 3,
+    news_upstox_bullish: 2,
   },
   STRONG_BULL: {
     fiftyTwoWeek_high: 8,
     pullback_at_support: 5,
     volume_shocker_bullish: 5,
+    news_upstox_bullish: 3,
   },
   EXTREME_BEAR: {
     fiftyTwoWeek_low: 6,
     failed_at_resistance: 5,
     volume_shocker_bearish: 3,
+    news_upstox_bearish: 2,
   },
   STRONG_BEAR: {
     fiftyTwoWeek_low: 8,
     failed_at_resistance: 5,
     volume_shocker_bearish: 5,
+    news_upstox_bearish: 3,
   }
 };
 
@@ -366,9 +371,100 @@ async function runDailyPicks(options = {}) {
     const picksWithInsights = await generatePickInsights(picksWithLevels, marketContext);
     console.log(`${LOG} [Step 6] AI insights done: ${picksWithInsights.filter(p => p.ai_generated).length}/${picksWithInsights.length} generated`);
 
-    // Step 7: Save to DB (includes full global intel snapshot)
-    console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks`);
-    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, null);
+    // ── Step 6.5: Upstox "Stocks to Watch" — separate news pipeline ──
+    // News stocks are shown in the app as their own section (not competing with top-3 ChartInk picks).
+    // ALL scraped stocks are kept; the engine provides entry/stop/target but doesn't filter them out.
+    let newsPicksProcessed = [];
+    let newsArticleMeta = null;
+    try {
+      const newsResult = await scrapeUpstoxNewsForCandidates();
+      if (newsResult.candidates.length > 0) {
+        console.log(`${LOG} [Step 6.5] Processing ${newsResult.candidates.length} news candidates...`);
+        newsArticleMeta = {
+          url: newsResult.article_url,
+          title: newsResult.article_title,
+          scraped_at: new Date(),
+          total_stocks_found: (newsResult.raw_stocks || []).length,
+          total_mapped: newsResult.candidates.length,
+        };
+
+        // Enrich news candidates with OHLCV + indicators (reuse existing enrichment)
+        const newsEnriched = await enrichCandidates(newsResult.candidates, { allowOutdatedCandle });
+
+        // Run each through levels engine — but keep ALL regardless of R:R
+        for (const candidate of newsEnriched) {
+          const withLevels = calculateLevels(candidate);
+          const newsPick = {
+            symbol: candidate.symbol,
+            instrument_key: candidate.instrument_key,
+            stock_name: candidate.stock_name,
+            direction: candidate.direction,
+            rank_score: candidate.rank_score || 0,
+            scan_scores: candidate.scan_scores,
+            news_context: candidate.news_context || null,
+          };
+
+          if (withLevels && withLevels.levels) {
+            newsPick.levels = withLevels.levels;
+            newsPick.technically_confirmed = true;
+            newsPick.engine_status = 'VIABLE';
+            console.log(`${LOG} [Step 6.5] ${candidate.symbol}: VIABLE — entry=₹${withLevels.levels.entry} stop=₹${withLevels.levels.stop} target=₹${withLevels.levels.target} T1=₹${withLevels.levels.target1 || 'N/A'} T3=₹${withLevels.levels.target3 || 'N/A'} R:R=${withLevels.levels.risk_reward}`);
+          } else {
+            // Levels engine rejected (bad R:R) — still include but mark as weak
+            newsPick.technically_confirmed = false;
+            newsPick.engine_status = 'WEAK_RR';
+            // Try to at least show basic levels from OHLCV
+            const _o = candidate._ohlcv;
+            if (_o) {
+              const entry = _o.close;
+              const stop = candidate.direction === 'LONG' ? _o.low : _o.high;
+              const atr = _o.atr || 0;
+              const target = candidate.direction === 'LONG' ? entry + (atr * 2) : entry - (atr * 2);
+              newsPick.levels = {
+                entry: round2(entry),
+                stop: round2(stop),
+                target: round2(target),
+                target1: round2(candidate.direction === 'LONG' ? entry + (atr * 1.5) : entry - (atr * 1.5)),
+                target3: round2(candidate.direction === 'LONG' ? entry + (atr * 3) : entry - (atr * 3)),
+                risk_pct: entry > 0 ? round2(Math.abs(entry - stop) / entry * 100) : 0,
+                reward_pct: entry > 0 ? round2(Math.abs(target - entry) / entry * 100) : 0,
+                risk_reward: Math.abs(entry - stop) > 0 ? round2(Math.abs(target - entry) / Math.abs(entry - stop)) : 0,
+                mode: 'atr_fallback_news',
+                reason: 'ATR-based levels (engine R:R threshold not met)',
+              };
+            }
+            console.log(`${LOG} [Step 6.5] ${candidate.symbol}: WEAK R:R — kept with ATR fallback levels`);
+          }
+          newsPicksProcessed.push(newsPick);
+        }
+
+        // Also include candidates that couldn't be enriched (no candle data)
+        const enrichedSymbols = new Set(newsEnriched.map(c => c.symbol));
+        for (const candidate of newsResult.candidates) {
+          if (!enrichedSymbols.has(candidate.symbol)) {
+            newsPicksProcessed.push({
+              symbol: candidate.symbol,
+              stock_name: candidate.stock_name,
+              direction: candidate.direction,
+              news_context: candidate.news_context || null,
+              technically_confirmed: false,
+              engine_status: 'NO_DATA',
+            });
+            console.log(`${LOG} [Step 6.5] ${candidate.symbol}: NO DATA — kept without levels`);
+          }
+        }
+
+        console.log(`${LOG} [Step 6.5] News picks: ${newsPicksProcessed.length} total (${newsPicksProcessed.filter(p => p.technically_confirmed).length} confirmed, ${newsPicksProcessed.filter(p => !p.technically_confirmed).length} unconfirmed)`);
+      } else {
+        console.log(`${LOG} [Step 6.5] No news article found for today.`);
+      }
+    } catch (newsErr) {
+      console.error(`${LOG} [Step 6.5] News pipeline failed (non-fatal): ${newsErr.message}`);
+    }
+
+    // Step 7: Save to DB (includes full global intel snapshot + news picks)
+    console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks + ${newsPicksProcessed.length} news picks`);
+    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, null, newsPicksProcessed, newsArticleMeta);
     console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
 
     // Step 8: Send notification
@@ -1133,6 +1229,8 @@ const MIN_RR_BY_SCAN_TYPE = {
   pullback_at_support:    1.5,
   volume_shocker_bearish: 1.5,
   volume_shocker_bullish: 1.5,
+  news_upstox_bullish:    1.5,
+  news_upstox_bearish:    1.5,
 };
 const MIN_REWARD_PCT_BY_SCAN_TYPE = {
   fiftyTwoWeek_low:       3.0,
@@ -1141,6 +1239,8 @@ const MIN_REWARD_PCT_BY_SCAN_TYPE = {
   pullback_at_support:    2.0,
   volume_shocker_bearish: 2.0,
   volume_shocker_bullish: 2.0,
+  news_upstox_bullish:    2.0,
+  news_upstox_bearish:    2.0,
 };
 
 // Graduated sector scoring — how strongly the sector confirms/contradicts the trade direction
@@ -1627,7 +1727,7 @@ Generate 1-2 sentence insights for each pick.`
 // STEP 7: SAVE TO DB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function saveToDB(marketContext, picks, scanResult, candidatesReview = [], globalIntel = null) {
+async function saveToDB(marketContext, picks, scanResult, candidatesReview = [], globalIntel = null, newsPicks = [], newsArticleMeta = null) {
   // Determine scan_date and trading_date based on when we're running:
   // - 8:40 AM scheduled run: scan_date = yesterday, trading_date = today
   // - Manual evening run:    scan_date = today,     trading_date = next trading day
@@ -1668,7 +1768,8 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [],
     ai_insight: p.ai_insight || null,
     ai_generated: p.ai_generated || false,
     news_sentiment: p.news_sentiment || null,
-    news_adjustment: p.news_adjustment || 0
+    news_adjustment: p.news_adjustment || 0,
+    news_context: p.news_context || null,
   }));
 
   // Upsert: one document per trading day
@@ -1687,6 +1788,9 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [],
           selected_count: picks.length
         },
         candidates_review: candidatesReview,
+        // Upstox "Stocks to Watch" — ALL news stocks (not filtered by top-3 cap)
+        ...(newsPicks.length > 0 ? { news_picks: newsPicks } : {}),
+        ...(newsArticleMeta ? { news_article: newsArticleMeta } : {}),
         ...(globalIntel ? {
           global_intel: {
             market_mood: globalIntel.market_mood,

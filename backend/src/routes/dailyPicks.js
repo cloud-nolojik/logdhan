@@ -103,10 +103,11 @@ router.get('/today', auth, async (req, res) => {
       });
     }
 
-    // Get live prices for all picks with instrument keys
-    const instrumentKeys = doc.picks
-      .filter(p => p.instrument_key)
-      .map(p => p.instrument_key);
+    // Get live prices for all picks + news picks with instrument keys
+    const instrumentKeys = [
+      ...doc.picks.filter(p => p.instrument_key).map(p => p.instrument_key),
+      ...(doc.news_picks || []).filter(p => p.instrument_key).map(p => p.instrument_key),
+    ].filter((v, i, a) => a.indexOf(v) === i); // dedup
 
     let livePrices = {};
     if (instrumentKeys.length > 0) {
@@ -137,7 +138,13 @@ router.get('/today', auth, async (req, res) => {
         direction: pick.direction,
         rank_score: pick.rank_score,
         scan_scores: pick.scan_scores,
-        levels: pick.levels,
+        levels: {
+          ...pick.levels,
+          // Explicit target ladder for the app
+          target1: pick.levels?.target1 || null,   // Conservative target
+          target: pick.levels?.target || null,      // Main target
+          target3: pick.levels?.target3 || null,    // Aggressive target
+        },
         trade: {
           ...pick.trade,
           current_price: currentPrice,
@@ -145,6 +152,7 @@ router.get('/today', auth, async (req, res) => {
         },
         kite_status: pick.kite?.kite_status,
         ai_insight: pick.ai_insight,
+        news_context: pick.news_context || null,
         validation: pick.validation ? {
           passed: pick.validation.passed,
           skip_reason: pick.validation.skip_reason,
@@ -173,6 +181,30 @@ router.get('/today', auth, async (req, res) => {
     if (doc.global_intel) {
       marketContext.global_intel = sanitizeIntelForMobile(doc.global_intel);
     }
+    // ── Enrich news picks with live prices ──
+    const newsPicksEnriched = (doc.news_picks || []).map(np => {
+      const nInstrumentKey = np.instrument_key;
+      const nCurrentPrice = nInstrumentKey ? livePrices[nInstrumentKey] : null;
+
+      return {
+        symbol: np.symbol,
+        stock_name: np.stock_name,
+        direction: np.direction,
+        levels: np.levels ? {
+          ...np.levels,
+          target1: np.levels.target1 || null,
+          target: np.levels.target || null,
+          target3: np.levels.target3 || null,
+        } : null,
+        rank_score: np.rank_score,
+        scan_scores: np.scan_scores,
+        news_context: np.news_context,
+        technically_confirmed: np.technically_confirmed,
+        engine_status: np.engine_status,
+        current_price: nCurrentPrice,
+      };
+    });
+
     res.json({
       success: true,
       data: {
@@ -180,9 +212,12 @@ router.get('/today', auth, async (req, res) => {
         scan_date: doc.scan_date ? new Date(new Date(doc.scan_date).getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0] : null,
         market_context: marketContext,
         picks: enrichedPicks,
+        news_picks: newsPicksEnriched,
+        news_article: doc.news_article || null,
         summary: {
           ...doc.summary,
-          auto_exit_time: '3:00 PM'
+          auto_exit_time: '3:00 PM',
+          news_picks_count: newsPicksEnriched.length,
         },
         results: doc.results
       }
