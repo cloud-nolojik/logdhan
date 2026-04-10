@@ -1547,6 +1547,9 @@ function calculateLevels(pick) {
     // Intraday flag — signals scanLevels to use daily pivots instead of weekly
     isIntraday: true,
 
+    // Skip risk/reward guardrails for news picks — they must always show levels
+    skipGuardrails: scan_type?.startsWith('news_upstox_'),
+
     // Scan-type-aware minimum R:R — different setups have different risk profiles
     minRR: MIN_RR_BY_SCAN_TYPE[scan_type] || 1.5,
 
@@ -1597,9 +1600,10 @@ function calculateLevels(pick) {
   // With PDH/PDL stops, risk should naturally stay under 3%.
   // 52W breakout/breakdown stocks are inherently volatile — 5% cap.
   const is52wScan = scan_type === 'fiftyTwoWeek_high' || scan_type === 'fiftyTwoWeek_low';
+  const isNewsScan = scan_type?.startsWith('news_upstox_');
   const DAILY_PICKS_MAX_RISK = is52wScan ? 5.0 : 3.0;
 
-  if (riskPercent > DAILY_PICKS_MAX_RISK) {
+  if (!isNewsScan && riskPercent > DAILY_PICKS_MAX_RISK) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED — Risk ${round2(riskPercent)}% exceeds daily picks cap (${DAILY_PICKS_MAX_RISK}%)`);
     pick._lastRejectionReason = `Risk ${round2(riskPercent)}% exceeds ${DAILY_PICKS_MAX_RISK}% cap`;
     return null;
@@ -1607,8 +1611,9 @@ function calculateLevels(pick) {
 
   // Minimum absolute reward % — even good R:R is worthless if the move is too small
   // A 3:1 R:R on a 1% move = ₹5 on a ₹500 stock, eaten by slippage/brokerage
+  // Skip for news picks — they must always show levels
   const minRewardPct = MIN_REWARD_PCT_BY_SCAN_TYPE[scan_type] || 2.0;
-  if (rewardPercent < minRewardPct) {
+  if (!isNewsScan && rewardPercent < minRewardPct) {
     console.log(`${LOG} [Levels] ${symbol}: REJECTED — Reward ${round2(rewardPercent)}% below minimum ${minRewardPct}% for ${scan_type} (R:R=${round2(riskReward)} was fine but move too small)`);
     pick._lastRejectionReason = `Reward ${round2(rewardPercent)}% below ${minRewardPct}% minimum (move too small)`;
     return null;

@@ -833,8 +833,10 @@ export function calculateTradingLevels(scanType, data) {
 
   // ─────────────────────────────────────────────────────────────────────────
   // APPLY GUARDRAILS
+  // Skip risk/reward guardrails when skipGuardrails=true (e.g. news picks
+  // that must always show levels regardless of R:R quality)
   // ─────────────────────────────────────────────────────────────────────────
-  const guarded = applyGuardrails(result.entry, result.stop, result.target, atr, scanType);
+  const guarded = applyGuardrails(result.entry, result.stop, result.target, atr, scanType, { skipRiskReward: data.skipGuardrails });
   if (guarded.valid) {
     console.log(`[SCAN-LEVELS] ${scanType}: entry=₹${round2(guarded.entry)} stop=₹${round2(guarded.stop)} target=₹${round2(guarded.target)} R:R=${guarded.riskReward} risk=${guarded.riskPercent}% mode=${result.mode || scanType}`);
   } else {
@@ -1533,7 +1535,8 @@ function calculateAPlusMomentumLevels(data) {
  * These guards REJECT invalid trades rather than adjusting stops
  * (adjusting stops breaks structural logic)
  */
-function applyGuardrails(entry, stop, target, atr, scanType) {
+function applyGuardrails(entry, stop, target, atr, scanType, options = {}) {
+  const { skipRiskReward = false } = options;
   const adjustments = [];
 
   // Detect if this is a SHORT trade based on scan type
@@ -1613,7 +1616,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   const is52wScan = ['fiftytwoweek_high', 'fiftytwoweek_low'].includes(scanType?.toLowerCase());
   const MAX_RISK_PERCENT = is52wScan ? 5.0 : 3.0;
 
-  if (riskPercent > MAX_RISK_PERCENT) {
+  if (!skipRiskReward && riskPercent > MAX_RISK_PERCENT) {
     return {
       valid: false,
       reason: `Risk too high: ${round2(riskPercent)}% (max ${MAX_RISK_PERCENT}%). ` +
@@ -1628,7 +1631,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   // ─────────────────────────────────────────────────────────────────────────
   const MIN_RISK_PERCENT = 0.5;
 
-  if (riskPercent < MIN_RISK_PERCENT) {
+  if (!skipRiskReward && riskPercent < MIN_RISK_PERCENT) {
     return {
       valid: false,
       reason: `Risk too small: ${round2(riskPercent)}% (min ${MIN_RISK_PERCENT}%). ` +
@@ -1646,7 +1649,7 @@ function applyGuardrails(entry, stop, target, atr, scanType) {
   const rewardPercent = (reward / entry) * 100;
   const MIN_TARGET_PERCENT = scanType === 'pullback' ? 1.5 : 2.0;
 
-  if (rewardPercent < MIN_TARGET_PERCENT) {
+  if (!skipRiskReward && rewardPercent < MIN_TARGET_PERCENT) {
     return {
       valid: false,
       reason: `Target too close: ${round2(rewardPercent)}% (min ${MIN_TARGET_PERCENT}%). ` +
