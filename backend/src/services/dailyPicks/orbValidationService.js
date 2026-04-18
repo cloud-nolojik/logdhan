@@ -13,14 +13,13 @@
 import kiteOrderService from '../kiteOrder.service.js';
 import { rateLimitedGet } from '../../utils/upstoxRateLimiter.js';
 import { round2 } from './dailyPicksHelpers.js';
-import { MIN_ORB_RR_BY_REGIME, GAP_DIRECTION_THRESHOLD_PCT, GAP_FADE_MAX_PASS, GAP_SIZE_ADVERSE_MAX_PCT, GAP_SIZE_ALIGNED_MAX_PCT, MIN_ORB_VOLUME_RATIO, TRADING_CANDLES_PER_DAY } from './dailyPicksConstants.js';
+import { MIN_ORB_RR_BY_REGIME, GAP_DIRECTION_THRESHOLD_PCT, GAP_FADE_MAX_PASS, GAP_SIZE_ADVERSE_MAX_PCT, GAP_SIZE_ALIGNED_MAX_PCT, MIN_ORB_VOLUME_RATIO, TRADING_CANDLES_PER_DAY, MAX_ORB_ATR_RATIO, MAX_ORB_RANGE_PCT_ABSOLUTE } from './dailyPicksConstants.js';
 
 const LOG = '[ORB]';
 
 // Crabel-style ORB constants
 const ORB_BUFFER_PCT = 0.001;       // 0.1% above ORB high (longs) / below ORB low (shorts)
 const NIFTY_THRESHOLD_PCT = 0.3;    // >0.3% opposing NIFTY move blocks trade
-const MAX_ORB_RANGE_PCT = 3.0;      // ORB range > 3% of stock price = too volatile
 
 /**
  * Compute volume ratio from actual volume, candle count, and 50-day average.
@@ -57,7 +56,12 @@ async function fetchOrbVolume(picks) {
 
   for (const pick of picks) {
     const instrumentKey = pick.instrument_key;
-    const avgVol50d = pick._ohlcv?.avg_volume_50d || 0;
+    // avg_volume_50d: prefer scan_scores (persisted to DB) over _ohlcv (transient, not in pickSchema)
+    const avgVol50dScanScores = pick.scan_scores?.avg_volume_50d;
+    const avgVol50dOhlcv = pick._ohlcv?.avg_volume_50d;
+    const avgVol50d = avgVol50dScanScores || avgVol50dOhlcv || 0;
+    const avgVolSource = avgVol50dScanScores ? 'scan_scores(DB)' : avgVol50dOhlcv ? '_ohlcv(transient)' : 'MISSING';
+    console.log(`${LOG} [VOL] ${pick.symbol}: instrument_key=${instrumentKey || 'MISSING'} avgVol50d=${avgVol50d} source=${avgVolSource}`);
 
     if (!instrumentKey || !avgVol50d) {
       console.log(`${LOG} [VOL] ${pick.symbol}: skipping volume fetch — no instrument_key or avg_volume`);
@@ -120,13 +124,9 @@ async function collectOpeningRange(symbols, picks) {
     console.error(`${LOG} [ERROR] getOHLC() returned empty data — no OHLC for any instrument`);
   }
 
-  // Prev close map for gap calculation
-  const prevCloseMap = {};
-  for (const pick of picks) {
-    prevCloseMap[pick.symbol] = pick.levels.entry;
-  }
-
   // Build result map from OHLC data
+  // Note: In Kite's OHLC endpoint, `close` = the PREVIOUS DAY'S close (not intraday).
+  // We use it directly for gap calculation — no need for a pre-computed prevCloseMap.
   const resultMap = {};
 
   for (const sym of symbols) {
@@ -138,13 +138,13 @@ async function collectOpeningRange(symbols, picks) {
       continue;
     }
 
-    const { open, high, low, close } = data.ohlc;
+    const { open, high, low, close: prevClose } = data.ohlc;  // Kite: close = prev day close
     const ltp = data.last_price;
 
-    const prevClose = prevCloseMap[sym];
-    const gapPct = prevClose ? round2(((open - prevClose) / prevClose) * 100) : 0;
+    // Gap = today's open vs yesterday's close
+    const gapPct = prevClose > 0 ? round2(((open - prevClose) / prevClose) * 100) : 0;
 
-    // ORB direction: LTP vs open (Kite's `close` = prev day close, not candle close)
+    // ORB direction: LTP vs open
     let orbDirection = 'NEUTRAL';
     if (ltp > open * 1.001) orbDirection = 'UP';
     else if (ltp < open * 0.999) orbDirection = 'DOWN';
@@ -158,7 +158,7 @@ async function collectOpeningRange(symbols, picks) {
       orb_direction: orbDirection
     };
 
-    console.log(`${LOG} ${sym}: O=${open} H=${high} L=${low} LTP=${ltp} prevClose=${close} gap=${gapPct}% dir=${orbDirection}`);
+    console.log(`${LOG} ${sym}: O=${open} H=${high} L=${low} LTP=${ltp} prevClose=${prevClose} gap=${gapPct}% dir=${orbDirection}`);
   }
 
   // NIFTY ORB
@@ -249,7 +249,7 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
   //         gap_direction: { passed: true, value: orb?.gap_percent || 0, direction: 'FORCED' },
   //         orb_alignment: { passed: true, scan_bias: pick.direction, orb_dir: orb?.orb_direction || 'FORCED', new_entry: orbEntry, original_entry: pick.levels.entry, new_rr: 99, min_rr: MIN_ORB_RR, orb_high: orb?.high || 0, orb_low: orb?.low || 0 },
   //         nifty_alignment: { passed: true, nifty_dir: niftyDir, nifty_change_pct: niftyChangePct, threshold: NIFTY_THRESHOLD_PCT },
-  //         entry_still_valid: { passed: true, orb_range_pct: 0, max_allowed: MAX_ORB_RANGE_PCT },
+  //         orb_range_width: { passed: true, orb_range_pct: 0, orb_atr_ratio: 0, max_ratio: MAX_ORB_ATR_RATIO, max_absolute_pct: MAX_ORB_RANGE_PCT_ABSOLUTE },
   //         volume_check: { passed: true, ratio: null }
   //       },
   //       skip_reason: null,
@@ -276,7 +276,11 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
 
     const orbDate = orb.date || '';
     console.log(`${LOG} │ ORB data: ${orbDate ? `[${orbDate}] ` : ''}O=${orb.opening_price} H=${orb.high} L=${orb.low} gap=${orb.gap_percent}% dir=${orb.orb_direction}`);
-    console.log(`${LOG} │ Pre-market levels: entry=${pick.levels.entry} stop=${pick.levels.stop} target=${pick.levels.target} R:R=${pick.levels.risk_reward}`);
+    // Pure-ORB design: levels are computed from OR below, not pre-market.
+    // Only warn if an actual entry price exists (not an empty {} stub).
+    if (pick.levels && typeof pick.levels.entry === 'number') {
+      console.log(`${LOG} │ (legacy pre-market levels present on pick — ignored in pure-ORB flow): entry=${pick.levels.entry} stop=${pick.levels.stop} target=${pick.levels.target}`);
+    }
 
     // Populate ORB data on the pick — preserve orb_pass/orb_passes from multi-pass tracking
     pick.orb = {
@@ -306,7 +310,7 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
       gap_aligned: gapAligned
     };
     console.log(`${LOG} │ Check 1 GAP SIZE: |${orb.gap_percent}%| < ${gapThreshold}% (${gapAligned ? 'aligned' : 'adverse'}) → ${checks.gap_check.passed ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`${LOG} │   gap = (open(${orb.opening_price}) - entry(${pick.levels.entry})) / entry × 100`);
+    console.log(`${LOG} │   gap = (open(${orb.opening_price}) - prev_close) / prev_close × 100`);
 
     // Check 2: Gap direction must not oppose scan bias
     const gapOpposesDirection = (isBullish && orb.gap_percent < -GAP_DIRECTION_THRESHOLD_PCT) || (!isBullish && orb.gap_percent > GAP_DIRECTION_THRESHOLD_PCT);
@@ -317,55 +321,51 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
     };
     console.log(`${LOG} │ Check 2 GAP DIR: ${isBullish ? 'LONG' : 'SHORT'} bias, gap=${orb.gap_percent}% (threshold: ±${GAP_DIRECTION_THRESHOLD_PCT}%) → ${checks.gap_direction.passed ? '✅ PASS' : '❌ FAIL (gap opposes direction)'}`);
 
-    // Gap-fade override: on Pass 2+, if Check 2 failed but LTP has faded back
-    // through the original entry price, the gap has reversed and thesis is alive.
-    // Edge Case 1 gate: LTP < open alone isn't enough — require LTP past original entry.
+    // Gap-fade override: on Pass 2+, if Check 2 failed but LTP has retraced
+    // through the opening price (back into the prev-day range), the gap has
+    // reversed and the thesis is alive. Pure-ORB: we compare LTP to the ORB
+    // opening_price (today's open), not a pre-market entry.
     let gapFadeTriggered = false;
     if (!checks.gap_direction.passed && orbPass > 1 && orbPass <= GAP_FADE_MAX_PASS && orb.ltp) {
-      const originalEntry = pick.levels.entry;
-      const ltpPastEntry = (isBullish && orb.ltp > originalEntry) || (!isBullish && orb.ltp < originalEntry);
+      const fadeAnchor = orb.opening_price;
+      const ltpPastAnchor = (isBullish && orb.ltp > fadeAnchor) || (!isBullish && orb.ltp < fadeAnchor);
 
-      if (ltpPastEntry) {
+      if (ltpPastAnchor) {
         checks.gap_direction.passed = true;
         checks.gap_direction.gap_fade = true;
         checks.gap_direction.ltp = orb.ltp;
-        checks.gap_direction.original_entry = originalEntry;
+        checks.gap_direction.fade_anchor = fadeAnchor;
         gapFadeTriggered = true;
-        console.log(`${LOG} │ Check 2 GAP-FADE OVERRIDE: LTP=${orb.ltp} has faded past entry=${originalEntry} → ✅ PASS (gap_fade)`);
+        console.log(`${LOG} │ Check 2 GAP-FADE OVERRIDE: LTP=${orb.ltp} has faded past open=${fadeAnchor} → ✅ PASS (gap_fade)`);
       } else {
         checks.gap_direction.gap_fade = false;
         checks.gap_direction.ltp = orb.ltp;
-        checks.gap_direction.original_entry = originalEntry;
-        console.log(`${LOG} │ Check 2 GAP-FADE: LTP=${orb.ltp} has NOT faded past entry=${originalEntry} — fade incomplete`);
+        checks.gap_direction.fade_anchor = fadeAnchor;
+        console.log(`${LOG} │ Check 2 GAP-FADE: LTP=${orb.ltp} has NOT faded past open=${fadeAnchor} — fade incomplete`);
       }
     }
 
-    // Check 3: ORB breakout R:R check (Crabel-style SL-M entry)
-    // Entry = ORB high + 0.1% buffer (LONG) or ORB low - 0.1% buffer (SHORT)
-    // Stop  = ORB opposite end + buffer (the ORB range defines intraday risk)
-    //         If ORB stop is wider than structural stop, use structural (tighter = better)
+    // Check 3: ORB breakout R:R — entry & stop from OR, target = fixed 2R.
+    //   entry  = ORB_high × (1 + buffer) for LONG / ORB_low × (1 - buffer) for SHORT
+    //   stop   = ORB_low  × (1 - buffer) for LONG / ORB_high × (1 + buffer) for SHORT
+    //   target = entry ± risk × 2.0  (fixed 2R — structural levels removed: Step 5 deprecated)
+    const MAX_RR = 2.0;
+
     const orbEntry = isBullish
       ? round2(orb.high * (1 + ORB_BUFFER_PCT))
-      : round2(orb.low * (1 - ORB_BUFFER_PCT));
+      : round2(orb.low  * (1 - ORB_BUFFER_PCT));
 
-    // ORB-based stop: opposite end of the opening range + buffer
     const orbStop = isBullish
-      ? round2(orb.low * (1 - ORB_BUFFER_PCT))    // LONG: stop below ORB low
-      : round2(orb.high * (1 + ORB_BUFFER_PCT));   // SHORT: stop above ORB high
+      ? round2(orb.low  * (1 - ORB_BUFFER_PCT))
+      : round2(orb.high * (1 + ORB_BUFFER_PCT));
 
-    const originalStop = pick.levels.stop;
-    const originalTarget = pick.levels.target;
+    const risk = Math.abs(orbEntry - orbStop);
 
-    // Use the TIGHTER stop: ORB-based or structural (whichever limits risk more)
-    // For LONG: tighter = higher stop. For SHORT: tighter = lower stop.
-    const useOrbStop = isBullish
-      ? orbStop > originalStop   // LONG: ORB stop is higher (tighter) than structural
-      : orbStop < originalStop;  // SHORT: ORB stop is lower (tighter) than structural
-    const effectiveStop = useOrbStop ? orbStop : originalStop;
-    const stopSource = useOrbStop ? 'orb' : 'structural';
+    const orbTarget = round2(isBullish
+      ? orbEntry + risk * MAX_RR
+      : orbEntry - risk * MAX_RR);
 
-    const risk = Math.abs(orbEntry - effectiveStop);
-    const reward = Math.abs(originalTarget - orbEntry);
+    const reward = Math.abs(orbTarget - orbEntry);
     const newRR = risk > 0 ? round2(reward / risk) : 0;
 
     checks.orb_alignment = {
@@ -373,23 +373,22 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
       scan_bias: pick.direction,
       orb_dir: orb.orb_direction,
       new_entry: orbEntry,
-      new_stop: effectiveStop,
-      orb_stop: orbStop,
-      structural_stop: originalStop,
-      stop_source: stopSource,
-      original_entry: pick.levels.entry,
+      new_stop: orbStop,
+      new_target: orbTarget,
+      target_source: 'fixed_2r',
+      stop_source: 'orb',
       new_rr: newRR,
       min_rr: minRR,
       orb_high: orb.high,
-      orb_low: orb.low
+      orb_low: orb.low,
+      risk,
     };
-    console.log(`${LOG} │ Check 3 ORB R:R:`);
-    console.log(`${LOG} │   orbEntry = ${isBullish ? 'ORB_high' : 'ORB_low'}(${isBullish ? orb.high : orb.low}) × ${isBullish ? '1.001' : '0.999'} = ${orbEntry}`);
-    console.log(`${LOG} │   orbStop = ${isBullish ? 'ORB_low' : 'ORB_high'}(${isBullish ? orb.low : orb.high}) × ${isBullish ? '0.999' : '1.001'} = ${orbStop} | structuralStop=${originalStop} → using ${stopSource} (${effectiveStop})`);
-    console.log(`${LOG} │   originalTarget=${originalTarget}`);
-    console.log(`${LOG} │   risk = |orbEntry(${orbEntry}) - stop(${effectiveStop})| = ${round2(risk)}`);
-    console.log(`${LOG} │   reward = |target(${originalTarget}) - orbEntry(${orbEntry})| = ${round2(reward)}`);
-    console.log(`${LOG} │   newRR = ${round2(reward)} / ${round2(risk)} = ${newRR} (min: ${minRR} [${regime}]) → ${checks.orb_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`${LOG} │ Check 3 ORB levels (fixed ${MAX_RR}:1):`);
+    console.log(`${LOG} │   entry  = ${isBullish ? 'ORB_high' : 'ORB_low'}(${isBullish ? orb.high : orb.low}) × ${isBullish ? 1 + ORB_BUFFER_PCT : 1 - ORB_BUFFER_PCT} = ${orbEntry}`);
+    console.log(`${LOG} │   stop   = ${isBullish ? 'ORB_low'  : 'ORB_high'}(${isBullish ? orb.low  : orb.high}) × ${isBullish ? 1 - ORB_BUFFER_PCT : 1 + ORB_BUFFER_PCT} = ${orbStop}`);
+    console.log(`${LOG} │   risk   = |entry - stop| = ${round2(risk)}`);
+    console.log(`${LOG} │   target = entry ± risk × ${MAX_RR} = ${orbTarget} (fixed_2r)`);
+    console.log(`${LOG} │   R:R    = ${newRR} (min ${minRR} [${regime}]) → ${checks.orb_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
 
     // Check 4: Nifty alignment — opposing move blocks trade
     // Regime-aligned trades get wider threshold to tolerate normal morning counter-moves:
@@ -411,15 +410,34 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
     };
     console.log(`${LOG} │ Check 4 NIFTY: dir=${niftyDir} change=${niftyChangePct}% vs ${isBullish ? 'LONG' : 'SHORT'} (threshold: ±${niftyThreshold}%${pick.regime_aligned ? ' regime-aligned' : ''}) → ${checks.nifty_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
 
-    // Check 5: ORB range width — ensure ORB isn't too volatile for breakout entry
+    // Check 5: ORB range width — ATR-normalized
+    // Reject if the opening range is too wide relative to the stock's own daily ATR.
+    // Effective ATR = max(daily_atr, |gap_pct|) so news-driven gap days aren't
+    // penalised for a daily ATR that hasn't caught up to the new price level.
+    // Absolute 5% backstop catches edge cases on very high-ATR low-priced names.
     const orbRange = orb.high - orb.low;
     const orbRangePct = orb.low > 0 ? round2((orbRange / orb.low) * 100) : 0;
-    checks.entry_still_valid = {
-      passed: orbRangePct <= MAX_ORB_RANGE_PCT,
+    const dailyAtrPct = pick.scan_scores?.atr_pct || 0;
+    const effectiveAtr = dailyAtrPct > 0
+      ? round2(Math.max(dailyAtrPct, Math.abs(orb.gap_percent || 0)))
+      : 0;
+    const orbAtrRatio = effectiveAtr > 0 ? round2(orbRangePct / effectiveAtr) : null;
+    const orbRangePassed = orbAtrRatio !== null
+      ? orbAtrRatio <= MAX_ORB_ATR_RATIO && orbRangePct <= MAX_ORB_RANGE_PCT_ABSOLUTE
+      : orbRangePct <= MAX_ORB_RANGE_PCT_ABSOLUTE; // fallback: no ATR on pick
+    checks.orb_range_width = {
+      passed: orbRangePassed,
       orb_range_pct: orbRangePct,
-      max_allowed: MAX_ORB_RANGE_PCT
+      orb_atr_ratio: orbAtrRatio,
+      daily_atr_pct: dailyAtrPct,
+      effective_atr_pct: effectiveAtr,
+      max_ratio: MAX_ORB_ATR_RATIO,
+      max_absolute_pct: MAX_ORB_RANGE_PCT_ABSOLUTE
     };
-    console.log(`${LOG} │ Check 5 ORB RANGE: (H(${orb.high}) - L(${orb.low})) / L × 100 = ${orbRangePct}% (max: ${MAX_ORB_RANGE_PCT}%) → ${checks.entry_still_valid.passed ? '✅ PASS' : '❌ FAIL'}`);
+    const ratioStr = orbAtrRatio !== null
+      ? `ratio=${orbAtrRatio}x ATR (max ${MAX_ORB_ATR_RATIO}x), `
+      : '';
+    console.log(`${LOG} │ Check 5 ORB RANGE: ${orbRangePct}% / effectiveATR=${effectiveAtr}% → ${ratioStr}abs max=${MAX_ORB_RANGE_PCT_ABSOLUTE}% → ${orbRangePassed ? '✅ PASS' : '❌ FAIL'}`);
 
     // Check 6: Volume gate — compare 15m opening volume to expected daily average
     const volData = orbVolumeMap?.[pick.symbol];

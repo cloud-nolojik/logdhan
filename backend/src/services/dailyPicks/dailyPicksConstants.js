@@ -37,8 +37,28 @@ export const MIN_ORB_RR_BY_REGIME = {
   STRONG_BEAR: 1.5,
   EXTREME_BEAR: 1.5,
 };
-/** ORB range > 3% of stock price = too volatile, skip */
-export const MAX_ORB_RANGE_PCT = 3.0;
+/**
+ * ORB range width gate — ATR-normalized (Check 5 in orbValidationService).
+ *
+ * Replaces the old flat MAX_ORB_RANGE_PCT = 3.0% threshold, which was
+ * volatility-blind: a 3% ORB on a 1%-ATR stock (3× ATR) is genuinely too
+ * wide; a 3% ORB on a 3%-ATR stock (1× ATR) is completely normal.
+ *
+ * The denominator uses gap-adjusted effective ATR:
+ *   effectiveAtr = max(daily_atr_pct, abs(gap_pct))
+ * This prevents rejecting legitimately wide opens on news-driven gap days
+ * where the daily ATR hasn't caught up to the new price range yet.
+ *
+ * Expert calibration (April 2026):
+ *   ≤ 1.0× ATR  — normal open, proceed
+ *   1.0–1.25×   — active open, still tradeable
+ *   > 1.25×     — stop distance too large relative to stock's own range → reject
+ *
+ * The absolute 5% backstop prevents edge-case acceptance on very high-ATR
+ * low-priced midcaps where position sizing shrinks to near-trivial quantity.
+ */
+export const MAX_ORB_ATR_RATIO = 1.25;         // reject if ORB range > 1.25× effective ATR
+export const MAX_ORB_RANGE_PCT_ABSOLUTE = 5.0; // absolute backstop regardless of ATR
 /** >0.3% opposing NIFTY move blocks trade */
 export const NIFTY_THRESHOLD_PCT = 0.3;
 /** Gap direction threshold — gap opposing scan bias beyond this % fails Check 2 */
@@ -61,8 +81,11 @@ export const SLIPPAGE_BUFFER_PCT = 0.0015;
 // PARTIAL PROFIT BOOKING
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** Book partial when price reaches 60% of target distance */
-export const PARTIAL_BOOK_PCT = 0.60;
+/** Book partial when price reaches 75% of target distance — i.e. 1.5R of a
+ * 2R target. Tightened from 0.60 → 0.75 as part of Phase 3 tuning. The 1.5R
+ * partial mark is the textbook intraday level: captures ~half the total
+ * planned move (minus slippage) and leaves half the position to ride to 2R. */
+export const PARTIAL_BOOK_PCT = 0.75;
 /** Sell half the position at partial booking level */
 export const PARTIAL_BOOK_QTY_RATIO = 0.50;
 
@@ -167,8 +190,50 @@ export const INTEL_SECTOR_OPPOSING = -5;
 export const EXHAUSTION_PENALTY = 25;
 /** Minimum consecutive same-direction days to trigger */
 export const EXHAUSTION_CONSECUTIVE_DAYS = 5;
-/** Minimum distance from EMA20 (%) to trigger */
-export const EXHAUSTION_EMA20_DIST_PCT = 8.0;
+/**
+ * G4 distance threshold — ATR-normalized (expert-calibrated April 2026).
+ *
+ * Using a flat 8% was inconsistent with G3's ATR-normalized 3.0× threshold:
+ *   WIPRO (1.5% ATR):    flat 8% = 5.3 ATRs  (G3 fires first at 3.0×)
+ *   JINDALSTEL (4% ATR): flat 8% = 2.0 ATRs  (G4 fires before G3 — wrong order)
+ *
+ * New approach: OR condition — either ATR-normalized OR absolute floor.
+ * G4 should be slightly more permissive on extension than G3 (because duration
+ * + RSI do additional work), sitting at 2.5× vs G3's 3.0×.
+ * The 6% absolute floor catches genuinely extended low-ATR stocks (e.g. WIPRO
+ * at 1.5% ATR where 2.5× = 3.75% — too permissive absolutely).
+ */
+export const EXHAUSTION_EMA20_DIST_ATR = 2.5;       // ATR-normalized trigger
+export const EXHAUSTION_EMA20_DIST_ABS_PCT = 6.0;   // absolute fallback floor
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// G3 CHASE GUARD — ATR-normalized distance threshold
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Reject if stock is more than this many ATRs beyond EMA20 in trade direction.
+ * ATR-normalizing makes the threshold volatility-aware: a 3% move on a 1%-ATR
+ * stock (3 ATRs extended) is treated the same as a 6% move on a 2%-ATR stock.
+ * Raw % thresholds were too tight for high-ATR names and too loose for low-ATR
+ * names. ~3 ATRs is empirically where NSE intraday edge flips negative (you're
+ * providing exit liquidity to institutions that got in at 1–2 ATRs).
+ */
+export const CHASE_MAX_ATR_DIST = 3.0;
+
+/**
+ * Soft chase penalty — applied to rank_score at Step 4 (after enrichment).
+ *
+ * G3 is the hard gate (reject at 3 ATRs). This penalty pre-shapes rankings
+ * in the 1.25–3.0× ATR band so that chasing stocks fall lower in selection
+ * order even when they technically pass G3. A stock at 2.8 ATRs is not
+ * rejected, but scores 15 points lower than an identical stock at 0.8 ATRs.
+ *
+ * Formula: penalty_points = CHASE_SOFT_PENALTY_MAX_PTS
+ *                           × max(0, min(1, (atrDist - START) / (END - START)))
+ * Linear, per direction (LONG: dist above EMA20; SHORT: dist below EMA20).
+ */
+export const CHASE_SOFT_PENALTY_START_ATR = 1.25;  // below this: no penalty
+export const CHASE_SOFT_PENALTY_MAX_PTS   = 15;    // max rank_score deduction (on 0–100 scale)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // NR7 / INSIDE DAY SCORING BONUS

@@ -311,19 +311,77 @@ Respond ONLY with valid JSON (no markdown, no backticks):
     });
 
     const text = response.content[0]?.text || '';
+    const parsed = robustParseJson(text);
 
-    // Parse JSON from response (handle potential markdown wrapping)
-    let jsonStr = text;
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) jsonStr = jsonMatch[0];
-
-    const parsed = JSON.parse(jsonStr);
+    if (!parsed) {
+      // Log first 300 chars so we can diagnose what Claude actually returned
+      const preview = text.slice(0, 300).replace(/\s+/g, ' ');
+      console.error(`${LOG} [Step 3] AI parsing failed after all fallbacks. Raw preview: "${preview}${text.length > 300 ? '…' : ''}"`);
+      return [];
+    }
     return (parsed.stocks || []).filter(s => s.sentiment !== 'NEUTRAL');
 
   } catch (err) {
-    console.error(`${LOG} [Step 3] AI parsing failed:`, err.message);
+    console.error(`${LOG} [Step 3] AI request failed:`, err.message);
     return [];
   }
+}
+
+/**
+ * Robust JSON extraction from LLM output.
+ * Handles:
+ *   - Markdown code fences (```json ... ``` or ``` ... ```)
+ *   - Leading/trailing prose ("Here is the JSON:")
+ *   - Trailing commas before ] or }
+ *   - Smart quotes ("" '' → normal " ')
+ * Returns the parsed object or null if nothing works.
+ */
+function robustParseJson(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+
+  // 1. Strip markdown code fences
+  let s = raw.trim();
+  const fenceMatch = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) s = fenceMatch[1];
+
+  // 2. Extract outermost JSON object (greedy from first { to last })
+  const firstBrace = s.indexOf('{');
+  const lastBrace  = s.lastIndexOf('}');
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
+  let candidate = s.slice(firstBrace, lastBrace + 1);
+
+  // 3. Try raw first
+  try { return JSON.parse(candidate); } catch (_) { /* fallthrough */ }
+
+  // 4. Normalize smart quotes
+  let cleaned = candidate
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'");
+
+  try { return JSON.parse(cleaned); } catch (_) { /* fallthrough */ }
+
+  // 5. Strip trailing commas before ] or }
+  cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
+
+  try { return JSON.parse(cleaned); } catch (_) { /* fallthrough */ }
+
+  // 6. Last resort: try to repair unterminated strings by truncating at last
+  //    valid closing brace before the bad position. Only useful if Claude's
+  //    JSON was valid up to some point then got cut off or malformed.
+  try {
+    // Find last balanced } by tracking depth from start
+    let depth = 0, lastGood = -1;
+    for (let i = 0; i < cleaned.length; i++) {
+      const c = cleaned[i];
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) lastGood = i; }
+    }
+    if (lastGood > 0) {
+      return JSON.parse(cleaned.slice(0, lastGood + 1));
+    }
+  } catch (_) { /* final fail */ }
+
+  return null;
 }
 
 
@@ -355,12 +413,33 @@ async function mapToCandidates(parsedStocks) {
       }).lean();
     }
 
-    // Fallback: search by short_name
+    // Fallback 3: search by short_name (stock's alias contains the guessed symbol)
     if (!dbStock) {
       dbStock = await Stock.findOne({
         short_name: { $regex: new RegExp(escapeRegex(likely_nse_symbol), 'i') },
         segment: 'NSE_EQ',
       }).lean();
+    }
+
+    // Fallback 4: prefix shrink — AI often guesses a longer variant of the real NSE ticker
+    // (e.g. 'PARASDEFS' or 'PARASDEFENCE' → actual ticker 'PARAS').
+    // Try exact trading_symbol matches against progressively shorter prefixes of the guess
+    // (max 8 chars down to 5). Accept only if exactly 1 stock matches to avoid false positives.
+    if (!dbStock) {
+      const guessUpper = likely_nse_symbol.toUpperCase();
+      for (let len = Math.min(guessUpper.length - 1, 8); len >= 5; len--) {
+        const prefix = guessUpper.substring(0, len);
+        const matches = await Stock.find({
+          trading_symbol: prefix,
+          segment: 'NSE_EQ',
+          is_active: true,
+        }).lean();
+        if (matches.length === 1) {
+          dbStock = matches[0];
+          console.log(`${LOG} [Step 4] ${name} (${likely_nse_symbol}): prefix fallback matched "${prefix}" → ${dbStock.trading_symbol} (${dbStock.name})`);
+          break;
+        }
+      }
     }
 
     if (!dbStock) {

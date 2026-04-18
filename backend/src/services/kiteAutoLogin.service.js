@@ -559,6 +559,28 @@ class KiteAutoLoginService {
   }
 
   /**
+   * Get full market quotes (incl. 5-level depth, buy/sell pending totals, OHLC).
+   *
+   * Kite's /quote expects `i` repeated for each instrument: ?i=NSE:INFY&i=NSE:TCS
+   * We build that query string manually because axios' default array serializer
+   * produces `i[]=...` which Kite rejects.
+   *
+   * @param {string[]} instruments - e.g. ['NSE:INFY', 'NSE:ICICIBANK']
+   * @returns {Promise<Object>} { status, data: { 'NSE:INFY': {...}, ... } }
+   */
+  async getQuote(instruments) {
+    if (!Array.isArray(instruments) || instruments.length === 0) {
+      return { status: 'success', data: {} };
+    }
+    if (instruments.length > 500) {
+      throw new Error(`Kite /quote accepts max 500 instruments per call; got ${instruments.length}`);
+    }
+    const query = instruments.map(i => `i=${encodeURIComponent(i)}`).join('&');
+    const endpoint = `${kiteConfig.ENDPOINTS.QUOTE}?${query}`;
+    return this.makeRequest('GET', endpoint);
+  }
+
+  /**
    * Get holdings
    */
   async getHoldings() {

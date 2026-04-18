@@ -228,7 +228,7 @@ async function main() {
 
           if (v.checks) {
             const checks = v.checks;
-            const checkNames = ['gap_check', 'gap_direction', 'orb_alignment', 'nifty_alignment', 'entry_still_valid', 'volume_check'];
+            const checkNames = ['gap_check', 'gap_direction', 'orb_alignment', 'nifty_alignment', 'orb_range_width', 'volume_check'];
             const failedChecks = checkNames.filter(c => checks[c] && checks[c].passed === false);
             if (failedChecks.length > 0) {
               for (const fc of failedChecks) {
@@ -468,7 +468,7 @@ function getCheckDetail(check, name) {
       return `bias: ${check.scan_bias || '?'} orb: ${check.orb_dir || '?'} rr: ${r2(check.new_rr || 0)}`;
     case 'nifty_alignment':
       return `nifty: ${check.nifty_dir || '?'} ${r2(check.nifty_change_pct || 0)}%`;
-    case 'entry_still_valid':
+    case 'orb_range_width':
       return `orb_range: ${r2(check.orb_range_pct || 0)}% max: ${r2(check.max_allowed || 0)}%`;
     case 'volume_check':
       return `ratio: ${r2(check.ratio || 0)}`;

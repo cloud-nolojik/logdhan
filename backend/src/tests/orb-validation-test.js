@@ -324,7 +324,7 @@ async function runTests() {
     });
     const [result] = validatePicks([pick], orbData, 'STRONG_BULL', 1, null);
     printResult(result);
-    expect('Check 5 entry_still_valid FAILED (ORB range > 3%)', result.validation.checks.entry_still_valid.passed, false);
+    expect('Check 5 orb_range_width FAILED (ORB range > 3%)', result.validation.checks.orb_range_width.passed, false);
   }
 
   // ─── Test 14: Poor R:R — fails Check 3 ────────────────────────────────

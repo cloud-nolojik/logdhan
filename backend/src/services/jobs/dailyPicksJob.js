@@ -1,8 +1,15 @@
 /**
- * Daily Picks Job — 8:40 AM IST
+ * Daily Picks Job — 8:30 AM IST
  *
- * Runs ChartInk scans, enriches, scores, saves, and notifies.
- * Schedule: Monday-Friday at 8:40 AM IST (before market open for clean OHLCV).
+ * Single job that inline-runs everything:
+ *   Step 0  refresh regime snapshots (fii/vix/breadth — breadth via ChartInk)
+ *   Step 1  regime v2 compute
+ *   Step 2  shortlist (replaces legacy ChartInk daily scans)
+ *   Steps 2.5–8  earnings filter → enrich → score → levels → select → save → notify
+ *
+ * Schedule: Monday-Friday at 8:30 AM IST (45 min before market open).
+ * Step 0's ChartInk-based breadth runs in ~2–5s so there's no need for an
+ * earlier start.
  */
 
 import Agenda from 'agenda';
@@ -126,12 +133,20 @@ class DailyPicksJob {
     try {
       await this.agenda.cancel({ name: 'daily-pick-scan' });
 
-      // 8:30 AM IST, Monday-Friday (before market open)
+      // Skip self-scheduling when the tradingDaySequence orchestrator owns
+      // the 08:30 step. Default: individual crons are disabled.
+      const ownedBySequence = String(process.env.DISABLE_INDIVIDUAL_CRONS ?? 'true').toLowerCase() !== 'false';
+      if (ownedBySequence) {
+        console.log(`${LOG} Skipping self-schedule — owned by tradingDaySequenceJob (set DISABLE_INDIVIDUAL_CRONS=false to restore)`);
+        return;
+      }
+
+      // 8:30 AM IST, Monday-Friday (45 min before market open)
       await this.agenda.every('30 8 * * 1-5', 'daily-pick-scan', { allowOutdatedCandle: false }, {
         timezone: 'Asia/Kolkata'
       });
 
-      console.log(`${LOG} Scheduled: 8:40 AM IST, Mon-Fri`);
+      console.log(`${LOG} Scheduled: 8:30 AM IST, Mon-Fri`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
       throw error;

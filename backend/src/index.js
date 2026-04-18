@@ -35,6 +35,10 @@ import instrumentSyncJob from './services/jobs/instrumentSyncJob.js'; // sync-in
 import dailyPicksJob from './services/jobs/dailyPicksJob.js'; // daily-pick-scan (8:30 AM Mon-Fri)
 import dailyEntryJob from './services/jobs/dailyEntryJob.js'; // v2: ORB 9:30, validate+entry, monitor */3, tighten 14:00, exit 15:00
 import morningBriefJob from './services/jobs/morningBriefJob.js'; // morning-brief (Monday 8:00 AM IST)
+import preopenDepthJob from './services/jobs/preopenDepthJob.js'; // preopen-depth-check (9:12:30 AM Mon-Fri)
+import tradingDaySequenceJob from './services/jobs/tradingDaySequenceJob.js'; // 08:30→10:00 sequential orchestrator
+import regimeRecheckJob from './services/jobs/regimeRecheckJob.js'; // 11:00 IST regime-flip safety valve
+import weeklyReviewJob from './services/jobs/weeklyReviewJob.js'; // Saturday 10:00 IST auto-review
 import { initFillListener } from './services/dailyPicks/dailyPicksService.js'; // Postback → instant SL+target
 
 import authRoutes from './routes/auth.js';
@@ -308,9 +312,54 @@ app.listen(PORT, async () => {
   // Instrument sync (6:00 AM Mon-Fri — before daily picks)
   await instrumentSyncJob.initialize();
 
-  // Daily picks jobs
-  await initializeDailyPicksJob(); // daily-pick-scan (8:40 AM Mon-Fri)
+  // Daily picks jobs — the 8:30 AM daily-pick-scan also takes care of fetching
+  // breadth/VIX/FII inline as its Step 0 (no separate nightly jobs).
+  await initializeDailyPicksJob(); // daily-pick-scan (8:30 AM Mon-Fri)
   await initializeDailyEntryJob(); // daily-picks-entry 9:30, monitor */3, tighten 14:00, exit 15:00
+
+  // Pre-open depth job — Kite /quote at 09:12:30 IST Mon-Fri. Stamps
+  // imbalance/liquidity/mid_pct per shortlist candidate and prunes
+  // DailyPick.picks[] so only survivors carry into 09:15 ORB collection.
+  //
+  // Note: when tradingDaySequenceJob is active (default), the 09:12 cron is
+  // auto-skipped and the orchestrator drives the 09:08 step directly.
+  try {
+    await preopenDepthJob.initialize();
+    console.log('✅ Pre-open depth job initialized');
+  } catch (err) {
+    console.error('❌ Failed to initialize preopen depth job:', err);
+  }
+
+  // Trading Day Sequence — ONE cron at 08:30 IST Mon-Fri that sequentially
+  // runs: 08:30 daily-pick-scan → 09:08 preopen → 09:30/09:45/10:00 ORB passes.
+  // Each step only starts after the previous completes. Replaces the
+  // individual crons for these 5 steps (they remain self-skipped via
+  // DISABLE_INDIVIDUAL_CRONS=true, which is the default).
+  try {
+    await tradingDaySequenceJob.initialize();
+    console.log('✅ Trading day sequence scheduled (08:30 IST, Mon-Fri, sequential)');
+  } catch (err) {
+    console.error('❌ Failed to initialize trading day sequence:', err);
+  }
+
+  // Regime recheck — 11:00 IST Mon-Fri safety valve. If the morning regime
+  // has flipped by now (Nifty moved in opposite direction > 0.5%), force-flat
+  // all open positions.
+  try {
+    await regimeRecheckJob.initialize();
+    console.log('✅ Regime recheck scheduled (11:00 IST, Mon-Fri)');
+  } catch (err) {
+    console.error('❌ Failed to initialize regime recheck job:', err);
+  }
+
+  // Weekly review — Saturday 10:00 IST. Aggregates Mon-Fri performance
+  // into WeeklyReview with breakdowns, alerts, rr_drift tracking.
+  try {
+    await weeklyReviewJob.initialize();
+    console.log('✅ Weekly review scheduled (Saturday 10:00 IST)');
+  } catch (err) {
+    console.error('❌ Failed to initialize weekly review job:', err);
+  }
 
   // Kite Connect token refresh job (6:00 AM IST daily)
   await kiteTokenRefreshJob.initialize();
@@ -335,7 +384,11 @@ process.on('SIGINT', async () => {
       instrumentSyncJob.shutdown(),
       dailyPicksJob.shutdown(),
       dailyEntryJob.shutdown(),
-      morningBriefJob.shutdown()
+      morningBriefJob.shutdown(),
+      preopenDepthJob.shutdown(),
+      tradingDaySequenceJob.shutdown(),
+      regimeRecheckJob.shutdown(),
+      weeklyReviewJob.shutdown()
     ]);
 
     // Close MongoDB connection
@@ -362,7 +415,11 @@ process.on('SIGTERM', async () => {
       instrumentSyncJob.shutdown(),
       dailyPicksJob.shutdown(),
       dailyEntryJob.shutdown(),
-      morningBriefJob.shutdown()
+      morningBriefJob.shutdown(),
+      preopenDepthJob.shutdown(),
+      tradingDaySequenceJob.shutdown(),
+      regimeRecheckJob.shutdown(),
+      weeklyReviewJob.shutdown()
     ]);
 
     // Close MongoDB connection

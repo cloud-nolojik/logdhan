@@ -40,8 +40,28 @@ class IncrementalUpdaterService {
         // Find corresponding DB record
         const dbRecord = dbData.find((db) => db.timeframe === timeframe);
 
-        // Get last bar time from staleInfo
-        const lastBarTime = new Date(staleInfo.last_bar_time);
+        // Resolve last bar time with fallbacks:
+        //   1. staleInfo.last_bar_time (metadata, often populated)
+        //   2. dbRecord's actual last candle timestamp (fallback when metadata null)
+        //   3. 7 days ago (safety net for empty/corrupt DB records)
+        //
+        // Without these fallbacks, a null last_bar_time (which happens on
+        // older records that predated the metadata field) causes
+        // `new Date(null).toISOString()` → "Invalid time value" and the
+        // whole incremental path fails.
+        let lastBarTime = new Date(staleInfo.last_bar_time);
+        if (isNaN(lastBarTime.getTime())) {
+          const candles = dbRecord?.candle_data || [];
+          const lastCandle = candles[candles.length - 1];
+          const ts = lastCandle?.timestamp
+                  || (Array.isArray(lastCandle) ? lastCandle[0] : null)
+                  || lastCandle?.date;
+          if (ts) lastBarTime = new Date(ts);
+        }
+        if (isNaN(lastBarTime.getTime())) {
+          console.warn(`[INCREMENTAL] ${timeframe}: last_bar_time invalid, falling back to 7 days ago`);
+          lastBarTime = new Date(Date.now() - 7 * 86400 * 1000);
+        }
 
         // Calculate fromDate: For intraday timeframes (15m, 1h), use the same day as last bar
         // For daily timeframe, use next day

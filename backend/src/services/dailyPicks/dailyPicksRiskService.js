@@ -20,8 +20,10 @@ const LOG = '[DAILY-RISK]';
 // CIRCUIT BREAKER — Portfolio-level daily drawdown limit
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const MAX_DAILY_DRAWDOWN_PCT = 2.0;    // Halt new trades if daily P&L < -2%
-const MAX_DAILY_DRAWDOWN_ABS = null;   // Or use absolute (₹), null = use % only
+const MAX_DAILY_DRAWDOWN_PCT   = 2.0;   // Halt new trades if daily P&L < -2%
+const MAX_DAILY_DRAWDOWN_ABS   = null;  // Or use absolute (₹), null = use % only
+const MAX_WEEKLY_DRAWDOWN_PCT  = 5.0;   // Halt trades for rest of week if week P&L < -5%
+const MAX_MONTHLY_DRAWDOWN_PCT = 10.0;  // Halt trades for rest of month if month P&L < -10%
 
 let circuitBreakerTripped = false;
 let circuitBreakerReason = '';
@@ -39,9 +41,20 @@ async function checkCircuitBreaker() {
     return { allowed: false, reason: circuitBreakerReason };
   }
 
+  // Rolling weekly / monthly drawdown gate — walks prior DailyPick docs.
+  // This runs FIRST because if the week is already blown, daily-level check
+  // is moot.
+  const rolling = await checkRollingDrawdowns();
+  if (!rolling.allowed) {
+    circuitBreakerTripped = true;
+    circuitBreakerReason = rolling.reason;
+    await notifyCircuitBreaker(0, 0, rolling.reason);
+    return { allowed: false, reason: rolling.reason, ...rolling };
+  }
+
   try {
     const doc = await DailyPick.findToday();
-    if (!doc) return { allowed: true };
+    if (!doc) return { allowed: true, ...rolling };
 
     // Check if circuit breaker was persisted to DB (survives restarts)
     if (doc.circuit_breaker_tripped) {
@@ -154,15 +167,100 @@ async function persistCircuitBreaker(doc, reason) {
 /**
  * Notify admin that circuit breaker has been tripped
  */
-async function notifyCircuitBreaker(dailyPnl, dailyPnlPct) {
-  console.error(`${LOG} ⛔ CIRCUIT BREAKER TRIPPED: ${circuitBreakerReason}`);
+async function notifyCircuitBreaker(dailyPnl, dailyPnlPct, overrideReason = null) {
+  const reason = overrideReason || circuitBreakerReason;
+  console.error(`${LOG} ⛔ CIRCUIT BREAKER TRIPPED: ${reason}`);
   try {
+    const body = overrideReason
+      ? `${reason}. No new trades will be placed. Open positions still managed (SL/target/trailing/exit).`
+      : `${reason}. No new trades will be placed today. Open positions will still be managed (SL/target/trailing/exit). Daily P&L: ₹${round2(dailyPnl)} (${round2(dailyPnlPct)}%)`;
     await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
       '⛔ Circuit Breaker — Trading Halted',
-      `${circuitBreakerReason}. No new trades will be placed today. Open positions will still be managed (SL/target/trailing/exit). Daily P&L: ₹${round2(dailyPnl)} (${round2(dailyPnlPct)}%)`,
+      body,
       { type: 'CIRCUIT_BREAKER', route: '/daily-picks' }
     );
   } catch (_) { /* ignore */ }
+}
+
+/**
+ * Check rolling weekly + monthly drawdown against DailyPick history.
+ *
+ * Walks prior trading days, sums realized P&L on closed trades, computes
+ * drawdown % against starting capital (estimated from capital deployed + PnL).
+ *
+ * Returns:
+ *   { allowed: boolean, reason?: string, weekly_pnl_pct?: number, monthly_pnl_pct?: number }
+ */
+async function checkRollingDrawdowns() {
+  try {
+    const now = new Date();
+    const istMs = now.getTime() + (5.5 * 60 * 60 * 1000);
+    const istNow = new Date(istMs);
+
+    // Monday of current week (ISO week start = Monday)
+    const mondayIstMs = (() => {
+      const d = new Date(istNow);
+      const weekdayMon0 = (d.getUTCDay() + 6) % 7; // 0 = Mon
+      d.setUTCDate(d.getUTCDate() - weekdayMon0);
+      d.setUTCHours(0, 0, 0, 0);
+      return d.getTime();
+    })();
+
+    // 1st of current month
+    const firstOfMonthIstMs = (() => {
+      const d = new Date(istNow);
+      d.setUTCDate(1);
+      d.setUTCHours(0, 0, 0, 0);
+      return d.getTime();
+    })();
+
+    // Query DailyPick docs for this month (includes this week)
+    const monthStart = new Date(firstOfMonthIstMs - (5.5 * 60 * 60 * 1000));
+    const docs = await DailyPick.find({
+      trading_date: { $gte: monthStart }
+    }).lean();
+
+    let weeklyPnl = 0, weeklyCapital = 0;
+    let monthlyPnl = 0, monthlyCapital = 0;
+
+    for (const doc of docs) {
+      const tradingTs = new Date(doc.trading_date).getTime() + (5.5 * 60 * 60 * 1000);
+
+      let docPnl = 0, docCapital = 0;
+      for (const p of (doc.picks || [])) {
+        const status = p?.trade?.status;
+        if (!['TARGET_HIT', 'STOPPED_OUT', 'TIME_EXIT', 'FAILED'].includes(status)) continue;
+        docPnl += (p.trade.pnl || 0);
+        if (p.trade.entry_price && p.trade.qty) {
+          docCapital += p.trade.entry_price * p.trade.qty;
+        }
+      }
+
+      if (tradingTs >= mondayIstMs)      { weeklyPnl  += docPnl; weeklyCapital  += docCapital; }
+      if (tradingTs >= firstOfMonthIstMs){ monthlyPnl += docPnl; monthlyCapital += docCapital; }
+    }
+
+    const wkStart = weeklyCapital  > 0 ? weeklyCapital  - weeklyPnl  : 0;
+    const moStart = monthlyCapital > 0 ? monthlyCapital - monthlyPnl : 0;
+    const wkPct   = wkStart > 0 ? (weeklyPnl  / wkStart) * 100 : 0;
+    const moPct   = moStart > 0 ? (monthlyPnl / moStart) * 100 : 0;
+
+    console.log(`${LOG} [ROLLING-DD] week pnl=₹${round2(weeklyPnl)} (${round2(wkPct)}%) | month pnl=₹${round2(monthlyPnl)} (${round2(moPct)}%)`);
+
+    if (wkPct < -MAX_WEEKLY_DRAWDOWN_PCT) {
+      const reason = `Weekly drawdown ${round2(wkPct)}% exceeds -${MAX_WEEKLY_DRAWDOWN_PCT}% limit — trading paused for the rest of the week`;
+      return { allowed: false, reason, weekly_pnl_pct: round2(wkPct), monthly_pnl_pct: round2(moPct) };
+    }
+    if (moPct < -MAX_MONTHLY_DRAWDOWN_PCT) {
+      const reason = `Monthly drawdown ${round2(moPct)}% exceeds -${MAX_MONTHLY_DRAWDOWN_PCT}% limit — trading paused for the rest of the month`;
+      return { allowed: false, reason, weekly_pnl_pct: round2(wkPct), monthly_pnl_pct: round2(moPct) };
+    }
+    return { allowed: true, weekly_pnl_pct: round2(wkPct), monthly_pnl_pct: round2(moPct) };
+
+  } catch (err) {
+    console.error(`${LOG} [ROLLING-DD] failed:`, err.message);
+    return { allowed: true, error: err.message };  // fail-open (consistent with daily breaker)
+  }
 }
 
 /**

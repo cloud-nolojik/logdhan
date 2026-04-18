@@ -560,9 +560,16 @@ async function sendOrderNotification(stocks, balance) {
 }
 
 /**
- * Check if Kite integration is enabled and configured
+ * Check if Kite integration is enabled and configured.
+ *
+ * Honors the PAPER_TRADE env flag: when PAPER_TRADE=true, this returns false
+ * so no Kite order endpoints are ever called. The rest of the pipeline runs
+ * exactly as it would in live — pick generation, validation, level assignment,
+ * stamping — and every "would-have-placed" decision is logged with the intended
+ * qty/entry/stop/target. Equivalent to a live dry-run.
  */
 function isKiteIntegrationEnabled() {
+  if (isPaperTradeMode()) return false;
   return !!(
     kiteConfig.API_KEY &&
     kiteConfig.API_SECRET &&
@@ -573,16 +580,26 @@ function isKiteIntegrationEnabled() {
   );
 }
 
+/**
+ * Returns true if PAPER_TRADE=true is set in the environment.
+ * Primary toggle for paper-trade validation runs. Default is LIVE mode.
+ */
+function isPaperTradeMode() {
+  return String(process.env.PAPER_TRADE || '').toLowerCase() === 'true';
+}
+
 export {
   processSimulationForKiteOrders,
   processPostEntryOrders,
   syncKiteGTTs,
-  isKiteIntegrationEnabled
+  isKiteIntegrationEnabled,
+  isPaperTradeMode
 };
 
 export default {
   processSimulationForKiteOrders,
   processPostEntryOrders,
   syncKiteGTTs,
-  isKiteIntegrationEnabled
+  isKiteIntegrationEnabled,
+  isPaperTradeMode
 };

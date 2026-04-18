@@ -258,7 +258,38 @@ class DailyEntryJob {
       }
     });
 
-    // Job 7: Force-exit all open positions at 3:00 PM
+    // Job 6b: 14:45 HARD FLAT — exit all MIS positions 15 min before broker
+    // force-close at 15:20. Gives us clean fills on liquid names and avoids
+    // the end-of-day slippage spike. Reuses the same runDailyExit() path; the
+    // 15:00 job below becomes a safety net for anything this 14:45 job missed.
+    this.agenda.define('daily-picks-hard-flat', async () => {
+      if (this.runningJobs.has('hard-flat')) {
+        console.log(`${LOG} Hard flat already running, skipping`);
+        return;
+      }
+      this.runningJobs.add('hard-flat');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) {
+          console.log(`${LOG} Not a trading day — skipping 14:45 hard flat`);
+          return { skipped: true, reason: 'not_trading_day' };
+        }
+        console.log(`${LOG} [HARD-FLAT] ▶ Executing 14:45 hard-flat exit (15 min before broker auto-close)`);
+        const result = await runDailyExit({ reason: 'hard_flat_14_45' });
+        this.stats.lastRunAt = new Date();
+        this.stats.lastResult = result;
+        console.log(`${LOG} [HARD-FLAT] ✅ Completed: ${result.exited} exited, ${result.cancelledUnfilled || 0} unfilled cancelled`);
+        return result;
+      } catch (error) {
+        console.error(`${LOG} Hard flat failed:`, error);
+        this.stats.errors++;
+        throw error;
+      } finally {
+        this.runningJobs.delete('hard-flat');
+      }
+    });
+
+    // Job 7: Force-exit all open positions at 3:00 PM (safety net)
     this.agenda.define('daily-picks-exit', async (job) => {
       if (this.runningJobs.has('exit')) {
         console.log(`${LOG} Exit already running, skipping`);
@@ -278,6 +309,17 @@ class DailyEntryJob {
         this.stats.lastRunAt = new Date();
         this.stats.lastResult = result;
         console.log(`${LOG} [EXIT] ✅ Completed: ${result.exited} positions exited, ${result.cancelledUnfilled || 0} unfilled cancelled`);
+
+        // Write daily performance summary (non-fatal on failure)
+        try {
+          const { recordDailyMetrics } = await import('../dailyPicks/metricsService.js');
+          const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+          const dateStr = nowIst.toISOString().slice(0, 10);
+          const row = await recordDailyMetrics(dateStr);
+          if (row) console.log(`${LOG} [EXIT] DailyPerformance written for ${dateStr}`);
+        } catch (metricsErr) {
+          console.error(`${LOG} [EXIT] DailyPerformance write failed (non-fatal):`, metricsErr.message);
+        }
         return result;
       } catch (error) {
         console.error(`${LOG} Exit failed:`, error);
@@ -337,6 +379,7 @@ class DailyEntryJob {
             'daily-picks-fill-fallback',
             'daily-picks-monitor',
             'daily-picks-tighten',
+            'daily-picks-hard-flat',
             'daily-picks-exit',
             // Legacy v1 job names — clean up on first deploy
             'daily-picks-entry',
@@ -345,21 +388,29 @@ class DailyEntryJob {
         }
       });
 
-      // Multi-pass ORB validation: 3 passes with widening time windows
-      // Pass 1: 9:30 AM IST — 15-min ORB
-      await this.agenda.every('30 9 * * 1-5', 'daily-picks-validate-entry', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // ORB validate entry passes (9:30 / 9:46 / 10:01) — by default owned by
+      // tradingDaySequenceJob. Set DISABLE_INDIVIDUAL_CRONS=false to restore
+      // the per-pass cron schedule here.
+      const sequenceOwnsOrb = String(process.env.DISABLE_INDIVIDUAL_CRONS ?? 'true').toLowerCase() !== 'false';
+      if (sequenceOwnsOrb) {
+        console.log(`${LOG} Skipping ORB validate-entry cron schedule — owned by tradingDaySequenceJob`);
+      } else {
+        // Multi-pass ORB validation: 3 passes with widening time windows
+        // Pass 1: 9:30 AM IST — 15-min ORB
+        await this.agenda.every('30 9 * * 1-5', 'daily-picks-validate-entry', {}, {
+          timezone: 'Asia/Kolkata'
+        });
 
-      // Pass 2: 9:46 AM IST — 30-min ORB (1 min buffer after 9:45 candle close)
-      await this.agenda.every('46 9 * * 1-5', 'daily-picks-validate-entry-pass2', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+        // Pass 2: 9:46 AM IST — 30-min ORB (1 min buffer after 9:45 candle close)
+        await this.agenda.every('46 9 * * 1-5', 'daily-picks-validate-entry-pass2', {}, {
+          timezone: 'Asia/Kolkata'
+        });
 
-      // Pass 3: 10:01 AM IST — 45-min ORB (FINAL, 1 min buffer after 10:00 candle close)
-      await this.agenda.every('1 10 * * 1-5', 'daily-picks-validate-entry-pass3', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+        // Pass 3: 10:01 AM IST — 45-min ORB (FINAL, 1 min buffer after 10:00 candle close)
+        await this.agenda.every('1 10 * * 1-5', 'daily-picks-validate-entry-pass3', {}, {
+          timezone: 'Asia/Kolkata'
+        });
+      }
 
       // Every 2 min, 9:30-10:29 AM IST — Polling fallback for fill detection
       await this.agenda.every('*/2 9-10 * * 1-5', 'daily-picks-fill-fallback', {}, {
@@ -376,7 +427,12 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      // 3:00 PM IST — Force-exit all open positions + cancel unfilled orders
+      // 2:45 PM IST — HARD FLAT (primary exit) — 15 min before broker force-close at 15:20
+      await this.agenda.every('45 14 * * 1-5', 'daily-picks-hard-flat', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+
+      // 3:00 PM IST — Force-exit any position 14:45 missed (safety net)
       await this.agenda.every('0 15 * * 1-5', 'daily-picks-exit', {}, {
         timezone: 'Asia/Kolkata'
       });

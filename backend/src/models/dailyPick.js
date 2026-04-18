@@ -26,6 +26,7 @@ const pickSchema = new mongoose.Schema({
   scan_scores: {
     close_in_range_pct: Number,   // (close - low) / (high - low) * 100
     volume_ratio: Number,         // today_vol / 50d_avg
+    avg_volume_50d: Number,       // 50-day average daily volume (persisted for ORB volume check)
     rsi: Number,
     atr_pct: Number,
     candle_pattern: String        // bullish_engulfing, bearish_engulfing, hammer, bullish_candle, bearish_candle
@@ -113,7 +114,7 @@ const pickSchema = new mongoose.Schema({
       gap_direction: { passed: Boolean, value: Number, direction: String },
       orb_alignment: { passed: Boolean, scan_bias: String, orb_dir: String, new_entry: Number, original_entry: Number, new_rr: Number, min_rr: Number, orb_high: Number, orb_low: Number },
       nifty_alignment: { passed: Boolean, nifty_dir: String, nifty_change_pct: Number, threshold: Number },
-      entry_still_valid: { passed: Boolean, orb_range_pct: Number, max_allowed: Number },
+      orb_range_width: { passed: Boolean, orb_range_pct: Number, orb_atr_ratio: Number, daily_atr_pct: Number, effective_atr_pct: Number, max_ratio: Number, max_absolute_pct: Number },
       volume_check: { passed: Boolean, ratio: Number }
     },
     skip_reason: String,

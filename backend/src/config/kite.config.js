@@ -65,6 +65,7 @@ const kiteConfig = {
     GTT_TRIGGERS: '/gtt/triggers',
 
     // Quotes
+    QUOTE: '/quote',            // full quote incl. 5-level depth, buy/sell qty, OHLC
     QUOTE_LTP: '/quote/ltp',
     QUOTE_OHLC: '/quote/ohlc',
 

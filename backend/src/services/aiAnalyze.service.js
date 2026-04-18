@@ -361,7 +361,7 @@ class AIAnalyzeService {
     // ChartInk screening context (optional)
     scan_type = null,  // breakout, pullback, momentum, consolidation_breakout
     setup_score = null,
-    // Market regime context (optional) - from regime.checkMarketRegime()
+    // Market regime context (optional) - { regime, distancePct } object from regimeV2
     regimeCheck = null,
     // Weekly analysis option - use only Friday's closing data
     useLastFridayData = false,

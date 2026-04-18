@@ -30,7 +30,7 @@ export const { calculateEntryZone, checkEntryZoneStatus, generateEntryVerdict, c
 export const { calculateTrailingStop, recommendTrailingStrategy, calculateRiskReduction, calculatePositionSize, rrBuy, rrSell } = risk;
 export const { checkExitConditions, checkEntryZoneProximity, checkPositionStatus, generateMorningGlance } = alerts;
 export const { calcClassicPivots } = levels;
-export const { REGIME, checkMarketRegime, getRegimeWarning, fetchAndCheckRegime } = regime;
+export const { REGIME, getRegimeWarning } = regime;
 export const { calculateTradingLevels, calculateAPlusMomentumLevels } = scanLevels;
 
 /**

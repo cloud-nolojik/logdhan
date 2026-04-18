@@ -167,7 +167,7 @@ export async function fetchAllSectorRegimes({ allowOutdated = false } = {}) {
  *
  * @param {string} stockSymbol - e.g. 'TCS', 'HDFCBANK'
  * @param {Object} sectorRegimes - result.sectorRegimes from fetchAllSectorRegimes()
- * @param {Object} [broadMarketRegime] - result from fetchAndCheckRegime() — used as fallback for OTHER
+ * @param {Object} [broadMarketRegime] - broad market regime { regime, distancePct } — used as fallback for OTHER
  * @returns {Object} sector regime result (never null — falls back to broad market)
  */
 export function getSectorRegimeForStock(stockSymbol, sectorRegimes, broadMarketRegime = null) {

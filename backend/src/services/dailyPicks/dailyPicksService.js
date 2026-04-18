@@ -1,7 +1,7 @@
 /**
  * Daily Picks Service — Core Orchestrator
  *
- * Handles: scan → enrich → score → levels → intel → select → save → notify (8:40 AM IST)
+ * Handles: scan → enrich → score → levels → intel → select → save → notify (8:30 AM IST)
  *          ORB validation + entry placement (9:15 AM - 10:01 AM, multi-pass)
  *          fill check + SL/target placement (9:45 AM)
  *          order monitoring every 15 min (10:00 AM - 2:45 PM)
@@ -12,10 +12,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
 
-import { DAILY_SCANS, SCAN_LABELS, SCAN_PRIORITY, ALL_SCAN_ORDER, SCAN_ARCHETYPE } from './dailyPicksScans.js';
-import { runChartinkScan } from '../chartinkService.js';
+import { SCAN_LABELS, SCAN_ARCHETYPE } from './dailyPicksScans.js';
+import { buildShortlist } from '../shortlist/shortlistService.js';
+import { runBreadthSnapshotJob } from '../jobs/breadthSnapshotJob.js';
+import { runVixSnapshotJob } from '../jobs/vixSnapshotJob.js';
+import { runFiiFlowJob } from '../jobs/fiiFlowJob.js';
 import { getDailyAnalysisData } from '../technicalData.service.js';
-import { fetchAndCheckRegime, getRegimeWarning } from '../../engine/regime.js';
+import { getRegimeWarning } from '../../engine/regime.js';
 import DailyPick from '../../models/dailyPick.js';
 import ApiUsage from '../../models/apiUsage.js';
 import kiteOrderService from '../kiteOrder.service.js';
@@ -29,15 +32,16 @@ import { getISTMidnight, calculatePnl, updateDailyResults, round2, roundToTick, 
 import { collectOpeningRange, validatePicks, fetchOrbVolume } from './orbValidationService.js';
 import { checkCircuitBreaker, resetCircuitBreaker, reconcilePositionsOnStartup } from './dailyPicksRiskService.js';
 import { filterEarningsStocks } from './earningsFilter.js';
+import { checkEventBlackout } from './eventBlackout.js';
 // newsSentimentFilter.js is DEPRECATED — scoring now done inline at Step 5.5 using constants below
-import { fetchSGXNiftyData, clearIntelCache } from './globalMarketIntel.js';
-import { scrapeUpstoxNewsForCandidates } from './upstoxNewsScraper.js';
+import { clearIntelCache } from './globalMarketIntel.js';
+// scrapeUpstoxNewsForCandidates import removed — Step 6.5 is gone.
+// The scraper module itself is still used by the shortlist catalyst signal.
 // Intel imports — kept for future re-enable. Currently replaced by checkEconomicCalendar.
 // import { fetchGlobalMarketIntel, shouldAvoidTrading, getTradingAdjustment } from './globalMarketIntel.js';
-import scanLevels from '../../engine/scanLevels.js';
-import { SECTOR_MAPPING, getSectorForStock } from '../../utils/sectorMapping.js';
+// scanLevels import removed — pure-ORB flow no longer pre-computes structural levels
+import { SECTOR_MAPPING } from '../../utils/sectorMapping.js';
 // import { mapSectorToIntelKey } from '../../utils/sectorMapping.js'; // used by intel, currently disabled
-import { fetchAllSectorRegimes } from '../../engine/sectorRegime.js';
 import {
   GAP_PROTECTION_MAX_PCT,
   SLIPPAGE_BUFFER_PCT,
@@ -58,13 +62,17 @@ import {
   // INTEL_STOCK_NEWS_OPPOSING_HIGH,
   // INTEL_SECTOR_ALIGNED,
   // INTEL_SECTOR_OPPOSING,
-  EXHAUSTION_PENALTY,
+  // EXHAUSTION_PENALTY, // removed — Step 4 now hard-rejects on exhaustion instead of penalizing
   EXHAUSTION_CONSECUTIVE_DAYS,
-  EXHAUSTION_EMA20_DIST_PCT,
+  EXHAUSTION_EMA20_DIST_ATR,
+  EXHAUSTION_EMA20_DIST_ABS_PCT,
+  CHASE_MAX_ATR_DIST,
+  CHASE_SOFT_PENALTY_START_ATR,
+  CHASE_SOFT_PENALTY_MAX_PTS,
   // NR7_BONUS, // removed — NR7 scans no longer in pipeline
   // NR7_NEUTRAL_BONUS,
-  MAX_COUNTER_REGIME_PICKS,
-  COUNTER_REGIME_MIN_SCORE,
+  MAX_COUNTER_REGIME_PICKS, // kept: selectDiversePicks still references it (dead branch now, harmless)
+  // COUNTER_REGIME_MIN_SCORE, // removed — Step 4 hard-rejects counter-regime, no threshold needed
 } from './dailyPicksConstants.js';
 import { computeDynamicTrail, checkPartialBooking, checkSidewaysExit } from './tradingDecisions.js';
 
@@ -74,38 +82,11 @@ import { computeDynamicTrail, checkPartialBooking, checkSidewaysExit } from './t
 
 const MAX_DAILY_PICKS = MAX_PICKS; // from shared constants (currently 3)
 const TARGET_PCT = 2.0;
-const SCAN_DELAY_MS = 2000;
-const MIN_SCORE = 60;
 const LOG = '[DAILY-PICKS]';
 
-// Scan priority bonus — rewards stocks caught by higher-priority scans in strong/extreme regimes
-// WEAK_BULL/WEAK_BEAR/NEUTRAL: all scans equal weight (0 bonus)
-const SCAN_PRIORITY_BONUS = {
-  EXTREME_BULL: {
-    fiftyTwoWeek_high: 6,
-    pullback_at_support: 5,
-    volume_shocker_bullish: 3,
-    news_upstox_bullish: 2,
-  },
-  STRONG_BULL: {
-    fiftyTwoWeek_high: 8,
-    pullback_at_support: 5,
-    volume_shocker_bullish: 5,
-    news_upstox_bullish: 3,
-  },
-  EXTREME_BEAR: {
-    fiftyTwoWeek_low: 6,
-    failed_at_resistance: 5,
-    volume_shocker_bearish: 3,
-    news_upstox_bearish: 2,
-  },
-  STRONG_BEAR: {
-    fiftyTwoWeek_low: 8,
-    failed_at_resistance: 5,
-    volume_shocker_bearish: 5,
-    news_upstox_bearish: 3,
-  }
-};
+// Note: MIN_SCORE / SHORTLIST_COMPOSITE_BONUS_MAX are gone.
+// Step 4 is now a pass/reject gate filter — no 0-100 score to compare against.
+// rank_score on survivors is the shortlist composite_score × 100.
 
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const MAX_OUTPUT_TOKENS = 5000;
@@ -131,12 +112,12 @@ function getAnthropicClient() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAIN ORCHESTRATOR — 8:40 AM
+// MAIN ORCHESTRATOR — 8:30 AM
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Run daily picks scan, enrich, score, save, and notify.
- * Called at 8:40 AM IST before market open.
+ * Called at 8:30 AM IST before market open.
  */
 async function runDailyPicks(options = {}) {
   const { dryRun = false, allowOutdatedCandle = false } = options;
@@ -151,30 +132,115 @@ async function runDailyPicks(options = {}) {
   clearIntelCache();
 
   try {
-    // NOTE: Global intel now runs AFTER ChartInk scans + enrichment + scoring + levels
+    // NOTE: Global intel now runs AFTER shortlist + enrichment + scoring + levels
     // so we can pass viable candidate symbols for stock-specific Indian market analysis.
     // See Step 5.5 below.
 
-    // Step 1: Market context (regime + SGX Nifty combined)
-    const marketContext = await getMarketContext({ allowOutdatedCandle });
-    console.log(`${LOG} Market regime: ${marketContext.regime} (structure: ${marketContext.structure_regime})`);
+    // ───────────────────────────────────────────────────────────────────────
+    // Step 0: Refresh Regime v2 data snapshots (inline — no separate cron jobs).
+    //
+    // Three data sources are upserted into their Mongo collections before the
+    // regime compute reads them in Step 1:
+    //   • institutional_flow_daily  (prev-day FII/DII from NSE — ~1–3s)
+    //   • india_vix_daily           (prev-day India VIX close from NSE — ~1–3s)
+    //   • breadth_daily             (% Nifty 500 above 50-DMA — TWO ChartInk
+    //                                 scans, ~2–5s total — replaced the earlier
+    //                                 500-stock Upstox sweep)
+    //
+    // All three run in parallel. Each is fail-soft: if one fails, we log and
+    // continue — Regime v2's fetchers are null-safe and will reweight the
+    // score across whichever inputs are available.
+    // ───────────────────────────────────────────────────────────────────────
+    console.log(`${LOG} [Step 0] Refreshing regime data snapshots (fii, vix, breadth) in parallel...`);
+    const step0T0 = Date.now();
+    const [fiiSettled, vixSettled, breadthSettled] = await Promise.allSettled([
+      runFiiFlowJob(),
+      runVixSnapshotJob(),
+      runBreadthSnapshotJob(),
+    ]);
+    const step0Ms = Date.now() - step0T0;
+    const snapshotStatus = {
+      fii:     fiiSettled.status     === 'fulfilled' ? 'ok' : `failed: ${fiiSettled.reason?.message || 'unknown'}`,
+      vix:     vixSettled.status     === 'fulfilled' ? 'ok' : `failed: ${vixSettled.reason?.message || 'unknown'}`,
+      breadth: breadthSettled.status === 'fulfilled' ? 'ok' : `failed: ${breadthSettled.reason?.message || 'unknown'}`,
+    };
+    console.log(`${LOG} [Step 0] Snapshots done in ${step0Ms}ms — ${JSON.stringify(snapshotStatus)}`);
+    if (fiiSettled.status     === 'rejected') console.error(`${LOG} [Step 0] fii snapshot failed:`,     fiiSettled.reason);
+    if (vixSettled.status     === 'rejected') console.error(`${LOG} [Step 0] vix snapshot failed:`,     vixSettled.reason);
+    if (breadthSettled.status === 'rejected') console.error(`${LOG} [Step 0] breadth snapshot failed:`, breadthSettled.reason);
+
+    // Step 0.5 — Event blackout calendar
+    // Hard block before regime compute. Budget day, RBI MPC, major election
+    // results — the historical priors the system is tuned against don't hold
+    // on these days.
+    const blackout = checkEventBlackout();
+    if (blackout.blocked) {
+      const reason = `EVENT_BLACKOUT — ${blackout.reason} (${blackout.date})`;
+      console.log(`${LOG} ⛔ ${reason}. Sitting out today.`);
+      const haltCtx = {
+        regime: 'HALT', regime_score: null, playbook: 'halt',
+        halt_reason: reason, max_trades: 0, size_multiplier: 0,
+        score_floor_override: null, inputs: null,
+        decided_at: new Date().toISOString(),
+      };
+      const doc = await saveToDB(haltCtx, [], { candidates: [], bullish_count: 0, bearish_count: 0 });
+      await sendNotification(haltCtx, [], doc);
+      return { success: true, picks: 0, doc, halted: true, reason };
+    }
+
+    // Step 1: Market context (continuous regime score — 5 inputs: structure, breadth, volatility, overnight, flow)
+    //
+    // REGIME_VERSION env flag (kill-switch, not a v1 rollback — v1 is deleted):
+    //   'v2' (default)  → run the standard v2 compute
+    //   'off'           → return HALT marketContext, no trades today
+    //   anything else   → treated as 'off' (fail-closed)
+    const REGIME_VERSION = (process.env.REGIME_VERSION || 'v2').toLowerCase();
+    let marketContext;
+    if (REGIME_VERSION === 'v2') {
+      const { computeMarketContextV2 } = await import('../../engine/regimeV2.js');
+      marketContext = await computeMarketContextV2();
+    } else {
+      console.warn(`${LOG} [Step 1] REGIME_VERSION="${REGIME_VERSION}" — regime disabled, HALTING pipeline`);
+      marketContext = {
+        regime: 'HALT',
+        regime_score: null,
+        playbook: 'halt',
+        halt_reason: `regime_disabled (REGIME_VERSION=${REGIME_VERSION})`,
+        max_trades: 0,
+        size_multiplier: 0,
+        score_floor_override: null,
+        inputs: null,
+        decided_at: new Date().toISOString(),
+      };
+    }
+    console.log(`${LOG} Market regime: ${marketContext.regime} score=${marketContext.regime_score} playbook=${marketContext.playbook}`);
     console.log(`${LOG} [Step 1] marketContext:`, JSON.stringify(marketContext, null, 2));
 
-    // SIT OUT regimes — CONFLICT (structure vs sentiment beyond dynamic threshold) or RANGING (5+ neutral days)
-    if (marketContext.regime === 'CONFLICT' || marketContext.regime === 'RANGING') {
-      const reason = marketContext.regime === 'CONFLICT'
-        ? `CONFLICT — structure vs SGX beyond dynamic threshold (${round2(0.5 + Math.abs(marketContext.distance_pct) * 0.1)}%)`
-        : 'RANGING — 5+ consecutive NEUTRAL days, range-bound market';
+    // HALT — insufficient data or extreme volatility
+    if (marketContext.regime === 'HALT') {
+      const reason = `HALT — ${marketContext.halt_reason || 'unknown'}`;
       console.log(`${LOG} ⛔ ${reason}. Sitting out today.`);
       const doc = await saveToDB(marketContext, [], { candidates: [], bullish_count: 0, bearish_count: 0 });
       await sendNotification(marketContext, [], doc);
       return { success: true, picks: 0, doc, halted: true, reason };
     }
 
-    // // Step 2: Run scans based on regime
-    const scanResult = await runScans(marketContext);
+    // Gap-fade playbook gated off (max_trades=0) until the playbook is live
+    if (marketContext.playbook === 'gap_fade' && marketContext.max_trades === 0) {
+      const reason = 'gap_fade_playbook_disabled — gap-fade conditions detected; playbook not yet live';
+      console.log(`${LOG} ⛔ ${reason}. Sitting out today.`);
+      const doc = await saveToDB(marketContext, [], { candidates: [], bullish_count: 0, bearish_count: 0 });
+      await sendNotification(marketContext, [], doc);
+      return { success: true, picks: 0, doc, halted: true, reason };
+    }
+
+    // Step 2: Build shortlist from F&O universe (replaces legacy ChartInk scans)
+    // buildShortlist produces a top-N ranked list using 5 signals: catalyst, gap, RS,
+    // sector-top-3, direction-fit. This call both persists the ShortlistWatchlist doc
+    // (for audit) AND returns the same candidates adapted to the downstream shape.
+    const scanResult = await runShortlistScan(marketContext);
     console.log(`${LOG} Total candidates: ${scanResult.candidates.length} (${scanResult.bullish_count}B / ${scanResult.bearish_count}Be)`);
-    console.log(`${LOG} [Step 2] scanResult:`, JSON.stringify(scanResult, null, 2));
+    console.log(`${LOG} [Step 2] shortlist top-${scanResult.candidates.length} (${scanResult.signal_status ? JSON.stringify(scanResult.signal_status) : 'no signal_status'})`);
 
     if (scanResult.candidates.length === 0) {
       console.log(`${LOG} No candidates found. Saving empty doc and notifying.`);
@@ -208,11 +274,13 @@ async function runDailyPicks(options = {}) {
       return { success: true, picks: 0, doc };
     }
 
-    // Step 4: Score candidates (sorted by score descending, filtered by MIN_SCORE)
-    // NOTE: News + sector sentiment from global intel is applied AFTER scoring at Step 5.5,
-    // once we have viable candidates to pass to Claude for stock-specific analysis.
-    const scored = scoreCandidates(enriched, marketContext.regime);
-    console.log(`${LOG} Scored: ${scored.length} candidates passed min (${MIN_SCORE})`);
+    // Step 4: Gate filter (replaces the old 0-100 technical scorer).
+    // The shortlist already produced the composite ranking; here we only apply
+    // four execution sanity gates (liquidity, ATR envelope, chase guard,
+    // exhaustion) plus a hard counter-regime block. Survivors keep their
+    // shortlist composite as rank_score.
+    const scored = scoreCandidates(enriched, marketContext);
+    console.log(`${LOG} Filtered: ${scored.length} candidates passed gates`);
 
     if (scored.length === 0) {
       console.log(`${LOG} No picks above minimum score.`);
@@ -221,101 +289,39 @@ async function runDailyPicks(options = {}) {
       return { success: true, picks: 0, doc };
     }
 
-    // Step 5: Evaluate ALL scored candidates through the levels engine,
-    // then select top MAX_DAILY_PICKS with scan-type diversity.
-    console.log(`${LOG} [Step 5] Evaluating all ${scored.length} scored candidates through levels engine...`);
-    const allViable = [];
-    const candidatesReview = [];
-    let rejectedCount = 0;
-    let conflictRejections = 0;
-    let levelsRejections = 0;
-    const rejectionReasons = {};
-    for (let i = 0; i < scored.length; i++) {
-      const candidate = scored[i];
-      const _ohlcv = candidate._ohlcv;
-      console.log(`${LOG} [Step 5] --- Candidate ${i + 1}/${scored.length}: ${candidate.symbol} (${candidate.scan_type}, score=${candidate.rank_score}) ---`);
-
-      // Base review entry with candle + indicator data
-      const reviewEntry = {
-        symbol: candidate.symbol,
-        scan_type: candidate.scan_type,
-        direction: candidate.direction,
-        rank_score: candidate.rank_score,
+    // ───────────────────────────────────────────────────────────────────────
+    // Step 5 (REMOVED — pure-ORB design).
+    //
+    // The old Step 5 pre-computed structural entry/stop/target from yesterday's
+    // PDH/PDL/pivots/1H swing zones and applied an R:R + 1H-conflict pre-gate.
+    // In the pure-ORB design those price levels are computed live at 9:30 AM
+    // from the opening range (see orbValidationService → validateAndPlaceEntries).
+    //
+    // Here we simply promote every Step-4 survivor to "viable" and build the
+    // review entries. No levels are attached at this stage; `pick.levels` will
+    // be populated at ORB validation time.
+    // ───────────────────────────────────────────────────────────────────────
+    const allViable = [...scored];
+    const candidatesReview = scored.map(c => {
+      const _ohlcv = c._ohlcv || {};
+      return {
+        symbol: c.symbol,
+        scan_type: c.scan_type,
+        direction: c.direction,
+        rank_score: c.rank_score,
         candle: {
-          open: _ohlcv.open,
-          high: _ohlcv.high,
-          low: _ohlcv.low,
-          close: _ohlcv.close,
-          prev_close: _ohlcv.prev_close,
-          volume: _ohlcv.volume
+          open: _ohlcv.open, high: _ohlcv.high, low: _ohlcv.low,
+          close: _ohlcv.close, prev_close: _ohlcv.prev_close, volume: _ohlcv.volume,
         },
         indicators: {
-          ema20: _ohlcv.ema20,
-          atr: _ohlcv.atr,
-          rsi: candidate.scan_scores?.rsi || 0
+          ema20: _ohlcv.ema20, atr: _ohlcv.atr, rsi: c.scan_scores?.rsi || 0,
         },
-        levels: null,
-        status: null,
-        rejection_reason: null
+        levels: null,              // filled in at ORB time (9:30)
+        status: 'viable',           // no pre-market level rejection anymore
+        rejection_reason: null,
       };
-
-      // ═══════════════════════════════════════════════════════════════════════
-      // CONFLICT CHECK GATE: Reject if 1H structure blocks the trade
-      // LONG: reject if resistance zone within 2% above PDH (entry zone)
-      // SHORT: reject if support zone within 2% below PDL (entry zone)
-      // ═══════════════════════════════════════════════════════════════════════
-      const conflictResult = check1HStructuralConflict(candidate);
-      if (conflictResult.rejected) {
-        rejectedCount++;
-        const scanType = candidate.scan_type;
-        rejectionReasons[scanType] = (rejectionReasons[scanType] || 0) + 1;
-        conflictRejections++;
-        reviewEntry.status = 'rejected_conflict';
-        reviewEntry.rejection_reason = conflictResult.reason;
-        candidatesReview.push(reviewEntry);
-        console.log(`${LOG} [Step 5] ${candidate.symbol}: REJECTED by conflict check (${rejectedCount} rejected so far)`);
-        continue;
-      }
-
-      const withLevels = calculateLevels(candidate);
-      if (withLevels) {
-        reviewEntry.status = 'viable';
-        reviewEntry.levels = {
-          entry: withLevels.levels.entry,
-          stop: withLevels.levels.stop,
-          target: withLevels.levels.target,
-          risk_pct: withLevels.levels.risk_pct,
-          risk_reward: withLevels.levels.risk_reward,
-          target_basis: withLevels.levels.target2_basis || withLevels.levels.mode,
-          mode: withLevels.levels.mode
-        };
-        candidatesReview.push(reviewEntry);
-        allViable.push(withLevels);
-        console.log(`${LOG} [Step 5] ${candidate.symbol}: VIABLE — entry=₹${withLevels.levels.entry} stop=₹${withLevels.levels.stop} target=₹${withLevels.levels.target} R:R=${withLevels.levels.risk_reward} mode=${withLevels.levels.mode} (${allViable.length} viable so far)`);
-      } else {
-        rejectedCount++;
-        const scanType = candidate.scan_type;
-        rejectionReasons[scanType] = (rejectionReasons[scanType] || 0) + 1;
-        levelsRejections++;
-        reviewEntry.status = 'rejected_levels';
-        reviewEntry.rejection_reason = candidate._lastRejectionReason || 'Levels engine rejected';
-        candidatesReview.push(reviewEntry);
-        console.log(`${LOG} [Step 5] ${candidate.symbol}: REJECTED — ${candidate._lastRejectionReason || 'unknown reason'} (${rejectedCount} rejected so far)`);
-      }
-    }
-    console.log(`${LOG} [Step 5] Engine results: ${allViable.length} viable, ${rejectedCount} rejected (${conflictRejections} conflict, ${levelsRejections} R:R) out of ${scored.length} scored`);
-    if (rejectedCount > 0) {
-      console.log(`${LOG} [Step 5] Rejections by scan type: ${Object.entries(rejectionReasons).map(([k, v]) => `${k}=${v}`).join(', ')}`);
-    }
-    if (allViable.length > 0) {
-      console.log(`${LOG} [Step 5] Viable candidates: ${allViable.map(v => `${v.symbol}(${v.scan_type}:${v.rank_score})`).join(', ')}`);
-    }
-
-    // Guard: skip intel + selection if levels engine rejected everything
-    // NOTE: Don't return early — Step 6.5 (news scraping) must still run
-    if (allViable.length === 0) {
-      console.log(`${LOG} All ${scored.length} candidates rejected by levels engine. Skipping intel + selection. News pipeline will still run.`);
-    }
+    });
+    console.log(`${LOG} [Step 5] Skipped pre-market levels computation — ${allViable.length} picks forwarded to selection. Entry/stop/target will be set from ORB at 09:30.`);
 
     // ── Step 5.5 (DISABLED): Global Market Intelligence via Claude/OpenAI ──
     // Commented out — the scoring pipeline captures sector/macro from live price data.
@@ -345,7 +351,26 @@ async function runDailyPicks(options = {}) {
       picksWithLevels = selectDiversePicks(allViable, maxPicksToday, marketContext.regime);
       console.log(`${LOG} Selected ${picksWithLevels.length} picks (diversity-weighted) from ${allViable.length} viable`);
     } else {
-      console.log(`${LOG} [Step 6] No viable ChartInk candidates — skipping selection.`);
+      console.log(`${LOG} [Step 6] No viable shortlist candidates — skipping selection.`);
+    }
+
+    // ─── Quality-over-quota gate: abort if the system found too few setups ──
+    // If fewer than 50% of today's max_trades slots have quality picks, sit
+    // out entirely. A STRONG_BULL day with max_trades=3 that yielded only 1
+    // pick means everything is either extended or unclean — the marginal 1
+    // pick is likely negative-expectancy. A pro reads this: "my system is
+    // telling me this isn't my day."
+    const MIN_PICKS_RATIO = 0.5;  // need at least 50% of max_trades to trade
+    const minPicksRequired = Math.ceil(maxPicksToday * MIN_PICKS_RATIO);
+    if (maxPicksToday > 0 && picksWithLevels.length > 0 && picksWithLevels.length < minPicksRequired) {
+      console.log(`${LOG} [Step 6] ⛔ Quality-over-quota abort: ${picksWithLevels.length} picks < ${minPicksRequired} required (${Math.round(MIN_PICKS_RATIO*100)}% of max_trades=${maxPicksToday})`);
+      console.log(`${LOG} [Step 6] Sitting out today — marginal single pick on a ${marketContext.regime} day is negative EV`);
+      const reason = `too_few_setups: ${picksWithLevels.length}/${maxPicksToday} survived (needed ${minPicksRequired})`;
+      // Save an intentional-sit-out doc so the audit trail shows why we skipped
+      const haltedCtx = { ...marketContext, halt_reason: reason };
+      const doc = await saveToDB(haltedCtx, [], scanResult, candidatesReview);
+      await sendNotification(haltedCtx, [], doc);
+      return { success: true, picks: 0, doc, halted: true, reason };
     }
 
     // Sync candidatesReview with intel-adjusted scores and mark selected picks
@@ -362,6 +387,68 @@ async function runDailyPicks(options = {}) {
       }
     }
 
+    // ─── Post-filter stamp back to ShortlistWatchlist ──────────────────────
+    // Build a verdict per shortlist symbol based on the downstream journey:
+    //   selected        — made it into picksWithLevels (top max_trades)
+    //   not_selected    — passed gates (allViable/scored) but didn't win a slot
+    //   dropped_*       — various drops along 2.5 / 3 / 4
+    //   dropped_neutral_direction — adapter drop in Step 2 (NEUTRAL)
+    //
+    // Reject-reason → post_filter_status mapping for Step 4 gates:
+    const GATE_REJECT_TO_STATUS = {
+      counter_regime: 'dropped_gate_counter_regime',
+      g1_turnover:    'dropped_gate_liquidity',
+      g1_volume:      'dropped_gate_liquidity',
+      g2_atr:         'dropped_gate_atr',
+      g3_chase:       'dropped_gate_chase',
+      g4_exhaustion:  'dropped_gate_exhaustion',
+      no_ohlcv:       'dropped_no_ohlcv',
+    };
+
+    try {
+      if (scanResult.shortlist_date && scanResult.shortlist_raw_symbols?.length) {
+        const statusMap = new Map();
+
+        // 1. NEUTRAL-dropped by adapter
+        for (const sym of (scanResult.neutral_dropped || [])) {
+          statusMap.set(sym, 'dropped_neutral_direction');
+        }
+
+        // 2. Earnings-filtered (Step 2.5)
+        for (const r of (earningsRemoved || [])) {
+          if (r?.symbol) statusMap.set(r.symbol, 'dropped_earnings');
+        }
+
+        // 3. Not enriched (Step 3 missing from analysisData)
+        //    earningsFiltered went into enrichCandidates; anything in earningsFiltered
+        //    that isn't in `enriched` is a no-OHLCV drop.
+        const enrichedSymbols = new Set((enriched || []).map(c => c.symbol));
+        for (const c of (earningsFiltered || [])) {
+          if (!enrichedSymbols.has(c.symbol) && !statusMap.has(c.symbol)) {
+            statusMap.set(c.symbol, 'dropped_no_ohlcv');
+          }
+        }
+
+        // 4. Step 4 gate rejects
+        const rejMap = scored._rejectedBySymbol || new Map();
+        for (const [sym, reason] of rejMap.entries()) {
+          const status = GATE_REJECT_TO_STATUS[reason] || 'dropped_no_ohlcv';
+          if (!statusMap.has(sym)) statusMap.set(sym, status);
+        }
+
+        // 5. Step 4 survivors — either selected or not_selected
+        for (const v of allViable) {
+          statusMap.set(v.symbol, selectedSymbols.has(v.symbol) ? 'selected' : 'not_selected');
+        }
+
+        const { default: ShortlistWatchlist } = await import('../../models/shortlistWatchlist.js');
+        const res = await ShortlistWatchlist.stampPostFilter(scanResult.shortlist_date, statusMap);
+        console.log(`${LOG} [Step 6] Stamped ShortlistWatchlist: ${res.modifiedCount}/${res.matchedCount} candidates tagged (date=${scanResult.shortlist_date})`);
+      }
+    } catch (stampErr) {
+      console.error(`${LOG} [Step 6] ShortlistWatchlist stamp failed (non-fatal): ${stampErr.message}`);
+    }
+
     // Step 6: Generate AI insights (non-fatal) — skip if no viable picks
     let picksWithInsights = [];
     if (picksWithLevels.length > 0) {
@@ -369,104 +456,21 @@ async function runDailyPicks(options = {}) {
       picksWithInsights = await generatePickInsights(picksWithLevels, marketContext);
       console.log(`${LOG} [Step 6] AI insights done: ${picksWithInsights.filter(p => p.ai_generated).length}/${picksWithInsights.length} generated`);
     } else {
-      console.log(`${LOG} [Step 6] No viable ChartInk picks — skipping AI insights.`);
+      console.log(`${LOG} [Step 6] No viable shortlist picks — skipping AI insights.`);
     }
 
-    // ── Step 6.5: Upstox "Stocks to Watch" — separate news pipeline ──
-    // News stocks are shown in the app as their own section (not competing with top-3 ChartInk picks).
-    // ALL scraped stocks are kept; the engine provides entry/stop/target but doesn't filter them out.
-    let newsPicksProcessed = [];
-    let newsArticleMeta = null;
-    try {
-      const newsResult = await scrapeUpstoxNewsForCandidates();
-      if (newsResult.candidates.length > 0) {
-        console.log(`${LOG} [Step 6.5] Processing ${newsResult.candidates.length} news candidates...`);
-        newsArticleMeta = {
-          url: newsResult.article_url,
-          title: newsResult.article_title,
-          scraped_at: new Date(),
-          total_stocks_found: (newsResult.raw_stocks || []).length,
-          total_mapped: newsResult.candidates.length,
-        };
-
-        // Enrich news candidates with OHLCV + indicators (reuse existing enrichment)
-        const newsEnriched = await enrichCandidates(newsResult.candidates, { allowOutdatedCandle });
-
-        // Run each through levels engine — but keep ALL regardless of R:R
-        for (const candidate of newsEnriched) {
-          const withLevels = calculateLevels(candidate);
-          const newsPick = {
-            symbol: candidate.symbol,
-            instrument_key: candidate.instrument_key,
-            stock_name: candidate.stock_name,
-            direction: candidate.direction,
-            rank_score: candidate.rank_score || 0,
-            scan_scores: candidate.scan_scores,
-            news_context: candidate.news_context || null,
-          };
-
-          if (withLevels && withLevels.levels) {
-            newsPick.levels = withLevels.levels;
-            newsPick.technically_confirmed = true;
-            newsPick.engine_status = 'VIABLE';
-            console.log(`${LOG} [Step 6.5] ${candidate.symbol}: VIABLE — entry=₹${withLevels.levels.entry} stop=₹${withLevels.levels.stop} target=₹${withLevels.levels.target} T1=₹${withLevels.levels.target1 || 'N/A'} T3=₹${withLevels.levels.target3 || 'N/A'} R:R=${withLevels.levels.risk_reward}`);
-          } else {
-            // Levels engine rejected (bad R:R) — still include but mark as weak
-            newsPick.technically_confirmed = false;
-            newsPick.engine_status = 'WEAK_RR';
-            // Try to at least show basic levels from OHLCV
-            const _o = candidate._ohlcv;
-            if (_o) {
-              const entry = _o.close;
-              const stop = candidate.direction === 'LONG' ? _o.low : _o.high;
-              const atr = _o.atr || 0;
-              const target = candidate.direction === 'LONG' ? entry + (atr * 2) : entry - (atr * 2);
-              newsPick.levels = {
-                entry: round2(entry),
-                stop: round2(stop),
-                target: round2(target),
-                target1: round2(candidate.direction === 'LONG' ? entry + (atr * 1.5) : entry - (atr * 1.5)),
-                target3: round2(candidate.direction === 'LONG' ? entry + (atr * 3) : entry - (atr * 3)),
-                risk_pct: entry > 0 ? round2(Math.abs(entry - stop) / entry * 100) : 0,
-                reward_pct: entry > 0 ? round2(Math.abs(target - entry) / entry * 100) : 0,
-                risk_reward: Math.abs(entry - stop) > 0 ? round2(Math.abs(target - entry) / Math.abs(entry - stop)) : 0,
-                mode: 'atr_fallback_news',
-                reason: 'ATR-based levels (engine R:R threshold not met)',
-              };
-            }
-            console.log(`${LOG} [Step 6.5] ${candidate.symbol}: WEAK R:R — kept with ATR fallback levels`);
-          }
-          newsPicksProcessed.push(newsPick);
-        }
-
-        // Also include candidates that couldn't be enriched (no candle data)
-        const enrichedSymbols = new Set(newsEnriched.map(c => c.symbol));
-        for (const candidate of newsResult.candidates) {
-          if (!enrichedSymbols.has(candidate.symbol)) {
-            newsPicksProcessed.push({
-              symbol: candidate.symbol,
-              stock_name: candidate.stock_name,
-              direction: candidate.direction,
-              news_context: candidate.news_context || null,
-              technically_confirmed: false,
-              engine_status: 'NO_DATA',
-            });
-            console.log(`${LOG} [Step 6.5] ${candidate.symbol}: NO DATA — kept without levels`);
-          }
-        }
-
-        console.log(`${LOG} [Step 6.5] News picks: ${newsPicksProcessed.length} total (${newsPicksProcessed.filter(p => p.technically_confirmed).length} confirmed, ${newsPicksProcessed.filter(p => !p.technically_confirmed).length} unconfirmed)`);
-      } else {
-        console.log(`${LOG} [Step 6.5] No news article found for today.`);
-      }
-    } catch (newsErr) {
-      console.error(`${LOG} [Step 6.5] News pipeline failed (non-fatal): ${newsErr.message}`);
-    }
+    // Step 6.5 (news pipeline) REMOVED. News picks were advisory-only — never
+    // traded — so they're not part of the automation path.
 
     // Step 7: Save to DB (includes full global intel snapshot + news picks)
-    console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks + ${newsPicksProcessed.length} news picks`);
-    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, null, newsPicksProcessed, newsArticleMeta);
+    console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks`);
+    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, null);
     console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
+    // Verify scan_scores persisted — especially avg_volume_50d (critical for ORB Check 6)
+    for (const p of doc.picks) {
+      const ss = p.scan_scores;
+      console.log(`${LOG} [Step 7] scan_scores persisted — ${p.symbol}: avg_volume_50d=${ss?.avg_volume_50d ?? 'MISSING'} vol_ratio=${ss?.volume_ratio} rsi=${ss?.rsi} atr_pct=${ss?.atr_pct}%`);
+    }
 
     // Step 8: Send notification
     console.log(`${LOG} [Step 8] Sending notification...`);
@@ -475,12 +479,10 @@ async function runDailyPicks(options = {}) {
     const elapsed = Date.now() - startTime;
     console.log(`${LOG} ════════════════════════════════════════`);
     console.log(`${LOG} ✅ PIPELINE COMPLETE in ${elapsed}ms`);
-    console.log(`${LOG} Pipeline summary: ${scanResult.candidates.length} scanned → ${enriched.length} enriched → ${scored.length} scored → ${allViable.length} viable → ${picksWithInsights.length} final picks + ${newsPicksProcessed.length} news picks`);
+    console.log(`${LOG} Pipeline summary: ${scanResult.candidates.length} scanned → ${enriched.length} enriched → ${scored.length} scored → ${allViable.length} viable → ${picksWithInsights.length} final picks`);
     for (const p of picksWithInsights) {
-      console.log(`${LOG} FINAL PICK: ${p.symbol} | ${p.scan_type} | ${p.direction} | score=${p.rank_score} | entry=₹${p.levels.entry} stop=₹${p.levels.stop} target=₹${p.levels.target} R:R=${p.levels.risk_reward}`);
-    }
-    for (const np of newsPicksProcessed) {
-      console.log(`${LOG} NEWS PICK: ${np.symbol} | ${np.direction} | ${np.engine_status} | entry=₹${np.levels?.entry || 'N/A'} stop=₹${np.levels?.stop || 'N/A'} T1=₹${np.levels?.target1 || 'N/A'} T2=₹${np.levels?.target || 'N/A'} T3=₹${np.levels?.target3 || 'N/A'}`);
+      // Pure-ORB: pick.levels is null until 9:30 AM ORB validation fills it in
+      console.log(`${LOG} FINAL PICK: ${p.symbol} | ${p.scan_type} | ${p.direction} | score=${p.rank_score} | levels=<computed at 9:30 ORB>`);
     }
     console.log(`${LOG} ════════════════════════════════════════`);
     return { success: true, picks: picksWithInsights.length, doc };
@@ -508,465 +510,109 @@ async function runDailyPicks(options = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// STEP 1: MARKET CONTEXT
+// STEP 2: BUILD SHORTLIST (replaces legacy ChartInk scans)
 // ═══════════════════════════════════════════════════════════════════════════════
-
-async function getMarketContext({ allowOutdatedCandle = false } = {}) {
-  console.log(`${LOG} [Step 1] Fetching market context (regime + SGX Nifty)...`);
-
-  // Fetch structure (Nifty vs 50 EMA), sentiment (SGX/GIFT Nifty), and sector regimes in parallel
-  // All three are critical — if structure or sentiment fails, pipeline halts
-  const [regimeResult, sgxData, sectorRegimeResult] = await Promise.all([
-    fetchAndCheckRegime({ allowOutdated: allowOutdatedCandle }),
-    fetchSGXNiftyData(),
-    fetchAllSectorRegimes({ allowOutdated: allowOutdatedCandle })
-  ]);
-
-  const { regime: structureRegime, niftyLast, ema50, distancePct } = regimeResult;
-  console.log(`${LOG} Structure: ${structureRegime} (Nifty: ${niftyLast}, EMA50: ${ema50}, dist: ${distancePct}%)`);
-  console.log(`${LOG} Sentiment: SGX/GIFT Nifty change=${sgxData.change_pct}% price=${sgxData.last_price}`);
-  console.log(`${LOG} Sectors: ${sectorRegimeResult.bullish.length} bullish, ${sectorRegimeResult.bearish.length} bearish, ${sectorRegimeResult.neutral.length} neutral`);
-  // Fetch recent regime history (last 5 trading days) for persistent-NEUTRAL detection
-  // structure_regime = Nifty vs EMA50 only (used for "5 neutral days" check)
-  // regime = combined regime (used for "how many RANGING sit-outs" count)
-  let recentStructureHistory = [];
-  let recentCombinedHistory = [];
-  try {
-    const recentDocs = await DailyPick.find(
-      { 'market_context.structure_regime': { $exists: true } },
-      { 'market_context.structure_regime': 1, 'market_context.regime': 1 }
-    ).sort({ scan_date: -1 }).limit(5).lean();
-    recentStructureHistory = recentDocs.map(d => d.market_context?.structure_regime).filter(Boolean);
-    recentCombinedHistory = recentDocs.map(d => d.market_context?.regime).filter(Boolean);
-    console.log(`${LOG} Structure history (last ${recentStructureHistory.length}): ${recentStructureHistory.join(', ') || 'none'}`);
-    console.log(`${LOG} Combined history (last ${recentCombinedHistory.length}): ${recentCombinedHistory.join(', ') || 'none'}`);
-  } catch (err) {
-    console.warn(`${LOG} Could not fetch regime history: ${err.message}`);
-  }
-
-  // Combine structure + sentiment + sector breadth into a single regime
-  const sectorSummary = { bullish: sectorRegimeResult.bullish, bearish: sectorRegimeResult.bearish, neutral: sectorRegimeResult.neutral };
-  const combined = getCombinedRegime(niftyLast, ema50, sgxData.change_pct, distancePct, sectorSummary, recentStructureHistory, recentCombinedHistory);
-
-  console.log(`${LOG} ═══════════════════════════════════════`);
-  console.log(`${LOG} Combined Regime: ${combined.regime} (structure=${structureRegime}, sgx=${sgxData.change_pct}%)`);
-  console.log(`${LOG} Size multiplier: ${combined.sizeMultiplier}x | Max trades: ${combined.maxTrades} | Breadth confirmed: ${combined.confirmedByBreadth}`);
-  if (combined.allowedCounterTrendSectors.length > 0) {
-    console.log(`${LOG} Counter-trend sectors allowed: ${combined.allowedCounterTrendSectors.join(', ')}`);
-  }
-  console.log(`${LOG} ═══════════════════════════════════════`);
-
-  return {
-    regime: combined.regime,
-    structure_regime: structureRegime,
-    nifty_prev_close: niftyLast,
-    distance_pct: distancePct,
-    ema50,
-    sgx_data: sgxData,
-    size_multiplier: combined.sizeMultiplier,
-    max_trades: combined.maxTrades,
-    confirmed_by_breadth: combined.confirmedByBreadth,
-    allowed_counter_trend_sectors: combined.allowedCounterTrendSectors,
-    sector_regimes: sectorRegimeResult.sectorRegimes,
-    sector_summary: sectorSummary,
-    decided_at: new Date()
-  };
-}
+//
+// The shortlist engine (services/shortlist/shortlistService.js) is the single
+// source of pre-market candidates. It ranks the entire F&O universe by a 5-signal
+// composite: catalyst (news), gap (sector×SGX + catalyst), relative strength
+// (5-day z-score vs Nifty), sector-top-3, and direction-fit vs marketContext.
+//
+// This adapter calls buildShortlist() and maps each shortlist candidate into the
+// shape Steps 2.5 onward already expect (symbol, stock_name, scan_type, direction,
+// sector, chartink_data placeholder). The shortlist result is also persisted to
+// its own Mongo collection (`shortlist_watchlists`) for audit, separate from the
+// DailyPick document written in Step 7.
 
 /**
- * Combine structure (Nifty vs 50 EMA) + sentiment (GIFT Nifty change%)
- * + sector breadth + regime history into a single regime with position sizing guidance.
- *
- * Structure = GATE (which direction is allowed)
- * Sentiment = MODIFIER (confidence/sizing)
- * Sector breadth = CONFIRMATION (adjusts conviction + identifies counter-trend sectors)
- * Regime history = PERSISTENCE CHECK (detects range-bound markets)
- *
- * CONFLICT threshold is dynamic: SGX must move more to conflict with a deeply trending market.
- * Formula: conflictThreshold = 0.5 + abs(distancePct) * 0.1
- *   Nifty -1% → CONFLICT if SGX >= +0.6%
- *   Nifty -4% → CONFLICT if SGX >= +0.9%
- *   Nifty -7% → CONFLICT if SGX >= +1.2%
+ * Map a shortlist candidate's dominant signal + direction to a scan_type.
+ * scan_type is consumed by Step 4 (scoring bonus), Step 5 (levels engine
+ * archetype via SCAN_ARCHETYPE), and Step 6 (diversity selection).
  */
-function getCombinedRegime(niftyClose, ema50, giftNiftyChangePct, distancePct = 0, sectorSummary = null, recentStructureHistory = [], recentCombinedHistory = []) {
-  if (!niftyClose || !ema50) {
-    throw new Error('Nifty structure data (close + EMA50) is critical — cannot determine regime');
-  }
+function deriveScanType(candidate) {
+  const s = candidate.signals || {};
+  const dir = candidate.direction === 'SHORT' ? 'short' : 'long';
 
-  const structureBull = niftyClose > ema50 * 1.003;
-  const structureBear = niftyClose < ema50 * 0.997;
-  const sentimentBull = giftNiftyChangePct > 0.3;
-  const sentimentBear = giftNiftyChangePct < -0.3;
-  const absDistance = Math.abs(distancePct);
-
-  // Dynamic CONFLICT threshold — deeper trend = higher bar for conflict
-  const conflictThreshold = 0.5 + absDistance * 0.1;
-
-  // EXTREME thresholds — 6%+ from EMA50
-  const isExtremeBear = structureBear && absDistance >= 6;
-  const isExtremeBull = structureBull && absDistance >= 6;
-
-  let base;
-
-  // ── CONFLICT regimes (structure vs sentiment, dynamic threshold) — checked FIRST ──
-  // At any distance, if SGX opposes structure beyond the dynamic threshold, sit out
-  if (structureBear && giftNiftyChangePct >= conflictThreshold) {
-    base = { regime: 'CONFLICT', sizeMultiplier: 0.0, maxTrades: 0 };
-    console.log(`${LOG} CONFLICT: bear structure (${distancePct}%) + SGX +${giftNiftyChangePct}% >= threshold ${round2(conflictThreshold)}%`);
-  } else if (structureBull && giftNiftyChangePct <= -conflictThreshold) {
-    base = { regime: 'CONFLICT', sizeMultiplier: 0.0, maxTrades: 0 };
-    console.log(`${LOG} CONFLICT: bull structure (+${distancePct}%) + SGX ${giftNiftyChangePct}% <= threshold -${round2(conflictThreshold)}%`);
-  }
-  // ── EXTREME regimes (6%+ from EMA50) ──
-  // Structure is so deep that it dominates regardless of sentiment direction.
-  // Sentiment aligned = 0.7x. Sentiment flat/mildly opposing (but below CONFLICT) = 0.5x.
-  else if (isExtremeBear && sentimentBear) {
-    base = { regime: 'EXTREME_BEAR', sizeMultiplier: 0.7, maxTrades: 2 };
-  } else if (isExtremeBear && !sentimentBear) {
-    // 6%+ below EMA50 but SGX flat or mildly positive (below conflict threshold, already eliminated above)
-    // Still EXTREME_BEAR — structure dominates at this distance. Reduced size for caution.
-    base = { regime: 'EXTREME_BEAR', sizeMultiplier: 0.5, maxTrades: 2 };
-  } else if (isExtremeBull && sentimentBull) {
-    base = { regime: 'EXTREME_BULL', sizeMultiplier: 0.7, maxTrades: 2 };
-  } else if (isExtremeBull && !sentimentBull) {
-    // 6%+ above EMA50 but SGX flat or mildly negative (below conflict threshold, already eliminated above)
-    base = { regime: 'EXTREME_BULL', sizeMultiplier: 0.5, maxTrades: 2 };
-  }
-  // ── STRONG regimes (structure + sentiment aligned, distance < 6%) ──
-  else if (structureBull && sentimentBull) {
-    base = { regime: 'STRONG_BULL', sizeMultiplier: 1.0, maxTrades: 3 };
-  } else if (structureBear && sentimentBear) {
-    base = { regime: 'STRONG_BEAR', sizeMultiplier: 1.0, maxTrades: 3 };
-  }
-  // ── WEAK regimes (structure has direction, sentiment flat or mildly opposing) ──
-  else if (structureBull && sentimentBear) {
-    base = { regime: 'WEAK_BULL', sizeMultiplier: 0.6, maxTrades: 2 };
-  } else if (structureBear && sentimentBull) {
-    // "Sell on rise" — small positive SGX below conflict threshold is a shorting opportunity
-    base = { regime: 'WEAK_BEAR', sizeMultiplier: 0.6, maxTrades: 2 };
-  } else if (structureBull) {
-    base = { regime: 'WEAK_BULL', sizeMultiplier: 0.6, maxTrades: 2 };
-  } else if (structureBear) {
-    base = { regime: 'WEAK_BEAR', sizeMultiplier: 0.6, maxTrades: 2 };
-  } else {
-    // True NEUTRAL: structure near EMA + sentiment flat
-    base = { regime: 'NEUTRAL', sizeMultiplier: 0.5, maxTrades: 1 };
-  }
-
-  // ── Persistent NEUTRAL detection ──
-  // Uses structure_regime history (Nifty vs EMA50 only) to detect range-bound markets.
-  // Combined regime can be WEAK_BULL even when structure is NEUTRAL (if SGX has direction),
-  // so structure_regime is the correct signal for "market is genuinely stuck."
-  // Sit out for max 3 consecutive RANGING days, then trade with minimal size to stay engaged.
-  if (base.regime === 'NEUTRAL' && recentStructureHistory.length >= 5) {
-    const neutralLike = ['NEUTRAL', 'UNKNOWN'];
-    const allNeutral = recentStructureHistory.slice(0, 5).every(r => neutralLike.includes(r));
-    if (allNeutral) {
-      // Count consecutive RANGING days from most recent backward (not total in window)
-      let consecutiveRanging = 0;
-      for (const r of recentCombinedHistory) {
-        if (r === 'RANGING') consecutiveRanging++;
-        else break;
-      }
-      if (consecutiveRanging >= 3) {
-        console.log(`${LOG} RANGING: ${consecutiveRanging} consecutive sit-out days — resuming with minimal size`);
-        base = { regime: 'NEUTRAL', sizeMultiplier: 0.3, maxTrades: 1 };
-      } else {
-        console.log(`${LOG} RANGING: 5+ neutral structure days (${consecutiveRanging} sit-outs so far, max 3) — sitting out`);
-        base = { regime: 'RANGING', sizeMultiplier: 0.0, maxTrades: 0 };
-      }
-    }
-  }
-
-  // ── Sector breadth adjustment ──
-  if (!sectorSummary) {
-    return { ...base, confirmedByBreadth: false, allowedCounterTrendSectors: [] };
-  }
-
-  const { bullish = [], bearish = [], neutral = [] } = sectorSummary;
-  const totalSectors = bullish.length + bearish.length + neutral.length;
-  const isBearRegime = base.regime.includes('BEAR');
-  const isBullRegime = base.regime.includes('BULL');
-
-  let bearishBreadth = totalSectors > 0 ? bearish.length / totalSectors : 0;
-  let bullishBreadth = totalSectors > 0 ? bullish.length / totalSectors : 0;
-  let confirmedByBreadth = false;
-
-  // Pre-breadth size is used to distinguish EXTREME variants:
-  // 0.7 = sentiment aligned, 0.5 = sentiment flat/mildly opposing
-  const preBreadthSize = base.sizeMultiplier;
-
-  if (isBearRegime && bearishBreadth >= 0.6) {
-    // High bearish breadth confirms the bear regime
-    confirmedByBreadth = true;
-    if (base.regime === 'WEAK_BEAR') {
-      base.sizeMultiplier = 0.8;
-      base.maxTrades = 3;
-    } else if (base.regime === 'EXTREME_BEAR' && preBreadthSize <= 0.5) {
-      // Flat-SGX EXTREME_BEAR with strong breadth confirmation → bump from 0.5 to 0.6
-      base.sizeMultiplier = 0.6;
-    }
-    // STRONG_BEAR: already 1.0x. EXTREME_BEAR aligned: already 0.7x. No change needed.
-  } else if (isBearRegime && bearishBreadth < 0.4) {
-    // Low bearish breadth contradicts the bear regime — sectors diverging, reduce conviction
-    if (base.regime === 'WEAK_BEAR') {
-      base.sizeMultiplier = 0.4;
-    } else if (base.regime === 'STRONG_BEAR') {
-      base.sizeMultiplier = 0.7;
-      base.maxTrades = 2;
-    } else if (base.regime === 'EXTREME_BEAR') {
-      // Both variants get reduced: aligned 0.7→0.5, flat 0.5→0.3
-      base.sizeMultiplier = Math.max(preBreadthSize - 0.2, 0.3);
-      base.maxTrades = 1;
-    }
-  } else if (isBullRegime && bullishBreadth >= 0.6) {
-    // High bullish breadth confirms the bull regime
-    confirmedByBreadth = true;
-    if (base.regime === 'WEAK_BULL') {
-      base.sizeMultiplier = 0.8;
-      base.maxTrades = 3;
-    } else if (base.regime === 'EXTREME_BULL' && preBreadthSize <= 0.5) {
-      // Flat-SGX EXTREME_BULL with strong breadth confirmation → bump from 0.5 to 0.6
-      base.sizeMultiplier = 0.6;
-    }
-    // STRONG_BULL: already 1.0x. EXTREME_BULL aligned: already 0.7x. No change needed.
-  } else if (isBullRegime && bullishBreadth < 0.4) {
-    // Low bullish breadth contradicts the bull regime — sectors diverging, reduce conviction
-    if (base.regime === 'WEAK_BULL') {
-      base.sizeMultiplier = 0.4;
-    } else if (base.regime === 'STRONG_BULL') {
-      base.sizeMultiplier = 0.7;
-      base.maxTrades = 2;
-    } else if (base.regime === 'EXTREME_BULL') {
-      base.sizeMultiplier = Math.max(preBreadthSize - 0.2, 0.3);
-      base.maxTrades = 1;
-    }
-  }
-
-  // Identify sectors where counter-trend trades are permitted
-  let allowedCounterTrendSectors = [];
-  if (isBearRegime) {
-    allowedCounterTrendSectors = [...bullish, ...neutral];
-  } else if (isBullRegime) {
-    allowedCounterTrendSectors = [...bearish, ...neutral];
-  } else {
-    // NEUTRAL / RANGING / CONFLICT — all sectors permitted
-    allowedCounterTrendSectors = [...bullish, ...bearish, ...neutral];
-  }
-
-  console.log(`${LOG} Breadth: ${round2(bearishBreadth * 100)}% bearish, ${round2(bullishBreadth * 100)}% bullish | confirmed=${confirmedByBreadth}`);
-  if (allowedCounterTrendSectors.length > 0 && allowedCounterTrendSectors.length < totalSectors) {
-    console.log(`${LOG} Counter-trend sectors: ${allowedCounterTrendSectors.join(', ')}`);
-  }
-
-  return {
-    ...base,
-    confirmedByBreadth,
-    allowedCounterTrendSectors,
-  };
+  // Prefer the strongest informative signal as the scan_type label.
+  if (s.catalyst === 1)                     return `shortlist_catalyst`;
+  if (s.gap !== null && s.gap >= 0.6)       return `shortlist_gap_${dir}`;
+  if (s.rs !== null && s.rs >= 0.6)         return `shortlist_rs_${dir}`;
+  if (s.sector_top3 === 1)                  return `shortlist_sector`;
+  // Fallback: pure directional ranking
+  return `shortlist_${dir}`;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// STEP 2: RUN CHARTINK SCANS
-// ═══════════════════════════════════════════════════════════════════════════════
+async function runShortlistScan(marketContext) {
+  console.log(`${LOG} [Step 2] buildShortlist(regime=${marketContext.regime} score=${marketContext.regime_score} playbook=${marketContext.playbook})`);
 
-async function runScans(marketContext) {
-  const { regime } = marketContext;
+  const shortlistDoc = await buildShortlist(marketContext, {
+    outputSize: 50,
+    topSectorsN: 3,
+    persist: true,
+  });
 
-  console.log(`${LOG} [Step 2] Running ALL ${ALL_SCAN_ORDER.length} scans (regime: ${regime}, sector filter handles direction)`);
+  const raw = shortlistDoc?.candidates || [];
 
-  // ── Pass 1: Run all scans, collect all hits without dedup ──
-  // stockHits: { symbol → { stock_name, chartink_data, scans: [{ scanName, direction }] } }
-  const stockHits = {};
-  let totalHits = 0;
-
-  for (let idx = 0; idx < ALL_SCAN_ORDER.length; idx++) {
-    const scanName = ALL_SCAN_ORDER[idx];
-    const scan = DAILY_SCANS[scanName];
-    if (!scan) continue;
-
-    // Skip regime-restricted scans (e.g. relative_strength_long only in bear regimes)
-    if (scan.regimeRestriction && !scan.regimeRestriction.includes(regime)) {
-      console.log(`${LOG} ${scanName}: SKIPPED (regime restriction, ${regime} not in [${scan.regimeRestriction.join(',')}])`);
-      continue;
-    }
-
-    try {
-      console.log(`${LOG} Running scan: ${scanName} (${scan.type})...`);
-      const results = await runChartinkScan(scan.query);
-      const direction = scan.type === 'bullish' ? 'LONG' : 'SHORT';
-
-      let newStocks = 0;
-      let existingStocks = 0;
-      for (const stock of results) {
-        const symbol = stock.nsecode;
-        if (!symbol) continue;
-
-        if (!stockHits[symbol]) {
-          stockHits[symbol] = {
-            stock_name: stock.name,
-            chartink_data: { per_change: stock.per_change, close: stock.close, volume: stock.volume },
-            scans: [],
-          };
-          newStocks++;
-        } else {
-          existingStocks++;
-        }
-
-        stockHits[symbol].scans.push({ scanName, direction });
-        totalHits++;
-      }
-
-      console.log(`${LOG} ${scanName}: ${results.length} results (${newStocks} new, ${existingStocks} multi-hit)`);
-
-      // Delay between scans to avoid rate-limiting (not after last)
-      if (idx < ALL_SCAN_ORDER.length - 1) {
-        await delay(SCAN_DELAY_MS);
-      }
-    } catch (err) {
-      console.error(`${LOG} Scan ${scanName} failed:`, err.message);
-    }
-  }
-
-  const uniqueStocks = Object.keys(stockHits).length;
-  console.log(`${LOG} [Step 2] Pass 1 done: ${totalHits} total hits → ${uniqueStocks} unique stocks`);
-
-  // ── Pass 2: Two-pass dedup — assign best scan_type, detect conflicts ──
+  // Adapt shortlist candidates to the downstream shape. Fields Step 3+ expect:
+  //   symbol, stock_name, scan_type, direction, sector, chartink_data (placeholder)
+  // Extra fields carried through for audit / scoring:
+  //   _shortlist_signals, _composite_score, _reasons, _catalyst_meta
   const candidates = [];
   let bullishCount = 0;
   let bearishCount = 0;
-  let conflictCount = 0;
-  let multiHitCount = 0;
+  // Track symbols dropped by the adapter (NEUTRAL direction) so the post-filter
+  // stamp can flag them in the ShortlistWatchlist doc.
+  const neutralDropped = new Set();
 
-  for (const [symbol, data] of Object.entries(stockHits)) {
-    const { scans, stock_name, chartink_data } = data;
-
-    // Check for direction conflict — stock in both bullish and bearish scans
-    const directions = new Set(scans.map(s => s.direction));
-    if (directions.size > 1) {
-      conflictCount++;
-      continue; // skip — no directional conviction
+  for (const c of raw) {
+    // Skip NEUTRAL direction — we only trade directional setups
+    if (!c.direction || c.direction === 'NEUTRAL') {
+      if (c.trading_symbol) neutralDropped.add(c.trading_symbol);
+      continue;
     }
 
-    const direction = scans[0].direction;
-    const scanNames = scans.map(s => s.scanName);
+    const scan_type = deriveScanType(c);
 
-    // Find highest-priority scan (lowest rank number)
-    let bestScan = scanNames[0];
-    let bestRank = SCAN_PRIORITY[bestScan]?.rank ?? 99;
-    for (let i = 1; i < scanNames.length; i++) {
-      const rank = SCAN_PRIORITY[scanNames[i]]?.rank ?? 99;
-      if (rank < bestRank) {
-        bestRank = rank;
-        bestScan = scanNames[i];
-      }
-    }
+    const adapted = {
+      symbol: c.trading_symbol,
+      stock_name: c.name,
+      instrument_key: c.instrument_key,
+      scan_type,
+      direction: c.direction,
+      sector: c.sector || 'OTHER',
+      // Chartink parity fields — kept as a placeholder so downstream logging
+      // that references candidate.chartink_data doesn't crash. Real OHLCV
+      // comes from Step 3 (Upstox enrichment).
+      chartink_data: {},
+      scan_matches: [scan_type],
+      scan_count: 1,
+      // Audit trail
+      _shortlist_signals: c.signals || null,
+      _composite_score: c.composite_score,
+      _reasons: c.reasons || [],
+      _catalyst_meta: c.catalyst_meta || null,
+    };
 
-    if (scanNames.length > 1) multiHitCount++;
-
-    candidates.push({
-      symbol,
-      stock_name,
-      scan_type: bestScan,
-      direction,
-      scan_matches: scanNames,
-      scan_count: scanNames.length,
-      chartink_data,
-    });
-
-    if (direction === 'LONG') bullishCount++;
+    candidates.push(adapted);
+    if (adapted.direction === 'LONG') bullishCount++;
     else bearishCount++;
   }
 
-  console.log(`${LOG} [Step 2] Pass 2 done: ${candidates.length} candidates (${bullishCount}B / ${bearishCount}Be), ${conflictCount} conflicts removed, ${multiHitCount} multi-hit stocks`);
-
-  // ── Step 2B: Sector cross-filter ──
-  const { sector_regimes: sectorRegimes, allowed_counter_trend_sectors: allowedCT } = marketContext;
-  if (sectorRegimes && candidates.length > 0) {
-    let sectorKept = 0, sectorAligned = 0, sectorNeutralKept = 0, sectorUnknown = 0, sectorMismatch = 0;
-    const rejected = [];
-
-    for (let i = candidates.length - 1; i >= 0; i--) {
-      const c = candidates[i];
-      const sectorInfo = getSectorForStock(c.symbol);
-      const sectorCode = sectorInfo?.code || null;
-      const sectorData = (sectorCode && sectorCode !== 'OTHER') ? sectorRegimes[sectorCode] : null;
-      const sectorRegime = sectorData?.regime || null;
-
-      // sector_aligned is metadata for logging/debugging — scoring uses sector_regime directly via SECTOR_SCORE_MAP
-      c.sector = sectorCode || 'OTHER';
-      c.sector_regime = sectorRegime;
-      c.sector_unknown = !sectorData;
-
-      if (!sectorData || sectorRegime === 'UNKNOWN') {
-        rejected.push(`${c.symbol}(${c.sector}:unknown)`);
-        if (c.direction === 'LONG') bullishCount--;
-        else bearishCount--;
-        candidates.splice(i, 1);
-        sectorUnknown++;
-        continue;
-      }
-
-      const isSectorBullish = sectorRegime === 'STRONG_BULLISH' || sectorRegime === 'BULLISH';
-      const isSectorBearish = sectorRegime === 'STRONG_BEARISH' || sectorRegime === 'BEARISH';
-      const isSectorNeutral = sectorRegime === 'NEUTRAL';
-
-      if (c.direction === 'SHORT') {
-        if (isSectorBearish) {
-          c.sector_aligned = true;
-          sectorAligned++;
-          sectorKept++;
-        } else if (isSectorNeutral && allowedCT.includes(sectorCode)) {
-          c.sector_aligned = false;
-          sectorNeutralKept++;
-          sectorKept++;
-        } else {
-          rejected.push(`${c.symbol}(${sectorCode}:${sectorRegime})`);
-          bearishCount--;
-          candidates.splice(i, 1);
-          sectorMismatch++;
-        }
-      } else {
-        if (isSectorBullish) {
-          c.sector_aligned = true;
-          sectorAligned++;
-          sectorKept++;
-        } else if (isSectorNeutral && allowedCT.includes(sectorCode)) {
-          c.sector_aligned = false;
-          sectorNeutralKept++;
-          sectorKept++;
-        } else {
-          rejected.push(`${c.symbol}(${sectorCode}:${sectorRegime})`);
-          bullishCount--;
-          candidates.splice(i, 1);
-          sectorMismatch++;
-        }
-      }
-    }
-
-    const totalRejected = sectorMismatch + sectorUnknown;
-    console.log(`${LOG} [Step 2B] Sector filter: ${sectorKept} kept (${sectorAligned} aligned, ${sectorNeutralKept} neutral), ${totalRejected} rejected (${sectorMismatch} mismatch, ${sectorUnknown} unknown)`);
-    if (rejected.length > 0) {
-      console.log(`${LOG} [Step 2B] Rejected: ${rejected.join(', ')}`);
-    }
-
-    // Log surviving longs/shorts by sector for visibility
-    const longsBySector = {};
-    const shortsBySector = {};
-    for (const c of candidates) {
-      const map = c.direction === 'LONG' ? longsBySector : shortsBySector;
-      map[c.sector] = (map[c.sector] || 0) + 1;
-    }
-    if (Object.keys(longsBySector).length > 0) {
-      console.log(`${LOG} [Step 2B] Surviving longs by sector: ${Object.entries(longsBySector).map(([s, n]) => `${s}=${n}`).join(', ')}`);
-    }
-    console.log(`${LOG} [Step 2B] Surviving shorts by sector: ${Object.entries(shortsBySector).map(([s, n]) => `${s}=${n}`).join(', ')}`);
+  console.log(`${LOG} [Step 2] Shortlist produced ${candidates.length} directional candidates (${bullishCount}B / ${bearishCount}Be). signal_status=${JSON.stringify(shortlistDoc?.signal_status || {})}`);
+  if (shortlistDoc?.warnings?.length) {
+    for (const w of shortlistDoc.warnings) console.warn(`${LOG} [Step 2] warning: ${w}`);
   }
 
   return {
     candidates,
     bullish_count: bullishCount,
-    bearish_count: bearishCount
+    bearish_count: bearishCount,
+    signal_status: shortlistDoc?.signal_status || null,
+    shortlist_date: shortlistDoc?.date || null,
+    shortlist_stats: shortlistDoc?.stats || null,
+    // Extra audit trail for stampPostFilter
+    shortlist_raw_symbols: raw.map(c => c.trading_symbol).filter(Boolean),
+    neutral_dropped: [...neutralDropped],
   };
 }
 
@@ -1028,8 +674,8 @@ async function enrichCandidates(candidates, { allowOutdatedCandle = false } = {}
     const lastDailyClose = stock.last_daily_close || close;
     const volSource = stock.todays_volume > 0 ? 'live' : 'chartink';
 
-    // Single compact debug line — uncomment to compare across runs
-    // console.log(`${LOG} [ENRICH-DEBUG] ${candidate.symbol} (${candidate.scan_type}/${candidate.direction}): src=${stock.data_source || 'N/A'} O=${open} H=${high} L=${low} C=${close} prevC=${prevClose} | vol=${effectiveVolume}(${volSource}) avgVol50=${stock.avg_volume_50d} ratio=${round2(volumeRatio)}x | RSI=${stock.daily_rsi} EMA20=${stock.ema20 || 0} ATR=${round2(atrPct)}% CIR=${round2(closeInRangePct)}% candle=${candlePattern}`);
+    // Step 3 enrichment debug — logs per-stock data including avg_volume_50d for Monday verification
+    console.log(`${LOG} [ENRICH] ${candidate.symbol} (${candidate.scan_type}/${candidate.direction}): src=${stock.data_source || 'N/A'} O=${open} H=${high} L=${low} C=${close} prevC=${prevClose} | vol=${effectiveVolume}(${volSource}) avgVol50d=${stock.avg_volume_50d || 0} volRatio=${round2(volumeRatio)}x | RSI=${stock.daily_rsi} EMA20=${stock.ema20 || 0} ATR=${round2(atrPct)}% CIR=${round2(closeInRangePct)}% candle=${candlePattern}`);
 
     enriched.push({
       ...candidate,
@@ -1037,6 +683,7 @@ async function enrichCandidates(candidates, { allowOutdatedCandle = false } = {}
       scan_scores: {
         close_in_range_pct: round2(closeInRangePct),
         volume_ratio: round2(volumeRatio),
+        avg_volume_50d: stock.avg_volume_50d || 0,
         rsi: stock.daily_rsi || 0,
         atr_pct: round2(atrPct),
         candle_pattern: candlePattern
@@ -1087,120 +734,8 @@ async function enrichCandidates(candidates, { allowOutdatedCandle = false } = {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 1H STRUCTURAL CONFLICT CHECK
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Hard gate: reject candidates where 1H structure blocks the trade direction.
- * LONG: reject if any resistance zone midpoint is within 1% above PDH (entry zone)
- * SHORT: reject if any support zone midpoint is within 1% below PDL (entry zone)
- *
- * Uses PDH/PDL as approximate entry (not close) since that's where entries trigger.
- *
- * @returns {{ rejected: boolean, reason?: string }}
- */
-function check1HStructuralConflict(candidate) {
-  const ohlcv = candidate._ohlcv;
-  if (!ohlcv?.swing_levels_1h) return { rejected: false };
-
-  const { resistanceZones = [], supportZones = [] } = ohlcv.swing_levels_1h;
-  const sym = candidate.symbol;
-  const isLong = candidate.direction === 'LONG';
-
-  // ATR-aware conflict threshold: max(0.5×ATR, 1% of price) — adapts to volatility.
-  // On high-ATR days, a fixed 2% can be within normal noise. Using 0.5×ATR
-  // gives wider breathing room for volatile stocks while keeping tight for low-vol.
-  const atr = ohlcv.atr || 0;
-
-  if (isLong) {
-    const pdh = ohlcv.high;
-    const conflictBuffer = Math.max(0.5 * atr, pdh * 0.01);
-    const conflictZone = resistanceZones.find(z => z.midpoint > pdh && z.midpoint <= pdh + conflictBuffer);
-    if (conflictZone) {
-      const distPct = round2(((conflictZone.midpoint - pdh) / pdh) * 100);
-      const reason = `1H structural conflict: resistance at ₹${round2(conflictZone.midpoint)} within ${distPct}% above entry zone (PDH ₹${round2(pdh)}, threshold=0.5×ATR ₹${round2(conflictBuffer)})`;
-      console.log(`${LOG} [ConflictCheck] ${sym}: REJECTED — ${reason}`);
-      return { rejected: true, reason };
-    }
-  } else {
-    const pdl = ohlcv.low;
-    const conflictBuffer = Math.max(0.5 * atr, pdl * 0.01);
-    const conflictZone = supportZones.find(z => z.midpoint < pdl && z.midpoint >= pdl - conflictBuffer);
-    if (conflictZone) {
-      const distPct = round2(((pdl - conflictZone.midpoint) / pdl) * 100);
-      const reason = `1H structural conflict: support at ₹${round2(conflictZone.midpoint)} within ${distPct}% below entry zone (PDL ₹${round2(pdl)}, threshold=0.5×ATR ₹${round2(conflictBuffer)})`;
-      console.log(`${LOG} [ConflictCheck] ${sym}: REJECTED — ${reason}`);
-      return { rejected: true, reason };
-    }
-  }
-
-  console.log(`${LOG} [ConflictCheck] ${sym}: PASSED — no 1H structural conflict`);
-  return { rejected: false };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4: SCORE CANDIDATES
 // ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * 1H stop validation bonus.
- * Checks if any 1H swing level clusters within 0.5% of the PDH/PDL stop level.
- * If a 1H swing level confirms the stop zone, the setup gets +5 score bonus.
- *
- * LONG: checks if any swing low clusters near PDL (the stop zone)
- * SHORT: checks if any swing high clusters near PDH (the stop zone)
- *
- * @returns {{ bonus: number, detail: string }}
- */
-function calculateConfluence(candidate) {
-  const THRESHOLD = 0.005; // 0.5% cluster distance
-  const BONUS_PTS = 5;
-  const sym = candidate.symbol;
-
-  const ohlcv = candidate._ohlcv;
-  if (!ohlcv) return { bonus: 0, detail: 'no ohlcv' };
-
-  const swingLevels = ohlcv.swing_levels_1h;
-  if (!swingLevels) {
-    console.log(`${LOG} [Confluence] ${sym}: skip — no 1H swing levels`);
-    return { bonus: 0, detail: 'no 1H swing levels' };
-  }
-
-  const isLong = candidate.direction === 'LONG';
-
-  if (isLong) {
-    // LONG: check if any swing low clusters near PDL (stop zone)
-    const pdl = ohlcv.low;
-    const { supportZones = [] } = swingLevels;
-    const match = supportZones.find(z => {
-      const dist = Math.abs(z.midpoint - pdl) / pdl;
-      return dist <= THRESHOLD;
-    });
-    if (match) {
-      const dist = Math.abs(match.midpoint - pdl) / pdl;
-      const detail = `1H swing low at ${round2(match.midpoint)} confirms PDL stop at ${round2(pdl)} (${round2(dist * 100)}%)`;
-      console.log(`${LOG} [Confluence] ${sym}: +${BONUS_PTS} pts — ${detail}`);
-      return { bonus: BONUS_PTS, detail };
-    }
-  } else {
-    // SHORT: check if any swing high clusters near PDH (stop zone)
-    const pdh = ohlcv.high;
-    const { resistanceZones = [] } = swingLevels;
-    const match = resistanceZones.find(z => {
-      const dist = Math.abs(z.midpoint - pdh) / pdh;
-      return dist <= THRESHOLD;
-    });
-    if (match) {
-      const dist = Math.abs(match.midpoint - pdh) / pdh;
-      const detail = `1H swing high at ${round2(match.midpoint)} confirms PDH stop at ${round2(pdh)} (${round2(dist * 100)}%)`;
-      console.log(`${LOG} [Confluence] ${sym}: +${BONUS_PTS} pts — ${detail}`);
-      return { bonus: BONUS_PTS, detail };
-    }
-  }
-
-  console.log(`${LOG} [Confluence] ${sym}: no stop validation — no 1H swing near ${isLong ? 'PDL' : 'PDH'}`);
-  return { bonus: 0, detail: 'no stop validation' };
-}
 
 /**
  * Check if a candidate's direction aligns with the current regime for score bonus.
@@ -1223,427 +758,217 @@ function isRegimeAligned(direction, regime) {
   return false;
 }
 
-// Scan-type-aware minimum R:R + minimum reward %
-// 52W scans: structural breakdowns need room. Reversal/volume: moderate.
-// Hard rule: even if R:R passes, reward must exceed minimum % to cover slippage/brokerage.
-const MIN_RR_BY_SCAN_TYPE = {
-  fiftyTwoWeek_low:       2.0,
-  fiftyTwoWeek_high:      2.0,
-  failed_at_resistance:   1.5,
-  pullback_at_support:    1.5,
-  volume_shocker_bearish: 1.5,
-  volume_shocker_bullish: 1.5,
-  news_upstox_bullish:    1.5,
-  news_upstox_bearish:    1.5,
-};
-const MIN_REWARD_PCT_BY_SCAN_TYPE = {
-  fiftyTwoWeek_low:       3.0,
-  fiftyTwoWeek_high:      3.0,
-  failed_at_resistance:   2.0,
-  pullback_at_support:    2.0,
-  volume_shocker_bearish: 2.0,
-  volume_shocker_bullish: 2.0,
-  news_upstox_bullish:    2.0,
-  news_upstox_bearish:    2.0,
-};
+// MIN_RR_BY_SCAN_TYPE and MIN_REWARD_PCT_BY_SCAN_TYPE removed — pure-ORB flow
+// computes target = entry + (risk × 2) at ORB time, giving a fixed 2:1 R:R by
+// construction. Per-scan-type R:R customization no longer applies because every
+// pick uses the same ORB-derived entry/stop/target formula.
 
-// Graduated sector scoring — how strongly the sector confirms/contradicts the trade direction
-// Defined once, used per candidate in the scoring loop
-const SECTOR_SCORE_MAP = {
-  SHORT: { STRONG_BEARISH: 15, BEARISH: 10, NEUTRAL: 0, BULLISH: -15, STRONG_BULLISH: -20 },
-  LONG:  { STRONG_BULLISH: 15, BULLISH: 10, NEUTRAL: 0, BEARISH: -15, STRONG_BEARISH: -20 },
-};
+/**
+ * Gate thresholds for Step 4 execution-sanity filter.
+ * Tunables — adjust here, not inside the loop.
+ */
+const GATE = Object.freeze({
+  MIN_TURNOVER_CR: 5,        // prev-day close × volume ≥ ₹5 Cr  (fill-at-scale liquidity)
+  MIN_VOLUME_RATIO: 1.0,     // prev-day volume ≥ 50d-avg        (not a dead day)
+  ATR_MIN_PCT: 1.2,          // below this, stop is inside noise → whipsaw
+  ATR_MAX_PCT: 5.0,          // raised 4→5% (expert April 2026): ORB Check 5 now handles
+                             // today-specific wide opens; G2 guards structural pathologies
+                             // (spreads, slippage, structural-level reliability). Real
+                             // pathology threshold is ~5–5.5%; below that is normal F&O.
+                             // Unlocks RVNL/SIEMENS/KEI/INOXWIND (~4 extra names/week).
+                             // TODO: make regime-adaptive (tighten back to 4% when VIX
+                             // percentile > 70) once 60+ days of paper-trade data exists.
+  CHASE_MAX_ATR_DIST,        // reject if price > 3 ATRs beyond EMA20 (volatility-aware)
+});
 
-function scoreCandidates(enrichedCandidates, regime) {
-  console.log(`${LOG} [Step 4] Scoring ${enrichedCandidates.length} candidates (regime: ${regime})...`);
+/**
+ * Step 4 — Execution-sanity gates (replaces the old 0–100 technical scorer).
+ *
+ * The shortlist (Step 2) already produced composite_score ∈ [-1, +1] that captures
+ * stock-selection merit. Here we only apply hard gates that the shortlist
+ * cannot see:
+ *   G1  Liquidity — prev-day turnover ≥ 5 Cr AND volume_ratio ≥ 1.0
+ *   G2  ATR envelope — 1.2% ≤ atr_pct ≤ 4.0%
+ *   G3  Chase guard — price not > 3 ATRs beyond EMA20 in trade direction (ATR-normalized)
+ *   G4  Exhaustion — 3+ consec same-direction closes + >3% EMA20 dist + RSI extreme → reject
+ *   G5  Counter-regime — LONG in bear regime or SHORT in bull regime → reject
+ *
+ * Survivors keep their shortlist composite as rank_score (scaled ×100 for
+ * readability: +0.748 → 74.8). No extra scoring, no confluence bonus, no
+ * regime alignment bonus. Downstream sorting is pure composite order.
+ */
+function scoreCandidates(enrichedCandidates, marketContext) {
+  const regime = marketContext?.regime || 'UNKNOWN';
+  console.log(`${LOG} [Step 4] Gate filter on ${enrichedCandidates.length} candidates (regime=${regime}, score=${marketContext?.regime_score ?? 'n/a'})`);
 
   const scored = [];
-  let ema20Skipped = 0, ema20Penalized = 0, belowMinScore = 0, passedCount = 0, regimeBonusCount = 0;
-  let weeklyAlignedCount = 0, weeklyContraCount = 0;
-  let vol5Count = 0, vol10Count = 0, vol15Count = 0, vol20Count = 0, vol25Count = 0;
+  const rejects = {};                    // reason → count (for reconciliation log)
+  const rejectedBySymbol = new Map();    // symbol → rejection reason (for post-filter stamp)
+  const reject = (symbol, reason) => {
+    rejects[reason] = (rejects[reason] || 0) + 1;
+    if (symbol) rejectedBySymbol.set(symbol, reason);
+  };
 
   for (const c of enrichedCandidates) {
+    const o = c._ohlcv;
     const s = c.scan_scores;
-    let score = 0;
-    let cirPts = 0, volPts = 0, rsiPts = 0, atrPts = 0, candlePts = 0;
+    const direction = c.direction;
 
-    // Close in range (25 pts) — higher = closed near high (bullish) / near low (bearish)
-    const cir = c.direction === 'LONG' ? s.close_in_range_pct : (100 - s.close_in_range_pct);
-    if (cir > 90) cirPts = 25;
-    else if (cir > 80) cirPts = 20;
-    else if (cir > 70) cirPts = 15;
-    else if (cir > 60) cirPts = 10;
-    else cirPts = 5;
-    score += cirPts;
-
-    // Volume ratio (25 pts)
-    if (s.volume_ratio > 3) { volPts = 25; vol25Count++; }
-    else if (s.volume_ratio > 2) { volPts = 20; vol20Count++; }
-    else if (s.volume_ratio > 1.5) { volPts = 15; vol15Count++; }
-    else if (s.volume_ratio > 1.2) { volPts = 10; vol10Count++; }
-    else { volPts = 5; vol5Count++; }
-    score += volPts;
-
-    // RSI positioning (20 pts)
-    if (c.direction === 'LONG') {
-      if (s.rsi >= 55 && s.rsi <= 65) rsiPts = 20;
-      else if (s.rsi > 65 && s.rsi <= 72) rsiPts = 15;
-      else if (s.rsi >= 50 && s.rsi < 55) rsiPts = 10;
-      else rsiPts = 5;
-    } else {
-      // Bearish — mirror RSI logic
-      if (s.rsi >= 35 && s.rsi <= 45) rsiPts = 20;
-      else if (s.rsi >= 28 && s.rsi < 35) rsiPts = 15;
-      else if (s.rsi > 45 && s.rsi <= 50) rsiPts = 10;
-      else rsiPts = 5;
+    if (!o) {
+      console.log(`${LOG} ❌ ${c.symbol}: G0 no enriched OHLCV`);
+      reject(c.symbol, 'no_ohlcv');
+      continue;
     }
-    score += rsiPts;
 
-    // ATR tradability (15 pts)
-    if (s.atr_pct > 2.5) atrPts = 15;
-    else if (s.atr_pct > 2.0) atrPts = 10;
-    else if (s.atr_pct > 1.5) atrPts = 5;
-    else atrPts = 0;
-    score += atrPts;
+    // ── G5: Counter-regime hard block ─────────────────────────────────────
+    const isCounter =
+      (direction === 'LONG'  && (regime === 'STRONG_BEAR' || regime === 'EXTREME_BEAR' || regime === 'WEAK_BEAR')) ||
+      (direction === 'SHORT' && (regime === 'STRONG_BULL' || regime === 'EXTREME_BULL' || regime === 'WEAK_BULL'));
+    if (isCounter) {
+      console.log(`${LOG} ❌ ${c.symbol} (${direction}): G5 counter-regime (regime=${regime})`);
+      reject(c.symbol, 'counter_regime');
+      continue;
+    }
 
-    // Candle confirmation (15 pts)
-    if (s.candle_pattern?.includes('engulfing')) candlePts = 15;
-    else if (s.candle_pattern === 'hammer') candlePts = 12;
-    else if (s.candle_pattern === 'bullish_candle' || s.candle_pattern === 'bearish_candle') candlePts = 10;
-    else candlePts = 5;
-    score += candlePts;
+    // ── G1: Liquidity ─────────────────────────────────────────────────────
+    const turnoverCr = (o.close * o.volume) / 1e7;          // 1 Cr = 10M
+    if (turnoverCr < GATE.MIN_TURNOVER_CR) {
+      console.log(`${LOG} ❌ ${c.symbol}: G1 turnover=₹${round2(turnoverCr)}Cr < ${GATE.MIN_TURNOVER_CR}Cr`);
+      reject(c.symbol, 'g1_turnover');
+      continue;
+    }
+    const volRatio = s?.volume_ratio ?? 0;
+    if (volRatio < GATE.MIN_VOLUME_RATIO) {
+      console.log(`${LOG} ❌ ${c.symbol}: G1 volume_ratio=${volRatio}x < ${GATE.MIN_VOLUME_RATIO}x`);
+      reject(c.symbol, 'g1_volume');
+      continue;
+    }
 
-    // EMA20 extension filter — directional: only penalize if chasing in trade direction
-    // LONG 3%+ above EMA20 = chasing momentum → skip
-    // SHORT 3%+ below EMA20 = chasing momentum → skip
-    // LONG below EMA20 = pullback (fine), SHORT above EMA20 = bounce short (fine)
-    // 52W scans exempt — they are inherently extended by definition
-    const is52wScan = c.scan_type === 'fiftyTwoWeek_high' || c.scan_type === 'fiftyTwoWeek_low';
-    const ema20 = c._ohlcv?.ema20;
-    if (ema20 && ema20 > 0 && !is52wScan) {
-      const rawDist = round2(((c._ohlcv.close - ema20) / ema20) * 100); // positive = above, negative = below
-      const isChasing = (c.direction === 'LONG' && rawDist > 0) || (c.direction === 'SHORT' && rawDist < 0);
-      const absDist = Math.abs(rawDist);
+    // ── G2: ATR envelope ──────────────────────────────────────────────────
+    const atrPct = s?.atr_pct ?? 0;
+    if (atrPct < GATE.ATR_MIN_PCT || atrPct > GATE.ATR_MAX_PCT) {
+      console.log(`${LOG} ❌ ${c.symbol}: G2 atr_pct=${atrPct}% outside [${GATE.ATR_MIN_PCT}, ${GATE.ATR_MAX_PCT}]`);
+      reject(c.symbol, 'g2_atr');
+      continue;
+    }
 
-      if (isChasing && absDist >= 3.0) {
-        ema20Skipped++;
-        console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): SKIPPED — ${rawDist}% from EMA20 (chasing, >= 3%)`);
+    // ── G3: Chase guard (ATR-normalized) ──────────────────────────────────
+    // Normalize EMA20 distance by ATR so the threshold is volatility-aware.
+    // A 3%-ATR stock 3% above EMA20 (1 ATR) is fine; a 1%-ATR stock 3% above
+    // EMA20 (3 ATRs) is extended. Raw % treats them identically — wrong.
+    // Falls back to raw % comparison if ATR is unavailable.
+    const ema20 = o.ema20;
+    if (ema20 && ema20 > 0) {
+      const rawDist = ((o.close - ema20) / ema20) * 100; // + above EMA20, - below
+      const atrDist = atrPct > 0 ? rawDist / atrPct : rawDist; // ATRs from EMA20
+      const chasing =
+        (direction === 'LONG'  && atrDist >  GATE.CHASE_MAX_ATR_DIST) ||
+        (direction === 'SHORT' && atrDist < -GATE.CHASE_MAX_ATR_DIST);
+      if (chasing) {
+        console.log(`${LOG} ❌ ${c.symbol} (${direction}): G3 chasing ${round2(atrDist)}x ATR from EMA20 (${round2(rawDist)}%)`);
+        reject(c.symbol, 'g3_chase');
         continue;
       }
-      if (isChasing && absDist >= 2.0) {
-        ema20Penalized++;
-        score -= 15;
-        console.log(`${LOG} ⚠️ ${c.symbol}: -15 pts EMA20 chasing (${rawDist}% from EMA20)`);
-      }
     }
 
-    // Exhaustion detection — triple-gate: consecutive days + EMA20 extension + extreme RSI
-    // Penalizes stocks that have run too far too fast (likely to reverse at open)
+    // ── G4: Exhaustion (ATR-normalized + absolute floor) ─────────────────
+    // Old: flat 8% EMA20 distance. Now: ATR-normalized (2.5×) OR abs floor (6%),
+    // whichever triggers first. G4 is intentionally less strict on extension
+    // than G3 (2.5× vs 3.0×) because duration + RSI do additional work.
+    // The absolute 6% floor catches low-ATR stocks where 2.5× is too permissive
+    // (e.g. WIPRO at 1.5% ATR: 2.5× = 3.75%, but 6% is the right absolute cap).
     if (ema20 && ema20 > 0) {
-      const ema20Dist = Math.abs(((c._ohlcv.close - ema20) / ema20) * 100);
-      const consUp = c._ohlcv?.consecutive_up_days || 0;
-      const consDown = c._ohlcv?.consecutive_down_days || 0;
-      const rsi = s.rsi || 0;
-
-      const isExhaustedLong = c.direction === 'LONG' && consUp >= EXHAUSTION_CONSECUTIVE_DAYS && ema20Dist > EXHAUSTION_EMA20_DIST_PCT && rsi > 70;
-      const isExhaustedShort = c.direction === 'SHORT' && consDown >= EXHAUSTION_CONSECUTIVE_DAYS && ema20Dist > EXHAUSTION_EMA20_DIST_PCT && rsi < 30;
-
-      if (isExhaustedLong || isExhaustedShort) {
-        score -= EXHAUSTION_PENALTY;
-        console.log(`${LOG} ⚠️ ${c.symbol}: -${EXHAUSTION_PENALTY} pts EXHAUSTION (${isExhaustedLong ? `${consUp} up days` : `${consDown} down days`}, ${round2(ema20Dist)}% from EMA20, RSI=${rsi})`);
+      const ema20Dist    = Math.abs(((o.close - ema20) / ema20) * 100);
+      const ema20DistAtr = atrPct > 0 ? ema20Dist / atrPct : null;
+      const distExceeded = (ema20DistAtr !== null && ema20DistAtr > EXHAUSTION_EMA20_DIST_ATR)
+                           || ema20Dist > EXHAUSTION_EMA20_DIST_ABS_PCT;
+      const consUp   = o.consecutive_up_days   || 0;
+      const consDown = o.consecutive_down_days || 0;
+      const rsi = s?.rsi ?? 0;
+      const exhaustedLong  = direction === 'LONG'  && consUp   >= EXHAUSTION_CONSECUTIVE_DAYS && distExceeded && rsi > 70;
+      const exhaustedShort = direction === 'SHORT' && consDown >= EXHAUSTION_CONSECUTIVE_DAYS && distExceeded && rsi < 30;
+      if (exhaustedLong || exhaustedShort) {
+        const detail = exhaustedLong ? `${consUp} up days` : `${consDown} down days`;
+        const distDetail = ema20DistAtr !== null
+          ? `${round2(ema20DistAtr)}x ATR (${round2(ema20Dist)}%)`
+          : `${round2(ema20Dist)}%`;
+        console.log(`${LOG} ❌ ${c.symbol} (${direction}): G4 exhaustion (${detail}, ${distDetail} from EMA20, RSI=${rsi})`);
+        reject(c.symbol, 'g4_exhaustion');
+        continue;
       }
     }
 
-    // Multi-scan bonus — stock confirmed by multiple independent scans = higher conviction
-    // Capped to prevent weak-technical stocks from being carried by scan count alone
-    let scanCountBonus = 0;
-    if (c.scan_count >= 4) scanCountBonus = 15;
-    else if (c.scan_count === 3) scanCountBonus = 12;
-    else if (c.scan_count === 2) scanCountBonus = 8;
-    if (scanCountBonus > 0) {
-      score += scanCountBonus;
-      console.log(`${LOG}   ↳ Multi-scan: +${scanCountBonus} pts (${c.scan_count} scans: ${c.scan_matches.join(', ')})`);
-    }
+    // ── All gates passed — compute rank_score with soft chase penalty ─────
+    // Base: shortlist composite × 100 (range 0–100).
+    // Soft chase penalty: linear reduction in 1.25–3.0 ATR band, max 15pts.
+    // This pre-shapes selection so chasing stocks rank below identical setups
+    // at lower extension, even when G3's hard gate hasn't fired yet.
+    // Direction-aware: LONG penalised for extension above EMA20; SHORT below.
+    const composite = typeof c._composite_score === 'number' ? c._composite_score : 0;
+    let rankScore = round2(composite * 100);
 
-    // Sector regime scoring — graduated based on how strongly the sector confirms/contradicts
-    // sector_unknown stocks are already rejected in Step 2B — only known sectors reach here
-    // Step 2B also rejects hard contradictions (LONG in BEARISH sector), so penalty tiers are safety nets
-    const sectorScoreAdj = SECTOR_SCORE_MAP[c.direction]?.[c.sector_regime] ?? 0;
-    if (sectorScoreAdj !== 0) {
-      console.log(`${LOG}   ↳ Sector: ${sectorScoreAdj > 0 ? '+' : ''}${sectorScoreAdj} pts (${c.sector} ${c.sector_regime} ${sectorScoreAdj > 0 ? 'confirms' : 'contradicts'} ${c.direction})`);
-    }
-    score += sectorScoreAdj;
-
-    // Weekly trend — pre-gate so it affects MIN_SCORE qualification
-    // LONG should have weekly close > weekly EMA20, SHORT should have weekly close < weekly EMA20
-    let weeklyTrendAdj = 0;
-    const weeklyTrend = c._ohlcv?.weekly_trend_bullish;
-    if (weeklyTrend !== null && weeklyTrend !== undefined) {
-      const weeklyAligned = (c.direction === 'LONG' && weeklyTrend === true) ||
-                            (c.direction === 'SHORT' && weeklyTrend === false);
-      if (weeklyAligned) {
-        weeklyTrendAdj = 5;
-        weeklyAlignedCount++;
-        console.log(`${LOG}   ↳ Weekly trend: +5 pts (${c.direction} aligned with weekly ${weeklyTrend ? 'bullish' : 'bearish'}, close=₹${c._ohlcv.weekly_close} vs EMA20=₹${c._ohlcv.weekly_ema20})`);
-      } else {
-        weeklyTrendAdj = -10;
-        weeklyContraCount++;
-        console.log(`${LOG}   ↳ Weekly trend: -10 pts (${c.direction} CONTRA weekly ${weeklyTrend ? 'bullish' : 'bearish'}, close=₹${c._ohlcv.weekly_close} vs EMA20=₹${c._ohlcv.weekly_ema20})`);
+    if (ema20 && ema20 > 0 && atrPct > 0) {
+      const rawDist = ((o.close - ema20) / ema20) * 100;
+      const atrDist = rawDist / atrPct;
+      // Direction-aligned extension (positive = extended in trade direction)
+      const directedDist = direction === 'LONG' ? atrDist : -atrDist;
+      if (directedDist > CHASE_SOFT_PENALTY_START_ATR) {
+        const penaltyFraction = Math.min(1,
+          (directedDist - CHASE_SOFT_PENALTY_START_ATR) /
+          (GATE.CHASE_MAX_ATR_DIST - CHASE_SOFT_PENALTY_START_ATR)
+        );
+        const pts = round2(penaltyFraction * CHASE_SOFT_PENALTY_MAX_PTS);
+        rankScore = round2(rankScore - pts);
+        console.log(`${LOG} ⚠️  ${c.symbol} (${direction}): soft chase penalty −${pts}pts (${round2(directedDist)}x ATR from EMA20) → rank=${rankScore}`);
       }
     }
-    score += weeklyTrendAdj;
 
-    // Counter-regime gate: any LONG in bear regimes or SHORT in bull regimes needs higher score
-    const isCounterRegime =
-      (c.direction === 'LONG' && (regime === 'STRONG_BEAR' || regime === 'EXTREME_BEAR')) ||
-      (c.direction === 'SHORT' && (regime === 'STRONG_BULL' || regime === 'EXTREME_BULL'));
-    const effectiveMinScore = isCounterRegime ? COUNTER_REGIME_MIN_SCORE : MIN_SCORE;
+    const pick = {
+      ...c,
+      rank_score: rankScore,
+      shortlist_composite: composite,
+      shortlist_signals: c._shortlist_signals,
+      regime_aligned: true,        // counter-regime already rejected above
+      gate_passed: true,
+    };
 
-    if (score >= effectiveMinScore) {
-      passedCount++;
-      const pick = { ...c, rank_score: score, scan_count_bonus: scanCountBonus || undefined, sector_score_adj: sectorScoreAdj || undefined, weekly_trend_adj: weeklyTrendAdj || undefined, counter_regime: isCounterRegime || undefined };
-      if (isCounterRegime) {
-        console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [COUNTER-REGIME: min=${COUNTER_REGIME_MIN_SCORE}]`);
-      }
-      console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} [CIR:${cirPts}/25(${round2(cir)}%) VOL:${volPts}/25(${s.volume_ratio}x) RSI:${rsiPts}/20(${s.rsi}) ATR:${atrPts}/15(${s.atr_pct}%) CANDLE:${candlePts}/15(${s.candle_pattern})]`);
-
-      // Confluence bonus: cluster detection across Daily / 1H / 4H pivots
-      // Applied AFTER MIN_SCORE check — additive only (never reduces score)
-      const confluenceResult = calculateConfluence(c);
-      if (confluenceResult.bonus > 0) {
-        pick.rank_score += confluenceResult.bonus;
-        pick.confluence_score = confluenceResult.bonus;
-        pick.confluence_detail = confluenceResult.detail;
-        console.log(`${LOG}   ↳ Confluence: +${confluenceResult.bonus} pts (${confluenceResult.detail})`);
-      }
-
-      // Scan priority bonus: rewards stocks caught by higher-priority scans
-      // Only applies in STRONG regimes where scan order encodes conviction
-      const scanBonus = SCAN_PRIORITY_BONUS[regime]?.[c.scan_type] ?? 0;
-      if (scanBonus > 0) {
-        pick.rank_score += scanBonus;
-        pick.scan_priority_bonus = scanBonus;
-        console.log(`${LOG}   ↳ Scan priority: +${scanBonus} pts (${c.scan_type} in ${regime})`);
-      }
-
-      // Regime alignment bonus: +5 for direction matching regime
-      if (isRegimeAligned(c.direction, regime)) {
-        pick.rank_score += 5;
-        pick.regime_bonus = 5;
-        pick.regime_aligned = true;
-        regimeBonusCount++;
-        console.log(`${LOG}   ↳ Regime: +5 pts (${regime} regime, ${c.direction})`);
-      } else if (regime && regime !== 'NEUTRAL' && regime !== 'UNKNOWN') {
-        // Counter-regime trade — attach warning for position sizing
-        // Map combined regime types back to structure regimes for warning lookup
-        const warningRegime = (regime === 'EXTREME_BULL' || regime === 'STRONG_BULL') ? 'STRONG_BULLISH'
-          : regime === 'WEAK_BULL' ? 'BULLISH'
-          : regime === 'WEAK_BEAR' ? 'BEARISH'
-          : (regime === 'STRONG_BEAR' || regime === 'EXTREME_BEAR') ? 'STRONG_BEARISH'
-          : regime;
-        const setupType = c.direction === 'LONG' ? 'BUY' : 'SELL';
-        const warning = getRegimeWarning(setupType, { regime: warningRegime, distancePct: 0 });
-        if (warning) {
-          pick.regime_warning = warning;
-          pick.regime_aligned = false;
-          console.log(`${LOG}   ↳ Regime WARNING: ${warning.code} (${warning.severity}) — ${c.direction} in ${regime} market`);
-        }
-      }
-
-      // NOTE: Step 5.5 (intel) is disabled — scoring is the final score adjustment.
-
-      scored.push(pick);
-    } else {
-      belowMinScore++;
-      console.log(`${LOG} ❌ ${c.symbol} (${c.scan_type}/${c.direction}): score=${score} < ${MIN_SCORE} [CIR:${cirPts} VOL:${volPts} RSI:${rsiPts} ATR:${atrPts} CANDLE:${candlePts}]`);
-    }
+    console.log(`${LOG} ✅ ${c.symbol} (${c.scan_type}/${direction}): composite=${composite.toFixed(3)} rank=${rankScore} [turnover=₹${round2(turnoverCr)}Cr vol=${volRatio}x ATR=${atrPct}% RSI=${s?.rsi}]`);
+    scored.push(pick);
   }
 
-  // Scoring reconciliation — every candidate must be accounted for
-  const totalProcessed = passedCount + belowMinScore + ema20Skipped;
-  console.log(`${LOG} [Step 4] RECONCILIATION: input=${enrichedCandidates.length} passed=${passedCount} belowMin=${belowMinScore} ema20Skip=${ema20Skipped} ema20Pen=${ema20Penalized} regimeBonus=${regimeBonusCount} weeklyAlign=${weeklyAlignedCount} weeklyContra=${weeklyContraCount} total=${totalProcessed}${totalProcessed !== enrichedCandidates.length ? ' ⚠️ MISMATCH' : ''}`);
-  console.log(`${LOG} [Step 4] VOL distribution: 25pts=${vol25Count} 20pts=${vol20Count} 15pts=${vol15Count} 10pts=${vol10Count} 5pts=${vol5Count}`);
+  // Reconciliation
+  const rejectedCount = Object.values(rejects).reduce((a, b) => a + b, 0);
+  const totalProcessed = scored.length + rejectedCount;
+  const rejectSummary = Object.entries(rejects).map(([k, v]) => `${k}=${v}`).join(', ') || 'none';
+  console.log(`${LOG} [Step 4] RECONCILIATION: input=${enrichedCandidates.length} passed=${scored.length} rejected=${rejectedCount} [${rejectSummary}]${totalProcessed !== enrichedCandidates.length ? ' ⚠️ MISMATCH' : ''}`);
 
-  // Sort descending by score
+  // Sort descending by composite-based rank_score
   scored.sort((a, b) => b.rank_score - a.rank_score);
 
-  // Log sorted order with scan-type distribution
   if (scored.length > 0) {
-    const scanTypeDist = {};
-    for (const s of scored) {
-      scanTypeDist[s.scan_type] = (scanTypeDist[s.scan_type] || 0) + 1;
-    }
-    console.log(`${LOG} [Step 4] Scored list (sorted): ${scored.map(s => `${s.symbol}(${s.scan_type}:${s.rank_score})`).join(', ')}`);
-    console.log(`${LOG} [Step 4] Scan type distribution: ${Object.entries(scanTypeDist).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+    console.log(`${LOG} [Step 4] Ranked: ${scored.map(p => `${p.symbol}(${p.scan_type}:${p.rank_score})`).join(', ')}`);
   }
 
+  // Attach per-symbol rejection trail onto the array itself as a non-enumerable
+  // property. Callers that only need the array get the array; callers that want
+  // the rejection map (runDailyPicks, for the ShortlistWatchlist post-filter
+  // stamp) can read scored._rejectedBySymbol.
+  Object.defineProperty(scored, '_rejectedBySymbol', { value: rejectedBySymbol, enumerable: false });
   return scored;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// STEP 5: CALCULATE LEVELS
+// STEP 5: DEPRECATED — LEVELS ARE NOW COMPUTED AT ORB TIME (9:30)
+// ═══════════════════════════════════════════════════════════════════════════════
+// The scanLevels-based pre-market structural entry/stop/target is gone. In the
+// pure-ORB design these are computed at 9:30 AM from the opening range by
+// orbValidationService.validatePicks → validateAndPlaceEntries, with a fixed
+// 2:1 R:R by construction:
+//   entry  = isLong ? orb.high × 1.001 : orb.low × 0.999
+//   stop   = isLong ? orb.low  × 0.999 : orb.high × 1.001
+//   target = entry ± (|entry - stop| × 2)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Calculate entry/stop/target levels using scan-type-aware scanLevels engine.
- *
- * NOW USES scanLevels.js:
- * - LONG picks: breakout, pullback, momentum, consolidation_breakout
- * - SHORT picks: breakdown_setup, momentum_carry_bearish, failed_at_resistance, compression_bearish
- *
- * Returns null if the engine rejects the setup (enforces discipline).
- */
-function calculateLevels(pick) {
-  const { _ohlcv, direction, scan_type, symbol } = pick;
-
-  console.log(`${LOG} [Levels] ┌─── ${symbol} LEVEL CALCULATION ───`);
-  console.log(`${LOG} [Levels] │ direction=${direction} scan=${scan_type} score=${pick.rank_score}`);
-  console.log(`${LOG} [Levels] │ _ohlcv: O=${_ohlcv.open} H=${_ohlcv.high} L=${_ohlcv.low} C=${_ohlcv.close} prevC=${_ohlcv.prev_close}`);
-  console.log(`${LOG} [Levels] │ ⚠️ CRITICAL: _ohlcv.close (=${_ohlcv.close}) will become prevClose in scanLevels`);
-  console.log(`${LOG} [Levels] │ ⚠️ For 52W scans: entry = prevClose = ${_ohlcv.close} — is this yesterday's close?`);
-  console.log(`${LOG} [Levels] │ indicators: ema20=${_ohlcv.ema20} ema50=${_ohlcv.ema50} atr=${_ohlcv.atr}`);
-  console.log(`${LOG} [Levels] │ swing: h5D=${_ohlcv.high_5d} l5D=${_ohlcv.low_5d} h10D=${_ohlcv.high_10d} l10D=${_ohlcv.low_10d} h20D=${_ohlcv.high_20d} l20D=${_ohlcv.low_20d} h52W=${_ohlcv.high_52w}`);
-  console.log(`${LOG} [Levels] ${symbol}: pivots wR1=${_ohlcv.weekly_pivot_levels?.r1} wR2=${_ohlcv.weekly_pivot_levels?.r2} wS1=${_ohlcv.weekly_pivot_levels?.s1} wS2=${_ohlcv.weekly_pivot_levels?.s2} dP=${_ohlcv.daily_pivot_levels?.pivot} dR1=${_ohlcv.daily_pivot_levels?.r1} dR2=${_ohlcv.daily_pivot_levels?.r2} dS1=${_ohlcv.daily_pivot_levels?.s1} dS2=${_ohlcv.daily_pivot_levels?.s2}`);
-  const swingLevels = _ohlcv.swing_levels_1h;
-  console.log(`${LOG} [Levels] ${symbol}: 1H swings: resistanceZones=${swingLevels?.resistanceZones?.length || 0} [${(swingLevels?.resistanceZones || []).map(z => z.midpoint).join(',')}] supportZones=${swingLevels?.supportZones?.length || 0} [${(swingLevels?.supportZones || []).map(z => z.midpoint).join(',')}]`);
-
-  // Prepare data for scanLevels engine
-  const scanData = {
-    // Core price levels (previous candle = last completed daily candle)
-    prevHigh: _ohlcv.high,
-    prevLow: _ohlcv.low,
-    prevClose: _ohlcv.close,
-
-    // Indicators
-    ema20: _ohlcv.ema20,
-    ema50: _ohlcv.ema50 || 0,
-    atr: _ohlcv.atr || 0,
-
-    // 20-day levels (for stops/targets)
-    high20D: _ohlcv.high_20d,
-    low20D: _ohlcv.low_20d,
-
-    // 10-day/5-day levels (for consolidation/breakdown stops)
-    high10D: _ohlcv.high_10d || null,
-    low10D: _ohlcv.low_10d || null,
-    high5D: _ohlcv.high_5d || null,
-
-    // 52-week levels
-    high52W: _ohlcv.high_52w || null,
-
-    // Weekly pivot levels (for structural targets)
-    weeklyR1: _ohlcv.weekly_pivot_levels?.r1 || null,
-    weeklyR2: _ohlcv.weekly_pivot_levels?.r2 || null,
-    weeklyS1: _ohlcv.weekly_pivot_levels?.s1 || null,
-    weeklyS2: _ohlcv.weekly_pivot_levels?.s2 || null,
-
-    // Daily pivot levels (primary targets for intraday MIS trades)
-    dailyR1: _ohlcv.daily_pivot_levels?.r1 || null,
-    dailyR2: _ohlcv.daily_pivot_levels?.r2 || null,
-    dailyS1: _ohlcv.daily_pivot_levels?.s1 || null,
-    dailyS2: _ohlcv.daily_pivot_levels?.s2 || null,
-    dailyPivot: _ohlcv.daily_pivot_levels?.pivot || null,
-
-    // Previous day high/low — explicit names for intraday target fallback
-    previousDayHigh: _ohlcv.high,
-    previousDayLow: _ohlcv.low,
-
-    // Intraday flag — signals scanLevels to use daily pivots instead of weekly
-    isIntraday: true,
-
-    // Skip risk/reward guardrails for news picks — they must always show levels
-    skipGuardrails: scan_type?.startsWith('news_upstox_'),
-
-    // Scan-type-aware minimum R:R — different setups have different risk profiles
-    minRR: MIN_RR_BY_SCAN_TYPE[scan_type] || 1.5,
-
-    // 1H swing levels for structural targets
-    resistanceZones: _ohlcv.swing_levels_1h?.resistanceZones || [],
-    supportZones: _ohlcv.swing_levels_1h?.supportZones || [],
-
-    // 1H pivot levels (R1/R2/S1/S2 from classic pivot formula on 1H candle)
-    hourlyR1: _ohlcv.hourly_1h_pivots?.r1 || null,
-    hourlyR2: _ohlcv.hourly_1h_pivots?.r2 || null,
-    hourlyS1: _ohlcv.hourly_1h_pivots?.s1 || null,
-    hourlyS2: _ohlcv.hourly_1h_pivots?.s2 || null
-  };
-
-  // Map daily picks scan type to engine archetype (e.g. breakout_setup → breakout)
-  const archetype = SCAN_ARCHETYPE[scan_type] || scan_type;
-  console.log(`${LOG} [Levels] │ scan_type="${scan_type}" → archetype="${archetype}" minRR=${scanData.minRR}`);
-  console.log(`${LOG} [Levels] │ scanData.prevClose=${scanData.prevClose} scanData.prevHigh=${scanData.prevHigh} scanData.prevLow=${scanData.prevLow}`);
-  console.log(`${LOG} [Levels] │ scanData.atr=${scanData.atr} scanData.high52W=${scanData.high52W}`);
-
-  // Call scanLevels engine with the mapped archetype
-  console.log(`${LOG} [Levels] │ → calling scanLevels.calculateTradingLevels("${archetype}", scanData)...`);
-  const result = scanLevels.calculateTradingLevels(archetype, scanData);
-  console.log(`${LOG} [Levels] │ ← engine returned: valid=${result.valid} mode=${result.mode || 'N/A'}`);
-  if (result.valid) {
-    console.log(`${LOG} [Levels] │   entry=${result.entry} stop=${result.stop} target2=${result.target2} R:R=${result.riskReward} risk=${result.riskPercent}% reward=${result.rewardPercent}%`);
-    console.log(`${LOG} [Levels] │   target1=${result.target1 || 'N/A'} target3=${result.target3 || 'N/A'} entryType=${result.entryType}`);
-  } else {
-    console.log(`${LOG} [Levels] │   REJECTED: ${result.reason}`);
-  }
-  console.log(`${LOG} [Levels] └────────────────────────────────────`);
-
-  if (!result.valid) {
-    console.log(`${LOG} [Levels] ${symbol}: REJECTED by scanLevels — ${result.reason}`);
-    if (result.currentRR) console.log(`${LOG} [Levels] ${symbol}: currentRR=${result.currentRR} suggestedTarget=${result.suggestedTarget || 'N/A'}`);
-    if (result.noData) console.log(`${LOG} [Levels] ${symbol}: noData=${result.noData} (missing indicator data)`);
-    pick._lastRejectionReason = result.reason || 'Levels engine rejected';
-    return null;
-  }
-
-  // Extract levels from scanLevels result
-  const { entry, stop, target2: target, riskReward, riskPercent, rewardPercent, mode, reason } = result;
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // DAILY PICKS RISK CAP: 3% default, 5% for 52W scans
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Daily picks are intraday MIS positions that force-close at 3 PM.
-  // With PDH/PDL stops, risk should naturally stay under 3%.
-  // 52W breakout/breakdown stocks are inherently volatile — 5% cap.
-  const is52wScan = scan_type === 'fiftyTwoWeek_high' || scan_type === 'fiftyTwoWeek_low';
-  const isNewsScan = scan_type?.startsWith('news_upstox_');
-  const DAILY_PICKS_MAX_RISK = is52wScan ? 5.0 : 3.0;
-
-  if (!isNewsScan && riskPercent > DAILY_PICKS_MAX_RISK) {
-    console.log(`${LOG} [Levels] ${symbol}: REJECTED — Risk ${round2(riskPercent)}% exceeds daily picks cap (${DAILY_PICKS_MAX_RISK}%)`);
-    pick._lastRejectionReason = `Risk ${round2(riskPercent)}% exceeds ${DAILY_PICKS_MAX_RISK}% cap`;
-    return null;
-  }
-
-  // Minimum absolute reward % — even good R:R is worthless if the move is too small
-  // A 3:1 R:R on a 1% move = ₹5 on a ₹500 stock, eaten by slippage/brokerage
-  // Skip for news picks — they must always show levels
-  const minRewardPct = MIN_REWARD_PCT_BY_SCAN_TYPE[scan_type] || 2.0;
-  if (!isNewsScan && rewardPercent < minRewardPct) {
-    console.log(`${LOG} [Levels] ${symbol}: REJECTED — Reward ${round2(rewardPercent)}% below minimum ${minRewardPct}% for ${scan_type} (R:R=${round2(riskReward)} was fine but move too small)`);
-    pick._lastRejectionReason = `Reward ${round2(rewardPercent)}% below ${minRewardPct}% minimum (move too small)`;
-    return null;
-  }
-
-  console.log(`${LOG} [Levels] ${symbol}: ACCEPTED ${mode} entry=${round2(entry)} stop=${round2(stop)} target=${round2(target)} R:R=${round2(riskReward)} risk=${round2(riskPercent)}% reward=${round2(rewardPercent)}%`);
-  console.log(`${LOG} [Levels] ${symbol}: entryType=${result.entryType || 'N/A'} target1=${result.target1 ? round2(result.target1) : 'N/A'} target3=${result.target3 ? round2(result.target3) : 'N/A'}`);
-
-  return {
-    ...pick,
-    levels: {
-      entry: round2(entry),
-      stop: round2(stop),
-      target: round2(target),
-      risk_pct: round2(riskPercent),
-      reward_pct: round2(rewardPercent),
-      risk_reward: round2(riskReward),
-      mode,
-      reason,
-      // Additional context from scanLevels
-      entry_type: result.entryType,
-      target1: result.target1 ? round2(result.target1) : null,
-      target3: result.target3 ? round2(result.target3) : null
-    }
-  };
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 6: AI INSIGHTS (NON-FATAL)
@@ -1736,9 +1061,9 @@ Generate 1-2 sentence insights for each pick.`
 // STEP 7: SAVE TO DB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function saveToDB(marketContext, picks, scanResult, candidatesReview = [], globalIntel = null, newsPicks = [], newsArticleMeta = null) {
+async function saveToDB(marketContext, picks, scanResult, candidatesReview = [], globalIntel = null) {
   // Determine scan_date and trading_date based on when we're running:
-  // - 8:40 AM scheduled run: scan_date = yesterday, trading_date = today
+  // - 8:30 AM scheduled run: scan_date = yesterday, trading_date = today
   // - Manual evening run:    scan_date = today,     trading_date = next trading day
   const now = new Date();
   const istHour = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
@@ -1746,7 +1071,7 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [],
 
   let scanDate, tradingDate;
   if (istHour < 15) {
-    // Before market close (scheduled 8:40 AM run or manual pre-market)
+    // Before market close (scheduled 8:30 AM run or manual pre-market)
     // ChartInk "latest" = yesterday's candle, we trade today
     scanDate = new Date(todayMidnight);
     scanDate.setDate(scanDate.getDate() - 1);
@@ -1760,26 +1085,53 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [],
 
   console.log(`${LOG} [Step 7] Run at ${istHour}:xx IST → scanDate=${scanDate.toISOString()} tradingDate=${tradingDate.toISOString()} candidatesReview=${candidatesReview.length}`);
 
-  const pickDocs = picks.map(p => ({
-    symbol: p.symbol,
-    instrument_key: p.instrument_key,
-    stock_name: p.stock_name,
-    scan_type: p.scan_type,
-    direction: p.direction,
-    scan_scores: p.scan_scores,
-    rank_score: p.rank_score,
-    confluence_score: p.confluence_score || 0,
-    confluence_detail: p.confluence_detail || null,
-    regime_bonus: p.regime_bonus || 0,
-    levels: p.levels,
-    trade: { status: 'PENDING' },
-    kite: { kite_status: 'pending' },
-    ai_insight: p.ai_insight || null,
-    ai_generated: p.ai_generated || false,
-    news_sentiment: p.news_sentiment || null,
-    news_adjustment: p.news_adjustment || 0,
-    news_context: p.news_context || null,
-  }));
+  const pickDocs = picks.map(p => {
+    const o = p._ohlcv || {};
+    // Persist structural price levels from Step 3 enrichment.
+    // Used as reference data (prev high/low, 52w high, pivot levels) on the
+    // DailyPick document. ORB target is now always fixed 2R — structural levels
+    // are no longer used by orbValidationService but kept for analysis/debugging.
+    const structural_levels = {
+      prev_high: o.high ?? null,
+      prev_low:  o.low ?? null,
+      prev_close: o.prev_close ?? o.close ?? null,
+      high_20d: o.high_20d ?? null,
+      low_20d: o.low_20d ?? null,
+      high_52w: o.high_52w ?? null,
+      daily_r1: o.daily_pivot_levels?.r1 ?? null,
+      daily_r2: o.daily_pivot_levels?.r2 ?? null,
+      daily_s1: o.daily_pivot_levels?.s1 ?? null,
+      daily_s2: o.daily_pivot_levels?.s2 ?? null,
+      weekly_r1: o.weekly_pivot_levels?.r1 ?? null,
+      weekly_r2: o.weekly_pivot_levels?.r2 ?? null,
+      weekly_s1: o.weekly_pivot_levels?.s1 ?? null,
+      weekly_s2: o.weekly_pivot_levels?.s2 ?? null,
+      swing_resistance: (o.swing_levels_1h?.resistanceZones || []).map(z => z.midpoint).filter(x => typeof x === 'number'),
+      swing_support:    (o.swing_levels_1h?.supportZones    || []).map(z => z.midpoint).filter(x => typeof x === 'number'),
+      atr: o.atr ?? null,
+    };
+    return {
+      symbol: p.symbol,
+      instrument_key: p.instrument_key,
+      stock_name: p.stock_name,
+      scan_type: p.scan_type,
+      direction: p.direction,
+      scan_scores: p.scan_scores,
+      rank_score: p.rank_score,
+      confluence_score: p.confluence_score || 0,
+      confluence_detail: p.confluence_detail || null,
+      regime_bonus: p.regime_bonus || 0,
+      levels: p.levels,
+      structural_levels,
+      trade: { status: 'PENDING' },
+      kite: { kite_status: 'pending' },
+      ai_insight: p.ai_insight || null,
+      ai_generated: p.ai_generated || false,
+      news_sentiment: p.news_sentiment || null,
+      news_adjustment: p.news_adjustment || 0,
+      news_context: p.news_context || null,
+    };
+  });
 
   // Upsert: one document per trading day
   const doc = await DailyPick.findOneAndUpdate(
@@ -1797,9 +1149,6 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [],
           selected_count: picks.length
         },
         candidates_review: candidatesReview,
-        // Upstox "Stocks to Watch" — ALL news stocks (not filtered by top-3 cap)
-        ...(newsPicks.length > 0 ? { news_picks: newsPicks } : {}),
-        ...(newsArticleMeta ? { news_article: newsArticleMeta } : {}),
         ...(globalIntel ? {
           global_intel: {
             market_mood: globalIntel.market_mood,
@@ -1836,20 +1185,25 @@ async function sendNotification(marketContext, picks, doc) {
     return;
   }
 
+  const { isPaperTradeMode } = await import('../kiteTradeIntegration.service.js');
+  const paperTag = isPaperTradeMode() ? '[PAPER] ' : '';
+
   let title, body;
 
   if (picks.length > 0) {
+    // Pure-ORB: pick.levels is null at 8:32 notify time. Entry price is
+    // computed at 9:30 ORB. Show direction + symbol only here.
     const pickSummary = picks
-      .map(p => `${p.symbol} ₹${p.levels.entry}`)
+      .map(p => `${p.symbol} (${p.direction})`)
       .join(', ');
     const longCount = picks.filter(p => p.direction === 'LONG').length;
     const shortCount = picks.filter(p => p.direction === 'SHORT').length;
     if (longCount > 0 && shortCount > 0) {
-      title = `Daily Picks: ${longCount} BUY + ${shortCount} SELL`;
+      title = `${paperTag}Daily Picks: ${longCount} BUY + ${shortCount} SELL`;
     } else {
-      title = `Daily Picks: ${picks[0].direction === 'LONG' ? 'BUY' : 'SELL'} ${picks.length} stocks`;
+      title = `${paperTag}Daily Picks: ${picks[0].direction === 'LONG' ? 'BUY' : 'SELL'} ${picks.length} stocks`;
     }
-    body = pickSummary;
+    body = `${pickSummary} — levels will be set at 09:30 ORB`;
   } else if (marketContext.regime === 'CONFLICT') {
     title = 'Daily Picks: CONFLICT — Sitting Out';
     body = `Structure vs SGX beyond dynamic threshold. No trades today.`;
@@ -1892,16 +1246,30 @@ async function sendNotification(marketContext, picks, doc) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Place pre-market entry orders immediately after pick generation.
- * LONG picks → GTT single-leg + CNC (delivery), triggers at entry price.
- * SHORT picks → AMO SL-M + MIS (intraday), queued for market open.
- * Skips ORB validation — entries based on scan engine's levels.
+ * Place pre-market entry orders.
+ *
+ * DEPRECATED in the pure-ORB flow. With Step 5 gone, picks arrive at this
+ * function WITHOUT levels (entry/stop/target are computed at 9:30 AM inside
+ * validateAndPlaceEntries). This function now returns immediately so the admin
+ * endpoint that calls it doesn't crash — the ORB path is the sole entry path.
+ *
+ * Kept as a function (not deleted) because routes/dailyPicks.js still imports
+ * and calls it at `POST /dailyPicks/premarket/place`.
  */
 async function placePreMarketEntries(doc) {
   console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} [Step 7.5] Placing pre-market entries`);
+  console.log(`${LOG} [Step 7.5] placePreMarketEntries — DEPRECATED in pure-ORB flow`);
   console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} [Step 7.5] No pre-market levels exist after Step 5 removal. All picks wait for ORB validation at 9:30 AM.`);
+  return {
+    success: true,
+    message: 'Pre-market entry deprecated in pure-ORB flow; picks are placed at 9:30 via validateAndPlaceEntries',
+    ordersPlaced: 0,
+    deprecated: true,
+  };
 
+  // ─────── LEGACY CODE BELOW — unreachable; kept for reference ───────
+  // eslint-disable-next-line no-unreachable
   if (!isKiteIntegrationEnabled()) {
     console.log(`${LOG} [Step 7.5] Kite not enabled — skipping`);
     return { success: true, message: 'Kite not enabled', ordersPlaced: 0 };
@@ -2501,33 +1869,27 @@ async function validateAndPlaceEntries(options = {}) {
     });
   }
 
-  // Step 2: Update validated picks' entry + stop to ORB breakout levels (Crabel-style)
-  // Entry → ORB breakout (high+buffer for LONG, low-buffer for SHORT)
-  // Stop  → ORB opposite end (tighter of ORB-based vs structural)
-  // Target → kept as structural (unchanged)
+  // Step 2: Pure-ORB level assignment.
+  // Pre-market picks arrive with pick.levels === null (Step 5 deprecated).
+  // Here we build pick.levels fresh from the orb_alignment check output.
+  //   entry  = ORB breakout price
+  //   stop   = opposite end of ORB
+  //   target = entry ± (risk × 2)  (fixed 2:1 R:R — computed in orbValidationService)
   for (const pick of eligiblePicks) {
     if (pick.validation?.passed && pick.validation.checks.orb_alignment?.new_entry) {
       const orbCheck = pick.validation.checks.orb_alignment;
-      // Store original levels for audit trail before overwriting
-      pick.validation.original_levels = {
-        entry: pick.levels.entry,
-        stop: pick.levels.stop,
-        target: pick.levels.target
+      const risk   = Math.abs(orbCheck.new_entry - orbCheck.new_stop);
+      const reward = Math.abs(orbCheck.new_target - orbCheck.new_entry);
+      pick.levels = {
+        entry:  orbCheck.new_entry,
+        stop:   orbCheck.new_stop,
+        target: orbCheck.new_target,
+        risk_reward: risk > 0 ? Math.round((reward / risk) * 100) / 100 : 0,
+        entry_type: pick.direction === 'LONG' ? 'buy_above' : 'sell_below',
+        mode: 'orb',
+        source: 'orb_breakout',
       };
       pick.validation.levels_recalculated = true;
-      // Update entry to ORB breakout level
-      pick.levels.entry = orbCheck.new_entry;
-      pick.levels.entry_type = pick.direction === 'LONG' ? 'buy_above' : 'sell_below';
-      // Update stop to ORB-based stop (tighter of ORB vs structural, decided in validation)
-      if (orbCheck.new_stop) {
-        pick.levels.stop = orbCheck.new_stop;
-        pick.levels.stop_source = orbCheck.stop_source;  // 'orb' or 'structural'
-        pick.levels.structural_stop = orbCheck.structural_stop;  // preserve for reference
-      }
-      // Recalculate R:R with new entry and stop
-      const risk = Math.abs(pick.levels.entry - pick.levels.stop);
-      const reward = Math.abs(pick.levels.target - pick.levels.entry);
-      pick.levels.risk_reward = risk > 0 ? Math.round((reward / risk) * 100) / 100 : 0;
     }
   }
   // Mongoose needs a nudge to detect nested changes on subdocument arrays
@@ -2546,9 +1908,12 @@ async function validateAndPlaceEntries(options = {}) {
       // Gap-fade picks that never faded get a distinct terminal status
       if (isGapDirectionFail && !isPermanentFail) {
         pick.trade.status = 'GAP_FADE_EXPIRED';
-        pick.trade.exit_reason = `gap_fade_expired_pass_${orbPass}: LTP never faded through entry`;
+        pick.trade.exit_reason = `gap_fade_expired_pass_${orbPass}: LTP never faded through today's open`;
         pick.kite.kite_status = 'skipped';
-        console.log(`${LOG} ${pick.symbol}: GAP_FADE_EXPIRED (pass ${orbPass}) — gap never faded through entry=${pick.levels.entry}`);
+        // Pure-ORB: pick.levels is null for failed-validation picks. Log the
+        // opening price (the fade anchor) instead.
+        const fadeAnchor = pick.orb?.opening_price ?? 'n/a';
+        console.log(`${LOG} ${pick.symbol}: GAP_FADE_EXPIRED (pass ${orbPass}) — gap never faded through open=${fadeAnchor}`);
       } else {
         pick.trade.status = 'SKIPPED';
         pick.trade.exit_reason = `validation_failed_pass_${orbPass}: ${failedChecks}`;
@@ -2560,7 +1925,9 @@ async function validateAndPlaceEntries(options = {}) {
       // Retryable failure — track gap-fade watches distinctly
       if (isGapDirectionFail) {
         pick.trade.status = 'GAP_FADE_WATCH';
-        console.log(`${LOG} ${pick.symbol}: GAP_FADE_WATCH (pass ${orbPass}, gap=${pick.orb?.gap_percent}%) — monitoring for fade through entry=${pick.levels.entry} at pass ${orbPass + 1} (${ORB_PASS_LABELS[orbPass + 1]})`);
+        // Pure-ORB: log the fade anchor (today's open), not pick.levels.entry
+        const fadeAnchor = pick.orb?.opening_price ?? 'n/a';
+        console.log(`${LOG} ${pick.symbol}: GAP_FADE_WATCH (pass ${orbPass}, gap=${pick.orb?.gap_percent}%) — monitoring for fade through open=${fadeAnchor} at pass ${orbPass + 1} (${ORB_PASS_LABELS[orbPass + 1]})`);
       } else {
         pick.trade.status = 'PENDING';
         console.log(`${LOG} ${pick.symbol}: FAILED pass ${orbPass} (retryable: ${failedChecks}) — will retry at pass ${orbPass + 1} (${ORB_PASS_LABELS[orbPass + 1]})`);
@@ -3690,26 +3057,25 @@ function getStockSector(symbol) {
 function selectDiversePicks(viable, maxPicks, regime = 'UNKNOWN') {
   console.log(`${LOG} [Diversity] Selecting ${maxPicks} from ${viable.length} viable candidates (regime=${regime})`);
 
-  // ── STEP 1: Sector cap on the full pool FIRST ──
-  // Keep only the highest-scored stock per sector. This pre-cleans the pool
-  // so Round 1 and Round 2 never select two correlated stocks.
+  // ── STEP 1: HARD sector cap — max 1 pick per sector, INCLUDING 'OTHER' ──
+  // Previously 'OTHER' was allowed multiple picks; tightened because two
+  // uncategorized stocks on the same day correlate more than we'd like.
+  // viable is already sorted by rank_score descending.
   const sectorBest = {};
   const sectorDropped = [];
-  // viable is already sorted by rank_score descending from Step 5.5 re-sort
   for (const pick of viable) {
     const sector = pick.sector || 'OTHER';
-    if (sector === 'OTHER' || !sectorBest[sector]) {
-      sectorBest[`${sector}_${pick.symbol}`] = pick; // OTHER can have multiple
-      if (sector !== 'OTHER') sectorBest[sector] = pick;
+    if (!sectorBest[sector]) {
+      sectorBest[sector] = pick;
     } else {
-      sectorDropped.push({ symbol: pick.symbol, sector, score: pick.rank_score, keptSymbol: sectorBest[sector].symbol });
+      sectorDropped.push({
+        symbol: pick.symbol, sector, score: pick.rank_score,
+        keptSymbol: sectorBest[sector].symbol,
+      });
     }
   }
   // Build sector-filtered pool (preserving score order)
-  const keptSymbols = new Set();
-  for (const key of Object.keys(sectorBest)) {
-    keptSymbols.add(sectorBest[key].symbol);
-  }
+  const keptSymbols = new Set(Object.values(sectorBest).map(p => p.symbol));
   const sectorFiltered = viable.filter(p => keptSymbols.has(p.symbol));
 
   if (sectorDropped.length > 0) {
@@ -3871,7 +3237,6 @@ export {
   initFillListener,
   monitorDailyPickOrders,
   tightenStops,
-  getMarketContext,
   detectCandlePattern,
   selectDiversePicks,
   getStockSector,
@@ -3889,7 +3254,6 @@ export default {
   initFillListener,
   monitorDailyPickOrders,
   tightenStops,
-  getMarketContext,
   detectCandlePattern,
   selectDiversePicks,
   getStockSector,

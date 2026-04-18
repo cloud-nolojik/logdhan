@@ -42,6 +42,31 @@ export function calculatePnl(pick) {
   pick.trade.return_pct = entry_price > 0
     ? round2((pick.trade.pnl / (entry_price * qty)) * 100)
     : 0;
+
+  // ─── Planned vs realized R:R (strategy drift detector) ───────────────
+  // planned_rr    = |planned_target - planned_entry| / |planned_entry - planned_stop|
+  //                 (already stored on pick.levels.risk_reward by ORB validation)
+  // realized_rr   = (realized_return_per_share) / |planned_entry - planned_stop|
+  //                 where realized_return_per_share = (exit - entry) × direction
+  //
+  // Watch this number weekly. If rolling-20-day mean < 1.4 while planned is 2.0,
+  // something structural is failing — slippage, adverse moves after entry, stops
+  // being trailed too aggressively, or targets set too ambitiously.
+  const levels = pick.levels || {};
+  const plannedEntry = levels.entry;
+  const plannedStop  = levels.stop;
+  const plannedRR    = levels.risk_reward;
+  if (plannedEntry && plannedStop && qty > 0) {
+    const riskPerShare = Math.abs(plannedEntry - plannedStop);
+    if (riskPerShare > 0) {
+      const realizedPerShare = (pick.trade.pnl || 0) / qty;     // already signed by multiplier above
+      pick.trade.realized_rr = round2(realizedPerShare / riskPerShare);
+    }
+  }
+  if (plannedRR) pick.trade.planned_rr = plannedRR;
+  if (typeof pick.trade.planned_rr === 'number' && typeof pick.trade.realized_rr === 'number') {
+    pick.trade.rr_delta = round2(pick.trade.realized_rr - pick.trade.planned_rr);
+  }
 }
 
 /**
