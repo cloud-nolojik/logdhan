@@ -93,14 +93,16 @@ export async function rankSectors({ topN = 3, lookbackDays = 5 } = {}) {
   const ranked = Object.entries(returnsPerIndex).sort((a, b) => b[1] - a[1]);
   const ranks = {};
   ranked.forEach(([code], i) => { ranks[code] = i + 1; });
-  const top = ranked.slice(0, topN).map(([code]) => code);
+  const top    = ranked.slice(0, topN).map(([code]) => code);
+  const bottom = ranked.slice(-topN).map(([code]) => code);   // weakest N sectors
 
-  console.log(`${LOG} ranked ${ranked.length} sectors, top ${topN}: ${top.join(', ')}`);
+  console.log(`${LOG} ranked ${ranked.length} sectors, top ${topN}: ${top.join(', ')} | bottom ${topN}: ${bottom.join(', ')}`);
 
   return {
     status: failures.length > 0 ? 'degraded' : 'ok',
     sectorReturns: returnsPerIndex,
     topN: top,
+    bottomN: bottom,
     ranks,
     warning: failures.length > 0 ? `${failures.length} index fetches failed: ${failures.join(',')}` : null
   };

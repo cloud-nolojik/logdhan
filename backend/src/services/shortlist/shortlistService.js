@@ -188,7 +188,20 @@ export async function buildShortlist(marketContext, options = {}) {
       sectorResult.status === 'failed' ? null : scoreSector(sectorCode, sectorResult.topN);
 
     // 5. Direction fit
-    const stockDirection = inferStockDirection(gapPctEstimate ?? 0, catalystMeta);
+    // Pass sector+volume context so the AND-predicate can fire on low-gap days.
+    const inSectorBottom3 = sectorResult.status !== 'failed'
+      ? (sectorResult.bottomN ?? []).includes(sectorCode)
+      : false;
+    const stockDirection = inferStockDirection(
+      gapPctEstimate ?? 0,
+      catalystMeta,
+      {
+        sectorTop3:    sectorScore === 1,
+        sectorBottom3: inSectorBottom3,
+        volRatio:      volRatio,
+        mandate,
+      }
+    );
     const directionScore = scoreDirectionFit(stockDirection, mandate);
 
     // 6. Volume
