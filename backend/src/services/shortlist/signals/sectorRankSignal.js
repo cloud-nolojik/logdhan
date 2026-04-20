@@ -18,6 +18,11 @@ const SECTOR_INDEX_MAP = {
   TECH:         { instrumentKey: 'NSE_INDEX|Nifty IT',           symbol: 'NIFTY_IT' },
   BANKING:      { instrumentKey: 'NSE_INDEX|Nifty Bank',         symbol: 'NIFTY_BANK' },
   ENERGY:       { instrumentKey: 'NSE_INDEX|Nifty Energy',       symbol: 'NIFTY_ENERGY' },
+  // POWER is a dedicated bucket for T&D / heavy electrical equipment stocks
+  // (BHEL, ABB, Hitachi Energy, CG Power, KEI, Siemens etc.).
+  // Nifty PSE tracks public-sector enterprises and is the best available proxy
+  // for this cluster — it captures BHEL, NTPC, Power Grid, Coal India, ONGC, etc.
+  POWER:        { instrumentKey: 'NSE_INDEX|Nifty PSE',          symbol: 'NIFTY_PSE' },
   AUTO:         { instrumentKey: 'NSE_INDEX|Nifty Auto',         symbol: 'NIFTY_AUTO' },
   PHARMA:       { instrumentKey: 'NSE_INDEX|Nifty Pharma',       symbol: 'NIFTY_PHARMA' },
   FMCG:         { instrumentKey: 'NSE_INDEX|Nifty FMCG',         symbol: 'NIFTY_FMCG' },

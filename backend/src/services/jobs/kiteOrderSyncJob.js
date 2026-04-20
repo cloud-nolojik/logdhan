@@ -384,22 +384,42 @@ async function placeOCOForFilledEntry(entryOrder, results) {
       return;
     }
 
-    // Look up stock levels from WeeklyWatchlist
-    const watchlist = await WeeklyWatchlist.getCurrentWeek();
-    if (!watchlist) {
-      console.error(`${LOG_PREFIX} ${entryOrder.trading_symbol}: No current watchlist found for OCO placement`);
-      results.errors.push({ symbol: entryOrder.trading_symbol, error: 'no_watchlist_for_oco' });
-      return;
+    // Look up stock levels — try current week first, then fall back to any watchlist.
+    // A GTT placed in a previous week can fire after the watchlist has rotated, so
+    // restricting to getCurrentWeek() would cause every cross-week fill to miss its OCO.
+    let stock = null;
+
+    const currentWatchlist = await WeeklyWatchlist.getCurrentWeek();
+    if (currentWatchlist) {
+      stock = currentWatchlist.stocks.find(s =>
+        s._id.toString() === entryOrder.stock_id?.toString() ||
+        s.symbol === entryOrder.trading_symbol
+      ) || null;
     }
 
-    const stock = watchlist.stocks.find(s =>
-      s._id.toString() === entryOrder.stock_id?.toString() ||
-      s.symbol === entryOrder.trading_symbol
-    );
+    if (!stock) {
+      // Not in current week — search across all watchlists (most recent first)
+      console.log(`${LOG_PREFIX} ${entryOrder.trading_symbol}: Not in current watchlist — searching archived weeks...`);
+      const allWatchlists = await WeeklyWatchlist.find({
+        'stocks.symbol': entryOrder.trading_symbol
+      }).sort({ week_start: -1 }).limit(8);
+
+      for (const wl of allWatchlists) {
+        const found = wl.stocks.find(s =>
+          s._id.toString() === entryOrder.stock_id?.toString() ||
+          s.symbol === entryOrder.trading_symbol
+        );
+        if (found?.levels) {
+          stock = found;
+          console.log(`${LOG_PREFIX} ${entryOrder.trading_symbol}: Found levels in archived week ${wl.week_start}`);
+          break;
+        }
+      }
+    }
 
     if (!stock || !stock.levels) {
-      console.error(`${LOG_PREFIX} ${entryOrder.trading_symbol}: Stock not found in watchlist or missing levels`);
-      results.errors.push({ symbol: entryOrder.trading_symbol, error: 'stock_not_found_in_watchlist' });
+      console.error(`${LOG_PREFIX} ${entryOrder.trading_symbol}: Stock not found in any watchlist or missing levels`);
+      results.errors.push({ symbol: entryOrder.trading_symbol, error: 'stock_not_found_in_any_watchlist' });
       return;
     }
 

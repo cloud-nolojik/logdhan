@@ -112,7 +112,7 @@ const pickSchema = new mongoose.Schema({
     checks: {
       gap_check: { passed: Boolean, value: Number },
       gap_direction: { passed: Boolean, value: Number, direction: String },
-      orb_alignment: { passed: Boolean, scan_bias: String, orb_dir: String, new_entry: Number, original_entry: Number, new_rr: Number, min_rr: Number, orb_high: Number, orb_low: Number },
+      orb_alignment: { passed: Boolean, scan_bias: String, orb_dir: String, new_entry: Number, new_stop: Number, new_target: Number, original_entry: Number, new_rr: Number, min_rr: Number, orb_high: Number, orb_low: Number },
       nifty_alignment: { passed: Boolean, nifty_dir: String, nifty_change_pct: Number, threshold: Number },
       orb_range_width: { passed: Boolean, orb_range_pct: Number, orb_atr_ratio: Number, daily_atr_pct: Number, effective_atr_pct: Number, max_ratio: Number, max_absolute_pct: Number },
       volume_check: { passed: Boolean, ratio: Number }

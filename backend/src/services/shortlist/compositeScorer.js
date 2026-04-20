@@ -1,24 +1,26 @@
 /**
- * Composite scorer — combine 5 signal scores into one ranking number.
+ * Composite scorer — combine 6 signal scores into one ranking number.
  *
  * Weighted sum with null-safety: if a signal is missing/failed, its weight is
  * redistributed across the remaining signals so rankings stay comparable.
  *
  * Default weights (tuned for intraday):
  *   catalyst:      0.15   — news kick is powerful but rare; it's a boost, not backbone
- *   gap:           0.25   — gap + sector gives the day's direction
- *   rs:            0.30   — single best non-news predictor of intraday winners
+ *   gap:           0.20   — gap + sector gives the day's direction
+ *   rs:            0.25   — strong non-news predictor; trimmed slightly to make room for volume
  *   sector_top3:   0.20   — sector tape alignment
- *   direction_fit: 0.10   — alignment with regime mandate (small because regime is already
- *                           reflected in gap/sector; this prevents chasing counter-trend)
+ *   direction_fit: 0.05   — regime alignment; small because gap+sector already capture this
+ *   volume:        0.15   — abnormal volume flags institutional activity / sector rotation days
+ *                           that RS alone misses on the first breakout day
  */
 
 export const DEFAULT_WEIGHTS = Object.freeze({
   catalyst:      0.15,
-  gap:           0.25,
-  rs:            0.30,
+  gap:           0.20,
+  rs:            0.25,
   sector_top3:   0.20,
-  direction_fit: 0.10
+  direction_fit: 0.05,
+  volume:        0.15
 });
 
 /**

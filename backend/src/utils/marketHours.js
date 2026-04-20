@@ -132,7 +132,7 @@ class MarketHoursUtil {
     const startTime = MARKET_HOURS.PRE_MARKET.start.hour * 60 + MARKET_HOURS.PRE_MARKET.start.minute;
     const endTime = MARKET_HOURS.POST_MARKET.end.hour * 60 + MARKET_HOURS.POST_MARKET.end.minute;
 
-    return currentTime >= startTime && currentTime <= endTime;
+    return currentTime >= startTime && currentTime < endTime;
   }
 
   /**

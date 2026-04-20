@@ -21,7 +21,7 @@ const NIFTY_SYMBOL = 'NIFTY';
  * Candles format (Upstox): [[timestamp, open, high, low, close, volume], ...]
  * Most recent candle is typically at index 0 OR last; we handle both.
  */
-function nDayReturn(candles, n) {
+export function nDayReturn(candles, n) {
   if (!Array.isArray(candles) || candles.length < n + 1) return null;
 
   // Detect ordering: if first timestamp > last timestamp, it's descending (newest first)
@@ -57,16 +57,27 @@ export async function fetchNiftyReturn5d() {
 }
 
 /**
- * Compute 5-day return for one stock. Returns null if data unavailable.
+ * Fetch raw daily candles for one stock.
+ * Returns the candle array so callers can extract both return and volume
+ * from a single API call instead of fetching twice.
+ *
+ * @returns {Promise<Array|null>} candles array, or null on error
  */
-export async function fetchStockReturn5d(instrumentKey, symbol) {
+export async function fetchStockCandles(instrumentKey, symbol) {
   try {
-    const candles = await getCandleData(instrumentKey, symbol, '1d', { allowOutdated: true });
-    return nDayReturn(candles, 5);
+    return await getCandleData(instrumentKey, symbol, '1d', { allowOutdated: true });
   } catch (err) {
-    // Don't crash on individual stock failures — return null, orchestrator handles
     return null;
   }
+}
+
+/**
+ * Compute 5-day return for one stock. Returns null if data unavailable.
+ * Kept for backward compatibility — prefers fetchStockCandles if you need volume too.
+ */
+export async function fetchStockReturn5d(instrumentKey, symbol) {
+  const candles = await fetchStockCandles(instrumentKey, symbol);
+  return nDayReturn(candles, 5);
 }
 
 /**
@@ -116,4 +127,4 @@ export function scoreRs(z) {
   return 0;
 }
 
-export default { fetchNiftyReturn5d, fetchStockReturn5d, computeRsZScores, scoreRs };
+export default { fetchNiftyReturn5d, fetchStockCandles, fetchStockReturn5d, computeRsZScores, scoreRs, nDayReturn };

@@ -23,10 +23,12 @@ import { fetchCatalysts, scoreCatalyst } from './signals/catalystSignal.js';
 import { fetchMacroGap, estimateStockGap, scoreGap } from './signals/gapSignal.js';
 import {
   fetchNiftyReturn5d,
-  fetchStockReturn5d,
+  fetchStockCandles,
   computeRsZScores,
+  nDayReturn,
   scoreRs
 } from './signals/relativeStrengthSignal.js';
+import { computeVolumeRatio, scoreVolume } from './signals/volumeSignal.js';
 import { rankSectors, scoreSector } from './signals/sectorRankSignal.js';
 import {
   inferStockDirection,
@@ -127,16 +129,19 @@ export async function buildShortlist(marketContext, options = {}) {
   const mandate = mandateFromContext(marketContext);
   console.log(`${LOG} day mandate: ${mandate}`);
 
-  // Step 6: Fetch per-stock 5-day returns (parallel, chunked to avoid overload)
-  console.log(`${LOG} fetching 5-day returns for ${universe.length} stocks...`);
+  // Step 6: Fetch per-stock daily candles (parallel, chunked to avoid overload).
+  // One fetch gives us both 5-day return (RS signal) AND volume (volume signal).
+  console.log(`${LOG} fetching daily candles for ${universe.length} stocks...`);
   const CHUNK = 20;
-  const stockReturns = new Map();
+  const stockReturns = new Map();  // symbol → 5d return (number|null)
+  const stockVolRatios = new Map(); // symbol → volume ratio (number|null)
   for (let i = 0; i < universe.length; i += CHUNK) {
     const batch = universe.slice(i, i + CHUNK);
     await Promise.all(
       batch.map(async s => {
-        const r = await fetchStockReturn5d(s.instrument_key, s.trading_symbol);
-        stockReturns.set(s.trading_symbol, r);
+        const candles = await fetchStockCandles(s.instrument_key, s.trading_symbol);
+        stockReturns.set(s.trading_symbol, nDayReturn(candles, 5));
+        stockVolRatios.set(s.trading_symbol, computeVolumeRatio(candles));
       })
     );
   }
@@ -186,12 +191,17 @@ export async function buildShortlist(marketContext, options = {}) {
     const stockDirection = inferStockDirection(gapPctEstimate ?? 0, catalystMeta);
     const directionScore = scoreDirectionFit(stockDirection, mandate);
 
+    // 6. Volume
+    const volRatio = stockVolRatios.get(sym) ?? null;
+    const volumeScore = scoreVolume(volRatio);
+
     // Build reasons
     const reasons = [];
     if (catalyst === 1) reasons.push(`news:${catalystMeta?.headline?.slice(0, 40) || 'catalyst'}`);
     if (gapPctEstimate !== null && Math.abs(gapPctEstimate) >= 1) reasons.push(`gap:${gapPctEstimate}%`);
     if (rsZ !== null && rsZ >= 1) reasons.push(`rs_z:+${rsZ}`);
     if (sectorScore === 1) reasons.push(`sector_top3:${sectorCode}`);
+    if (volRatio !== null && volRatio >= 1.5) reasons.push(`vol_ratio:${volRatio}x`);
 
     candidates.push({
       trading_symbol: sym,
@@ -204,7 +214,8 @@ export async function buildShortlist(marketContext, options = {}) {
         gap: gapSignalScore,
         rs: rsScore,
         sector_top3: sectorScore,
-        direction_fit: directionScore
+        direction_fit: directionScore,
+        volume: volumeScore
       },
       reasons,
       catalyst_meta: catalystMeta

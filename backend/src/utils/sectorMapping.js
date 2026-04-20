@@ -107,6 +107,32 @@ export const SECTOR_MAPPING = {
         companies: ['INGERRAND', 'BLUESTARCO', 'KSB', 'KIRLPNU', 'GRINDWELL', 'ACE', 'INOXINDIA', 'JWL'],
         nifty_weight: 'Medium'
     },
+
+    // Power Equipment & T&D Infrastructure
+    // Covers heavy electrical equipment, T&D cables, transformers, switchgear — the
+    // HVDC/capex cycle cluster that Nifty Energy (oil-heavy) dilutes.
+    // Nifty PSE is the best available proxy; these are predominantly PSU-linked or
+    // PSU-order-dependent companies.
+    'POWER': {
+        name: 'Power Equipment & T&D',
+        index: 'NIFTY PSE',
+        keywords: ['transformer', 'switchgear', 'HVDC', 'transmission', 'T&D', 'cable', 'conductor', 'power equipment'],
+        companies: [
+            'BHEL',        // heavy electrical equipment (turbines, boilers, transformers)
+            'ABB',         // ABB India — switchgear, motors, drives, T&D equipment
+            'POWERINDIA',  // Hitachi Energy India (formerly ABB Power Products) — HVDC, transformers
+            'SIEMENS',     // Siemens India — power transmission & automation
+            'KECL',        // KEC International — transmission towers & EPC
+            'KALPATPOWR',  // Kalpataru Power Transmission
+            'KEIIND',      // KEI Industries — cables & wires
+            'POLYCAB',     // Polycab — cables & wires
+            'HAVELLS',     // Havells — cables, switchgear, consumer electricals
+            'SCHNEIDER',   // Schneider Electric India
+            'AMIORG',      // Amara Raja Energy
+            'TRITURBINE',  // Triveni Turbine
+        ],
+        nifty_weight: 'Medium'
+    },
     
     // Defense & Aerospace
     'DEFENSE': {
@@ -170,6 +196,7 @@ export function mapSectorToIntelKey(sectorKey) {
     'TECH': 'IT',
     'BANKING': 'BANKING',
     'ENERGY': 'ENERGY',
+    'POWER':  'ENERGY',   // T&D equipment maps to ENERGY for intel purposes
     'AUTO': 'AUTO',
     'PHARMA': 'PHARMA',
     'FMCG': 'FMCG',
@@ -275,6 +302,7 @@ export function getSectorNewsKeywords(sectorCode) {
         'TECH': ['digital transformation', 'cloud', 'SaaS', 'export', 'H1B', 'automation'],
         'BANKING': ['interest rate', 'NPA', 'credit growth', 'deposit', 'RBI', 'monetary policy'],
         'ENERGY': ['crude oil', 'solar tariff', 'renewable energy', 'power demand', 'electricity'],
+        'POWER':  ['HVDC', 'transmission', 'T&D', 'transformer', 'switchgear', 'power equipment', 'cable'],
         'AUTO': ['EV', 'electric vehicle', 'auto sales', 'semiconductor', 'chip shortage'],
         'PHARMA': ['FDA approval', 'drug launch', 'patent', 'clinical trial', 'healthcare'],
         'FMCG': ['rural demand', 'volume growth', 'input cost', 'commodity prices'],
@@ -307,6 +335,7 @@ export function getTrailingStopSuggestions(sectorCode, analysisType = 'swing') {
         'TELECOM': { swing: 1.3, intraday: 0.7 },
         'REALTY': { swing: 1.9, intraday: 1.0 },
         'INDUSTRIAL': { swing: 1.6, intraday: 0.8 },
+        'POWER':      { swing: 1.8, intraday: 0.9 },
         'DEFENSE': { swing: 2.1, intraday: 1.1 },
         'TRANSPORT': { swing: 1.7, intraday: 0.9 },
         'CHEMICALS': { swing: 1.8, intraday: 0.9 },
@@ -345,6 +374,7 @@ export function getSectorCorrelationMessage(sectorCode) {
         'TELECOM': `Telecom stocks affected by spectrum auctions and data tariff changes.`,
         'REALTY': `Real estate sensitive to interest rate changes and housing policy updates.`,
         'INDUSTRIAL': `Industrial stocks correlate with manufacturing PMI and capex cycles.`,
+        'POWER':      `Power equipment stocks track Nifty PSE and T&D capex cycle. Watch HVDC project announcements and government power-sector spending.`,
         'DEFENSE': `Defense stocks move on government orders and geopolitical developments.`,
         'TRANSPORT': `Transportation stocks affected by fuel costs and economic activity levels.`,
         'CHEMICALS': `Chemical stocks sensitive to crude oil prices and global demand cycles.`,
