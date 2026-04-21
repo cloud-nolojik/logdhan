@@ -187,7 +187,11 @@ export async function buildShortlist(marketContext, options = {}) {
     const sectorScore =
       sectorResult.status === 'failed' ? null : scoreSector(sectorCode, sectorResult.topN);
 
-    // 5. Direction fit
+    // 5. Volume (computed before direction — direction AND-predicate needs it)
+    const volRatio = stockVolRatios.get(sym) ?? null;
+    const volumeScore = scoreVolume(volRatio);
+
+    // 6. Direction fit
     // Pass sector+volume context so the AND-predicate can fire on low-gap days.
     const inSectorBottom3 = sectorResult.status !== 'failed'
       ? (sectorResult.bottomN ?? []).includes(sectorCode)
@@ -198,15 +202,11 @@ export async function buildShortlist(marketContext, options = {}) {
       {
         sectorTop3:    sectorScore === 1,
         sectorBottom3: inSectorBottom3,
-        volRatio:      volRatio,
+        volRatio,
         mandate,
       }
     );
     const directionScore = scoreDirectionFit(stockDirection, mandate);
-
-    // 6. Volume
-    const volRatio = stockVolRatios.get(sym) ?? null;
-    const volumeScore = scoreVolume(volRatio);
 
     // Build reasons
     const reasons = [];
