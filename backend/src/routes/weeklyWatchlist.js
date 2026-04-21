@@ -917,8 +917,56 @@ router.get("/", auth, async (req, res) => {
         }
       }
 
+      // Normalize the levels subdocument before sending to the app.
+      //
+      // Background: scanLevels.js historically emitted `target` (no suffix) while
+      // weeklyLevels.js emits `target2`. Old MongoDB documents therefore have
+      // `levels.target: null` (stale) alongside `levels.target2: <value>`. The
+      // app's Codable struct has `target: Double` (non-optional), which throws
+      // "Failed to parse type 'double' for input 'null'" when the stale null
+      // field is present.
+      //
+      // Fix: always serve `levels.target` = `target2 ?? target` so the app
+      // gets a real value (or an explicit null it can handle) rather than a
+      // stale null from an old schema field. Unknown legacy fields are stripped.
+      const rawLevels = stock.levels
+        ? (stock.levels.toObject ? stock.levels.toObject() : { ...stock.levels })
+        : null;
+
+      let normalizedLevels = rawLevels;
+      if (rawLevels) {
+        const resolvedTarget = rawLevels.target2 ?? rawLevels.target ?? null;
+        normalizedLevels = {
+          entry:              rawLevels.entry              ?? null,
+          entry_basis:        rawLevels.entry_basis        ?? null,
+          entryRange:         rawLevels.entryRange         ?? null,
+          stop:               rawLevels.stop               ?? null,
+          target1:            rawLevels.target1            ?? null,
+          target1_basis:      rawLevels.target1_basis      ?? null,
+          target:             resolvedTarget,               // ← backfilled from target2 for app compat
+          target2:            resolvedTarget,               // ← canonical field name
+          target2_basis:      rawLevels.target2_basis      ?? null,
+          target3:            rawLevels.target3            ?? null,
+          dailyR1Check:       rawLevels.dailyR1Check       ?? null,
+          riskReward:         rawLevels.riskReward         ?? null,
+          riskPercent:        rawLevels.riskPercent        ?? null,
+          rewardPercent:      rawLevels.rewardPercent      ?? null,
+          entryType:          rawLevels.entryType          ?? null,
+          mode:               rawLevels.mode               ?? null,
+          archetype:          rawLevels.archetype          ?? null,
+          reason:             rawLevels.reason             ?? null,
+          entryConfirmation:  rawLevels.entryConfirmation  ?? 'close_above',
+          entryWindowDays:    rawLevels.entryWindowDays    ?? 3,
+          maxHoldDays:        rawLevels.maxHoldDays        ?? 5,
+          weekEndRule:        rawLevels.weekEndRule        ?? 'exit_if_no_t1',
+          t1BookingPct:       rawLevels.t1BookingPct       ?? 50,
+          postT1Stop:         rawLevels.postT1Stop         ?? 'move_to_entry',
+        };
+      }
+
       return {
         ...stock.toObject(),
+        levels: normalizedLevels,          // override the raw spread with the normalized version
         current_price: currentPrice || null,
         price_change: priceData?.change || 0,
         price_change_percent: priceData?.change_percent || 0,
