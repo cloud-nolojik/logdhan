@@ -196,13 +196,54 @@ export function analyzeOne(candidate, quote, prevClose) {
  */
 export function analyzeAll(candidates, quoteMap) {
   const out = new Map();
+  const fmt = (n, d = 3) => n == null ? 'n/a' : (Math.round(n * 10 ** d) / 10 ** d).toString();
+
   for (const c of candidates) {
     if (!c?.trading_symbol) continue;
     const key = `NSE:${c.trading_symbol}`;
     const quote = quoteMap[key] || null;
     const prevClose = quote?.ohlc?.close || null;
-    out.set(c.trading_symbol, analyzeOne(c, quote, prevClose));
+    const r = analyzeOne(c, quote, prevClose);
+    out.set(c.trading_symbol, r);
+
+    const sym = c.trading_symbol;
+    const dir = c.direction;
+
+    switch (r.status) {
+      case 'kept':
+        console.log(
+          `${LOG} ${sym} (${dir}) KEPT — imb=${fmt(r.imbalance)} mid=${fmt(r.mid_pct, 2)}% ` +
+          `liq=${r.liquidity} depth=₹${fmt(r.depth_value_inr, 0)} spread=${fmt(r.spread_pct)}% score=${fmt(r.score)}`
+        );
+        break;
+      case 'dropped_preopen_imbalance': {
+        const need = dir === 'LONG'
+          ? `>= ${THRESHOLDS.IMBALANCE_LONG_MIN}`
+          : `<= ${THRESHOLDS.IMBALANCE_SHORT_MAX}`;
+        console.log(
+          `${LOG} ${sym} (${dir}) DROPPED imbalance=${fmt(r.imbalance)} (need ${need}) | ` +
+          `mid=${fmt(r.mid_pct, 2)}% liq=${r.liquidity}`
+        );
+        break;
+      }
+      case 'dropped_preopen_thin':
+        console.log(
+          `${LOG} ${sym} (${dir}) DROPPED thin depth=₹${fmt(r.depth_value_inr, 0)} ` +
+          `(need >= ₹${THRESHOLDS.MIN_DEPTH_VALUE_RUPEES}) | liq_qty=${r.liquidity}`
+        );
+        break;
+      case 'dropped_preopen_wide_spread':
+        console.log(
+          `${LOG} ${sym} (${dir}) DROPPED spread=${fmt(r.spread_pct)}% ` +
+          `(max ${THRESHOLDS.MAX_SPREAD_PCT}%) | imb=${fmt(r.imbalance)}`
+        );
+        break;
+      case 'dropped_preopen_no_quote':
+        console.log(`${LOG} ${sym} (${dir}) DROPPED no_quote — Kite returned no depth for ${key}`);
+        break;
+    }
   }
+
   const kept = [...out.values()].filter(v => v.status === 'kept').length;
   console.log(`${LOG} analyzeAll: ${kept}/${candidates.length} kept`);
   return out;

@@ -159,10 +159,14 @@ router.get('/today', auth, async (req, res) => {
         scan_scores: pick.scan_scores,
         levels: {
           ...pick.levels,
-          // Explicit target ladder for the app
-          target1: pick.levels?.target1 || null,   // Conservative target
-          target: pick.levels?.target || null,      // Main target
-          target3: pick.levels?.target3 || null,    // Aggressive target
+          // Explicit target ladder for the app.
+          // scanLevels.js emits `target` (legacy); weeklyLevels.js emits `target2`.
+          // Normalise here so the app always gets a non-stale value regardless
+          // of which calculator wrote this pick.
+          target1: pick.levels?.target1 ?? null,
+          target:  pick.levels?.target2 ?? pick.levels?.target ?? null,  // canonical, backfilled
+          target2: pick.levels?.target2 ?? pick.levels?.target ?? null,  // same value, both names
+          target3: pick.levels?.target3 ?? null,
         },
         trade: {
           ...pick.trade,
