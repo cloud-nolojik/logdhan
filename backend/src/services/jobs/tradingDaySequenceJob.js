@@ -110,40 +110,40 @@ export async function runTradingDaySequence({
   const s1 = await runStep('08:30 daily-pick-scan', () => runDailyPicks({ allowOutdatedCandle }));
   summary.steps.push({ name: '08:30 daily-pick-scan', ...s1 });
 
-  // Step 2 — 09:08 Pre-open Depth
-  if (!skipWait) await waitUntilIst(9, 8);
-  const s2 = await runStep('09:08 preopen-depth-check', () => runPreopenDepthCheck());
-  summary.steps.push({ name: '09:08 preopen-depth-check', ...s2 });
+  // Step 2 — 09:08 Pre-open Depth (DISABLED: scanner.py path bypasses pre-open depth check)
+  // if (!skipWait) await waitUntilIst(9, 8);
+  // const s2 = await runStep('09:08 preopen-depth-check', () => runPreopenDepthCheck());
+  // summary.steps.push({ name: '09:08 preopen-depth-check', ...s2 });
 
-  // Step 3 — 09:30 ORB Pass 1
-  if (!skipWait) await waitUntilIst(9, 30);
-  const s3 = await runStep('09:30 orb-pass-1', async () => {
-    const orb = await startOrbCollection({ orbPass: 1 });
-    if (!orb?.success) return { orb, validate: { skipped: true, reason: 'orb_fetch_failed' } };
-    const validate = await validateAndPlaceEntries({ orbPass: 1 });
-    return { orb, validate };
-  });
-  summary.steps.push({ name: '09:30 orb-pass-1', ...s3 });
+  // Step 3 — 09:30 validateAndPlaceEntries (DISABLED: AMO orders already placed at 8:30)
+  // scanner.py picks are queued as AMO MARKET inside runDailyPicks Step 7.5.
+  // By 9:30 all picks are ORDER_PLACED — no eligible picks remain, this is a no-op.
+  // if (!skipWait) await waitUntilIst(9, 30);
+  // const s3 = await runStep('09:30 scanner-entry', async () => {
+  //   const validate = await validateAndPlaceEntries({ orbPass: 1 });
+  //   return { validate };
+  // });
+  // summary.steps.push({ name: '09:30 scanner-entry', ...s3 });
 
-  // Step 4 — 09:45 ORB Pass 2
-  if (!skipWait) await waitUntilIst(9, 45);
-  const s4 = await runStep('09:45 orb-pass-2', async () => {
-    const orb = await startOrbCollection({ orbPass: 2 });
-    if (!orb?.success) return { orb, validate: { skipped: true, reason: 'orb_fetch_failed' } };
-    const validate = await validateAndPlaceEntries({ orbPass: 2 });
-    return { orb, validate };
-  });
-  summary.steps.push({ name: '09:45 orb-pass-2', ...s4 });
+  // Step 4 — 09:45 ORB Pass 2 (DISABLED: scanner picks placed in one pass at 09:30)
+  // if (!skipWait) await waitUntilIst(9, 45);
+  // const s4 = await runStep('09:45 orb-pass-2', async () => {
+  //   const orb = await startOrbCollection({ orbPass: 2 });
+  //   if (!orb?.success) return { orb, validate: { skipped: true, reason: 'orb_fetch_failed' } };
+  //   const validate = await validateAndPlaceEntries({ orbPass: 2 });
+  //   return { orb, validate };
+  // });
+  // summary.steps.push({ name: '09:45 orb-pass-2', ...s4 });
 
-  // Step 5 — 10:00 ORB Pass 3 (final)
-  if (!skipWait) await waitUntilIst(10, 0);
-  const s5 = await runStep('10:00 orb-pass-3', async () => {
-    const orb = await startOrbCollection({ orbPass: 3 });
-    if (!orb?.success) return { orb, validate: { skipped: true, reason: 'orb_fetch_failed' } };
-    const validate = await validateAndPlaceEntries({ orbPass: 3 });
-    return { orb, validate };
-  });
-  summary.steps.push({ name: '10:00 orb-pass-3', ...s5 });
+  // Step 5 — 10:00 ORB Pass 3 (DISABLED: scanner picks placed in one pass at 09:30)
+  // if (!skipWait) await waitUntilIst(10, 0);
+  // const s5 = await runStep('10:00 orb-pass-3', async () => {
+  //   const orb = await startOrbCollection({ orbPass: 3 });
+  //   if (!orb?.success) return { orb, validate: { skipped: true, reason: 'orb_fetch_failed' } };
+  //   const validate = await validateAndPlaceEntries({ orbPass: 3 });
+  //   return { orb, validate };
+  // });
+  // summary.steps.push({ name: '10:00 orb-pass-3', ...s5 });
 
   summary.completed_at = new Date().toISOString();
 

@@ -11,6 +11,18 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const execFileAsync = promisify(execFile);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// scanner.py lives at logdhan/scanner.py — 4 dirs up from dailyPicks/
+const SCANNER_PY_PATH = path.resolve(__dirname, '../../../..', 'scanner.py');
 
 import { SCAN_LABELS, SCAN_ARCHETYPE } from './dailyPicksScans.js';
 import { buildShortlist } from '../shortlist/shortlistService.js';
@@ -112,6 +124,86 @@ function getAnthropicClient() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SCANNER.PY INTEGRATION
+// Calls scanner.py (recovery-breakout screener) on the full F&O universe.
+// Returns picks mapped to the DailyPick shape with pre-computed levels (entry,
+// stop, target from structural pivots). Replaces Steps 0–6.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function runScannerPy() {
+  const { getFnoSymbols } = await import('../../constants/fnoUniverse.js');
+  const symbolSet = await getFnoSymbols();
+  const symbols = [...symbolSet];
+
+  // Write watchlist to a temp file — scanner.py reads one symbol per line
+  const watchlistPath = path.join(os.tmpdir(), `logdhan_fno_${Date.now()}.txt`);
+  await fs.writeFile(watchlistPath, symbols.join('\n'), 'utf8');
+
+  console.log(`${LOG} [Scanner] Running scanner.py on ${symbols.length} F&O symbols (path=${SCANNER_PY_PATH})...`);
+  const t0 = Date.now();
+
+  try {
+    const { stdout, stderr } = await execFileAsync('python3', [
+      SCANNER_PY_PATH,
+      '--watchlist', watchlistPath,
+      '--top', String(MAX_DAILY_PICKS),
+      '--json',
+      '--no-tv',
+      '--min-score', '0.3',
+    ], { timeout: 180_000 }); // 3 min max — yfinance batch can be slow on 400 symbols
+
+    if (stderr) console.warn(`${LOG} [Scanner] stderr: ${stderr.slice(0, 800)}`);
+    console.log(`${LOG} [Scanner] Done in ${Date.now() - t0}ms`);
+
+    // stdout has progress lines ("[scanner] N symbols...") + one JSON array line
+    const jsonLine = stdout.split('\n').map(l => l.trim()).find(l => l.startsWith('[{') || l === '[]');
+    if (!jsonLine) {
+      console.warn(`${LOG} [Scanner] No JSON array found in stdout. stdout=${stdout.slice(0, 400)}`);
+      return [];
+    }
+
+    const raw = JSON.parse(jsonLine); // array of Score dicts from scanner.py
+    console.log(`${LOG} [Scanner] ${raw.length} picks returned: ${raw.map(p => `${p.symbol}(${p.composite?.toFixed(2)})`).join(', ')}`);
+
+    // Map scanner.py Score → internal pick shape
+    return raw.map(s => ({
+      symbol: s.symbol,
+      stock_name: s.symbol,
+      instrument_key: null,
+      scan_type: 'recovery_breakout',
+      direction: 'LONG', // scanner.py is a bullish recovery-breakout screener
+      rank_score: Math.round((s.composite || 0) * 100),
+      levels: {
+        entry:       s.close,
+        stop:        s.sl,
+        target:      s.t1,
+        target2:     s.t2 || null,
+        target3:     s.t3 || null,
+        risk_pct:    s.sl_pct,
+        reward_pct:  s.t1_pct,
+        risk_reward: s.rr_t1,
+        entry_type:  'market',
+        mode:        'scanner',
+        source:      `scanner.py | sl_src=${s.sl_src} | t1_src=${s.t1_src}`,
+      },
+      scan_scores: {
+        volume_ratio:       round2(s.volume_spike || 0),
+        rsi:                round2(s.rsi || 0),
+        atr_pct:            s.atr && s.close ? round2((s.atr / s.close) * 100) : null,
+        close_in_range_pct: Math.round((s.range_pos || 0) * 100),
+        avg_volume_50d:     null, // not provided by scanner.py
+      },
+      _ohlcv: {
+        atr:   s.atr,
+        close: s.close,
+      },
+    }));
+  } finally {
+    await fs.unlink(watchlistPath).catch(() => {});
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN ORCHESTRATOR — 8:30 AM
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -132,6 +224,67 @@ async function runDailyPicks(options = {}) {
   clearIntelCache();
 
   try {
+    // ═══════════════════════════════════════════════════════════════════════
+    // SCANNER.PY — Steps 0–6 replaced by recovery-breakout screener
+    //
+    // scanner.py runs on the full F&O universe (yfinance, 6mo history) and
+    // returns top-N picks with pre-computed entry/stop/target from structural
+    // pivots. The ORB entry flow is bypassed — orders are placed at market open
+    // in validateAndPlaceEntries (MARKET order, balance.usableIntraday sizing).
+    // ═══════════════════════════════════════════════════════════════════════
+    const picksWithLevels = await runScannerPy();
+    // compat aliases used by Step 7/8 logging
+    const enriched  = picksWithLevels;
+    const scored    = picksWithLevels;
+    const allViable = picksWithLevels;
+
+    const marketContext = {
+      regime:         'SCANNER',
+      regime_score:   1.0,
+      playbook:       'recovery_breakout',
+      max_trades:     MAX_DAILY_PICKS,
+      size_multiplier: 1,
+      inputs:         { source: 'scanner.py' },
+      decided_at:     new Date().toISOString(),
+    };
+
+    if (picksWithLevels.length === 0) {
+      console.log(`${LOG} [Scanner] No picks above threshold — saving empty doc.`);
+      const emptyDoc = await saveToDB(marketContext, [], { candidates: [], bullish_count: 0, bearish_count: 0 });
+      await sendNotification(marketContext, [], emptyDoc);
+      return { success: true, picks: 0, doc: emptyDoc };
+    }
+
+    const scanResult = {
+      candidates:           picksWithLevels,
+      bullish_count:        picksWithLevels.filter(p => p.direction === 'LONG').length,
+      bearish_count:        picksWithLevels.filter(p => p.direction === 'SHORT').length,
+      shortlist_date:       null,
+      shortlist_raw_symbols: [],
+      neutral_dropped:      [],
+    };
+
+    const candidatesReview = picksWithLevels.map(p => ({
+      symbol:           p.symbol,
+      scan_type:        p.scan_type,
+      direction:        p.direction,
+      rank_score:       p.rank_score,
+      candle:           { close: p._ohlcv?.close },
+      indicators:       { rsi: p.scan_scores?.rsi, atr: p._ohlcv?.atr },
+      levels:           p.levels,
+      status:           'selected',
+      rejection_reason: null,
+    }));
+
+    // No AI insights in scanner path
+    const picksWithInsights = picksWithLevels;
+
+    console.log(`${LOG} [Scanner] ${picksWithLevels.length} picks selected: ${picksWithLevels.map(p => `${p.symbol}(${p.rank_score})`).join(', ')}`);
+
+    // ─── DISABLED: Old Steps 0–6 (regime snapshots, shortlist, enrich, gate filter, select)
+    // Preserved below for reference — remove after scanner.py path is validated.
+    // eslint-disable-next-line no-constant-condition
+    if (false) {
     // NOTE: Global intel now runs AFTER shortlist + enrichment + scoring + levels
     // so we can pass viable candidate symbols for stock-specific Indian market analysis.
     // See Step 5.5 below.
@@ -461,15 +614,32 @@ async function runDailyPicks(options = {}) {
 
     // Step 6.5 (news pipeline) REMOVED. News picks were advisory-only — never
     // traded — so they're not part of the automation path.
+    } // end disabled Steps 0–6
+    // ─────────────────────────────────────────────────────────────────────────
 
-    // Step 7: Save to DB (includes full global intel snapshot + news picks)
+
+    // Step 7: Save to DB
     console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks`);
     const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, null);
     console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
-    // Verify scan_scores persisted — especially avg_volume_50d (critical for ORB Check 6)
     for (const p of doc.picks) {
       const ss = p.scan_scores;
-      console.log(`${LOG} [Step 7] scan_scores persisted — ${p.symbol}: avg_volume_50d=${ss?.avg_volume_50d ?? 'MISSING'} vol_ratio=${ss?.volume_ratio} rsi=${ss?.rsi} atr_pct=${ss?.atr_pct}%`);
+      console.log(`${LOG} [Step 7] ${p.symbol}: entry=₹${p.levels?.entry} stop=₹${p.levels?.stop} target=₹${p.levels?.target} vol_ratio=${ss?.volume_ratio} rsi=${ss?.rsi} atr_pct=${ss?.atr_pct}%`);
+    }
+
+    // Step 7.5: Place AMO MARKET orders immediately (scanner path)
+    // Orders queue at the broker and execute at the 9:08 AM pre-open auction.
+    // This avoids any separate 9:30 AM scheduled step — by the time market opens,
+    // orders are already in the system. The 9:30 validateAndPlaceEntries call
+    // becomes a no-op (picks are already ORDER_PLACED, eligiblePicks filter skips them).
+    if (picksWithInsights.length > 0) {
+      console.log(`${LOG} [Step 7.5] Placing AMO MARKET orders for ${picksWithInsights.length} picks...`);
+      try {
+        const amoResult = await placePreMarketEntries(doc);
+        console.log(`${LOG} [Step 7.5] AMO done: ${amoResult.ordersPlaced ?? 0} orders placed`);
+      } catch (amoErr) {
+        console.error(`${LOG} [Step 7.5] AMO placement failed (non-fatal — picks saved, manual entry possible): ${amoErr.message}`);
+      }
     }
 
     // Step 8: Send notification
@@ -479,10 +649,9 @@ async function runDailyPicks(options = {}) {
     const elapsed = Date.now() - startTime;
     console.log(`${LOG} ════════════════════════════════════════`);
     console.log(`${LOG} ✅ PIPELINE COMPLETE in ${elapsed}ms`);
-    console.log(`${LOG} Pipeline summary: ${scanResult.candidates.length} scanned → ${enriched.length} enriched → ${scored.length} scored → ${allViable.length} viable → ${picksWithInsights.length} final picks`);
+    console.log(`${LOG} Pipeline summary: ${scanResult.candidates.length} scanned → ${picksWithInsights.length} picks selected → AMO orders queued`);
     for (const p of picksWithInsights) {
-      // Pure-ORB: pick.levels is null until 9:30 AM ORB validation fills it in
-      console.log(`${LOG} FINAL PICK: ${p.symbol} | ${p.scan_type} | ${p.direction} | score=${p.rank_score} | levels=<computed at 9:30 ORB>`);
+      console.log(`${LOG} FINAL PICK: ${p.symbol} | ${p.scan_type} | ${p.direction} | score=${p.rank_score} | entry=₹${p.levels?.entry} stop=₹${p.levels?.stop} target=₹${p.levels?.target}`);
     }
     console.log(`${LOG} ════════════════════════════════════════`);
     return { success: true, picks: picksWithInsights.length, doc };
@@ -1258,18 +1427,18 @@ async function sendNotification(marketContext, picks, doc) {
  */
 async function placePreMarketEntries(doc) {
   console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} [Step 7.5] placePreMarketEntries — DEPRECATED in pure-ORB flow`);
+  console.log(`${LOG} [Step 7.5] placePreMarketEntries — scanner.py AMO path`);
   console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} [Step 7.5] No pre-market levels exist after Step 5 removal. All picks wait for ORB validation at 9:30 AM.`);
-  return {
-    success: true,
-    message: 'Pre-market entry deprecated in pure-ORB flow; picks are placed at 9:30 via validateAndPlaceEntries',
-    ordersPlaced: 0,
-    deprecated: true,
-  };
 
-  // ─────── LEGACY CODE BELOW — unreachable; kept for reference ───────
-  // eslint-disable-next-line no-unreachable
+  // Scanner path: picks have pre-computed levels (mode='scanner'), place AMO MARKET
+  // orders immediately after the 8:30 AM scan so they queue for the 9:08 opening auction.
+  const isScannerDoc = doc.picks.some(p => p.levels?.mode === 'scanner');
+  if (!isScannerDoc) {
+    // Non-scanner doc (e.g. manual run with old path) — skip
+    console.log(`${LOG} [Step 7.5] Non-scanner doc — skipping AMO placement`);
+    return { success: true, message: 'Non-scanner doc — skipping', ordersPlaced: 0 };
+  }
+
   if (!isKiteIntegrationEnabled()) {
     console.log(`${LOG} [Step 7.5] Kite not enabled — skipping`);
     return { success: true, message: 'Kite not enabled', ordersPlaced: 0 };
@@ -1416,19 +1585,10 @@ async function placePreMarketEntries(doc) {
     return { success: true, message: `Circuit breaker: ${cbCheck.reason}`, ordersPlaced: 0 };
   }
 
-  // Breakout/52W scans wait for ORB validation at 9:30 AM — entry ≈ current price, gap risk is high
-  // Pullback/compression scans place pre-market — entry below current price, safe for LIMIT
-  const ORB_WAIT_SCANS = ['fiftyTwoWeek_high', 'fiftyTwoWeek_low', 'volume_shocker_bullish', 'volume_shocker_bearish'];
-
+  // Scanner path: all picks are recovery_breakout (LONG), no ORB-wait scan filter needed.
   let ordersPlaced = 0;
 
   for (const { pick, capital } of allocations) {
-    // Defer breakout/52W scans to ORB validation — stays PENDING for 9:30 AM job
-    if (ORB_WAIT_SCANS.includes(pick.scan_type)) {
-      console.log(`${LOG} [Step 7.5] ${pick.symbol}: ${pick.scan_type} — deferred to ORB validation at 9:30 AM`);
-      continue;
-    }
-
     const orderAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
     const qty = Math.floor(orderAmount / pick.levels.entry);
     if (qty <= 0) {
@@ -1436,45 +1596,19 @@ async function placePreMarketEntries(doc) {
       continue;
     }
 
-    // SLIPPAGE_BUFFER_PCT imported from dailyPicksConstants.js (0.15%)
-    const rawTrigger = pick.direction === 'LONG'
-      ? pick.levels.entry * (1 + SLIPPAGE_BUFFER_PCT)   // LONG: trigger slightly above entry
-      : pick.levels.entry * (1 - SLIPPAGE_BUFFER_PCT);  // SHORT: trigger slightly below entry
-    const triggerPrice = roundToTick(rawTrigger);
+    const txnType = pick.direction === 'LONG' ? 'BUY' : 'SELL';
+    console.log(`${LOG} [Step 7.5] ${pick.symbol}: AMO MARKET ${pick.direction} qty=${qty} capital=₹${orderAmount}`);
 
     try {
-      // All daily picks use MIS (intraday) — no overnight holding
-      // AMO SL-M for pre-market entry. For LONG: BUY trigger at entry + slippage buffer.
-      // For SHORT: Kite requires SL-M SELL trigger_price < LTP, so nudge if needed.
-      const txnType = pick.direction === 'LONG' ? 'BUY' : 'SELL';
-      let amoTrigger = triggerPrice;
-
-      if (pick.direction === 'SHORT') {
-        try {
-          const ltpData = await kiteOrderService.getLTP([`NSE:${pick.symbol}`]);
-          const ltp = ltpData?.[`NSE:${pick.symbol}`]?.last_price;
-          if (ltp && amoTrigger >= ltp) {
-            const tick = getNseTickSize(ltp);
-            amoTrigger = roundToTick(ltp - tick);
-            console.log(`${LOG} [Step 7.5] ${pick.symbol}: Trigger ₹${triggerPrice} >= LTP ₹${ltp}, nudged to ₹${amoTrigger} (1 tick below LTP)`);
-          }
-        } catch (ltpErr) {
-          const tick = getNseTickSize(triggerPrice);
-          amoTrigger = roundToTick(triggerPrice - tick);
-          console.log(`${LOG} [Step 7.5] ${pick.symbol}: LTP fetch failed, nudged trigger to ₹${amoTrigger} (1 tick below entry)`);
-        }
-      }
-
-      console.log(`${LOG} [Step 7.5] ${pick.symbol}: AMO ${pick.direction} qty=${qty} trigger=₹${amoTrigger} product=MIS`);
-
+      // AMO MARKET — executes at the 9:08 pre-open auction price.
+      // No trigger_price: we take whatever the market opens at.
       const result = await kiteOrderService.placeAMOOrder({
         tradingsymbol: pick.symbol,
         exchange: 'NSE',
         transaction_type: txnType,
-        order_type: 'SL-M',
+        order_type: 'MARKET',
         product: 'MIS',
         quantity: qty,
-        trigger_price: amoTrigger,
         simulationId: `daily_pick_${pick.symbol}`,
         orderType: 'ENTRY',
         source: 'DAILY_PICKS'
@@ -1487,11 +1621,11 @@ async function placePreMarketEntries(doc) {
         pick.kite.kite_status = 'amo_placed';
         ordersPlaced++;
 
-        console.log(`${LOG} [Step 7.5] ┌── AMO ENTRY: ${pick.symbol} ──────────────────────`);
+        console.log(`${LOG} [Step 7.5] ┌── AMO MARKET ENTRY: ${pick.symbol} ──────────────────`);
         console.log(`${LOG} [Step 7.5] │ Direction: ${pick.direction} | Scan: ${pick.scan_type} | Product: MIS`);
-        console.log(`${LOG} [Step 7.5] │ Trigger: ₹${amoTrigger}${amoTrigger !== triggerPrice ? ` (nudged from ₹${triggerPrice})` : ''} | Qty: ${qty} | Capital: ₹${orderAmount}`);
+        console.log(`${LOG} [Step 7.5] │ Ref entry: ₹${pick.levels.entry} (scanner prev-close) | Qty: ${qty} | Capital: ₹${orderAmount}`);
         console.log(`${LOG} [Step 7.5] │ Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target} | R:R=${pick.levels.risk_reward}`);
-        console.log(`${LOG} [Step 7.5] │ Order ID: ${result.orderId}`);
+        console.log(`${LOG} [Step 7.5] │ AMO Order ID: ${result.orderId}`);
         console.log(`${LOG} [Step 7.5] └─────────────────────────────────────────────────────`);
       } else {
         console.error(`${LOG} [Step 7.5] ❌ ${pick.symbol}: AMO placement failed — ${JSON.stringify(result)}`);
@@ -1761,6 +1895,25 @@ async function validateAndPlaceEntries(options = {}) {
     return { success: true, message: 'No eligible picks', orders: 0, validated: 0, skipped: 0 };
   }
 
+  // ─── SCANNER PATH: ORB validation bypassed ─────────────────────────────
+  // scanner.py picks (levels.mode === 'scanner') have pre-computed entry/stop/
+  // target from structural pivots. Mark all eligible picks VALIDATED directly.
+  //
+  // Non-scanner path (ORB validation + level assignment) is preserved below
+  // in a disabled block for future reference.
+  // ─────────────────────────────────────────────────────────────────────────
+  const isScanner = eligiblePicks.some(p => p.levels?.mode === 'scanner');
+
+  if (isScanner) {
+    console.log(`${LOG} [Scanner] Bypassing ORB — marking ${eligiblePicks.length} pick(s) VALIDATED (levels from scanner.py structural pivots)`);
+    for (const pick of eligiblePicks) {
+      pick.validation = { passed: true, checks: { scanner: true }, skip_reason: null };
+    }
+    doc.markModified('picks');
+  } else {
+    // ── DISABLED: ORB validation + level assignment (non-scanner path) ────
+    // eslint-disable-next-line no-constant-condition
+    if (false) {
   // Step 1: Validate against ORB data
   // Pass 1: use stored ORB data. Pass 2+: RE-FETCH fresh OHLC (market has moved 15-30 min)
   let orbData = {};
@@ -1894,6 +2047,10 @@ async function validateAndPlaceEntries(options = {}) {
   }
   // Mongoose needs a nudge to detect nested changes on subdocument arrays
   doc.markModified('picks');
+    } // end disabled ORB validation
+    // ─────────────────────────────────────────────────────────────────────
+  }
+
 
   // Step 3: Separate validated vs skipped
   const validatedPicks = eligiblePicks.filter(p => p.validation?.passed);
@@ -2018,18 +2175,25 @@ async function validateAndPlaceEntries(options = {}) {
       continue;
     }
 
-    // Crabel-style: SL-M at ORB breakout level + slippage buffer (0.15%)
+    // ── Order type: MARKET for scanner.py picks, SL-M for ORB picks ─────────
+    const isScannerPick = pick.levels?.mode === 'scanner';
+
+    // SL-M / trigger logic (ORB path only — kept for reference, unused in scanner path)
     const ORB_SLIPPAGE_BUFFER = 0.0015;
     const orbRawTrigger = pick.direction === 'LONG'
       ? pick.levels.entry * (1 + ORB_SLIPPAGE_BUFFER)
       : pick.levels.entry * (1 - ORB_SLIPPAGE_BUFFER);
-    const triggerPrice = roundToTick(orbRawTrigger);
+    const triggerPrice = isScannerPick ? null : roundToTick(orbRawTrigger);
     const originalEntry = pick.validation?.checks?.orb_alignment?.original_entry;
 
-    console.log(`${LOG} ${pick.symbol}: SL-M ${pick.direction} qty=${qty} trigger=₹${triggerPrice} (original entry=₹${originalEntry || 'N/A'})`);
+    if (isScannerPick) {
+      console.log(`${LOG} ${pick.symbol}: MARKET ${pick.direction} qty=${qty} entry=₹${pick.levels.entry} stop=₹${pick.levels.stop} target=₹${pick.levels.target}`);
+    } else {
+      console.log(`${LOG} ${pick.symbol}: SL-M ${pick.direction} qty=${qty} trigger=₹${triggerPrice} (original entry=₹${originalEntry || 'N/A'})`);
+    }
 
     if (dryRun) {
-      console.log(`${LOG} [DRY RUN] Would place SL-M order for ${pick.symbol}`);
+      console.log(`${LOG} [DRY RUN] Would place ${isScannerPick ? 'MARKET' : 'SL-M'} order for ${pick.symbol}`);
       continue;
     }
 
@@ -2038,10 +2202,10 @@ async function validateAndPlaceEntries(options = {}) {
         tradingsymbol: pick.symbol,
         exchange: 'NSE',
         transaction_type: pick.direction === 'LONG' ? 'BUY' : 'SELL',
-        order_type: 'SL-M',
+        order_type: isScannerPick ? 'MARKET' : 'SL-M',
         product: 'MIS',
         quantity: qty,
-        trigger_price: triggerPrice,
+        ...(isScannerPick ? {} : { trigger_price: triggerPrice }),
         simulationId: `daily_pick_${pick.symbol}`,
         orderType: 'ENTRY',
         source: 'DAILY_PICKS'
@@ -2063,10 +2227,10 @@ async function validateAndPlaceEntries(options = {}) {
         const maxProfit = round2(rewardPerShare * qty);
         console.log(`${LOG} ┌── TRADE: ${pick.symbol} ──────────────────────────────`);
         console.log(`${LOG} │ Direction: ${pick.direction} | Scan: ${pick.scan_type} | Mode: ${pick.levels.mode}`);
-        console.log(`${LOG} │ Original Entry: ₹${originalEntry || 'N/A'} → ORB Entry: ₹${pick.levels.entry} | Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target}`);
-        console.log(`${LOG} │ T1 (partial): ${pick.levels.target1 ? '₹' + pick.levels.target1 : 'N/A'} | T3 (stretch): ${pick.levels.target3 ? '₹' + pick.levels.target3 : 'N/A'}`);
-        console.log(`${LOG} │ R:R=${pick.validation?.checks?.orb_alignment?.new_rr ?? pick.levels.risk_reward} | Risk=${pick.levels.risk_pct}% | Reward=${pick.levels.reward_pct}%`);
-        console.log(`${LOG} │ Order → SL-M qty=${qty} trigger=₹${triggerPrice} orderId=${result.orderId}`);
+        console.log(`${LOG} │ Entry: ₹${pick.levels.entry}${!isScannerPick ? ` (ORB, original=₹${originalEntry || 'N/A'})` : ' (scanner structural)'} | Stop: ₹${pick.levels.stop} | Target: ₹${pick.levels.target}`);
+        console.log(`${LOG} │ T2: ${pick.levels.target2 ? '₹' + pick.levels.target2 : 'N/A'} | T3: ${pick.levels.target3 ? '₹' + pick.levels.target3 : 'N/A'}`);
+        console.log(`${LOG} │ R:R=${pick.levels.risk_reward} | Risk=${pick.levels.risk_pct}% | Reward=${pick.levels.reward_pct}%`);
+        console.log(`${LOG} │ Order → ${isScannerPick ? 'MARKET' : 'SL-M'} qty=${qty}${!isScannerPick ? ` trigger=₹${triggerPrice}` : ''} orderId=${result.orderId}`);
         console.log(`${LOG} │ Capital: ₹${orderAmount} | Max Loss: ₹${maxLoss} | Max Profit: ₹${maxProfit}`);
         console.log(`${LOG} │ Reason: ${pick.levels.reason}`);
         console.log(`${LOG} └─────────────────────────────────────────────────────`);

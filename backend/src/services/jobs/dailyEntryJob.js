@@ -86,37 +86,14 @@ class DailyEntryJob {
   }
 
   defineJobs() {
-    // Job 1: Start ORB collection at 9:15 AM
-    this.agenda.define('daily-picks-orb-collect', async (job) => {
-      if (this.runningJobs.has('orb-collect')) {
-        console.log(`${LOG} ORB collection already running, skipping`);
-        return;
-      }
-
-      this.runningJobs.add('orb-collect');
-      try {
-        const isTradingDay = await MarketHoursUtil.isTradingDay();
-        if (!isTradingDay) {
-          console.log(`${LOG} Not a trading day — skipping ORB collection`);
-          return { skipped: true, reason: 'not_trading_day' };
-        }
-
-        const t0 = Date.now();
-        console.log(`${LOG} [ORB-COLLECT] Calling startOrbCollection()...`);
-        const result = await startOrbCollection();
-        this.stats.orbCollections++;
-        this.stats.lastRunAt = new Date();
-        this.stats.lastResult = result;
-        console.log(`${LOG} [ORB-COLLECT] Completed in ${Date.now() - t0}ms:`, JSON.stringify(result));
-        return result;
-      } catch (error) {
-        console.error(`${LOG} ORB collection failed:`, error);
-        this.stats.errors++;
-        throw error;
-      } finally {
-        this.runningJobs.delete('orb-collect');
-      }
-    });
+    // Job 1: ORB collection (DISABLED — scanner.py path bypasses ORB)
+    // startOrbCollection() is no longer called; scanner picks have pre-computed
+    // structural levels (entry/stop/target from scanner.py pivots). Orders are
+    // placed as MARKET at 09:30 via validateAndPlaceEntries.
+    //
+    // this.agenda.define('daily-picks-orb-collect', async (job) => {
+    //   ...startOrbCollection()...
+    // });
 
     // Job 2: Multi-pass ORB validate+entry — shared handler, 3 distinct job names
     // Pass 1 (9:30) = 15-min ORB, Pass 2 (9:46) = 30-min, Pass 3 (10:01) = 45-min FINAL
@@ -412,40 +389,35 @@ class DailyEntryJob {
         });
       }
 
-      // Every 2 min, 9:30-10:29 AM IST — Polling fallback for fill detection
-      await this.agenda.every('*/2 9-10 * * 1-5', 'daily-picks-fill-fallback', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // Every 2 min, 9:30-10:29 AM IST — Fill fallback (DISABLED: AMO placed at 8:30, no polling needed)
+      // await this.agenda.every('*/2 9-10 * * 1-5', 'daily-picks-fill-fallback', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
-      // Every 3 min, 10:00 AM - 2:59 PM IST — Monitor stop/target + trailing
-      await this.agenda.every('*/3 10-14 * * 1-5', 'daily-picks-monitor', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // Every 3 min, 10:00 AM - 2:59 PM IST — Monitor/trailing/partial booking (DISABLED)
+      // await this.agenda.every('*/3 10-14 * * 1-5', 'daily-picks-monitor', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
-      // 2:00 PM IST — Tighten stops to breakeven for profitable positions
-      await this.agenda.every('0 14 * * 1-5', 'daily-picks-tighten', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // 2:00 PM IST — Tighten stops (DISABLED)
+      // await this.agenda.every('0 14 * * 1-5', 'daily-picks-tighten', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
-      // 2:45 PM IST — HARD FLAT (primary exit) — 15 min before broker force-close at 15:20
-      await this.agenda.every('45 14 * * 1-5', 'daily-picks-hard-flat', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // 2:45 PM IST — HARD FLAT (DISABLED)
+      // await this.agenda.every('45 14 * * 1-5', 'daily-picks-hard-flat', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
-      // 3:00 PM IST — Force-exit any position 14:45 missed (safety net)
-      await this.agenda.every('0 15 * * 1-5', 'daily-picks-exit', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // 3:00 PM IST — Force-exit safety net (DISABLED)
+      // await this.agenda.every('0 15 * * 1-5', 'daily-picks-exit', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
       console.log(`${LOG} ═══════════════════════════════════════`);
-      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST):`);
-      console.log(`${LOG}   09:30 — ORB Pass 1 (15-min range) → validate + SL-M entry`);
-      console.log(`${LOG}   09:46 — ORB Pass 2 (30-min range) → retry failed picks`);
-      console.log(`${LOG}   10:01 — ORB Pass 3 (45-min FINAL) → last chance entry`);
-      console.log(`${LOG}   */2 9-10 — Fill detection fallback (polling)`);
-      console.log(`${LOG}   */3 10-14 — Monitor: trailing, partial booking, sideways exit`);
-      console.log(`${LOG}   14:00 — Tighten stops to breakeven`);
-      console.log(`${LOG}   15:00 — Force-exit all positions`);
+      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — SCANNER/AMO PATH:`);
+      console.log(`${LOG}   08:30 — daily-pick-scan → scanner.py + AMO MARKET orders placed immediately`);
+      console.log(`${LOG}   [ALL intraday jobs DISABLED — exits managed manually or by broker auto-square]`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
