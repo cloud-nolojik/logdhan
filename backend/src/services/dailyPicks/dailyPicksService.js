@@ -165,8 +165,27 @@ async function runScannerPy() {
     const raw = JSON.parse(jsonLine); // array of Score dicts from scanner.py
     console.log(`${LOG} [Scanner] ${raw.length} picks returned: ${raw.map(p => `${p.symbol}(${p.composite?.toFixed(2)})`).join(', ')}`);
 
+    // Pick the first target (t1 → t2 → t3) that achieves at least 1:1 R:R.
+    // T1 is often the nearest pivot and sits just above price — terrible R:R.
+    // T2/T3 are wider levels that usually give a sensible reward.
+    const MIN_RR = 1.0;
+    function pickTarget(s) {
+      const risk = s.close - s.sl; // always positive for LONG (sl < close)
+      const candidates = [
+        { t: s.t1, pct: s.t1_pct, rr: s.rr_t1, label: 't1' },
+        { t: s.t2, pct: s.t2_pct, rr: s.rr_t2, label: 't2' },
+        { t: s.t3, pct: s.t3_pct, rr: s.rr_t3, label: 't3' },
+      ].filter(c => c.t && c.t > s.close);
+      const viable = candidates.find(c => (c.t - s.close) >= risk * MIN_RR);
+      const chosen = viable || candidates[candidates.length - 1]; // fallback: widest available
+      if (!viable) console.warn(`${LOG} [Scanner] ${s.symbol}: no target ≥ 1:1 R:R — using ${chosen?.label} (rr=${chosen?.rr?.toFixed(2)})`);
+      return chosen || { t: s.t1, pct: s.t1_pct, rr: s.rr_t1, label: 't1' };
+    }
+
     // Map scanner.py Score → internal pick shape
-    return raw.map(s => ({
+    return raw.map(s => {
+      const tgt = pickTarget(s);
+      return {
       symbol: s.symbol,
       stock_name: s.symbol,
       instrument_key: null,
@@ -176,15 +195,15 @@ async function runScannerPy() {
       levels: {
         entry:       s.close,
         stop:        s.sl,
-        target:      s.t1,
+        target:      tgt.t,
         target2:     s.t2 || null,
         target3:     s.t3 || null,
         risk_pct:    s.sl_pct,
-        reward_pct:  s.t1_pct,
-        risk_reward: s.rr_t1,
+        reward_pct:  tgt.pct,
+        risk_reward: tgt.rr,
         entry_type:  'market',
         mode:        'scanner',
-        source:      `scanner.py | sl_src=${s.sl_src} | t1_src=${s.t1_src}`,
+        source:      `scanner.py | sl_src=${s.sl_src} | tgt_src=${tgt.label}`,
       },
       scan_scores: {
         volume_ratio:       round2(s.volume_spike || 0),
@@ -197,7 +216,8 @@ async function runScannerPy() {
         atr:   s.atr,
         close: s.close,
       },
-    }));
+    };
+  });
   } finally {
     await fs.unlink(watchlistPath).catch(() => {});
   }
