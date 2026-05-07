@@ -51,11 +51,17 @@ sshpass -p "$REMOTE_PASSWORD" rsync -avz --exclude 'node_modules' -e "ssh -o Str
 echo "🚚 Uploading frontend build..."
 sshpass -p "$REMOTE_PASSWORD" rsync -avz -e "ssh -o StrictHostKeyChecking=no" $FRONTEND_DIR/dist/ $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/frontend
 
-# === STEP 4: Restart Backend (with PM2) ===
+# === STEP 3.5: Upload scanner.py (lives at project root, called from backend) ===
+echo "🚚 Uploading scanner.py..."
+sshpass -p "$REMOTE_PASSWORD" rsync -avz -e "ssh -o StrictHostKeyChecking=no" scanner.py $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/scanner.py
+
+# === STEP 4: Restart Backend (with PM2) + ensure Python deps for scanner.py ===
 echo "🚀 Restarting backend server..."
 sshpass -p "$REMOTE_PASSWORD" ssh -o StrictHostKeyChecking=no $REMOTE_USER@$REMOTE_HOST << 'ENDSSH'
 cd /var/www/logdhan/backend
 npm install
+# Ensure scanner.py Python deps are available (idempotent — quick if already installed)
+python3 -m pip install --quiet --upgrade pandas numpy yfinance || echo "⚠️ pip install failed — scanner.py may not run"
 pm2 flush logdhan-backend
 pm2 restart logdhan-backend || pm2 start src/index.js --name logdhan-backend
 ENDSSH
