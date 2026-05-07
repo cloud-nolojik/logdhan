@@ -26,12 +26,24 @@ Usage:
 from __future__ import annotations
 import argparse
 import json
+import math
 import sys
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Optional
 import urllib.request
+
+
+def _sanitize_for_json(obj):
+    # NaN/Inf are valid floats but invalid JSON — Node's JSON.parse rejects them.
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
 
 import numpy as np
 import pandas as pd
@@ -488,7 +500,10 @@ def fetch_history(symbols: list[str], period: str = "6mo") -> dict[str, pd.DataF
     for s in symbols:
         t = f"{s}.NS"
         try:
-            df = data[t].dropna(how="all")
+            # Drop rows where Close is missing — yfinance sometimes appends an
+            # empty placeholder row for "today" before the daily bar closes,
+            # which would otherwise become df.iloc[-1] and contaminate scoring.
+            df = data[t].dropna(subset=["Close"])
             if not df.empty:
                 out[s] = df
         except (KeyError, AttributeError):
@@ -588,10 +603,17 @@ def main():
         print(render_table(scores, args.top))
 
     if args.json:
+        # Reject picks with bad price data — null/NaN close means we can't size
+        # an order, and downstream broker calls fail on Infinity quantity.
+        def _has_valid_price(s: Score) -> bool:
+            return (
+                isinstance(s.close, (int, float))
+                and math.isfinite(s.close)
+                and s.close > 0
+            )
         winners = [asdict(s) for s in sorted(scores, key=lambda s: -s.composite)
-                   if s.composite >= args.min_score][: args.top]
-        import sys
-        print(json.dumps(winners), file=sys.stdout, flush=True)
+                   if s.composite >= args.min_score and _has_valid_price(s)][: args.top]
+        print(json.dumps(_sanitize_for_json(winners), allow_nan=False), file=sys.stdout, flush=True)
 
     if args.webhook:
         winners = [asdict(s) for s in sorted(scores, key=lambda s: -s.composite)
