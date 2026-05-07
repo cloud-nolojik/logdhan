@@ -409,15 +409,16 @@ class DailyEntryJob {
       //   timezone: 'Asia/Kolkata'
       // });
 
-      // 3:00 PM IST — Force-exit safety net (DISABLED)
-      // await this.agenda.every('0 15 * * 1-5', 'daily-picks-exit', {}, {
-      //   timezone: 'Asia/Kolkata'
-      // });
+      // 3:00 PM IST — Force-exit all MIS positions
+      await this.agenda.every('0 15 * * 1-5', 'daily-picks-exit', {}, {
+        timezone: 'Asia/Kolkata'
+      });
 
       console.log(`${LOG} ═══════════════════════════════════════`);
       console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — SCANNER/AMO PATH:`);
       console.log(`${LOG}   08:30 — daily-pick-scan → scanner.py + AMO MARKET orders placed immediately`);
-      console.log(`${LOG}   [ALL intraday jobs DISABLED — exits managed manually or by broker auto-square]`);
+      console.log(`${LOG}   [fill-fallback / monitor / tighten / hard-flat DISABLED]`);
+      console.log(`${LOG}   15:00 — Force-exit all MIS positions`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
