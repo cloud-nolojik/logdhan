@@ -428,18 +428,18 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      // 2:00 PM IST — Tighten stops to breakeven on profitable positions
-      await this.agenda.every('0 14 * * 1-5', 'daily-picks-tighten', {}, {
+      // 2:30 PM IST — Tighten stops to breakeven on profitable positions.
+      // Waits until 2:30 (not 2:00) to give the trade room to develop before locking in breakeven.
+      await this.agenda.every('30 14 * * 1-5', 'daily-picks-tighten', {}, {
         timezone: 'Asia/Kolkata'
       });
 
-      // 2:45 PM IST — Hard flat: exit all MIS positions 15 min before broker auto-square
-      await this.agenda.every('45 14 * * 1-5', 'daily-picks-hard-flat', {}, {
-        timezone: 'Asia/Kolkata'
-      });
-
-      // 3:00 PM IST — Force-exit all MIS positions
-      await this.agenda.every('0 15 * * 1-5', 'daily-picks-exit', {}, {
+      // 3:15 PM IST — Force-exit all remaining MIS positions.
+      // SL-M + target LIMIT orders handle most exits during the day.
+      // This catches anything that drifted sideways without hitting either level.
+      // 3:15 = 5 min before Zerodha auto-square at 3:20 — clean fills, avoids
+      // the bulk auto-square slippage spike.
+      await this.agenda.every('15 15 * * 1-5', 'daily-picks-exit', {}, {
         timezone: 'Asia/Kolkata'
       });
 
@@ -449,9 +449,8 @@ class DailyEntryJob {
       console.log(`${LOG}   09:14 — gap protection (cancel adverse-gap AMOs)`);
       console.log(`${LOG}   09:15–10:29 — fill fallback every 2 min → SL-M + target placed on fills`);
       console.log(`${LOG}   10:00–14:59 — monitor every 3 min → SL/target hit detection, trailing`);
-      console.log(`${LOG}   14:00 — tighten stops to breakeven`);
-      console.log(`${LOG}   14:45 — hard flat exit`);
-      console.log(`${LOG}   15:00 — force-exit safety net`);
+      console.log(`${LOG}   14:30 — tighten stops to breakeven`);
+      console.log(`${LOG}   15:15 — force-exit (5 min before Zerodha auto-square)`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
