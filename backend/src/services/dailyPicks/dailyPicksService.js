@@ -1659,8 +1659,29 @@ async function placePreMarketEntries(doc) {
     }
   }
 
-  doc.markModified('picks');
-  await doc.save();
+  // Persist pick status updates atomically using targeted $set per symbol.
+  // Avoids Mongoose VersionError that fires when doc.save() is called on a
+  // document returned by findOneAndUpdate (concurrent writes bump __v between
+  // the two calls).
+  for (const { pick } of allocations) {
+    // Picks with qty=0 were skipped — their kite_status is still 'pending', no write needed.
+    if (pick.kite.kite_status === 'pending') continue;
+    try {
+      await DailyPick.updateOne(
+        { _id: doc._id, 'picks.symbol': pick.symbol },
+        {
+          $set: {
+            'picks.$.trade.status':        pick.trade.status,
+            'picks.$.trade.qty':           pick.trade.qty || 0,
+            'picks.$.kite.kite_status':    pick.kite.kite_status,
+            'picks.$.kite.entry_order_id': pick.kite.entry_order_id || null,
+          }
+        }
+      );
+    } catch (saveErr) {
+      console.error(`${LOG} [Step 7.5] ⚠️ DB update failed for ${pick.symbol}: ${saveErr.message}`);
+    }
+  }
 
   console.log(`${LOG} [Step 7.5] Pre-market entries: ${ordersPlaced}/${pendingPicks.length} placed`);
   return { success: true, ordersPlaced };
@@ -1759,13 +1780,29 @@ async function gapProtectionCheck() {
   }
 
   if (cancelled > 0) {
-    doc.markModified('picks');
-    await doc.save();
+    // Targeted per-pick updates — avoids Mongoose version-key conflict
+    for (const pick of amoPicks) {
+      if (pick.kite.kite_status !== 'pending') continue; // only write changed picks
+      try {
+        await DailyPick.updateOne(
+          { _id: doc._id, 'picks.symbol': pick.symbol },
+          {
+            $set: {
+              'picks.$.trade.status':     pick.trade.status,
+              'picks.$.kite.kite_status': pick.kite.kite_status,
+              'picks.$.trade.exit_reason': pick.trade.exit_reason || null,
+            }
+          }
+        );
+      } catch (saveErr) {
+        console.error(`${LOG} [GAP-PROTECT] DB update failed for ${pick.symbol}: ${saveErr.message}`);
+      }
+    }
 
     try {
       await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
         `Gap Protection: ${cancelled} AMO cancelled`,
-        `${cancelled} entry order(s) cancelled due to excessive gap at open. Deferred to ORB validation.`,
+        `${cancelled} entry order(s) cancelled due to excessive gap at open.`,
         { type: 'GAP_PROTECTION', route: '/daily-picks' }
       );
     } catch (_) { /* ignore */ }

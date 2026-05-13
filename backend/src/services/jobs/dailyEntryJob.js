@@ -18,6 +18,7 @@ import {
   startOrbCollection,
   validateAndPlaceEntries,
   checkFillsFallback,
+  gapProtectionCheck,
   monitorDailyPickOrders,
   tightenStops,
 } from '../dailyPicks/dailyPicksService.js';
@@ -145,6 +146,29 @@ class DailyEntryJob {
     this.agenda.define('daily-picks-validate-entry', async (job) => orbValidateHandler(job, 1));
     this.agenda.define('daily-picks-validate-entry-pass2', async (job) => orbValidateHandler(job, 2));
     this.agenda.define('daily-picks-validate-entry-pass3', async (job) => orbValidateHandler(job, 3));
+
+    // Job 2b: Gap protection — 9:14 AM (1 min before market open)
+    // Cancels AMO entries that gapped adversely (stock opened >1% below scanner entry).
+    // For MARKET AMO orders the fill happens at 9:08 AM pre-open; this may not be able
+    // to cancel already-filled orders, but it logs the gap info and sets status correctly
+    // for the fill-fallback to skip/exit bad fills.
+    this.agenda.define('daily-picks-gap-protection', async (job) => {
+      if (this.runningJobs.has('gap-protection')) return;
+      this.runningJobs.add('gap-protection');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) return { skipped: true, reason: 'not_trading_day' };
+        console.log(`${LOG} [GAP-PROTECT] Running gap protection check...`);
+        const result = await gapProtectionCheck();
+        console.log(`${LOG} [GAP-PROTECT] Done: cancelled=${result.cancelled ?? 0}`);
+        return result;
+      } catch (err) {
+        console.error(`${LOG} Gap protection failed:`, err);
+        this.stats.errors++;
+      } finally {
+        this.runningJobs.delete('gap-protection');
+      }
+    });
 
     // Job 3: Polling fallback for fill detection (*/2 9-10)
     this.agenda.define('daily-picks-fill-fallback', async (job) => {
@@ -352,7 +376,7 @@ class DailyEntryJob {
             'daily-picks-validate-entry-pass2',
             'daily-picks-validate-entry-pass3',
             'daily-picks-cancel-expired', // legacy — clean up
-            'daily-picks-gap-protection', // removed — no AMO gap protection
+            'daily-picks-gap-protection',
             'daily-picks-fill-fallback',
             'daily-picks-monitor',
             'daily-picks-tighten',
@@ -389,25 +413,30 @@ class DailyEntryJob {
         });
       }
 
-      // Every 2 min, 9:30-10:29 AM IST — Fill fallback (DISABLED: AMO placed at 8:30, no polling needed)
-      // await this.agenda.every('*/2 9-10 * * 1-5', 'daily-picks-fill-fallback', {}, {
-      //   timezone: 'Asia/Kolkata'
-      // });
+      // 9:14 AM IST — Gap protection (cancel adverse-gap AMOs before market opens)
+      await this.agenda.every('14 9 * * 1-5', 'daily-picks-gap-protection', {}, {
+        timezone: 'Asia/Kolkata'
+      });
 
-      // Every 3 min, 10:00 AM - 2:59 PM IST — Monitor/trailing/partial booking (DISABLED)
-      // await this.agenda.every('*/3 10-14 * * 1-5', 'daily-picks-monitor', {}, {
-      //   timezone: 'Asia/Kolkata'
-      // });
+      // Every 2 min, 9:15–10:29 AM IST — Fill fallback: detect AMO fills, place SL-M + target
+      await this.agenda.every('*/2 9-10 * * 1-5', 'daily-picks-fill-fallback', {}, {
+        timezone: 'Asia/Kolkata'
+      });
 
-      // 2:00 PM IST — Tighten stops (DISABLED)
-      // await this.agenda.every('0 14 * * 1-5', 'daily-picks-tighten', {}, {
-      //   timezone: 'Asia/Kolkata'
-      // });
+      // Every 3 min, 10:00 AM – 2:59 PM IST — Monitor SL/target hits, trailing stops
+      await this.agenda.every('*/3 10-14 * * 1-5', 'daily-picks-monitor', {}, {
+        timezone: 'Asia/Kolkata'
+      });
 
-      // 2:45 PM IST — HARD FLAT (DISABLED)
-      // await this.agenda.every('45 14 * * 1-5', 'daily-picks-hard-flat', {}, {
-      //   timezone: 'Asia/Kolkata'
-      // });
+      // 2:00 PM IST — Tighten stops to breakeven on profitable positions
+      await this.agenda.every('0 14 * * 1-5', 'daily-picks-tighten', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+
+      // 2:45 PM IST — Hard flat: exit all MIS positions 15 min before broker auto-square
+      await this.agenda.every('45 14 * * 1-5', 'daily-picks-hard-flat', {}, {
+        timezone: 'Asia/Kolkata'
+      });
 
       // 3:00 PM IST — Force-exit all MIS positions
       await this.agenda.every('0 15 * * 1-5', 'daily-picks-exit', {}, {
@@ -416,9 +445,13 @@ class DailyEntryJob {
 
       console.log(`${LOG} ═══════════════════════════════════════`);
       console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — SCANNER/AMO PATH:`);
-      console.log(`${LOG}   08:30 — daily-pick-scan → scanner.py + AMO MARKET orders placed immediately`);
-      console.log(`${LOG}   [fill-fallback / monitor / tighten / hard-flat DISABLED]`);
-      console.log(`${LOG}   15:00 — Force-exit all MIS positions`);
+      console.log(`${LOG}   08:30 — scanner.py → AMO MARKET MIS orders placed`);
+      console.log(`${LOG}   09:14 — gap protection (cancel adverse-gap AMOs)`);
+      console.log(`${LOG}   09:15–10:29 — fill fallback every 2 min → SL-M + target placed on fills`);
+      console.log(`${LOG}   10:00–14:59 — monitor every 3 min → SL/target hit detection, trailing`);
+      console.log(`${LOG}   14:00 — tighten stops to breakeven`);
+      console.log(`${LOG}   14:45 — hard flat exit`);
+      console.log(`${LOG}   15:00 — force-exit safety net`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
