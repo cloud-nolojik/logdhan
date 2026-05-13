@@ -413,18 +413,27 @@ class DailyEntryJob {
         });
       }
 
-      // 9:14 AM IST — Gap protection (cancel adverse-gap AMOs before market opens)
-      await this.agenda.every('14 9 * * 1-5', 'daily-picks-gap-protection', {}, {
+      // 9:05 AM IST — Gap protection.
+      // Pre-open session runs 9:00–9:08 AM. Indicative prices are live from 9:00 AM
+      // and cancel requests are accepted up to ~9:07 AM before the auction settles.
+      // 9:05 AM gives us a price read + cancellation window before the 9:08 fill.
+      await this.agenda.every('5 9 * * 1-5', 'daily-picks-gap-protection', {}, {
         timezone: 'Asia/Kolkata'
       });
 
-      // Every 2 min, 9:15–10:29 AM IST — Fill fallback: detect AMO fills, place SL-M + target
+      // Every 2 min, 9:00–10:59 AM IST — Fill fallback.
+      // Detects AMO fills (MARKET orders fill at 9:08 AM pre-open auction).
+      // Fills detected before 9:15 AM are deferred (entered_awaiting_915) and
+      // SL-M + target are placed on the first poll at or after 9:15 AM.
       await this.agenda.every('*/2 9-10 * * 1-5', 'daily-picks-fill-fallback', {}, {
         timezone: 'Asia/Kolkata'
       });
 
-      // Every 3 min, 10:00 AM – 2:59 PM IST — Monitor SL/target hits, trailing stops
-      await this.agenda.every('*/3 10-14 * * 1-5', 'daily-picks-monitor', {}, {
+      // Every 3 min, 9:30 AM – 2:59 PM IST — Monitor SL/target hits, trailing stops.
+      // Starts at 9:30 (not 10:00) so it can cancel the other leg immediately if SL
+      // or target fires in the 9:16–10:00 window — prevents a naked short from an
+      // orphaned LIMIT sell after SL-M has already closed the position.
+      await this.agenda.every('*/3 9-14 * * 1-5', 'daily-picks-monitor', {}, {
         timezone: 'Asia/Kolkata'
       });
 
@@ -446,9 +455,9 @@ class DailyEntryJob {
       console.log(`${LOG} ═══════════════════════════════════════`);
       console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — SCANNER/AMO PATH:`);
       console.log(`${LOG}   08:30 — scanner.py → AMO MARKET MIS orders placed`);
-      console.log(`${LOG}   09:14 — gap protection (cancel adverse-gap AMOs)`);
-      console.log(`${LOG}   09:15–10:29 — fill fallback every 2 min → SL-M + target placed on fills`);
-      console.log(`${LOG}   10:00–14:59 — monitor every 3 min → SL/target hit detection, trailing`);
+      console.log(`${LOG}   09:05 — gap protection (cancel adverse-gap AMOs before 9:08 auction)`);
+      console.log(`${LOG}   09:00–10:59 — fill fallback every 2 min → SL-M + target placed on fills`);
+      console.log(`${LOG}   09:30–14:59 — monitor every 3 min → SL/target hit detection, trailing`);
       console.log(`${LOG}   14:30 — tighten stops to breakeven`);
       console.log(`${LOG}   15:15 — force-exit (5 min before Zerodha auto-square)`);
       console.log(`${LOG} ═══════════════════════════════════════`);

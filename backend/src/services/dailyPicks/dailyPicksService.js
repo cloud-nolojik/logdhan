@@ -2349,7 +2349,17 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
     pick.trade.entry_price = entryPrice;
     pick.trade.entry_time = new Date();
     pick.kite.kite_status = 'entered_awaiting_915';
-    await doc.save();
+    await DailyPick.updateOne(
+      { _id: doc._id, 'picks.symbol': pick.symbol },
+      {
+        $set: {
+          'picks.$.trade.status':     'ENTERED',
+          'picks.$.trade.entry_price': entryPrice,
+          'picks.$.trade.entry_time':  new Date(),
+          'picks.$.kite.kite_status': 'entered_awaiting_915',
+        }
+      }
+    );
     return; // Exit early — post-9:15 scheduler will call us again
   }
 
