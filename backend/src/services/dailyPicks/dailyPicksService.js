@@ -2354,17 +2354,17 @@ async function validateAndPlaceEntries(options = {}) {
  * Idempotency: checks kite_status !== 'sl_target_placed' before acting.
  */
 async function placeSLAndTarget(pick, doc, entryPrice) {
-  // Idempotency guard — prevent double-placement
-  if (pick.kite.kite_status === 'sl_target_placed' || pick.trade.status !== 'ORDER_PLACED') {
-    console.log(`${LOG} ${pick.symbol}: SL+target already placed or status changed — skipping`);
-    return;
-  }
-
-  // Also handle deferred picks that are now ready (entered_awaiting_915)
+  // Deferred path MUST be checked first — AMO fills before 9:15 AM set status=ENTERED
+  // (not ORDER_PLACED), so the idempotency guard below would incorrectly skip them.
   if (pick.kite.kite_status === 'entered_awaiting_915' && pick.trade.status === 'ENTERED') {
-    // This is a deferred call from post-9:15 scheduler — proceed with stored entry price
+    // Deferred call from post-9:15 scheduler — proceed with stored entry price
     entryPrice = entryPrice || pick.trade.entry_price;
     console.log(`${LOG} ${pick.symbol}: Processing deferred SL+target (was awaiting 9:15 AM) — entry @ ₹${entryPrice}`);
+    // Fall through to placement below
+  } else if (pick.kite.kite_status === 'sl_target_placed' || pick.trade.status !== 'ORDER_PLACED') {
+    // Idempotency guard — prevent double-placement for normal (non-deferred) picks
+    console.log(`${LOG} ${pick.symbol}: SL+target already placed or status changed — skipping`);
+    return;
   }
 
   // Pre-9:15 AM guard: defer SL/target placement if market hasn't opened yet

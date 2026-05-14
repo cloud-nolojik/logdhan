@@ -56,6 +56,13 @@ except ImportError:
     TV_TA_AVAILABLE = False
 
 
+# -------- hard filters --------
+# Exclude stocks that already made a large move the prior session.
+# A +8%+ day means momentum players are already positioned and will book profits
+# the next morning — the easy move is done before we even enter.
+# Also catches F&O-ban candidates (stocks near MWPL breach after a big day).
+MAX_PREV_DAY_MOVE_PCT = 8.0
+
 # -------- default watchlist (Nifty 50) --------
 DEFAULT_WATCHLIST = [
     "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "BHARTIARTL", "SBIN",
@@ -390,6 +397,15 @@ def score_symbol(symbol: str, df: pd.DataFrame) -> Score:
 
     last = df.iloc[-1]
     prev_close = df["Close"].iloc[-2]
+
+    # Hard gate: skip stocks that already moved > MAX_PREV_DAY_MOVE_PCT the prior session.
+    # A large prior-day move means: (a) momentum crowd is already positioned and will
+    # book profits at open, (b) stock is likely near or in F&O ban, (c) the entry price
+    # is chasing an exhausted move. Composite is zeroed so it never makes the top-N cut.
+    _pct_change_now = (float(last["Close"]) / float(prev_close) - 1) * 100
+    if _pct_change_now > MAX_PREV_DAY_MOVE_PCT:
+        return Score(symbol, *([0.0]*13), False, *([0.0]*6),
+                     error=f"prior-day move {_pct_change_now:.1f}% > {MAX_PREV_DAY_MOVE_PCT}% gate")
 
     close = float(last["Close"])
     high = float(last["High"])
