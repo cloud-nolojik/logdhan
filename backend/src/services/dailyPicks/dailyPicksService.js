@@ -1,12 +1,16 @@
 /**
- * Daily Picks Service — Core Orchestrator
+ * Daily Picks Service — Core Orchestrator (Scanner Path)
  *
- * Handles: scan → enrich → score → levels → intel → select → save → notify (8:30 AM IST)
- *          ORB validation + entry placement (9:15 AM - 10:01 AM, multi-pass)
- *          fill check + SL/target placement (9:45 AM)
- *          order monitoring every 15 min (10:00 AM - 2:45 PM)
+ * Flow:
+ *   08:30  scanner.py → top-N picks with structural entry/stop/target → save → AMO MARKET MIS orders placed
+ *   09:05  gapProtectionCheck — cancel adverse-gap AMOs before 9:08 pre-open auction
+ *   09:08  AMO fills at pre-open auction price
+ *   09:00–10:59  checkFillsFallback every 2 min — detects fills, places SL-M + LIMIT target
+ *   09:30–14:59  monitorDailyPickOrders every 3 min — SL/target hit detection, trailing, partial booking
+ *   15:15  runDailyExit — force-exit all remaining MIS positions
  *
- * Standalone from swing trading. Shared infra: ChartInk, Upstox, Kite orders.
+ * ORB validation path (Steps 0–6) preserved in disabled blocks for reference.
+ * Standalone from swing trading. Shared infra: Kite orders, Firebase notifications.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -1392,7 +1396,7 @@ async function sendNotification(marketContext, picks, doc) {
     } else {
       title = `${paperTag}Daily Picks: ${picks[0].direction === 'LONG' ? 'BUY' : 'SELL'} ${picks.length} stocks`;
     }
-    body = `${pickSummary} — levels will be set at 09:30 ORB`;
+    body = `${pickSummary} — AMO orders placing now (entry/stop/target from scanner pivots)`;
   } else if (marketContext.regime === 'CONFLICT') {
     title = 'Daily Picks: CONFLICT — Sitting Out';
     body = `Structure vs SGX beyond dynamic threshold. No trades today.`;
@@ -1435,15 +1439,14 @@ async function sendNotification(marketContext, picks, doc) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Place pre-market entry orders.
+ * Place pre-market AMO MARKET orders for scanner.py picks.
  *
- * DEPRECATED in the pure-ORB flow. With Step 5 gone, picks arrive at this
- * function WITHOUT levels (entry/stop/target are computed at 9:30 AM inside
- * validateAndPlaceEntries). This function now returns immediately so the admin
- * endpoint that calls it doesn't crash — the ORB path is the sole entry path.
+ * Called immediately after runDailyPicks() at 8:30 AM. Places AMO MARKET MIS
+ * orders that execute at the 9:08 AM pre-open auction. By market open at 9:15 AM
+ * the orders are either filled (→ checkFillsFallback places SL+target) or still
+ * pending (→ gapProtectionCheck may cancel at 9:05 AM if gap is adverse).
  *
- * Kept as a function (not deleted) because routes/dailyPicks.js still imports
- * and calls it at `POST /dailyPicks/premarket/place`.
+ * Non-scanner docs (levels.mode !== 'scanner') are skipped — ORB path handles those.
  */
 async function placePreMarketEntries(doc) {
   console.log(`${LOG} ════════════════════════════════════════`);
@@ -1560,10 +1563,10 @@ async function placePreMarketEntries(doc) {
   const allocations = pendingPicks.map((pick, i) => {
     let capital = weightSum > 0 ? Math.floor(totalPool * (rawWeights[i] / weightSum)) : 0;
 
-    // ATR-based sizing: scale capital inversely with volatility
-    const atrPct = pick._ohlcv?.atr && pick.levels?.entry
-      ? (pick._ohlcv.atr / pick.levels.entry) * 100
-      : null;
+    // ATR-based sizing: scale capital inversely with volatility.
+    // Use scan_scores.atr_pct (persisted in DB) — _ohlcv is NOT in the DB shape so
+    // it is undefined on the doc returned by findOneAndUpdate({ new: true }).
+    const atrPct = pick.scan_scores?.atr_pct || null;
     if (atrPct && atrPct > 0) {
       const atrMultiplier = Math.max(MIN_ATR_MULT, Math.min(MAX_ATR_MULT, BASELINE_ATR_PCT / atrPct));
       const preSized = capital;
@@ -1895,15 +1898,17 @@ async function startOrbCollection(options = {}) {
     }
   }
 
-  console.log(`${LOG} [DEBUG] Saving doc — ${storedCount} picks with ORB data, ${skippedCount} skipped (wrong status)`);
-  doc.markModified('picks');
-  try {
-    await doc.save();
-    console.log(`${LOG} [DEBUG] doc.save() SUCCESS — updatedAt=${doc.updatedAt}`);
-  } catch (saveErr) {
-    console.error(`${LOG} [ERROR] doc.save() FAILED in startOrbCollection: ${saveErr.message}`);
-    console.error(`${LOG} [ERROR] Mongoose validation errors:`, saveErr.errors ? JSON.stringify(Object.keys(saveErr.errors)) : 'none');
-    return { success: false, error: `doc.save() failed: ${saveErr.message}` };
+  console.log(`${LOG} [DEBUG] Persisting ORB data — ${storedCount} picks updated, ${skippedCount} skipped (wrong status)`);
+  for (const pick of pendingPicks) {
+    if (!pick.orb?.high) continue; // skip picks that had no ORB data in the response
+    try {
+      await DailyPick.updateOne(
+        { _id: doc._id, 'picks.symbol': pick.symbol },
+        { $set: { 'picks.$.orb': pick.orb } }
+      );
+    } catch (dbErr) {
+      console.error(`${LOG} [ERROR] updateOne failed for ${pick.symbol} (ORB store): ${dbErr.message}`);
+    }
   }
 
   console.log(`${LOG} ORB pass ${orbPass} complete — data stored for ${storedCount} symbols`);
@@ -2153,12 +2158,19 @@ async function validateAndPlaceEntries(options = {}) {
   if (validatedPicks.length === 0) {
     console.log(`${LOG} All picks failed validation on pass ${orbPass} — ${retryingPicks.length} retrying, ${skippedPicks.length - retryingPicks.length} permanently skipped`);
     console.log(`${LOG} [DEBUG] Saving failed validation results — statuses: ${eligiblePicks.map(p => `${p.symbol}=${p.trade.status}`).join(', ')}`);
-    try {
-      await doc.save();
-      console.log(`${LOG} [DEBUG] doc.save() SUCCESS (all failed) — updatedAt=${doc.updatedAt}`);
-    } catch (saveErr) {
-      console.error(`${LOG} [ERROR] doc.save() FAILED after validation: ${saveErr.message}`);
-      console.error(`${LOG} [ERROR] Mongoose errors:`, saveErr.errors ? JSON.stringify(Object.keys(saveErr.errors)) : 'none');
+    for (const pick of eligiblePicks) {
+      try {
+        await DailyPick.updateOne(
+          { _id: doc._id, 'picks.symbol': pick.symbol },
+          { $set: {
+            'picks.$.trade.status':      pick.trade.status,
+            'picks.$.kite.kite_status':  pick.kite.kite_status,
+            'picks.$.trade.exit_reason': pick.trade.exit_reason || null,
+          }}
+        );
+      } catch (dbErr) {
+        console.error(`${LOG} [ERROR] updateOne failed for ${pick.symbol} (all-failed path): ${dbErr.message}`);
+      }
     }
     return { success: true, message: `All picks failed pass ${orbPass}`, orders: 0, validated: 0, skipped: skippedPicks.length - retryingPicks.length, retrying: retryingPicks.length, orbPass };
   }
@@ -2178,11 +2190,19 @@ async function validateAndPlaceEntries(options = {}) {
       pick.trade.exit_reason = `circuit_breaker: ${cbCheck.reason}`;
       pick.kite.kite_status = 'skipped';
     }
-    try {
-      await doc.save();
-      console.log(`${LOG} [DEBUG] doc.save() SUCCESS (circuit breaker) — updatedAt=${doc.updatedAt}`);
-    } catch (saveErr) {
-      console.error(`${LOG} [ERROR] doc.save() FAILED (circuit breaker): ${saveErr.message}`);
+    for (const pick of validatedPicks) {
+      try {
+        await DailyPick.updateOne(
+          { _id: doc._id, 'picks.symbol': pick.symbol },
+          { $set: {
+            'picks.$.trade.status':      pick.trade.status,
+            'picks.$.kite.kite_status':  pick.kite.kite_status,
+            'picks.$.trade.exit_reason': pick.trade.exit_reason || null,
+          }}
+        );
+      } catch (dbErr) {
+        console.error(`${LOG} [ERROR] updateOne failed for ${pick.symbol} (circuit breaker): ${dbErr.message}`);
+      }
     }
     return { success: true, message: `Circuit breaker: ${cbCheck.reason}`, orders: 0, validated: validatedPicks.length, skipped: skippedPicks.length };
   }
@@ -2201,10 +2221,9 @@ async function validateAndPlaceEntries(options = {}) {
   const weightSum = rawWeights.reduce((s, w) => s + w, 0);
   const allocations = validatedPicks.map((pick, i) => {
     let capital = Math.floor(balance.usableIntraday * (rawWeights[i] / weightSum));
-    // ATR-based sizing: scale inversely with volatility
-    const atrPct = pick._ohlcv?.atr && pick.levels?.entry
-      ? (pick._ohlcv.atr / pick.levels.entry) * 100
-      : null;
+    // ATR-based sizing: scale inversely with volatility.
+    // Use scan_scores.atr_pct (persisted in DB) — _ohlcv is NOT in the DB shape.
+    const atrPct = pick.scan_scores?.atr_pct || null;
     if (atrPct && atrPct > 0) {
       const atrMult = Math.max(MIN_ATR_MULT_ORB, Math.min(MAX_ATR_MULT_ORB, BASELINE_ATR_PCT_ORB / atrPct));
       capital = Math.floor(capital * atrMult);
@@ -2303,13 +2322,22 @@ async function validateAndPlaceEntries(options = {}) {
     }
   }
 
-  console.log(`${LOG} [DEBUG] Saving after order placement — statuses: ${eligiblePicks.map(p => `${p.symbol}=${p.trade.status}`).join(', ')}`);
-  try {
-    await doc.save();
-    console.log(`${LOG} [DEBUG] doc.save() SUCCESS (after orders) — updatedAt=${doc.updatedAt}`);
-  } catch (saveErr) {
-    console.error(`${LOG} [ERROR] doc.save() FAILED after order placement: ${saveErr.message}`);
-    console.error(`${LOG} [ERROR] Mongoose errors:`, saveErr.errors ? JSON.stringify(Object.keys(saveErr.errors)) : 'none');
+  console.log(`${LOG} [DEBUG] Persisting order placement results — statuses: ${eligiblePicks.map(p => `${p.symbol}=${p.trade.status}`).join(', ')}`);
+  for (const pick of eligiblePicks) {
+    try {
+      await DailyPick.updateOne(
+        { _id: doc._id, 'picks.symbol': pick.symbol },
+        { $set: {
+          'picks.$.trade.status':        pick.trade.status,
+          'picks.$.trade.qty':           pick.trade.qty || 0,
+          'picks.$.kite.kite_status':    pick.kite.kite_status,
+          'picks.$.kite.entry_order_id': pick.kite.entry_order_id || null,
+          'picks.$.trade.exit_reason':   pick.trade.exit_reason || null,
+        }}
+      );
+    } catch (dbErr) {
+      console.error(`${LOG} [ERROR] updateOne failed for ${pick.symbol} (after orders): ${dbErr.message}`);
+    }
   }
   console.log(`${LOG} Pass ${orbPass} result: ${validatedPicks.length} validated, ${skippedPicks.length - retryingPicks.length} skipped, ${retryingPicks.length} retrying, ${ordersPlaced} orders placed`);
 
@@ -2505,7 +2533,34 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
     pick.kite.kite_status = 'sl_target_placed';
   }
 
-  await doc.save();
+  // Persist all state changes for this pick atomically.
+  // Using updateOne + positional $ prevents Mongoose VersionError from concurrent
+  // fill-listener postback and polling-fallback both calling doc.save() on the same doc.
+  try {
+    await DailyPick.updateOne(
+      { _id: doc._id, 'picks.symbol': pick.symbol },
+      {
+        $set: {
+          'picks.$.trade.status':         pick.trade.status,
+          'picks.$.trade.entry_price':    pick.trade.entry_price ?? null,
+          'picks.$.trade.entry_time':     pick.trade.entry_time ?? null,
+          'picks.$.trade.qty':            pick.trade.qty ?? null,
+          'picks.$.trade.exit_price':     pick.trade.exit_price ?? null,
+          'picks.$.trade.exit_time':      pick.trade.exit_time ?? null,
+          'picks.$.trade.exit_reason':    pick.trade.exit_reason ?? null,
+          'picks.$.trade.pnl':            pick.trade.pnl ?? null,
+          'picks.$.trade.return_pct':     pick.trade.return_pct ?? null,
+          'picks.$.kite.kite_status':     pick.kite.kite_status,
+          'picks.$.kite.stop_order_id':   pick.kite.stop_order_id ?? null,
+          'picks.$.kite.target_order_id': pick.kite.target_order_id ?? null,
+          'picks.$.levels.target':        pick.levels.target ?? null,
+          'picks.$.trailing_history':     pick.trailing_history ?? [],
+        }
+      }
+    );
+  } catch (dbErr) {
+    console.error(`${LOG} ${pick.symbol}: DB update failed in placeSLAndTarget: ${dbErr.message}`);
+  }
 }
 
 /**
@@ -2643,7 +2698,10 @@ async function checkFillsFallback(options = {}) {
           console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: GTT ${gttStatus} — marking as SKIPPED`);
           pick.trade.status = 'SKIPPED';
           pick.kite.kite_status = 'skipped';
-          await doc.save();
+          await DailyPick.updateOne(
+            { _id: doc._id, 'picks.symbol': pick.symbol },
+            { $set: { 'picks.$.trade.status': 'SKIPPED', 'picks.$.kite.kite_status': 'skipped' } }
+          ).catch(e => console.error(`${LOG} [FILL-FALLBACK] ${pick.symbol}: DB update failed: ${e.message}`));
         } else {
           console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: GTT still active — will check next poll`);
         }
@@ -2668,7 +2726,10 @@ async function checkFillsFallback(options = {}) {
           console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Order ${status} — marking as SKIPPED`);
           pick.trade.status = 'SKIPPED';
           pick.kite.kite_status = 'skipped';
-          await doc.save();
+          await DailyPick.updateOne(
+            { _id: doc._id, 'picks.symbol': pick.symbol },
+            { $set: { 'picks.$.trade.status': 'SKIPPED', 'picks.$.kite.kite_status': 'skipped' } }
+          ).catch(e => console.error(`${LOG} [FILL-FALLBACK] ${pick.symbol}: DB update failed: ${e.message}`));
         } else {
           console.log(`${LOG} [FILL-FALLBACK] ${pick.symbol}: Still pending (status=${status}) — will check next poll`);
         }
@@ -2716,9 +2777,21 @@ async function cancelExpiredEntries(options = {}) {
     pick.trade.exit_reason = 'setup_expired_1030';
     pick.kite.kite_status = 'skipped';
     cancelled++;
+
+    try {
+      await DailyPick.updateOne(
+        { _id: doc._id, 'picks.symbol': pick.symbol },
+        { $set: {
+          'picks.$.trade.status':      'SKIPPED',
+          'picks.$.trade.exit_reason': 'setup_expired_1030',
+          'picks.$.kite.kite_status':  'skipped',
+        }}
+      );
+    } catch (dbErr) {
+      console.error(`${LOG} ${pick.symbol}: DB update failed in cancelExpiredEntries: ${dbErr.message}`);
+    }
   }
 
-  await doc.save();
   console.log(`${LOG} Cancelled ${cancelled} expired entries`);
   return { success: true, cancelled };
 }
@@ -2765,57 +2838,11 @@ async function monitorDailyPickOrders(options = {}) {
   }
   console.log(`${LOG} ════════════════════════════════════════`);
 
-  // Midday intel re-check: at 12 PM, re-fetch global market intel for breaking events
-  // If risk level escalates to EXTREME mid-day, tighten all stops to breakeven
-  const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const istHourNow = istNow.getHours();
-  const istMinNow = istNow.getMinutes();
-  if (istHourNow === 12 && istMinNow < 20 && !doc._middayIntelChecked) {
-    try {
-      console.log(`${LOG} [MIDDAY-INTEL] 12 PM re-check — fetching fresh global intel...`);
-      clearIntelCache(); // Force fresh fetch
-      const middayIntel = await fetchGlobalMarketIntel();
-      const middayAvoid = shouldAvoidTrading();
-
-      if (middayAvoid.avoid) {
-        console.log(`${LOG} [MIDDAY-INTEL] ⛔ EXTREME event detected mid-day: ${middayAvoid.reason}`);
-        console.log(`${LOG} [MIDDAY-INTEL] Tightening all stops to breakeven or current price...`);
-
-        for (const pick of enteredPicks) {
-          if (!pick.trade.entry_price || !pick.kite.stop_order_id) continue;
-          const breakeven = pick.trade.entry_price;
-          const currentStop = pick.levels.stop;
-          const shouldTighten = pick.direction === 'LONG' ? breakeven > currentStop : breakeven < currentStop;
-
-          if (shouldTighten) {
-            try {
-              const newStop = roundToTick(breakeven);
-              await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: newStop });
-              console.log(`${LOG} [MIDDAY-INTEL] ${pick.symbol}: Stop tightened ₹${currentStop} → ₹${newStop} (breakeven)`);
-              pick.levels.stop = newStop;
-              if (!pick.trailing_history) pick.trailing_history = [];
-              pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: newStop, price_at_trail: breakeven, reason: 'midday_intel_extreme' });
-            } catch (modErr) {
-              console.error(`${LOG} [MIDDAY-INTEL] ${pick.symbol}: Stop modify failed: ${modErr.message}`);
-            }
-          }
-        }
-
-        try {
-          await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
-            '⛔ Midday Alert — Stops Tightened',
-            `Midday intel re-check detected extreme risk: ${middayAvoid.reason}. All stops moved to breakeven.`,
-            { type: 'MIDDAY_INTEL', route: '/daily-picks' }
-          );
-        } catch (_) { /* ignore */ }
-      } else {
-        console.log(`${LOG} [MIDDAY-INTEL] Risk level: ${middayIntel.risk_level} — no action needed`);
-      }
-      doc._middayIntelChecked = true;
-    } catch (intelErr) {
-      console.error(`${LOG} [MIDDAY-INTEL] Re-check failed (non-fatal): ${intelErr.message}`);
-    }
-  }
+  // [MIDDAY-INTEL REMOVED] fetchGlobalMarketIntel / shouldAvoidTrading were part of
+  // the disabled global-intel pipeline (import commented out at line 53).
+  // Calling them here caused ReferenceError on every 12 PM monitor cycle.
+  // If midday risk-off is needed in future, re-import from globalMarketIntel.js
+  // and restore this block — the modifyOrder logic is correct, just needs the import.
 
   let statusChanged = false;
 
@@ -3139,18 +3166,52 @@ async function monitorDailyPickOrders(options = {}) {
 
   if (statusChanged) {
     updateDailyResults(doc);
-    try {
-      await doc.save();
-      console.log(`${LOG} Updated results after status changes`);
-    } catch (saveErr) {
-      console.error(`${LOG} ⚠️ CRITICAL: Failed to save trade state changes:`, saveErr.message);
+    // Persist all in-flight state changes per pick atomically.
+    // Using updateOne + positional $ prevents VersionError if the fill listener or
+    // another monitor cycle runs concurrently on the same document.
+    // Fields covered: all terminal exit fields, trailing/partial in-flight mutations.
+    let saveFailed = false;
+    for (const pick of enteredPicks) {
+      try {
+        await DailyPick.updateOne(
+          { _id: doc._id, 'picks.symbol': pick.symbol },
+          {
+            $set: {
+              'picks.$.trade.status':           pick.trade.status,
+              'picks.$.trade.qty':              pick.trade.qty ?? null,
+              'picks.$.trade.exit_price':       pick.trade.exit_price ?? null,
+              'picks.$.trade.exit_time':        pick.trade.exit_time ?? null,
+              'picks.$.trade.exit_reason':      pick.trade.exit_reason ?? null,
+              'picks.$.trade.exit_price_source':pick.trade.exit_price_source ?? null,
+              'picks.$.trade.pnl':              pick.trade.pnl ?? null,
+              'picks.$.trade.return_pct':       pick.trade.return_pct ?? null,
+              'picks.$.trade.partial_exit_qty': pick.trade.partial_exit_qty ?? null,
+              'picks.$.trade.partial_exit_price':pick.trade.partial_exit_price ?? null,
+              'picks.$.kite.kite_status':       pick.kite.kite_status,
+              'picks.$.levels.stop':            pick.levels.stop ?? null,
+              'picks.$.levels.target':          pick.levels.target ?? null,
+              'picks.$.trailing_history':       pick.trailing_history ?? [],
+              'picks.$._breakeven_moved':       pick._breakeven_moved ?? false,
+              'picks.$._partial_booked':        pick._partial_booked ?? false,
+              'picks.$._extreme_price':         pick._extreme_price ?? null,
+            }
+          }
+        );
+      } catch (dbErr) {
+        saveFailed = true;
+        console.error(`${LOG} ⚠️ CRITICAL: updateOne failed for ${pick.symbol} in monitor: ${dbErr.message}`);
+      }
+    }
+    if (saveFailed) {
       try {
         await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
           'CRITICAL: Trade State Save Failed',
-          `Monitor detected status changes but doc.save() failed.`,
+          `Monitor detected changes but one or more DB writes failed. Check logs.`,
           { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
         );
       } catch (_) { /* ignore */ }
+    } else {
+      console.log(`${LOG} Updated results after status changes`);
     }
   }
 
@@ -3174,15 +3235,11 @@ async function monitorDailyPickOrders(options = {}) {
   return { success: true, active: stillEntered };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// v2: 2:00 PM STOP TIGHTENING
-// ═══════════════════════════════════════════════════════════════════════════════
+// tightenStops() removed — breakeven is handled inline in the monitor loop
+// via the +1R gate (profitR >= 1.0 → move stop to entry price). No separate
+// time-based cron needed.
 
-/**
- * Tighten stops to breakeven for profitable positions at 2:00 PM.
- * For positions in profit → move stop to entry price (breakeven).
- * For positions at loss → keep original SL.
- */
+/* istanbul ignore next — kept as dead code reference, not exported
 async function tightenStops(options = {}) {
   console.log(`${LOG} ════════════════════════════════════════`);
   console.log(`${LOG} 2:00 PM stop tightening`);
@@ -3231,17 +3288,27 @@ async function tightenStops(options = {}) {
             trigger_price: newStop
           });
 
-          if (!pick.trailing_history) pick.trailing_history = [];
-          pick.trailing_history.push({
+          const trailEntry = {
             timestamp: new Date(),
             old_stop: currentStop,
             new_stop: newStop,
-            price_at_trail: currentPrice
-          });
-          pick.levels.stop = newStop;
-          tightened++;
+            price_at_trail: currentPrice,
+            reason: 'tighten_2pm',
+          };
 
-          console.log(`${LOG} ${pick.symbol}: Stop tightened to breakeven ₹${newStop} (was ₹${currentStop}, profit=${round2(profitPct)}%)`);
+          try {
+            await DailyPick.updateOne(
+              { _id: doc._id, 'picks.symbol': pick.symbol },
+              {
+                $set:  { 'picks.$.levels.stop': newStop },
+                $push: { 'picks.$.trailing_history': trailEntry },
+              }
+            );
+            tightened++;
+            console.log(`${LOG} ${pick.symbol}: Stop tightened to breakeven ₹${newStop} (was ₹${currentStop}, profit=${round2(profitPct)}%)`);
+          } catch (dbErr) {
+            console.error(`${LOG} ${pick.symbol}: DB update failed after tightening:`, dbErr.message);
+          }
         } catch (err) {
           console.error(`${LOG} ${pick.symbol}: modifyOrder failed for tightening:`, err.message);
         }
@@ -3253,13 +3320,10 @@ async function tightenStops(options = {}) {
     }
   }
 
-  if (tightened > 0) {
-    await doc.save();
-  }
-
   console.log(`${LOG} Tightened ${tightened}/${enteredPicks.length} stops to breakeven`);
   return { success: true, tightened };
 }
+*/
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -3467,7 +3531,6 @@ export {
   cancelExpiredEntries,
   initFillListener,
   monitorDailyPickOrders,
-  tightenStops,
   detectCandlePattern,
   selectDiversePicks,
   getStockSector,
@@ -3484,7 +3547,6 @@ export default {
   cancelExpiredEntries,
   initFillListener,
   monitorDailyPickOrders,
-  tightenStops,
   detectCandlePattern,
   selectDiversePicks,
   getStockSector,

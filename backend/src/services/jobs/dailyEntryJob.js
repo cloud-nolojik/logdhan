@@ -1,15 +1,15 @@
 /**
- * Daily Entry Job — v2: Multi-Pass ORB Validation + Instant Protection + Trailing
+ * Daily Entry Job — Scanner Path
  *
  * Scheduled runs (Mon-Fri IST):
- * 1. 9:30 AM    — ORB Pass 1 (15-min range): validate picks + place entries
- * 2. 9:46 AM    — ORB Pass 2 (30-min range): retry failed picks with wider range
- * 3. 10:01 AM   — ORB Pass 3 (45-min range, FINAL): last chance, then SKIPPED
- * 4. Every 2 min (9-10) — Polling fallback for fill detection
- * 5. Every 3 min (10-14) — Monitor stop/target fills + trailing stops
- * 6. 14:00      — Tighten stops to breakeven for profitable positions
- * 7. 15:00      — Force-exit open positions + cancel unfilled orders
+ * 1. 08:30  — scanner.py scan + AMO MARKET MIS orders (owned by tradingDaySequenceJob)
+ * 2. 09:05  — gapProtectionCheck: cancel adverse-gap AMOs before 9:08 pre-open auction
+ * 3. Every 2 min (9:00–10:59)  — checkFillsFallback: detect fills → place SL-M + LIMIT target
+ * 4. Every 3 min (9:30–14:59) — monitorDailyPickOrders: SL/target hits, trailing, +1R BE
+ * 5. 15:15  — runDailyExit: force-exit remaining MIS positions
  *
+ * ORB validate-entry passes (9:30 / 9:46 / 10:01) are scheduled by tradingDaySequenceJob
+ * when DISABLE_INDIVIDUAL_CRONS is not explicitly set to false.
  * Manual triggers available for each step via API.
  */
 
@@ -20,7 +20,6 @@ import {
   checkFillsFallback,
   gapProtectionCheck,
   monitorDailyPickOrders,
-  tightenStops,
 } from '../dailyPicks/dailyPicksService.js';
 import { runDailyExit } from '../dailyPicks/dailyPicksExitService.js';
 import { reconcilePositionsOnStartup } from '../dailyPicks/dailyPicksRiskService.js';
@@ -38,7 +37,6 @@ class DailyEntryJob {
       entriesValidated: 0,
       fillsChecked: 0,
       monitorRuns: 0,
-      tightenRuns: 0,
       errors: 0,
       lastRunAt: null,
       lastResult: null
@@ -228,38 +226,7 @@ class DailyEntryJob {
       }
     });
 
-    // Job 6: Tighten stops at 2:00 PM
-    this.agenda.define('daily-picks-tighten', async (job) => {
-      if (this.runningJobs.has('tighten')) {
-        console.log(`${LOG} Tighten already running, skipping`);
-        return;
-      }
-
-      this.runningJobs.add('tighten');
-      try {
-        const isTradingDay = await MarketHoursUtil.isTradingDay();
-        if (!isTradingDay) {
-          console.log(`${LOG} Not a trading day — skipping tighten`);
-          return { skipped: true, reason: 'not_trading_day' };
-        }
-
-        console.log(`${LOG} [TIGHTEN] Calling tightenStops()...`);
-        const result = await tightenStops();
-        this.stats.tightenRuns++;
-        this.stats.lastRunAt = new Date();
-        this.stats.lastResult = result;
-        console.log(`${LOG} [TIGHTEN] Completed: tightened=${result.tightened ?? result.message}`);
-        return result;
-      } catch (error) {
-        console.error(`${LOG} Tighten failed:`, error);
-        this.stats.errors++;
-        throw error;
-      } finally {
-        this.runningJobs.delete('tighten');
-      }
-    });
-
-    // Job 6b: 14:45 HARD FLAT — exit all MIS positions 15 min before broker
+    // Job 6: 14:45 HARD FLAT — exit all MIS positions 15 min before broker
     // force-close at 15:20. Gives us clean fills on liquid names and avoids
     // the end-of-day slippage spike. Reuses the same runDailyExit() path; the
     // 15:00 job below becomes a safety net for anything this 14:45 job missed.
@@ -347,11 +314,6 @@ class DailyEntryJob {
       return monitorDailyPickOrders(opts);
     });
 
-    this.agenda.define('manual-daily-picks-tighten', async (job) => {
-      const opts = job.attrs.data || {};
-      return tightenStops(opts);
-    });
-
     this.agenda.define('manual-daily-picks-exit', async (job) => {
       const opts = job.attrs.data || {};
       return runDailyExit(opts);
@@ -379,7 +341,7 @@ class DailyEntryJob {
             'daily-picks-gap-protection',
             'daily-picks-fill-fallback',
             'daily-picks-monitor',
-            'daily-picks-tighten',
+            'daily-picks-tighten',   // removed — kept in cancel list to clean up any lingering DB jobs
             'daily-picks-hard-flat',
             'daily-picks-exit',
             // Legacy v1 job names — clean up on first deploy
@@ -437,12 +399,6 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      // 2:30 PM IST — Tighten stops to breakeven on profitable positions.
-      // Waits until 2:30 (not 2:00) to give the trade room to develop before locking in breakeven.
-      await this.agenda.every('30 14 * * 1-5', 'daily-picks-tighten', {}, {
-        timezone: 'Asia/Kolkata'
-      });
-
       // 3:15 PM IST — Force-exit all remaining MIS positions.
       // SL-M + target LIMIT orders handle most exits during the day.
       // This catches anything that drifted sideways without hitting either level.
@@ -457,8 +413,7 @@ class DailyEntryJob {
       console.log(`${LOG}   08:30 — scanner.py → AMO MARKET MIS orders placed`);
       console.log(`${LOG}   09:05 — gap protection (cancel adverse-gap AMOs before 9:08 auction)`);
       console.log(`${LOG}   09:00–10:59 — fill fallback every 2 min → SL-M + target placed on fills`);
-      console.log(`${LOG}   09:30–14:59 — monitor every 3 min → SL/target hit detection, trailing`);
-      console.log(`${LOG}   14:30 — tighten stops to breakeven`);
+      console.log(`${LOG}   09:30–14:59 — monitor every 3 min → SL/target hit detection, trailing (+1R BE inline)`);
       console.log(`${LOG}   15:15 — force-exit (5 min before Zerodha auto-square)`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
@@ -485,13 +440,6 @@ class DailyEntryJob {
     if (!this.isInitialized) throw new Error('Daily entry job not initialized');
     console.log(`${LOG} Manual monitor trigger`);
     const job = await this.agenda.now('manual-daily-picks-monitor', opts);
-    return { success: true, jobId: job.attrs._id };
-  }
-
-  async triggerTighten(opts = {}) {
-    if (!this.isInitialized) throw new Error('Daily entry job not initialized');
-    console.log(`${LOG} Manual tighten trigger`);
-    const job = await this.agenda.now('manual-daily-picks-tighten', opts);
     return { success: true, jobId: job.attrs._id };
   }
 
