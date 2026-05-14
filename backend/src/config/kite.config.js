@@ -69,6 +69,11 @@ const kiteConfig = {
     QUOTE_LTP: '/quote/ltp',
     QUOTE_OHLC: '/quote/ohlc',
 
+    // Historical / intraday candles
+    // Usage: /instruments/historical/{instrument_token}/{interval}?from=...&to=...
+    // Intervals: minute, 3minute, 5minute, 15minute, 30minute, 60minute, day
+    HISTORICAL: '/instruments/historical',
+
     // Portfolio
     HOLDINGS: '/portfolio/holdings',
     POSITIONS: '/portfolio/positions',

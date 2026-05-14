@@ -195,7 +195,7 @@ class DailyEntryJob {
       }
     });
 
-    // Job 5: Monitor orders every 3 min (10:00-14:59)
+    // Job 5: Monitor orders every 5 min (9:30-14:59)
     this.agenda.define('daily-picks-monitor', async (job) => {
       if (this.runningJobs.has('monitor')) {
         console.log(`${LOG} Monitor already running, skipping`);
@@ -391,11 +391,12 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      // Every 3 min, 9:30 AM – 2:59 PM IST — Monitor SL/target hits, trailing stops.
-      // Starts at 9:30 (not 10:00) so it can cancel the other leg immediately if SL
-      // or target fires in the 9:16–10:00 window — prevents a naked short from an
-      // orphaned LIMIT sell after SL-M has already closed the position.
-      await this.agenda.every('*/3 9-14 * * 1-5', 'daily-picks-monitor', {}, {
+      // Every 5 min, 9:30 AM – 2:59 PM IST — Monitor SL/target hits, trailing stops,
+      // and candle-based structure analysis (5-min + 15-min TF decision matrix).
+      // 5-min aligns with candle closes so analysis always sees complete candles.
+      // Starts at 9:30 so it can cancel the other leg immediately if SL or target
+      // fires in the 9:16–10:00 window.
+      await this.agenda.every('*/5 9-14 * * 1-5', 'daily-picks-monitor', {}, {
         timezone: 'Asia/Kolkata'
       });
 
@@ -413,7 +414,7 @@ class DailyEntryJob {
       console.log(`${LOG}   08:30 — scanner.py → AMO MARKET MIS orders placed`);
       console.log(`${LOG}   09:05 — gap protection (cancel adverse-gap AMOs before 9:08 auction)`);
       console.log(`${LOG}   09:00–10:59 — fill fallback every 2 min → SL-M + target placed on fills`);
-      console.log(`${LOG}   09:30–14:59 — monitor every 3 min → SL/target hit detection, trailing (+1R BE inline)`);
+      console.log(`${LOG}   09:30–14:59 — monitor every 5 min → SL/target detection, +1R BE, candle structure (5-min+15-min)`);
       console.log(`${LOG}   15:15 — force-exit (5 min before Zerodha auto-square)`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {

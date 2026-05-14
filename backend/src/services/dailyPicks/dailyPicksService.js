@@ -90,7 +90,7 @@ import {
   MAX_COUNTER_REGIME_PICKS, // kept: selectDiversePicks still references it (dead branch now, harmless)
   // COUNTER_REGIME_MIN_SCORE, // removed — Step 4 hard-rejects counter-regime, no threshold needed
 } from './dailyPicksConstants.js';
-import { computeDynamicTrail, checkPartialBooking, checkSidewaysExit } from './tradingDecisions.js';
+import { computeDynamicTrail, checkPartialBooking, checkSidewaysExit, analyzeIntradayStructure } from './tradingDecisions.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -3105,6 +3105,7 @@ async function monitorDailyPickOrders(options = {}) {
             if (!pick.trailing_history) pick.trailing_history = [];
             pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: trail.newStop, price_at_trail: currentPrice, phase: trail.phase, method: trail.method });
             pick.levels.stop = trail.newStop;
+            pick._layer2TrailedThisCycle = true;  // Guard — candle block checks this to avoid double modifyOrder
             statusChanged = true;
             console.log(`${LOG} [TRAILING] ${pick.symbol}: Stop ₹${currentStop} → ₹${trail.newStop} [${trail.method} P${trail.phase}] (price=₹${currentPrice}, peak=₹${round2(pick._extreme_price)}, ${trail.reason})`);
           } catch (err) {
@@ -3164,6 +3165,214 @@ async function monitorDailyPickOrders(options = {}) {
     }
   }
 
+  // ── CANDLE-BASED STRUCTURE ANALYSIS (5-min + 15-min) ──
+  // Runs for ALL entered picks (with or without protective orders).
+  // For picks with no protective orders this is the only intraday protection besides 3 PM exit.
+  if (enteredPicks.length > 0 && !dryRun) {
+    try {
+      const candleSymbols = enteredPicks
+        .filter(p => p.trade.status === 'ENTERED')
+        .map(p => p.symbol);
+
+      console.log(`${LOG} [CANDLE] ── Candle analysis cycle ──────────────────────────`);
+      console.log(`${LOG} [CANDLE] Fetching 5-min (6 bars) + 15-min (4 bars) for: ${candleSymbols.join(', ')}`);
+      const multiCandles = await kiteOrderService.getIntradayMultiCandles(candleSymbols, [
+        { interval: '5minute',  count: 6 },
+        { interval: '15minute', count: 4 },
+      ]);
+      const candles5m  = multiCandles['5minute']  || {};
+      const candles15m = multiCandles['15minute'] || {};
+
+      for (const pick of enteredPicks) {
+        if (pick.trade.status !== 'ENTERED') continue;
+
+        const sym5m  = candles5m[pick.symbol]  || [];
+        const sym15m = candles15m[pick.symbol] || [];
+
+        console.log(`${LOG} [CANDLE] ${pick.symbol}: 5m_bars=${sym5m.length} 15m_bars=${sym15m.length} currentStop=₹${pick.levels.stop} hasSL=${!!pick.kite.stop_order_id} layer2Trailed=${!!pick._layer2TrailedThisCycle}`);
+
+        // ── SIDEWAYS EXIT for no-SL picks (Layer 2 skips them; use 5-min close as LTP proxy) ──
+        if (!pick.kite.stop_order_id) {
+          const priceProxy      = sym5m.length > 0 ? sym5m[sym5m.length - 1].close : pick.trade.entry_price;
+          const minutesSinceEntry = pick.trade.entry_time
+            ? (Date.now() - new Date(pick.trade.entry_time).getTime()) / 60000
+            : 999;
+          const profitPctProxy  = ((priceProxy - pick.trade.entry_price) / pick.trade.entry_price) * 100
+            * (pick.direction === 'LONG' ? 1 : -1);
+          const sidewaysDecision = checkSidewaysExit(minutesSinceEntry, profitPctProxy);
+
+          console.log(`${LOG} [CANDLE/SIDEWAYS] ${pick.symbol} (no-SL): proxy=₹${priceProxy} pnl=${round2(profitPctProxy)}% min=${round2(minutesSinceEntry)} shouldExit=${sidewaysDecision.shouldExit}`);
+
+          if (sidewaysDecision.shouldExit) {
+            console.log(`${LOG} [CANDLE/SIDEWAYS] ${pick.symbol}: ${sidewaysDecision.reason} — exiting dead no-SL position`);
+            try {
+              const exitSide   = pick.direction === 'LONG' ? 'SELL' : 'BUY';
+              const exitResult = await kiteOrderService.placeOrder({
+                tradingsymbol: pick.symbol, exchange: 'NSE',
+                transaction_type: exitSide, order_type: 'MARKET',
+                product: 'MIS', quantity: pick.trade.qty,
+                simulationId: `daily_pick_sideways_nosl_${pick.symbol}`,
+                orderType: 'SIDEWAYS_EXIT', source: 'DAILY_PICKS',
+              });
+              if (exitResult.success) {
+                await delay(1500);
+                let exitPrice = priceProxy;
+                try {
+                  const exitOrder = await kiteOrderService.getOrderDetails(exitResult.orderId);
+                  if (exitOrder?.average_price) exitPrice = exitOrder.average_price;
+                } catch (_) {}
+                pick.trade.status     = 'TIME_EXIT';
+                pick.trade.exit_price = exitPrice;
+                pick.trade.exit_time  = new Date();
+                pick.trade.exit_reason = sidewaysDecision.reason;
+                pick.trade.exit_price_source = 'order_fill';
+                calculatePnl(pick);
+                pick.kite.kite_status = 'completed';
+                statusChanged = true;
+                console.log(`${LOG} [CANDLE/SIDEWAYS] ✅ ${pick.symbol}: Exited @ ₹${exitPrice}, PnL: ₹${pick.trade.pnl}`);
+              }
+            } catch (err) {
+              console.error(`${LOG} [CANDLE/SIDEWAYS] ${pick.symbol}: Exit failed:`, err.message);
+            }
+            continue; // Skip candle structure analysis for this pick after exit
+          }
+        }
+
+        const decision = analyzeIntradayStructure({
+          candles5m:   sym5m,
+          candles15m:  sym15m,
+          direction:   pick.direction,
+          currentStop: pick.levels.stop,
+        });
+
+        // Full decision + all intermediate values (the reason string embeds the debug dump)
+        console.log(`${LOG} [CANDLE] ${pick.symbol}: ▶ action=${decision.action}${decision.newStop ? ` newStop=₹${decision.newStop}` : ''}`);
+        console.log(`${LOG} [CANDLE] ${pick.symbol}:   ${decision.reason}`);
+
+        if (decision.action === 'exit') {
+          // ── CANDLE EXIT — 15-min structure broken ──
+          console.log(`${LOG} [CANDLE] ${pick.symbol}: STRUCTURE BREAK — placing market exit`);
+          try {
+            if (pick.kite.stop_order_id)   { try { await kiteOrderService.cancelOrder(pick.kite.stop_order_id);   } catch (_) {} }
+            if (pick.kite.target_order_id) { try { await kiteOrderService.cancelOrder(pick.kite.target_order_id); } catch (_) {} }
+            await delay(500);
+
+            const exitSide = pick.direction === 'LONG' ? 'SELL' : 'BUY';
+            const exitResult = await kiteOrderService.placeOrder({
+              tradingsymbol: pick.symbol, exchange: 'NSE',
+              transaction_type: exitSide, order_type: 'MARKET',
+              product: 'MIS', quantity: pick.trade.qty,
+              simulationId: `daily_pick_candle_exit_${pick.symbol}`,
+              orderType: 'CANDLE_STRUCTURE_EXIT', source: 'DAILY_PICKS',
+            });
+
+            if (exitResult.success) {
+              await delay(1500);
+              let exitPrice = sym5m.length > 0 ? sym5m[sym5m.length - 1].close : pick.trade.entry_price;
+              try {
+                const exitOrder = await kiteOrderService.getOrderDetails(exitResult.orderId);
+                if (exitOrder?.average_price) exitPrice = exitOrder.average_price;
+              } catch (_) {}
+
+              pick.trade.status = 'TIME_EXIT';
+              pick.trade.exit_price = exitPrice;
+              pick.trade.exit_time = new Date();
+              pick.trade.exit_reason = `candle_structure_exit: ${decision.reason}`;
+              pick.trade.exit_price_source = 'order_fill';
+              calculatePnl(pick);
+              pick.kite.kite_status = 'completed';
+              statusChanged = true;
+              console.log(`${LOG} [CANDLE] ✅ ${pick.symbol}: Exited @ ₹${exitPrice} — ${decision.reason}. PnL: ₹${pick.trade.pnl}`);
+            }
+          } catch (err) {
+            console.error(`${LOG} [CANDLE] ${pick.symbol}: Exit order failed:`, err.message);
+          }
+
+        } else if ((decision.action === 'trail' || decision.action === 'tighten') && decision.newStop) {
+          // ── CANDLE TRAIL / TIGHTEN ──
+          const isBullish = pick.direction === 'LONG';
+          const currentStop = pick.levels.stop;
+          // Only apply if it improves the stop (never widen it)
+          const isImprovement = isBullish
+            ? decision.newStop > currentStop
+            : decision.newStop < currentStop;
+
+          if (isImprovement) {
+            if (pick.kite.stop_order_id) {
+              if (pick._layer2TrailedThisCycle) {
+                // Layer 2 Chandelier already called modifyOrder this cycle — skip the extra API call.
+                // The stop has already been moved on Kite; just ensure DB level reflects the best value.
+                if (isBullish ? decision.newStop > pick.levels.stop : decision.newStop < pick.levels.stop) {
+                  pick.levels.stop = decision.newStop;
+                  statusChanged = true;
+                }
+                console.log(`${LOG} [CANDLE] ${pick.symbol}: Layer 2 already trailed this cycle — skipping modifyOrder, noted stop ₹${decision.newStop} [${decision.action}]`);
+              } else {
+                try {
+                  await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: decision.newStop });
+                  if (!pick.trailing_history) pick.trailing_history = [];
+                  pick.trailing_history.push({
+                    timestamp:      new Date(),
+                    old_stop:       currentStop,
+                    new_stop:       decision.newStop,
+                    price_at_trail: sym5m.length > 0 ? sym5m[sym5m.length - 1].close : null,
+                    reason:         `candle_${decision.action}`,
+                  });
+                  pick.levels.stop = decision.newStop;
+                  statusChanged = true;
+                  console.log(`${LOG} [CANDLE] ${pick.symbol}: Stop ₹${currentStop} → ₹${decision.newStop} [${decision.action}] — ${decision.reason}`);
+                } catch (err) {
+                  console.error(`${LOG} [CANDLE] ${pick.symbol}: modifyOrder failed:`, err.message);
+                }
+              }
+            } else {
+              // No SL order in Kite — place a fresh SL-M to protect this position going forward
+              console.log(`${LOG} [CANDLE] ${pick.symbol}: No SL order — placing fresh SL-M @ ₹${decision.newStop} [${decision.action}]`);
+              try {
+                const slSide   = pick.direction === 'LONG' ? 'SELL' : 'BUY';
+                const slResult = await kiteOrderService.placeOrder({
+                  tradingsymbol:    pick.symbol,
+                  exchange:         'NSE',
+                  transaction_type: slSide,
+                  order_type:       'SL-M',
+                  trigger_price:    decision.newStop,
+                  product:          'MIS',
+                  quantity:         pick.trade.qty,
+                  simulationId:     `daily_pick_candle_slm_${pick.symbol}`,
+                  orderType:        'CANDLE_SL_PLACE',
+                  source:           'DAILY_PICKS',
+                });
+                if (slResult.success) {
+                  pick.kite.stop_order_id = slResult.orderId;
+                  if (!pick.trailing_history) pick.trailing_history = [];
+                  pick.trailing_history.push({
+                    timestamp:      new Date(),
+                    old_stop:       currentStop,
+                    new_stop:       decision.newStop,
+                    price_at_trail: sym5m.length > 0 ? sym5m[sym5m.length - 1].close : null,
+                    reason:         `candle_${decision.action}_fresh_slm`,
+                  });
+                  pick.levels.stop = decision.newStop;
+                  statusChanged = true;
+                  console.log(`${LOG} [CANDLE] ✅ ${pick.symbol}: Fresh SL-M placed @ ₹${decision.newStop} [${decision.action}] — orderId=${slResult.orderId}`);
+                }
+              } catch (err) {
+                console.error(`${LOG} [CANDLE] ${pick.symbol}: Fresh SL-M placement failed:`, err.message);
+                // Fallback — at least update level in DB so 3 PM exit uses the tighter stop
+                pick.levels.stop = decision.newStop;
+                statusChanged = true;
+                console.warn(`${LOG} [CANDLE] ${pick.symbol}: Fallback — stop level updated to ₹${decision.newStop} in DB (SL-M placement failed)`);
+              }
+            }
+          }
+        }
+        // 'hold' → no action
+      }
+    } catch (err) {
+      console.error(`${LOG} [CANDLE] Candle analysis failed:`, err.message);
+    }
+  }
+
   if (statusChanged) {
     updateDailyResults(doc);
     // Persist all in-flight state changes per pick atomically.
@@ -3188,6 +3397,7 @@ async function monitorDailyPickOrders(options = {}) {
               'picks.$.trade.partial_exit_qty': pick.trade.partial_exit_qty ?? null,
               'picks.$.trade.partial_exit_price':pick.trade.partial_exit_price ?? null,
               'picks.$.kite.kite_status':       pick.kite.kite_status,
+              'picks.$.kite.stop_order_id':     pick.kite.stop_order_id ?? null,   // persist fresh SL-M placements
               'picks.$.levels.stop':            pick.levels.stop ?? null,
               'picks.$.levels.target':          pick.levels.target ?? null,
               'picks.$.trailing_history':       pick.trailing_history ?? [],

@@ -279,6 +279,143 @@ export function computePositionSize({
  * @param {number} [params.partialPrice] — price at which partial was booked
  * @returns {{ pnl: number, returnPct: number }}
  */
+/**
+ * analyzeIntradayStructure
+ *
+ * Candle-based trade management decision — runs every 5 min monitor cycle.
+ * Two-timeframe approach: 15-min for trend structure, 5-min for stop placement.
+ *
+ * Decision matrix:
+ *   15-min structure broken            → 'exit'   (close below prior 15-min low for LONG)
+ *   5-min bearish engulfing / star     → 'tighten' (stop to reversal candle extreme)
+ *   5-min doji / inside bar            → 'hold'   (indecision — don't move stop)
+ *   5-min bullish + 15-min intact      → 'trail'  (trail stop to 5-min candle low)
+ *   5-min bullish but volume drying    → 'hold'   (possible exhaustion)
+ *
+ * @param {Object[]} candles5m   - last N completed 5-min candles [{open,high,low,close,volume}]
+ * @param {Object[]} candles15m  - last N completed 15-min candles
+ * @param {string}   direction   - 'LONG' | 'SHORT'
+ * @param {number}   currentStop - current stop level (for trail direction guard)
+ * @returns {{ action: string, reason: string, newStop: number|null }}
+ */
+export function analyzeIntradayStructure({ candles5m, candles15m, direction, currentStop }) {
+  const NO_CHANGE = (reason) => ({ action: 'hold', reason, newStop: null });
+
+  if (!candles5m  || candles5m.length  < 2) return NO_CHANGE('insufficient 5-min candle data');
+  if (!candles15m || candles15m.length < 2) return NO_CHANGE('insufficient 15-min candle data');
+
+  const isBullish = direction === 'LONG';
+
+  // ── 15-min structure ──
+  const c15prev = candles15m[candles15m.length - 2];
+  const c15last = candles15m[candles15m.length - 1];
+
+  // Broken: last close breaches prior candle's low (LONG) or high (SHORT)
+  const struct15Broken = isBullish
+    ? c15last.close < c15prev.low
+    : c15last.close > c15prev.high;
+
+  // Intact: last low >= prior low for LONG (higher lows = uptrend maintained)
+  const struct15Intact = isBullish
+    ? c15last.low >= c15prev.low
+    : c15last.high <= c15prev.high;
+
+  // ── 5-min candle classification ──
+  const c5prev = candles5m[candles5m.length - 2];
+  const c5last = candles5m[candles5m.length - 1];
+
+  const c5Range    = c5last.high - c5last.low;
+  const c5Body     = Math.abs(c5last.close - c5last.open);
+  const c5prevBody = Math.abs(c5prev.close - c5prev.open);
+  const bodyRatio  = c5Range > 0 ? c5Body / c5Range : 0;
+  const upperWick  = c5last.high - Math.max(c5last.open, c5last.close);
+
+  const is5mBullish = c5last.close > c5last.open && bodyRatio > 0.50;
+
+  // Bearish engulfing intraday: relaxed gap condition (>= not >) since consecutive
+  // 5-min bars open at the prior bar's close — a strict gap-up almost never happens.
+  const is5mBearEngulf = isBullish
+    && c5last.close  <  c5last.open          // bearish body
+    && c5last.open   >= c5prev.close         // opens at or above prior close (relaxed)
+    && c5last.close  <= c5prev.open          // closes at or below prior open
+    && c5Body        >  c5prevBody;          // body larger than prior — confirms engulf
+
+  // Shooting star: upper wick > 2× body, small body in lower third of range
+  const is5mShootingStar = isBullish
+    && c5Range > 0
+    && upperWick > 2 * c5Body
+    && c5Body   < 0.30 * c5Range;
+
+  const is5mDoji   = bodyRatio < 0.15;
+  const is5mInside = c5last.high <= c5prev.high && c5last.low >= c5prev.low;
+
+  // ── Volume trend (compare last candle vs avg of prior 3) ──
+  const priorVols   = candles5m.slice(-4, -1).map(c => c.volume);
+  const avgVol      = priorVols.length > 0
+    ? priorVols.reduce((a, b) => a + b, 0) / priorVols.length
+    : c5last.volume;
+  const volRatio    = avgVol > 0 ? c5last.volume / avgVol : 1;
+  const volDrying   = volRatio < 0.60;
+  const volExpanding = volRatio > 1.40;
+
+  // ── Debug dump — visible in logs every cycle for each position ──
+  const dbg = [
+    `dir=${direction} stop=₹${currentStop}`,
+    `15m: prev[L=${c15prev.low} H=${c15prev.high} C=${c15prev.close}] last[L=${c15last.low} H=${c15last.high} C=${c15last.close}] broken=${struct15Broken} intact=${struct15Intact}`,
+    `5m:  prev[O=${c5prev.open} H=${c5prev.high} L=${c5prev.low} C=${c5prev.close} body=${round2(c5prevBody)}]`,
+    `5m:  last[O=${c5last.open} H=${c5last.high} L=${c5last.low} C=${c5last.close} body=${round2(c5Body)} range=${round2(c5Range)} bodyRatio=${round2(bodyRatio)} upperWick=${round2(upperWick)}]`,
+    `5m:  bullish=${is5mBullish} bearEngulf=${is5mBearEngulf} shootingStar=${is5mShootingStar} doji=${is5mDoji} inside=${is5mInside}`,
+    `vol: last=${c5last.volume} avg=${round2(avgVol)} ratio=${round2(volRatio)}x drying=${volDrying} expanding=${volExpanding}`,
+  ].join(' | ');
+
+  // ── Decision matrix ──
+
+  if (struct15Broken) {
+    return {
+      action: 'exit',
+      reason: isBullish
+        ? `15-min structure broken: close ₹${c15last.close} < prior low ₹${c15prev.low} | ${dbg}`
+        : `15-min structure broken: close ₹${c15last.close} > prior high ₹${c15prev.high} | ${dbg}`,
+      newStop: null,
+    };
+  }
+
+  // Reversal candle → tighten stop to the candle's LOW (LONG) / HIGH (SHORT)
+  // i.e. below the reversal body — NOT to the candle high which would be above price
+  if (is5mBearEngulf || is5mShootingStar) {
+    const tightStop = isBullish ? round2(c5last.low) : round2(c5last.high);
+    return {
+      action: 'tighten',
+      reason: `${is5mBearEngulf ? '5-min bearish engulfing' : '5-min shooting star'} | ${dbg}`,
+      newStop: tightStop,
+    };
+  }
+
+  // Doji or inside bar → pause, don't move stop
+  if (is5mDoji || is5mInside) {
+    return NO_CHANGE(`${is5mDoji ? '5-min doji — indecision' : '5-min inside bar — consolidation'} | ${dbg}`);
+  }
+
+  // Bullish + 15-min intact + volume not drying → trail stop to 5-min candle low
+  if (is5mBullish && struct15Intact && !volDrying) {
+    const trailStop = isBullish ? round2(c5last.low) : round2(c5last.high);
+    const isImprovement = isBullish ? trailStop > currentStop : trailStop < currentStop;
+    if (!isImprovement) return NO_CHANGE(`5-min bullish but trail ₹${trailStop} would not improve stop ₹${currentStop} | ${dbg}`);
+    return {
+      action: 'trail',
+      reason: `5-min bullish${volExpanding ? ' + expanding volume' : ''}, 15-min intact | ${dbg}`,
+      newStop: trailStop,
+    };
+  }
+
+  // Bullish candle but volume drying up → hold, exhaustion warning
+  if (is5mBullish && volDrying) {
+    return NO_CHANGE(`5-min bullish but volume drying (${round2(volRatio)}× avg) — exhaustion risk | ${dbg}`);
+  }
+
+  return NO_CHANGE(`5-min candle neutral | ${dbg}`);
+}
+
 export function computePnl({ entryPrice, exitPrice, qty, direction, partialQty = 0, partialPrice = 0 }) {
   const isBullish = direction === 'LONG';
   let pnl;

@@ -588,6 +588,30 @@ class KiteAutoLoginService {
   }
 
   /**
+   * Fetch OHLCV candles for a single instrument.
+   *
+   * @param {number} instrumentToken - numeric token from getLTP response
+   * @param {string} interval        - '5minute' | '15minute' | 'minute' | 'day' etc.
+   * @param {string} from            - ISO or 'YYYY-MM-DD HH:MM:SS' in IST
+   * @param {string} to              - ISO or 'YYYY-MM-DD HH:MM:SS' in IST
+   * @returns {Promise<Array>}       - array of { date, open, high, low, close, volume }
+   */
+  async getHistoricalData(instrumentToken, interval, from, to) {
+    const endpoint = `${kiteConfig.ENDPOINTS.HISTORICAL}/${instrumentToken}/${interval}`;
+    const resp = await this.makeRequest('GET', endpoint, { from, to, oi: 0 });
+    const raw = resp?.data?.candles || [];
+    // Each candle: [timestamp, open, high, low, close, volume, oi]
+    return raw.map(c => ({
+      date:   c[0],
+      open:   c[1],
+      high:   c[2],
+      low:    c[3],
+      close:  c[4],
+      volume: c[5],
+    }));
+  }
+
+  /**
    * Get positions
    */
   async getPositions() {

@@ -760,6 +760,141 @@ class KiteOrderService {
   }
 
   /**
+   * Fetch intraday OHLCV candles for multiple symbols.
+   *
+   * Uses instrument_token from a getLTP call (avoiding a separate instrument lookup).
+   * Returns the last `numCandles` completed candles — the currently-forming candle
+   * is excluded by fetching up to 1 minute ago.
+   *
+   * @param {string[]} symbols   - e.g. ['SAIL', 'IIFL']
+   * @param {string}   interval  - '5minute' | '15minute' | 'minute' etc.
+   * @param {number}   numCandles - how many completed candles to return (default 5)
+   * @returns {Object} { SAIL: [{date,open,high,low,close,volume}, ...], ... }
+   */
+  async getIntradayCandles(symbols, interval, numCandles = 5) {
+    try {
+      // Step 1: get instrument tokens via LTP (cheapest call, already used by monitor)
+      const instruments = symbols.map(s => `NSE:${s}`);
+      const ltpData = await this.getLTP(instruments);
+
+      // Step 2: compute from/to window — start of session to 1 min ago (exclude forming candle)
+      // We add IST offset manually so toISOString() yields an IST-looking string
+      // without depending on the machine's local timezone setting.
+      const now = new Date();
+      const istOffset = 5.5 * 60 * 60 * 1000;
+      const istNow    = new Date(now.getTime() + istOffset);
+      const toDate    = new Date(istNow.getTime() - 60_000); // 1 min ago — exclude forming candle
+
+      const fmt = d => d.toISOString().replace('T', ' ').slice(0, 19);
+      // Build "from" as today's session open (9:15 AM IST) — use date from istNow,
+      // then hardcode the time so it's never affected by machine local time.
+      const istDateStr = istNow.toISOString().slice(0, 10); // YYYY-MM-DD in IST
+      const from = `${istDateStr} 09:15:00`;
+      const to   = fmt(toDate);
+
+      console.log(`[KITE ORDER] getIntradayCandles: interval=${interval} from=${from} to=${to} symbols=${symbols.join(',')}`);
+
+      // Step 3: fetch candles per symbol in parallel
+      const result = {};
+      await Promise.all(symbols.map(async symbol => {
+        const token = ltpData[`NSE:${symbol}`]?.instrument_token;
+        if (!token) {
+          console.warn(`[KITE ORDER] getIntradayCandles: no instrument_token for ${symbol} — LTP keys=${Object.keys(ltpData).join(',')}`);
+          return;
+        }
+        try {
+          const candles = await this.kiteService.getHistoricalData(token, interval, from, to);
+          const sliced = candles.slice(-numCandles);
+          result[symbol] = sliced;
+
+          // Debug: log last candle so we can verify data is correct
+          if (sliced.length > 0) {
+            const last = sliced[sliced.length - 1];
+            console.log(`[KITE ORDER] ${symbol} ${interval}: ${sliced.length} candles — last: ${last.date} O=${last.open} H=${last.high} L=${last.low} C=${last.close} V=${last.volume}`);
+          } else {
+            console.warn(`[KITE ORDER] ${symbol} ${interval}: 0 candles returned (token=${token} from=${from} to=${to})`);
+          }
+        } catch (err) {
+          console.error(`[KITE ORDER] getIntradayCandles ${symbol} ${interval} (token=${token}): ${err.message}`);
+          result[symbol] = [];
+        }
+      }));
+
+      return result;
+    } catch (err) {
+      console.error('[KITE ORDER] getIntradayCandles failed:', err.message);
+      return {};
+    }
+  }
+
+  /**
+   * Fetch intraday candles for multiple symbols AND multiple intervals in one shot.
+   * Single LTP call for instrument tokens, then all symbol×interval fetches in parallel.
+   *
+   * @param {string[]} symbols         - e.g. ['SAIL', 'IIFL']
+   * @param {Array}    intervalsConfig  - [{interval:'5minute', count:6}, {interval:'15minute', count:4}]
+   * @returns {Object} { '5minute': { SAIL: [...], IIFL: [...] }, '15minute': { ... } }
+   */
+  async getIntradayMultiCandles(symbols, intervalsConfig) {
+    // Initialise empty result structure
+    const result = {};
+    for (const { interval } of intervalsConfig) result[interval] = {};
+
+    try {
+      // ── Single LTP call — gets instrument_token for every symbol ──
+      const instruments = symbols.map(s => `NSE:${s}`);
+      const ltpData = await this.getLTP(instruments);
+
+      // ── Time window (shared across all intervals) ──
+      const now = new Date();
+      const istOffset = 5.5 * 60 * 60 * 1000;
+      const istNow    = new Date(now.getTime() + istOffset);
+      const toDate    = new Date(istNow.getTime() - 60_000);     // 1 min ago — exclude forming candle
+      const fmt       = d => d.toISOString().replace('T', ' ').slice(0, 19);
+      const istDateStr = istNow.toISOString().slice(0, 10);      // YYYY-MM-DD in IST
+      const from      = `${istDateStr} 09:15:00`;
+      const to        = fmt(toDate);
+
+      console.log(`[KITE ORDER] getIntradayMultiCandles: from=${from} to=${to} symbols=${symbols.join(',')} intervals=${intervalsConfig.map(c => `${c.interval}(${c.count})`).join(',')}`);
+
+      // ── All symbol × interval combinations in parallel (no extra LTP calls) ──
+      const tasks = [];
+      for (const symbol of symbols) {
+        const token = ltpData[`NSE:${symbol}`]?.instrument_token;
+        if (!token) {
+          console.warn(`[KITE ORDER] getIntradayMultiCandles: no token for ${symbol} — ltpKeys=${Object.keys(ltpData).join(',')}`);
+          for (const { interval } of intervalsConfig) result[interval][symbol] = [];
+          continue;
+        }
+        for (const { interval, count } of intervalsConfig) {
+          tasks.push(async () => {
+            try {
+              const candles = await this.kiteService.getHistoricalData(token, interval, from, to);
+              const sliced  = candles.slice(-count);
+              result[interval][symbol] = sliced;
+              if (sliced.length > 0) {
+                const last = sliced[sliced.length - 1];
+                console.log(`[KITE ORDER] ${symbol} ${interval}: ${sliced.length} bars — last: ${last.date} O=${last.open} H=${last.high} L=${last.low} C=${last.close} V=${last.volume}`);
+              } else {
+                console.warn(`[KITE ORDER] ${symbol} ${interval}: 0 bars returned (token=${token} from=${from} to=${to})`);
+              }
+            } catch (err) {
+              console.error(`[KITE ORDER] ${symbol} ${interval} (token=${token}): ${err.message}`);
+              result[interval][symbol] = [];
+            }
+          });
+        }
+      }
+      await Promise.all(tasks.map(t => t()));
+      return result;
+
+    } catch (err) {
+      console.error('[KITE ORDER] getIntradayMultiCandles failed:', err.message);
+      return result; // return empty shells — caller handles missing data gracefully
+    }
+  }
+
+  /**
    * Get open positions from Kite (for reconciliation on startup)
    */
   async getPositions() {
