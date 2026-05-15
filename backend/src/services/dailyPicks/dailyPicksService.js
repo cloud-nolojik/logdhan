@@ -100,6 +100,36 @@ const MAX_DAILY_PICKS = MAX_PICKS; // from shared constants (currently 3)
 const TARGET_PCT = 2.0;
 const LOG = '[DAILY-PICKS]';
 
+/**
+ * Snap a price to the nearest valid NSE tick.
+ *
+ * NSE equities have a minimum tick of 0.05 (5 paise). Some higher-priced scripts
+ * (BHARTIARTL, TATACOMM, etc.) use 0.10. Since 0.10 is a multiple of 0.05, we
+ * default to 0.05 — and Kite's InputException message tells us the actual tick when
+ * it differs, letting the caller re-snap and retry.
+ *
+ * @param {number} price
+ * @param {number} [tick=0.05]
+ * @param {'floor'|'ceil'|'round'} [mode='round']
+ */
+function snapToNSETick(price, tick = 0.05, mode = 'round') {
+  // Use integer arithmetic to avoid floating-point drift (e.g., 0.05 × 20 = 1)
+  const factor = Math.round(1 / tick);
+  if (mode === 'floor') return Math.floor(price * factor) / factor;
+  if (mode === 'ceil')  return Math.ceil(price * factor)  / factor;
+  return Math.round(price * factor) / factor;
+}
+
+/**
+ * Parse the tick size Kite returns in InputException messages like:
+ *   "Tick size for this script is 0.10. Kindly enter trigger price..."
+ * Returns null if not a tick-size error.
+ */
+function parseKiteTickError(errMsg) {
+  const m = (errMsg || '').match(/Tick size for this script is ([\d.]+)/i);
+  return m ? parseFloat(m[1]) : null;
+}
+
 // Note: MIN_SCORE / SHORTLIST_COMPOSITE_BONUS_MAX are gone.
 // Step 4 is now a pass/reject gate filter — no 0-100 score to compare against.
 // rank_score on survivors is the shortlist composite_score × 100.
@@ -2415,29 +2445,49 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
   let slPlaced = false;
   let tgtPlaced = false;
 
-  // MIS allows multiple pending orders — place SL-M + LIMIT separately
-  // Retry SL-M up to 2 attempts (critical — position must be protected)
+  // Pre-snap to NSE standard tick (0.05).
+  // For LONG: stop trigger rounds DOWN (conservative — don't fire early).
+  // For SHORT: stop trigger rounds UP.
+  // If Kite rejects with a larger tick (e.g. 0.10), we re-snap on the retry.
+  const isBullishSL = pick.direction === 'LONG';
+  let slTrigger  = snapToNSETick(pick.levels.stop, 0.05, isBullishSL ? 'floor' : 'ceil');
+  let tgtPrice   = snapToNSETick(target,           0.05, isBullishSL ? 'ceil'  : 'floor');
+
+  console.log(`${LOG} ${pick.symbol}: Snapped SL ₹${pick.levels.stop} → ₹${slTrigger} | Target ₹${target} → ₹${tgtPrice} (tick=0.05)`);
+
+  // MIS allows multiple pending orders — place SL-M + LIMIT separately.
+  // Retry SL-M up to 2 attempts. On attempt 2, re-snap using the actual tick
+  // from Kite's InputException message — this fixes the 0.05/0.10 mismatch.
   for (let slAttempt = 1; slAttempt <= 2 && !slPlaced; slAttempt++) {
     try {
       if (slAttempt > 1) {
-        console.log(`${LOG} ${pick.symbol}: SL-M retry attempt ${slAttempt}/2 after ${slAttempt === 2 ? '3s' : '1s'} wait`);
-        await delay(slAttempt === 2 ? 3000 : 1000);
+        console.log(`${LOG} ${pick.symbol}: SL-M retry attempt 2/2 (trigger=₹${slTrigger})`);
+        await delay(500);
       }
       const slResult = await kiteOrderService.placeOrder({
         tradingsymbol: pick.symbol, exchange: 'NSE',
         transaction_type: exitSide, order_type: 'SL-M',
-        trigger_price: pick.levels.stop, product: 'MIS',
+        trigger_price: slTrigger, product: 'MIS',
         quantity: pick.trade.qty,
         simulationId: `daily_pick_sl_${pick.symbol}`,
         orderType: 'STOP_LOSS', source: 'DAILY_PICKS'
       });
       if (slResult.success) {
         pick.kite.stop_order_id = slResult.orderId;
+        pick.levels.stop = slTrigger; // keep levels in sync with what Kite actually accepted
         slPlaced = true;
-        console.log(`${LOG} ${pick.symbol}: SL-M placed @ ₹${pick.levels.stop} — orderId=${slResult.orderId}${slAttempt > 1 ? ` (attempt ${slAttempt})` : ''}`);
+        console.log(`${LOG} ${pick.symbol}: SL-M placed @ ₹${slTrigger} — orderId=${slResult.orderId}${slAttempt > 1 ? ' (attempt 2)' : ''}`);
       }
     } catch (err) {
-      console.error(`${LOG} ${pick.symbol}: SL-M error (attempt ${slAttempt}/2):`, err.message);
+      const tick = parseKiteTickError(err.message);
+      if (tick && slAttempt === 1) {
+        // Kite told us the real tick size — re-snap and the retry loop will use it
+        slTrigger = snapToNSETick(pick.levels.stop, tick, isBullishSL ? 'floor' : 'ceil');
+        tgtPrice  = snapToNSETick(target,           tick, isBullishSL ? 'ceil'  : 'floor');
+        console.log(`${LOG} ${pick.symbol}: Tick size is ${tick} — re-snapped SL → ₹${slTrigger}, target → ₹${tgtPrice}`);
+      } else {
+        console.error(`${LOG} ${pick.symbol}: SL-M error (attempt ${slAttempt}/2):`, err.message);
+      }
     }
   }
 
@@ -2445,15 +2495,16 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
     const tgtResult = await kiteOrderService.placeOrder({
       tradingsymbol: pick.symbol, exchange: 'NSE',
       transaction_type: exitSide, order_type: 'LIMIT',
-      price: target, product: 'MIS',
+      price: tgtPrice, product: 'MIS',
       quantity: pick.trade.qty,
       simulationId: `daily_pick_tgt_${pick.symbol}`,
       orderType: 'TARGET', source: 'DAILY_PICKS'
     });
     if (tgtResult.success) {
       pick.kite.target_order_id = tgtResult.orderId;
+      pick.levels.target = tgtPrice; // sync levels with accepted price
       tgtPlaced = true;
-      console.log(`${LOG} ${pick.symbol}: Target LIMIT placed @ ₹${target} — orderId=${tgtResult.orderId}`);
+      console.log(`${LOG} ${pick.symbol}: Target LIMIT placed @ ₹${tgtPrice} — orderId=${tgtResult.orderId}`);
     }
   } catch (err) {
     console.error(`${LOG} ${pick.symbol}: Target error:`, err.message);
@@ -3052,14 +3103,15 @@ async function monitorDailyPickOrders(options = {}) {
           const shouldMove = isBullish ? beStop > currentStop : beStop < currentStop;
 
           if (shouldMove) {
+            const snappedBE = snapToNSETick(beStop, 0.05, isBullish ? 'floor' : 'ceil');
             try {
-              await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: beStop });
+              await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: snappedBE });
               if (!pick.trailing_history) pick.trailing_history = [];
-              pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: beStop, price_at_trail: currentPrice, reason: 'breakeven_1R' });
-              pick.levels.stop = beStop;
+              pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: snappedBE, price_at_trail: currentPrice, reason: 'breakeven_1R' });
+              pick.levels.stop = snappedBE;
               pick._breakeven_moved = true;
               statusChanged = true;
-              console.log(`${LOG} [+1R BE] ${pick.symbol}: Profit ${round2(profitR)}R — stop moved to breakeven ₹${currentStop} → ₹${beStop}`);
+              console.log(`${LOG} [+1R BE] ${pick.symbol}: Profit ${round2(profitR)}R — stop moved to breakeven ₹${currentStop} → ₹${snappedBE}`);
             } catch (err) {
               console.error(`${LOG} [+1R BE] ${pick.symbol}: modifyOrder failed:`, err.message);
             }
@@ -3098,16 +3150,17 @@ async function monitorDailyPickOrders(options = {}) {
         });
 
         if (trail.shouldTrail) {
+          const snappedTrail = snapToNSETick(trail.newStop, 0.05, isBullish ? 'floor' : 'ceil');
           try {
             await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
-              trigger_price: trail.newStop
+              trigger_price: snappedTrail
             });
             if (!pick.trailing_history) pick.trailing_history = [];
-            pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: trail.newStop, price_at_trail: currentPrice, phase: trail.phase, method: trail.method });
-            pick.levels.stop = trail.newStop;
+            pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: snappedTrail, price_at_trail: currentPrice, phase: trail.phase, method: trail.method });
+            pick.levels.stop = snappedTrail;
             pick._layer2TrailedThisCycle = true;  // Guard — candle block checks this to avoid double modifyOrder
             statusChanged = true;
-            console.log(`${LOG} [TRAILING] ${pick.symbol}: Stop ₹${currentStop} → ₹${trail.newStop} [${trail.method} P${trail.phase}] (price=₹${currentPrice}, peak=₹${round2(pick._extreme_price)}, ${trail.reason})`);
+            console.log(`${LOG} [TRAILING] ${pick.symbol}: Stop ₹${currentStop} → ₹${snappedTrail} [${trail.method} P${trail.phase}] (price=₹${currentPrice}, peak=₹${round2(pick._extreme_price)}, ${trail.reason})`);
           } catch (err) {
             console.error(`${LOG} [TRAILING] ${pick.symbol}: modifyOrder failed:`, err.message);
           }
@@ -3308,26 +3361,28 @@ async function monitorDailyPickOrders(options = {}) {
                 }
                 console.log(`${LOG} [CANDLE] ${pick.symbol}: Layer 2 already trailed this cycle — skipping modifyOrder, noted stop ₹${decision.newStop} [${decision.action}]`);
               } else {
+                const snappedCandelStop = snapToNSETick(decision.newStop, 0.05, isBullish ? 'floor' : 'ceil');
                 try {
-                  await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: decision.newStop });
+                  await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: snappedCandelStop });
                   if (!pick.trailing_history) pick.trailing_history = [];
                   pick.trailing_history.push({
                     timestamp:      new Date(),
                     old_stop:       currentStop,
-                    new_stop:       decision.newStop,
+                    new_stop:       snappedCandelStop,
                     price_at_trail: sym5m.length > 0 ? sym5m[sym5m.length - 1].close : null,
                     reason:         `candle_${decision.action}`,
                   });
-                  pick.levels.stop = decision.newStop;
+                  pick.levels.stop = snappedCandelStop;
                   statusChanged = true;
-                  console.log(`${LOG} [CANDLE] ${pick.symbol}: Stop ₹${currentStop} → ₹${decision.newStop} [${decision.action}] — ${decision.reason}`);
+                  console.log(`${LOG} [CANDLE] ${pick.symbol}: Stop ₹${currentStop} → ₹${snappedCandelStop} [${decision.action}] — ${decision.reason}`);
                 } catch (err) {
                   console.error(`${LOG} [CANDLE] ${pick.symbol}: modifyOrder failed:`, err.message);
                 }
               }
             } else {
               // No SL order in Kite — place a fresh SL-M to protect this position going forward
-              console.log(`${LOG} [CANDLE] ${pick.symbol}: No SL order — placing fresh SL-M @ ₹${decision.newStop} [${decision.action}]`);
+              const freshSlTrigger = snapToNSETick(decision.newStop, 0.05, isBullish ? 'floor' : 'ceil');
+              console.log(`${LOG} [CANDLE] ${pick.symbol}: No SL order — placing fresh SL-M @ ₹${freshSlTrigger} [${decision.action}]`);
               try {
                 const slSide   = pick.direction === 'LONG' ? 'SELL' : 'BUY';
                 const slResult = await kiteOrderService.placeOrder({
@@ -3335,7 +3390,7 @@ async function monitorDailyPickOrders(options = {}) {
                   exchange:         'NSE',
                   transaction_type: slSide,
                   order_type:       'SL-M',
-                  trigger_price:    decision.newStop,
+                  trigger_price:    freshSlTrigger,
                   product:          'MIS',
                   quantity:         pick.trade.qty,
                   simulationId:     `daily_pick_candle_slm_${pick.symbol}`,
@@ -3348,20 +3403,20 @@ async function monitorDailyPickOrders(options = {}) {
                   pick.trailing_history.push({
                     timestamp:      new Date(),
                     old_stop:       currentStop,
-                    new_stop:       decision.newStop,
+                    new_stop:       freshSlTrigger,
                     price_at_trail: sym5m.length > 0 ? sym5m[sym5m.length - 1].close : null,
                     reason:         `candle_${decision.action}_fresh_slm`,
                   });
-                  pick.levels.stop = decision.newStop;
+                  pick.levels.stop = freshSlTrigger;
                   statusChanged = true;
-                  console.log(`${LOG} [CANDLE] ✅ ${pick.symbol}: Fresh SL-M placed @ ₹${decision.newStop} [${decision.action}] — orderId=${slResult.orderId}`);
+                  console.log(`${LOG} [CANDLE] ✅ ${pick.symbol}: Fresh SL-M placed @ ₹${freshSlTrigger} [${decision.action}] — orderId=${slResult.orderId}`);
                 }
               } catch (err) {
                 console.error(`${LOG} [CANDLE] ${pick.symbol}: Fresh SL-M placement failed:`, err.message);
                 // Fallback — at least update level in DB so 3 PM exit uses the tighter stop
-                pick.levels.stop = decision.newStop;
+                pick.levels.stop = freshSlTrigger;
                 statusChanged = true;
-                console.warn(`${LOG} [CANDLE] ${pick.symbol}: Fallback — stop level updated to ₹${decision.newStop} in DB (SL-M placement failed)`);
+                console.warn(`${LOG} [CANDLE] ${pick.symbol}: Fallback — stop level updated to ₹${freshSlTrigger} in DB (SL-M placement failed)`);
               }
             }
           }
