@@ -77,6 +77,7 @@ import kiteAdminRoutes from './routes/kiteAdmin.js';
 import dailyPicksRoutes from './routes/dailyPicks.js';
 import jobMonitorRoutes from './routes/jobMonitor.js';
 import kiteTokenRefreshJob from './services/jobs/kiteTokenRefreshJob.js';
+import orbJob from './services/jobs/orbJob.js'; // ORB: 9:08 pre-open → 9:30 range → */1 breakout → */5 monitor → 15:15 exit
 
 const app = express();
 
@@ -288,6 +289,17 @@ async function initializeDailyEntryJob() {
   }
 }
 
+// Initialize ORB job — completely separate from daily-picks pipeline
+// 9:08 pre-open universe → 9:30 opening range → */1 breakout check → */5 monitor → 15:15 force-exit
+async function initializeOrbJob() {
+  try {
+    await orbJob.initialize();
+    console.log('✅ ORB job initialized (9:08/9:30/*/1/*/5/15:15 IST, Mon-Fri)');
+  } catch (error) {
+    console.error('❌ Failed to initialize ORB job:', error);
+  }
+}
+
 // Condition monitoring removed - direct order placement only
 
 const PORT = process.env.PORT || 5650;
@@ -316,6 +328,7 @@ app.listen(PORT, async () => {
   // breadth/VIX/FII inline as its Step 0 (no separate nightly jobs).
   await initializeDailyPicksJob(); // daily-pick-scan (8:30 AM Mon-Fri)
   await initializeDailyEntryJob(); // daily-picks-entry 9:30, monitor */3, tighten 14:00, exit 15:00
+  await initializeOrbJob();        // ORB: 9:08 pre-open → 9:30 range → breakout → monitor → 15:15 exit
 
   // Pre-open depth job — Kite /quote at 09:12:30 IST Mon-Fri. Stamps
   // imbalance/liquidity/mid_pct per shortlist candidate and prunes
@@ -384,6 +397,7 @@ process.on('SIGINT', async () => {
       instrumentSyncJob.shutdown(),
       dailyPicksJob.shutdown(),
       dailyEntryJob.shutdown(),
+      orbJob.shutdown(),
       morningBriefJob.shutdown(),
       preopenDepthJob.shutdown(),
       tradingDaySequenceJob.shutdown(),
@@ -415,6 +429,7 @@ process.on('SIGTERM', async () => {
       instrumentSyncJob.shutdown(),
       dailyPicksJob.shutdown(),
       dailyEntryJob.shutdown(),
+      orbJob.shutdown(),
       morningBriefJob.shutdown(),
       preopenDepthJob.shutdown(),
       tradingDaySequenceJob.shutdown(),

@@ -993,7 +993,7 @@ function isRegimeAligned(direction, regime) {
 const GATE = Object.freeze({
   MIN_TURNOVER_CR: 5,        // prev-day close × volume ≥ ₹5 Cr  (fill-at-scale liquidity)
   MIN_VOLUME_RATIO: 1.0,     // prev-day volume ≥ 50d-avg        (not a dead day)
-  ATR_MIN_PCT: 1.2,          // below this, stop is inside noise → whipsaw
+  ATR_MIN_PCT: 1.0,          // below this, stop is inside noise → whipsaw (lowered 1.2→1.0 to admit borderline midcaps with genuine catalysts)
   ATR_MAX_PCT: 5.0,          // raised 4→5% (expert April 2026): ORB Check 5 now handles
                              // today-specific wide opens; G2 guards structural pathologies
                              // (spreads, slippage, structural-level reliability). Real
@@ -1011,7 +1011,7 @@ const GATE = Object.freeze({
  * stock-selection merit. Here we only apply hard gates that the shortlist
  * cannot see:
  *   G1  Liquidity — prev-day turnover ≥ 5 Cr AND volume_ratio ≥ 1.0
- *   G2  ATR envelope — 1.2% ≤ atr_pct ≤ 4.0%
+ *   G2  ATR envelope — 1.0% ≤ atr_pct ≤ 5.0%
  *   G3  Chase guard — price not > 3 ATRs beyond EMA20 in trade direction (ATR-normalized)
  *   G4  Exhaustion — 3+ consec same-direction closes + >3% EMA20 dist + RSI extreme → reject
  *   G5  Counter-regime — LONG in bear regime or SHORT in bull regime → reject
@@ -3071,7 +3071,10 @@ async function monitorDailyPickOrders(options = {}) {
                   const shouldMove = pick.direction === 'LONG' ? newStop > currentStop : newStop < currentStop;
                   if (shouldMove) {
                     try {
-                      await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: newStop });
+                      await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
+                        trigger_price: newStop,
+                        price: snapToNSETick(pick.direction === 'LONG' ? newStop - 13 : newStop + 13, 0.05, pick.direction === 'LONG' ? 'ceil' : 'floor'),
+                      });
                       if (!pick.trailing_history) pick.trailing_history = [];
                       pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: newStop, price_at_trail: currentPrice });
                       pick.levels.stop = newStop;
@@ -3105,7 +3108,10 @@ async function monitorDailyPickOrders(options = {}) {
           if (shouldMove) {
             const snappedBE = snapToNSETick(beStop, 0.05, isBullish ? 'floor' : 'ceil');
             try {
-              await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: snappedBE });
+              await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
+                trigger_price: snappedBE,
+                price: snapToNSETick(isBullish ? snappedBE - 13 : snappedBE + 13, 0.05, isBullish ? 'ceil' : 'floor'),
+              });
               if (!pick.trailing_history) pick.trailing_history = [];
               pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: snappedBE, price_at_trail: currentPrice, reason: 'breakeven_1R' });
               pick.levels.stop = snappedBE;
@@ -3153,7 +3159,8 @@ async function monitorDailyPickOrders(options = {}) {
           const snappedTrail = snapToNSETick(trail.newStop, 0.05, isBullish ? 'floor' : 'ceil');
           try {
             await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
-              trigger_price: snappedTrail
+              trigger_price: snappedTrail,
+              price: snapToNSETick(isBullish ? snappedTrail - 13 : snappedTrail + 13, 0.05, isBullish ? 'ceil' : 'floor'),
             });
             if (!pick.trailing_history) pick.trailing_history = [];
             pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: snappedTrail, price_at_trail: currentPrice, phase: trail.phase, method: trail.method });
@@ -3363,7 +3370,10 @@ async function monitorDailyPickOrders(options = {}) {
               } else {
                 const snappedCandelStop = snapToNSETick(decision.newStop, 0.05, isBullish ? 'floor' : 'ceil');
                 try {
-                  await kiteOrderService.modifyOrder(pick.kite.stop_order_id, { trigger_price: snappedCandelStop });
+                  await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
+                    trigger_price: snappedCandelStop,
+                    price: snapToNSETick(isBullish ? snappedCandelStop - 13 : snappedCandelStop + 13, 0.05, isBullish ? 'ceil' : 'floor'),
+                  });
                   if (!pick.trailing_history) pick.trailing_history = [];
                   pick.trailing_history.push({
                     timestamp:      new Date(),
@@ -3550,7 +3560,8 @@ async function tightenStops(options = {}) {
       if (shouldTighten) {
         try {
           await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
-            trigger_price: newStop
+            trigger_price: newStop,
+            price: snapToNSETick(pick.direction === 'LONG' ? newStop - 13 : newStop + 13, 0.05, pick.direction === 'LONG' ? 'ceil' : 'floor'),
           });
 
           const trailEntry = {
