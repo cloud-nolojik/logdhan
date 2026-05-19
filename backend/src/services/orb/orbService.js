@@ -15,6 +15,7 @@ import kiteOrderService from '../kiteOrder.service.js';
 import OrbTrade from '../../models/orbTrade.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import { getFnoSymbols } from '../../constants/fnoUniverse.js';
+import { analyzeIntradayStructure, checkSidewaysExit } from '../dailyPicks/tradingDecisions.js';
 
 const LOG = '[ORB]';
 
@@ -738,6 +739,167 @@ export async function monitorOrbPositions() {
           console.error(`${LOG} [MONITOR]   ❌ breakeven trail FAILED:`, err.message);
         }
       }
+    }
+  }
+
+  // ── Candle structure analysis — exit / trail / tighten ────────────────────
+  // Runs after fill checks so we skip already-exited positions.
+  // Fetches 5-min (6 bars) + 15-min (4 bars) for all still-ENTERED positions.
+  // Uses the same analyzeIntradayStructure() as dailyPicksService — two-timeframe
+  // candle logic: 15-min for trend structure, 5-min for stop placement.
+  // Also runs checkSidewaysExit (40 min / 0.3%) — ORB-appropriate shorter window
+  // vs the 120-min used in daily picks (ORB window closes at 10:30).
+  const ORB_SIDEWAYS_MINUTES = 40;
+  const ORB_SIDEWAYS_PCT     = 0.3;
+
+  const stillEntered = doc.candidates.filter(c => c.status === 'ENTERED');
+  if (stillEntered.length) {
+    const candleSymbols = stillEntered.map(c => c.symbol);
+    console.log(`${LOG} [CANDLE] ── Candle analysis [${istTimeStr()}] ──────────────────`);
+    console.log(`${LOG} [CANDLE] Fetching 5-min (6 bars) + 15-min (4 bars) for: ${candleSymbols.join(', ')}`);
+
+    let candles5m = {}, candles15m = {};
+    try {
+      const multi = await kiteOrderService.getIntradayMultiCandles(candleSymbols, [
+        { interval: '5minute',  count: 6 },
+        { interval: '15minute', count: 4 },
+      ]);
+      candles5m  = multi['5minute']  || {};
+      candles15m = multi['15minute'] || {};
+    } catch (err) {
+      console.error(`${LOG} [CANDLE] ❌ Candle fetch FAILED:`, err.message);
+    }
+
+    for (const c of stillEntered) {
+      const sym5m  = candles5m[c.symbol]  || [];
+      const sym15m = candles15m[c.symbol] || [];
+      const ltp    = ltpData[`NSE:${c.symbol}`]?.last_price;
+
+      console.log(`${LOG} [CANDLE] ${c.symbol}: 5m_bars=${sym5m.length}  15m_bars=${sym15m.length}  stop=₹${c.stopPrice}  beTrailed=${!!c._beTrailed}`);
+
+      // ── Sideways exit — position flat after 40 min ─────────────────────────
+      if (c.entryTime && ltp) {
+        const minutesSinceEntry = (Date.now() - new Date(c.entryTime).getTime()) / 60000;
+        const profitPct = ((ltp - c.entryPrice) / c.entryPrice) * 100;
+        const sideways  = checkSidewaysExit(minutesSinceEntry, profitPct);
+        console.log(`${LOG} [CANDLE] ${c.symbol}: sideways check — ${Math.round(minutesSinceEntry)}min in  pnl=${profitPct.toFixed(2)}%  shouldExit=${sideways.shouldExit}`);
+
+        if (sideways.shouldExit) {
+          console.log(`${LOG} [CANDLE] ${c.symbol}: SIDEWAYS EXIT — flat for ${Math.round(minutesSinceEntry)} min, cutting position`);
+          if (c.stopOrderId)   { try { await kiteOrderService.cancelOrder(c.stopOrderId);   } catch (_) {} }
+          if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); } catch (_) {} }
+          await delay(500);
+          try {
+            const res = await kiteOrderService.placeOrder({
+              tradingsymbol:    c.symbol,
+              exchange:         'NSE',
+              transaction_type: 'SELL',
+              order_type:       'MARKET',
+              product:          'MIS',
+              quantity:         c.qty,
+              simulationId:     `orb_sideways_exit_${c.symbol}`,
+              orderType:        'ORB_SIDEWAYS_EXIT',
+              source:           'ORB',
+            });
+            if (res.success) {
+              await delay(1500);
+              let exitPrice = ltp;
+              try {
+                const ord = await kiteOrderService.getOrderDetails(res.orderId);
+                if (ord?.average_price) exitPrice = ord.average_price;
+              } catch (_) {}
+              c.status     = 'TIME_EXIT';
+              c.exitPrice  = exitPrice;
+              c.exitTime   = new Date();
+              c.exitReason = `sideways_exit_${Math.round(minutesSinceEntry)}min`;
+              c.pnl        = parseFloat(((exitPrice - c.entryPrice) * c.qty).toFixed(2));
+              c.returnPct  = parseFloat(((exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
+              console.log(`${LOG} [CANDLE] ✅ ${c.symbol} sideways exit @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+              changed = true;
+            }
+          } catch (err) {
+            console.error(`${LOG} [CANDLE] ${c.symbol}: sideways exit order FAILED:`, err.message);
+          }
+          continue;
+        }
+      }
+
+      // ── Candle structure analysis ───────────────────────────────────────────
+      const decision = analyzeIntradayStructure({
+        candles5m:   sym5m,
+        candles15m:  sym15m,
+        direction:   'LONG',          // ORB only takes long breakouts
+        currentStop: c.stopPrice,
+      });
+
+      console.log(`${LOG} [CANDLE] ${c.symbol}: action=${decision.action}${decision.newStop ? `  newStop=₹${decision.newStop}` : ''}`);
+      console.log(`${LOG} [CANDLE] ${c.symbol}:   ${decision.reason}`);
+
+      if (decision.action === 'exit') {
+        // ── Structure break — exit immediately ────────────────────────────────
+        console.log(`${LOG} [CANDLE] ${c.symbol}: STRUCTURE BREAK → market exit`);
+        if (c.stopOrderId)   { try { await kiteOrderService.cancelOrder(c.stopOrderId);   console.log(`${LOG} [CANDLE] ${c.symbol}: SL cancelled`);   } catch (_) {} }
+        if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [CANDLE] ${c.symbol}: TGT cancelled`); } catch (_) {} }
+        await delay(500);
+        try {
+          const res = await kiteOrderService.placeOrder({
+            tradingsymbol:    c.symbol,
+            exchange:         'NSE',
+            transaction_type: 'SELL',
+            order_type:       'MARKET',
+            product:          'MIS',
+            quantity:         c.qty,
+            simulationId:     `orb_candle_exit_${c.symbol}`,
+            orderType:        'ORB_CANDLE_EXIT',
+            source:           'ORB',
+          });
+          if (res.success) {
+            await delay(1500);
+            let exitPrice = sym5m.length ? sym5m[sym5m.length - 1].close : c.entryPrice;
+            try {
+              const ord = await kiteOrderService.getOrderDetails(res.orderId);
+              if (ord?.average_price) exitPrice = ord.average_price;
+            } catch (_) {}
+            c.status     = 'TIME_EXIT';
+            c.exitPrice  = exitPrice;
+            c.exitTime   = new Date();
+            c.exitReason = `candle_structure_exit: ${decision.reason.split(' | ')[0]}`;
+            c.pnl        = parseFloat(((exitPrice - c.entryPrice) * c.qty).toFixed(2));
+            c.returnPct  = parseFloat(((exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
+            console.log(`${LOG} [CANDLE] ✅ ${c.symbol} candle exit @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+            changed = true;
+          }
+        } catch (err) {
+          console.error(`${LOG} [CANDLE] ${c.symbol}: candle exit order FAILED:`, err.message);
+        }
+
+      } else if ((decision.action === 'trail' || decision.action === 'tighten') && decision.newStop) {
+        // ── Trail or tighten — modify SL on Kite ──────────────────────────────
+        const snappedStop  = snapToNSETick(decision.newStop, 0.05, 'floor');
+        const limitPrice   = snapToNSETick(snappedStop - 13, 0.05, 'ceil');  // NSE permissible range
+        const isImprovement = snappedStop > c.stopPrice;  // LONG — only move stop up
+
+        if (!isImprovement) {
+          console.log(`${LOG} [CANDLE] ${c.symbol}: ${decision.action} ₹${snappedStop} would not improve current stop ₹${c.stopPrice} — skipping`);
+        } else if (!c.stopOrderId) {
+          console.warn(`${LOG} [CANDLE] ${c.symbol}: ${decision.action} ₹${snappedStop} but no SL order to modify`);
+        } else {
+          try {
+            await kiteOrderService.modifyOrder(c.stopOrderId, {
+              trigger_price: snappedStop,
+              price:         limitPrice,
+            });
+            console.log(`${LOG} [CANDLE] ✅ ${c.symbol}: ${decision.action} — stop ₹${c.stopPrice} → ₹${snappedStop} [${decision.reason.split(' | ')[0]}]`);
+            c.stopPrice  = snappedStop;
+            // If candle trail moved stop above entry, mark BE trailed too
+            if (snappedStop >= c.entryPrice) c._beTrailed = true;
+            changed = true;
+          } catch (err) {
+            console.error(`${LOG} [CANDLE] ${c.symbol}: modifyOrder FAILED:`, err.message);
+          }
+        }
+      }
+      // 'hold' — nothing to do
     }
   }
 
