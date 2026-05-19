@@ -2,7 +2,7 @@
  * ORB Service — Opening Range Breakout (intraday)
  *
  * Flow:
- *   09:08 AM  fetchPreOpenUniverse()  — NSE pre-open IEP top gainers → candidates
+ *   09:08 AM  fetchPreOpenUniverse()  — Kite OHLC gap scan → candidates
  *   09:30 AM  recordOpeningRanges()   — Kite historical 15-min candle → OR High / Low
  *   every 1m  checkBreakouts()        — LTP > OR High → enter (max 3, window closes 10:30)
  *   every 5m  monitorOrbPositions()   — poll stop/target order status
@@ -11,30 +11,28 @@
  * Completely independent of dailyPicksService — shares only kiteOrderService.
  */
 
-import axios from 'axios';
-import { wrapper } from 'axios-cookiejar-support';
-import { CookieJar } from 'tough-cookie';
 import kiteOrderService from '../kiteOrder.service.js';
 import OrbTrade from '../../models/orbTrade.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
+import { getFnoSymbols } from '../../constants/fnoUniverse.js';
 
 const LOG = '[ORB]';
 
 // ── Strategy constants ──────────────────────────────────────────────────────
-const MAX_ENTRIES          = 3;       // max positions per day
-const MAX_CANDIDATES       = 15;      // top N from pre-open list
-const MIN_PRE_OPEN_PCT     = 1.5;     // min gap % to watch
-const MAX_PRE_OPEN_PCT     = 8.0;     // max gap % (exhausted move)
-const ORB_CAPITAL_PCT      = 0.90;    // use at most 90% of whatever is available at entry time
-const MIN_CAPITAL_PER_TRADE = 5000;  // skip entry if budget too thin (e.g. daily picks consumed most)
-const TARGET_RANGE_MULT    = 1.5;     // target = OR High + 1.5 × OR Range
-const BREAKOUT_END_HOUR    = 11;
-const BREAKOUT_END_MIN     = 0;       // no new entries after 11:00 AM
-const MAX_OR_RANGE_PCT     = 2.5;     // reject candidates where OR range > 2.5% of IEP (unreachable target)
-const TIME_EXIT_HOUR       = 10;
-const TIME_EXIT_MIN        = 30;      // exit stalled positions at 10:30 AM
+const MAX_ENTRIES           = 3;      // max positions per day
+const MAX_CANDIDATES        = 15;     // top N from pre-open list
+const MIN_PRE_OPEN_PCT      = 1.5;    // min gap % to watch
+const MAX_PRE_OPEN_PCT      = 8.0;    // max gap % (exhausted move)
+const ORB_CAPITAL_PCT       = 0.90;   // use at most 90% of whatever is available at entry time
+const MIN_CAPITAL_PER_TRADE = 5000;   // skip entry if budget too thin
+const TARGET_RANGE_MULT     = 1.5;    // target = OR High + 1.5 × OR Range
+const BREAKOUT_END_HOUR     = 11;
+const BREAKOUT_END_MIN      = 0;      // no new entries after 11:00 AM
+const MAX_OR_RANGE_PCT      = 2.5;    // reject candidates where OR range > 2.5% of IEP
+const TIME_EXIT_HOUR        = 10;
+const TIME_EXIT_MIN         = 30;     // exit stalled positions at 10:30 AM
 
-// ── Tick snap helpers (mirrors dailyPicksService) ──────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 function snapToNSETick(price, tick = 0.05, mode = 'round') {
   const factor = Math.round(1 / tick);
   if (mode === 'floor') return Math.floor(price * factor) / factor;
@@ -49,38 +47,53 @@ function parseKiteTickError(errMsg) {
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
-// ── NSE pre-open session client ────────────────────────────────────────────
-function createNseClient() {
-  const jar = new CookieJar();
-  return wrapper(axios.create({
-    jar,
-    withCredentials: true,
-    timeout: 15000,
-    headers: {
-      'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept':          '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Referer':         'https://www.nseindia.com/',
-      'Connection':      'keep-alive',
-    },
-  }));
+function istTimeStr() {
+  return MarketHoursUtil.toIST(new Date()).toTimeString().slice(0, 8);
 }
 
-async function fetchNsePreOpenRaw() {
-  const client = createNseClient();
-  // Step 1: establish session + get cookies
-  const homeResp = await client.get('https://www.nseindia.com', { timeout: 15000 });
-  console.log(`${LOG} NSE homepage GET: status=${homeResp.status}`);
-  await delay(1200);
-  // Step 2: fetch actual pre-open data
-  const resp = await client.get(
-    'https://www.nseindia.com/api/market-data-pre-open?key=FO',
-    { headers: { 'Accept': 'application/json, text/plain, */*' } }
-  );
-  const list = resp.data?.data || [];
-  console.log(`${LOG} NSE pre-open API: status=${resp.status} records=${list.length}`);
-  return resp.data;
+// ── Pre-open universe via Kite OHLC ───────────────────────────────────────
+// NSE's pre-open API blocks requests from VPS/cloud IPs.
+// Kite's /quote/ohlc endpoint returns last_price (= IEP during pre-open auction)
+// and ohlc.close (= previous day's close) for every F&O symbol in one call.
+// Gap % = (last_price - ohlc.close) / ohlc.close × 100 — same calculation NSE uses.
+async function fetchPreOpenViaKite() {
+  const symbols = await getFnoSymbols();    // ~200 F&O underlyings from instrument master
+  const CHUNK   = 100;                      // Kite OHLC accepts ~500 but 100 is safe
+  const result  = {};
+
+  console.log(`${LOG} [PHASE1] F&O universe: ${symbols.length} symbols — fetching OHLC in batches of ${CHUNK}`);
+
+  for (let i = 0; i < symbols.length; i += CHUNK) {
+    const batch       = symbols.slice(i, i + CHUNK);
+    const instruments = batch.map(s => `NSE:${s}`);
+    console.log(`${LOG} [PHASE1] OHLC batch ${Math.floor(i / CHUNK) + 1}/${Math.ceil(symbols.length / CHUNK)}: ${batch[0]}…${batch[batch.length - 1]} (${batch.length} symbols)`);
+    try {
+      const data = await kiteOrderService.getOHLC(instruments);
+      const returned = Object.keys(data).length;
+      console.log(`${LOG} [PHASE1]   → ${returned}/${batch.length} symbols returned data`);
+      if (returned < batch.length) {
+        const missing = batch.filter(s => !data[`NSE:${s}`]);
+        console.warn(`${LOG} [PHASE1]   → missing: ${missing.join(', ')}`);
+      }
+      Object.assign(result, data);
+    } catch (err) {
+      console.error(`${LOG} [PHASE1] OHLC batch ${i}–${i + CHUNK} FAILED:`, err.message);
+    }
+  }
+
+  const totalReturned = Object.keys(result).length;
+  console.log(`${LOG} [PHASE1] OHLC complete: ${totalReturned}/${symbols.length} symbols have data`);
+
+  // Reshape into the structure fetchPreOpenUniverse() expects
+  const data = Object.entries(result).map(([key, q]) => {
+    const symbol    = key.replace(/^NSE:/, '');
+    const iep       = q.last_price  || 0;
+    const prevClose = q.ohlc?.close || 0;
+    const pChange   = prevClose > 0 ? ((iep - prevClose) / prevClose) * 100 : 0;
+    return { metadata: { symbol, iep, previousClose: prevClose, pChange } };
+  });
+
+  return { data };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -88,43 +101,76 @@ async function fetchNsePreOpenRaw() {
 // ══════════════════════════════════════════════════════════════════════════
 
 export async function fetchPreOpenUniverse() {
-  console.log(`${LOG} ═══ Phase 1: NSE pre-open universe ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} ═══ PHASE 1: Pre-open universe [${istTimeStr()}] ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
 
   let raw;
   try {
-    raw = await fetchNsePreOpenRaw();
+    raw = await fetchPreOpenViaKite();
   } catch (err) {
-    console.error(`${LOG} NSE pre-open fetch failed:`, err.message);
+    console.error(`${LOG} [PHASE1] ❌ Kite pre-open fetch FAILED:`, err.message);
+    console.error(`${LOG} [PHASE1]    Stack:`, err.stack);
     return { success: false, error: err.message };
   }
 
-  // NSE response: { data: [{ metadata: { symbol, iep, previousClose, pChange, ... } }] }
   const list = raw?.data || [];
-  console.log(`${LOG} Raw pre-open records: ${list.length}`);
+  console.log(`${LOG} [PHASE1] Raw records from Kite: ${list.length}`);
 
-  const candidates = list
-    .map(item => {
-      const m = item?.metadata || item;
-      return {
-        symbol:     String(m.symbol || '').toUpperCase().trim(),
-        iep:        parseFloat(m.iep        || m.lastPrice     || 0),
-        prevClose:  parseFloat(m.previousClose               || 0),
-        preOpenPct: parseFloat(m.pChange    || m.perChange    || 0),
-        status:     'WATCHING',
-      };
-    })
-    .filter(c =>
-      c.symbol                            &&
-      c.preOpenPct >= MIN_PRE_OPEN_PCT    &&
-      c.preOpenPct <= MAX_PRE_OPEN_PCT
-    )
+  if (!list.length) {
+    console.warn(`${LOG} [PHASE1] ⚠️  Zero records returned — Kite OHLC may be unavailable at this time`);
+    return { success: true, count: 0 };
+  }
+
+  // Map + classify all records for near-miss visibility
+  const mapped = list.map(item => {
+    const m = item?.metadata || item;
+    return {
+      symbol:     String(m.symbol || '').toUpperCase().trim(),
+      iep:        parseFloat(m.iep || m.lastPrice || 0),
+      prevClose:  parseFloat(m.previousClose || 0),
+      preOpenPct: parseFloat(m.pChange || m.perChange || 0),
+      status:     'WATCHING',
+    };
+  }).filter(c => c.symbol && c.iep > 0);
+
+  // Bucket for diagnostics
+  const belowFloor  = mapped.filter(c => c.preOpenPct > 0    && c.preOpenPct < MIN_PRE_OPEN_PCT);
+  const inWindow    = mapped.filter(c => c.preOpenPct >= MIN_PRE_OPEN_PCT && c.preOpenPct <= MAX_PRE_OPEN_PCT);
+  const aboveCap    = mapped.filter(c => c.preOpenPct > MAX_PRE_OPEN_PCT);
+  const negative    = mapped.filter(c => c.preOpenPct <= 0);
+
+  console.log(`${LOG} [PHASE1] Gap distribution:`);
+  console.log(`${LOG} [PHASE1]   gapping up (≥${MIN_PRE_OPEN_PCT}% to ≤${MAX_PRE_OPEN_PCT}%): ${inWindow.length}`);
+  console.log(`${LOG} [PHASE1]   near-miss  (>0% to <${MIN_PRE_OPEN_PCT}%):              ${belowFloor.length}`);
+  console.log(`${LOG} [PHASE1]   exhausted  (>${MAX_PRE_OPEN_PCT}%):                     ${aboveCap.length}`);
+  console.log(`${LOG} [PHASE1]   flat/down  (≤0%):                                       ${negative.length}`);
+
+  // Log near-misses so we can see what just missed the cut
+  if (belowFloor.length) {
+    const top5NearMiss = belowFloor.sort((a, b) => b.preOpenPct - a.preOpenPct).slice(0, 5);
+    console.log(`${LOG} [PHASE1] Near-miss top-5 (just below ${MIN_PRE_OPEN_PCT}% floor):`);
+    top5NearMiss.forEach(c =>
+      console.log(`${LOG} [PHASE1]   ${c.symbol.padEnd(14)} gap=${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}  prev=₹${c.prevClose}`)
+    );
+  }
+
+  if (aboveCap.length) {
+    console.log(`${LOG} [PHASE1] Exhausted/excluded (>${MAX_PRE_OPEN_PCT}%): ${aboveCap.map(c => `${c.symbol}(+${c.preOpenPct.toFixed(1)}%)`).join(', ')}`);
+  }
+
+  const candidates = inWindow
     .sort((a, b) => b.preOpenPct - a.preOpenPct)
     .slice(0, MAX_CANDIDATES);
 
-  console.log(`${LOG} Filtered candidates (${candidates.length}):`);
-  candidates.forEach(c =>
-    console.log(`${LOG}   ${c.symbol.padEnd(14)} IEP=₹${c.iep} prev=₹${c.prevClose} gap=+${c.preOpenPct.toFixed(2)}%`)
-  );
+  console.log(`${LOG} [PHASE1] Final candidate list (top ${MAX_CANDIDATES} by gap):`);
+  if (candidates.length) {
+    candidates.forEach((c, i) =>
+      console.log(`${LOG} [PHASE1]   #${String(i + 1).padStart(2)}  ${c.symbol.padEnd(14)} gap=+${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}  prev=₹${c.prevClose}`)
+    );
+  } else {
+    console.warn(`${LOG} [PHASE1] ⚠️  No candidates passed the gap filter — ORB will be idle today`);
+  }
 
   // Upsert today's ORB document
   const now      = new Date();
@@ -133,11 +179,17 @@ export async function fetchPreOpenUniverse() {
   const startIST = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate());
   const utcDate  = new Date(startIST.getTime() - istOff);
 
-  await OrbTrade.findOneAndUpdate(
-    { date: { $gte: utcDate, $lt: new Date(utcDate.getTime() + 86400000) } },
-    { $set: { date: utcDate, candidates } },
-    { upsert: true, new: true }
-  );
+  try {
+    const doc = await OrbTrade.findOneAndUpdate(
+      { date: { $gte: utcDate, $lt: new Date(utcDate.getTime() + 86400000) } },
+      { $set: { date: utcDate, candidates } },
+      { upsert: true, new: true }
+    );
+    console.log(`${LOG} [PHASE1] ✅ orb_trades upserted — docId=${doc._id}  candidates=${candidates.length}`);
+  } catch (err) {
+    console.error(`${LOG} [PHASE1] ❌ DB upsert FAILED:`, err.message);
+    return { success: false, error: err.message };
+  }
 
   return { success: true, count: candidates.length };
 }
@@ -147,22 +199,28 @@ export async function fetchPreOpenUniverse() {
 // ══════════════════════════════════════════════════════════════════════════
 
 export async function recordOpeningRanges() {
-  console.log(`${LOG} ═══ Phase 2: Record opening ranges ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} ═══ PHASE 2: Record opening ranges [${istTimeStr()}] ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
 
   const doc = await OrbTrade.findToday();
   if (!doc) {
-    console.log(`${LOG} No ORB doc today — skipping range recording`);
+    console.warn(`${LOG} [PHASE2] ⚠️  No ORB doc for today — Phase 1 may not have run`);
     return { success: false, reason: 'no_doc' };
   }
+  console.log(`${LOG} [PHASE2] Doc found — docId=${doc._id}  total candidates=${doc.candidates.length}`);
 
   const watching = doc.candidates.filter(c => c.status === 'WATCHING');
+  const skipped  = doc.candidates.filter(c => c.status === 'SKIPPED');
+  console.log(`${LOG} [PHASE2] Candidate states: WATCHING=${watching.length}  SKIPPED=${skipped.length}  other=${doc.candidates.length - watching.length - skipped.length}`);
+
   if (!watching.length) {
-    console.log(`${LOG} No WATCHING candidates`);
+    console.warn(`${LOG} [PHASE2] ⚠️  No WATCHING candidates — nothing to set range on`);
     return { success: true, rangesSet: 0 };
   }
 
   const symbols = watching.map(c => c.symbol);
-  console.log(`${LOG} Fetching first 15-min candle for: ${symbols.join(', ')}`);
+  console.log(`${LOG} [PHASE2] Fetching 15-min candle for: ${symbols.join(', ')}`);
 
   let multiCandles;
   try {
@@ -170,32 +228,49 @@ export async function recordOpeningRanges() {
       { interval: '15minute', count: 1 },
     ]);
   } catch (err) {
-    console.error(`${LOG} Kite candle fetch failed:`, err.message);
+    console.error(`${LOG} [PHASE2] ❌ Kite candle fetch FAILED:`, err.message);
+    console.error(`${LOG} [PHASE2]    Stack:`, err.stack);
     return { success: false, error: err.message };
   }
 
   const candles15m = multiCandles['15minute'] || {};
+  console.log(`${LOG} [PHASE2] Candle data received for: ${Object.keys(candles15m).join(', ') || '(none)'}`);
+
   let rangesSet = 0;
+  let rangesSkipped = 0;
+  let rangesNoBar   = 0;
 
   for (const candidate of doc.candidates) {
     if (candidate.status !== 'WATCHING') continue;
 
     const bars = candles15m[candidate.symbol] || [];
+    console.log(`${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} bars received: ${bars.length}`);
+
     if (!bars.length) {
-      console.warn(`${LOG} ${candidate.symbol}: no 15-min bar yet — leaving as WATCHING`);
+      console.warn(`${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ⚠️  No 15-min bar — candle not yet available, leaving as WATCHING`);
+      rangesNoBar++;
       continue;
     }
 
-    const bar      = bars[0];
-    const orRange  = parseFloat((bar.high - bar.low).toFixed(2));
+    const bar     = bars[0];
+    const orRange = parseFloat((bar.high - bar.low).toFixed(2));
     const rangePct = candidate.iep > 0 ? (orRange / candidate.iep) * 100 : 99;
+
+    console.log(
+      `${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ` +
+      `candle → O=₹${bar.open}  H=₹${bar.high}  L=₹${bar.low}  C=₹${bar.close}` +
+      `${bar.volume != null ? `  Vol=${bar.volume}` : ''}` +
+      `  Range=₹${orRange} (${rangePct.toFixed(2)}% of IEP)`
+    );
 
     if (rangePct > MAX_OR_RANGE_PCT) {
       candidate.status = 'SKIPPED';
-      console.log(
-        `${LOG} ${candidate.symbol.padEnd(14)} ` +
-        `OR range ₹${orRange} = ${rangePct.toFixed(1)}% of IEP — too wide, skipping`
+      candidate.skipReason = `or_range_too_wide_${rangePct.toFixed(1)}pct`;
+      console.warn(
+        `${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ❌ SKIPPED — ` +
+        `OR range ${rangePct.toFixed(2)}% > max ${MAX_OR_RANGE_PCT}% → target would be unreachable`
       );
+      rangesSkipped++;
       continue;
     }
 
@@ -205,86 +280,114 @@ export async function recordOpeningRanges() {
     candidate.status  = 'RANGE_SET';
     rangesSet++;
 
+    const impliedTarget = snapToNSETick(bar.high + TARGET_RANGE_MULT * orRange, 0.05, 'ceil');
+    const impliedStop   = snapToNSETick(bar.low, 0.05, 'floor');
     console.log(
-      `${LOG} ${candidate.symbol.padEnd(14)} ` +
-      `OR High=₹${bar.high}  Low=₹${bar.low}  Range=₹${orRange} (${rangePct.toFixed(1)}%)  ` +
-      `(gap was +${candidate.preOpenPct.toFixed(2)}%)`
+      `${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ✅ RANGE_SET — ` +
+      `OR High=₹${bar.high}  Low=₹${bar.low}  Range=₹${orRange}  ` +
+      `implied stop=₹${impliedStop}  implied target=₹${impliedTarget}  ` +
+      `gap was +${candidate.preOpenPct.toFixed(2)}%`
     );
   }
 
   await doc.save();
-  console.log(`${LOG} Ranges set for ${rangesSet}/${watching.length} candidates`);
-  return { success: true, rangesSet };
+  console.log(`${LOG} [PHASE2] ─────────────────────────────────`);
+  console.log(`${LOG} [PHASE2] Summary: RANGE_SET=${rangesSet}  SKIPPED=${rangesSkipped}  NO_BAR=${rangesNoBar}  of ${watching.length} WATCHING`);
+  return { success: true, rangesSet, rangesSkipped, rangesNoBar };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// PHASE 3 — Check breakouts + enter (every 1 min, 9:30–10:30 AM)
+// PHASE 3 — Check breakouts + enter (every 1 min, 9:30–11:00 AM)
 // ══════════════════════════════════════════════════════════════════════════
 
 export async function checkBreakouts() {
   const ist    = MarketHoursUtil.toIST(new Date());
   const istMin = ist.getHours() * 60 + ist.getMinutes();
+  const windowStart = 9 * 60 + 30;
+  const windowEnd   = BREAKOUT_END_HOUR * 60 + BREAKOUT_END_MIN;
 
-  // Only run inside the breakout window (9:30–10:30 AM)
-  if (istMin < 9 * 60 + 30 || istMin > BREAKOUT_END_HOUR * 60 + BREAKOUT_END_MIN) {
+  if (istMin < windowStart || istMin > windowEnd) {
+    console.log(`${LOG} [BREAKOUT] Outside entry window (now=${istTimeStr()}  window=09:30–${String(BREAKOUT_END_HOUR).padStart(2,'0')}:${String(BREAKOUT_END_MIN).padStart(2,'0')}) — skipping`);
     return { skipped: true, reason: 'outside_window' };
   }
 
   const doc = await OrbTrade.findToday();
-  if (!doc) return { skipped: true, reason: 'no_doc' };
+  if (!doc) {
+    console.warn(`${LOG} [BREAKOUT] No ORB doc for today — Phase 1 not run?`);
+    return { skipped: true, reason: 'no_doc' };
+  }
 
   const enteredCount = doc.candidates.filter(c => c.status === 'ENTERED').length;
+  const rangeSet     = doc.candidates.filter(c => c.status === 'RANGE_SET');
+
+  console.log(`${LOG} [BREAKOUT] [${istTimeStr()}] entries=${enteredCount}/${MAX_ENTRIES}  RANGE_SET=${rangeSet.length}`);
+
   if (enteredCount >= MAX_ENTRIES) {
-    console.log(`${LOG} [BREAKOUT] Max ${MAX_ENTRIES} entries reached`);
+    console.log(`${LOG} [BREAKOUT] Max ${MAX_ENTRIES} entries reached — skipping`);
     return { skipped: true, reason: 'max_entries' };
   }
 
-  const rangeSet = doc.candidates.filter(c => c.status === 'RANGE_SET');
-  if (!rangeSet.length) return { skipped: true, reason: 'no_range_set' };
+  if (!rangeSet.length) {
+    console.log(`${LOG} [BREAKOUT] No RANGE_SET candidates — skipping`);
+    return { skipped: true, reason: 'no_range_set' };
+  }
 
   // Fetch LTP for all candidates in one call
   const symbols = rangeSet.map(c => `NSE:${c.symbol}`);
   let ltpData;
   try {
     ltpData = await kiteOrderService.getLTP(symbols);
+    console.log(`${LOG} [BREAKOUT] LTP fetched for ${Object.keys(ltpData).length}/${symbols.length} symbols`);
   } catch (err) {
-    console.error(`${LOG} [BREAKOUT] LTP fetch failed:`, err.message);
+    console.error(`${LOG} [BREAKOUT] ❌ LTP fetch FAILED:`, err.message);
     return { success: false, error: err.message };
   }
 
-  // Compute per-trade capital dynamically:
-  //   equity.net at this point already reflects what daily picks consumed at 9:08.
-  //   ORB takes 90% of what's left, split equally across remaining entry slots.
-  let capitalPerTrade = MIN_CAPITAL_PER_TRADE; // fallback floor
+  // Capital allocation
+  let capitalPerTrade = MIN_CAPITAL_PER_TRADE;
   try {
-    const balance    = await kiteOrderService.getAvailableBalance();
-    const orbBudget  = balance.available * ORB_CAPITAL_PCT;
-    const slotsLeft  = MAX_ENTRIES - enteredCount;
-    capitalPerTrade  = Math.floor(orbBudget / Math.max(slotsLeft, 1));
+    const balance   = await kiteOrderService.getAvailableBalance();
+    const orbBudget = balance.available * ORB_CAPITAL_PCT;
+    const slotsLeft = MAX_ENTRIES - enteredCount;
+    capitalPerTrade = Math.floor(orbBudget / Math.max(slotsLeft, 1));
     console.log(
-      `${LOG} [BREAKOUT] Balance: net=₹${balance.available}  ` +
-      `ORB budget (90%)=₹${Math.round(orbBudget)}  ` +
+      `${LOG} [BREAKOUT] Capital — available=₹${balance.available}  ` +
+      `ORB budget (${ORB_CAPITAL_PCT * 100}%)=₹${Math.round(orbBudget)}  ` +
       `slots left=${slotsLeft}  per-trade=₹${capitalPerTrade}`
     );
     if (capitalPerTrade < MIN_CAPITAL_PER_TRADE) {
-      console.warn(`${LOG} [BREAKOUT] Per-trade capital ₹${capitalPerTrade} below floor ₹${MIN_CAPITAL_PER_TRADE} — skipping entries`);
+      console.warn(`${LOG} [BREAKOUT] ⚠️  Per-trade capital ₹${capitalPerTrade} < floor ₹${MIN_CAPITAL_PER_TRADE} — skipping entries`);
       return { skipped: true, reason: 'insufficient_capital', capitalPerTrade };
     }
   } catch (err) {
-    console.error(`${LOG} [BREAKOUT] Balance fetch failed — using floor ₹${capitalPerTrade}:`, err.message);
+    console.error(`${LOG} [BREAKOUT] Balance fetch FAILED — using floor ₹${capitalPerTrade}:`, err.message);
   }
 
+  // Check each candidate
+  console.log(`${LOG} [BREAKOUT] Checking ${rangeSet.length} candidate(s):`);
   let entered = 0;
+
   for (const candidate of rangeSet) {
     if (doc.candidates.filter(c => c.status === 'ENTERED').length >= MAX_ENTRIES) break;
 
-    const ltp = ltpData[`NSE:${candidate.symbol}`]?.last_price;
-    if (!ltp) continue;
+    const ltpEntry = ltpData[`NSE:${candidate.symbol}`];
+    const ltp      = ltpEntry?.last_price;
 
-    const aboveOR = ltp > candidate.orHigh;
+    if (!ltp) {
+      console.warn(`${LOG} [BREAKOUT]   ${candidate.symbol.padEnd(14)} ⚠️  No LTP returned — skipping`);
+      continue;
+    }
+
+    const aboveOR   = ltp > candidate.orHigh;
+    const gapToOR   = parseFloat((candidate.orHigh - ltp).toFixed(2));
+    const gapToPct  = parseFloat(((candidate.orHigh - ltp) / candidate.orHigh * 100).toFixed(2));
+
     console.log(
-      `${LOG} [BREAKOUT] ${candidate.symbol.padEnd(14)} ` +
-      `LTP=₹${ltp}  OR_High=₹${candidate.orHigh}  ${aboveOR ? '✅ BREAKOUT' : '⬜ below'}`
+      `${LOG} [BREAKOUT]   ${candidate.symbol.padEnd(14)} ` +
+      `LTP=₹${ltp}  OR_High=₹${candidate.orHigh}  OR_Low=₹${candidate.orLow}  ` +
+      (aboveOR
+        ? `✅ BREAKOUT (above by ₹${Math.abs(gapToOR)})`
+        : `⬜ below OR (₹${gapToOR} = ${gapToPct}% away)`)
     );
 
     if (aboveOR) {
@@ -294,6 +397,7 @@ export async function checkBreakouts() {
   }
 
   if (entered > 0 || doc.isModified()) await doc.save();
+  console.log(`${LOG} [BREAKOUT] Done — entered=${entered} this run`);
   return { success: true, entered };
 }
 
@@ -303,9 +407,11 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
   const target = snapToNSETick(candidate.orHigh + TARGET_RANGE_MULT * candidate.orRange, 0.05, 'ceil');
   let   stop   = snapToNSETick(candidate.orLow, 0.05, 'floor');
 
-  console.log(`${LOG} [ENTER] ${candidate.symbol}: qty=${qty} LTP≈₹${ltp} stop=₹${stop} target=₹${target}`);
+  console.log(`${LOG} [ENTER] ─── ${candidate.symbol} ───────────────────────`);
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: capital=₹${capitalPerTrade}  LTP≈₹${ltp}  qty=${qty}`);
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: stop=₹${stop} (OR Low)  target=₹${target} (OR High + ${TARGET_RANGE_MULT}×Range)  R:R=${((target - ltp) / (ltp - stop)).toFixed(2)}`);
 
-  // ── Step 1: Market entry ─────────────────────────────────────────────────
+  // ── Step 1: Market entry ──────────────────────────────────────────────────
   let entryOrderId, entryPrice;
   try {
     const res = await kiteOrderService.placeOrder({
@@ -319,21 +425,27 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
       orderType:        'ORB_ENTRY',
       source:           'ORB',
     });
-    if (!res.success) throw new Error('placeOrder returned not-success');
+    if (!res.success) throw new Error(`placeOrder returned success=false`);
     entryOrderId = res.orderId;
-    console.log(`${LOG} [ENTER] ${candidate.symbol}: entry order placed — orderId=${entryOrderId}`);
+    console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ entry order placed — orderId=${entryOrderId}`);
   } catch (err) {
-    console.error(`${LOG} [ENTER] ${candidate.symbol}: entry FAILED:`, err.message);
-    candidate.status = 'SKIPPED';
+    console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ entry order FAILED:`, err.message);
+    candidate.status     = 'SKIPPED';
+    candidate.skipReason = `entry_failed: ${err.message}`;
     return;
   }
 
   // Wait for fill then read average price
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: waiting 2s for fill confirmation...`);
   await delay(2000);
   try {
-    const ord = await kiteOrderService.getOrderDetails(entryOrderId);
+    const ord  = await kiteOrderService.getOrderDetails(entryOrderId);
     entryPrice = ord?.average_price || ltp;
-  } catch (_) { entryPrice = ltp; }
+    console.log(`${LOG} [ENTER] ${candidate.symbol}: fill confirmed — avg_price=₹${entryPrice}  status=${ord?.status}  filled_qty=${ord?.filled_quantity}`);
+  } catch (err) {
+    entryPrice = ltp;
+    console.warn(`${LOG} [ENTER] ${candidate.symbol}: couldn't read fill details (${err.message}) — using LTP ₹${ltp} as entry price`);
+  }
 
   candidate.entryOrderId = entryOrderId;
   candidate.entryPrice   = entryPrice;
@@ -344,9 +456,10 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
   candidate.status       = 'ENTERED';
   doc.entriesCount       = (doc.entriesCount || 0) + 1;
 
-  // ── Step 2: SL-M — retry with correct tick on rejection ─────────────────
+  // ── Step 2: SL-M — retry with correct tick on rejection ──────────────────
   let slOrderId;
   for (let attempt = 1; attempt <= 2; attempt++) {
+    console.log(`${LOG} [ENTER] ${candidate.symbol}: SL-M attempt ${attempt} — trigger=₹${stop}  qty=${qty}`);
     try {
       const slRes = await kiteOrderService.placeOrder({
         tradingsymbol:    candidate.symbol,
@@ -360,25 +473,29 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
         orderType:        'ORB_STOP',
         source:           'ORB',
       });
-      if (slRes.success) { slOrderId = slRes.orderId; break; }
+      if (slRes.success) {
+        slOrderId = slRes.orderId;
+        console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ SL-M placed — orderId=${slOrderId}  trigger=₹${stop}`);
+        break;
+      }
     } catch (err) {
       const tick = parseKiteTickError(err.message);
       if (tick && attempt === 1) {
         stop = snapToNSETick(candidate.orLow, tick, 'floor');
         candidate.stopPrice = stop;
-        console.log(`${LOG} [ENTER] ${candidate.symbol}: tick=${tick} → re-snapped stop=₹${stop}`);
+        console.warn(`${LOG} [ENTER] ${candidate.symbol}: tick error (tick=${tick}) → re-snapped stop=₹${stop}  retrying...`);
       } else {
-        console.error(`${LOG} [ENTER] ${candidate.symbol}: SL-M attempt ${attempt} failed:`, err.message);
+        console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ SL-M attempt ${attempt} FAILED:`, err.message);
       }
     }
   }
   candidate.stopOrderId = slOrderId;
 
-  // ── SL failure safety — if both attempts failed, exit the position immediately ──
+  // ── SL failure safety ────────────────────────────────────────────────────
   if (!slOrderId) {
-    console.error(`${LOG} [ENTER] ${candidate.symbol}: SL-M failed after 2 attempts — emergency market exit`);
+    console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌❌ SL-M FAILED after 2 attempts — EMERGENCY EXIT`);
     try {
-      await kiteOrderService.placeOrder({
+      const exitRes = await kiteOrderService.placeOrder({
         tradingsymbol:    candidate.symbol,
         exchange:         'NSE',
         transaction_type: 'SELL',
@@ -389,17 +506,20 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
         orderType:        'ORB_EMERGENCY_EXIT',
         source:           'ORB',
       });
+      console.log(`${LOG} [ENTER] ${candidate.symbol}: emergency exit order placed — orderId=${exitRes?.orderId}`);
     } catch (exitErr) {
-      console.error(`${LOG} [ENTER] ${candidate.symbol}: emergency exit also failed — MANUAL ACTION REQUIRED:`, exitErr.message);
+      console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌❌❌ EMERGENCY EXIT ALSO FAILED — MANUAL ACTION REQUIRED:`, exitErr.message);
     }
-    candidate.status = 'SKIPPED';
+    candidate.status     = 'SKIPPED';
+    candidate.skipReason = 'sl_placement_failed';
     candidate.exitReason = 'sl_placement_failed';
-    doc.entriesCount = Math.max(0, (doc.entriesCount || 1) - 1);
+    doc.entriesCount     = Math.max(0, (doc.entriesCount || 1) - 1);
     return;
   }
 
-  // ── Step 3: LIMIT target ─────────────────────────────────────────────────
+  // ── Step 3: LIMIT target ──────────────────────────────────────────────────
   let tgtOrderId;
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: placing target LIMIT — price=₹${target}  qty=${qty}`);
   try {
     const tgtRes = await kiteOrderService.placeOrder({
       tradingsymbol:    candidate.symbol,
@@ -413,11 +533,15 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
       orderType:        'ORB_TARGET',
       source:           'ORB',
     });
-    if (tgtRes.success) tgtOrderId = tgtRes.orderId;
+    if (tgtRes.success) {
+      tgtOrderId = tgtRes.orderId;
+      console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ target LIMIT placed — orderId=${tgtOrderId}  price=₹${target}`);
+    }
   } catch (err) {
     const tick = parseKiteTickError(err.message);
     if (tick) {
       const snappedTgt = snapToNSETick(target, tick, 'ceil');
+      console.warn(`${LOG} [ENTER] ${candidate.symbol}: target tick error (tick=${tick}) → re-snapped target=₹${snappedTgt}  retrying...`);
       try {
         const r2 = await kiteOrderService.placeOrder({
           tradingsymbol: candidate.symbol, exchange: 'NSE',
@@ -426,18 +550,24 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
           simulationId: `orb_tgt_${candidate.symbol}`,
           orderType: 'ORB_TARGET', source: 'ORB',
         });
-        if (r2.success) { tgtOrderId = r2.orderId; candidate.targetPrice = snappedTgt; }
-      } catch (_) {}
+        if (r2.success) {
+          tgtOrderId = r2.orderId;
+          candidate.targetPrice = snappedTgt;
+          console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ target LIMIT placed (retry) — orderId=${tgtOrderId}  price=₹${snappedTgt}`);
+        }
+      } catch (retryErr) {
+        console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ target LIMIT retry FAILED:`, retryErr.message);
+      }
+    } else {
+      console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ target LIMIT FAILED:`, err.message);
     }
-    console.error(`${LOG} [ENTER] ${candidate.symbol}: target error:`, err.message);
   }
   candidate.targetOrderId = tgtOrderId;
 
-  console.log(
-    `${LOG} [ENTER] ✅ ${candidate.symbol} LIVE — ` +
-    `entry=₹${entryPrice}  stop=₹${stop}  target=₹${target}  ` +
-    `SL=${slOrderId || 'FAILED'}  TGT=${tgtOrderId || 'FAILED'}`
-  );
+  console.log(`${LOG} [ENTER] ✅✅ ${candidate.symbol} LIVE`);
+  console.log(`${LOG} [ENTER]    entry=₹${entryPrice}  stop=₹${stop}  target=₹${candidate.targetPrice}`);
+  console.log(`${LOG} [ENTER]    SL orderId=${slOrderId}  TGT orderId=${tgtOrderId || '⚠️ FAILED'}`);
+  console.log(`${LOG} [ENTER]    risk=₹${((entryPrice - stop) * qty).toFixed(2)}  reward=₹${((candidate.targetPrice - entryPrice) * qty).toFixed(2)}`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -446,31 +576,55 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
 
 export async function monitorOrbPositions() {
   const doc = await OrbTrade.findToday();
-  if (!doc) return;
+  if (!doc) return { active: 0, exited: 0 };
 
   const entered = doc.candidates.filter(c => c.status === 'ENTERED');
-  if (!entered.length) return;
+  if (!entered.length) {
+    console.log(`${LOG} [MONITOR] [${istTimeStr()}] No open positions`);
+    return { active: 0, exited: 0 };
+  }
 
-  const ist    = MarketHoursUtil.toIST(new Date());
-  const istMin = ist.getHours() * 60 + ist.getMinutes();
+  const ist          = MarketHoursUtil.toIST(new Date());
+  const istMin       = ist.getHours() * 60 + ist.getMinutes();
   const pastTimeExit = istMin >= TIME_EXIT_HOUR * 60 + TIME_EXIT_MIN;
 
-  console.log(`${LOG} [MONITOR] ${entered.length} open ORB position(s)${pastTimeExit ? ' — past 10:30, time-exit mode' : ''}`);
+  console.log(`${LOG} [MONITOR] ════════════ [${istTimeStr()}] ════════════`);
+  console.log(`${LOG} [MONITOR] Open positions: ${entered.length}  ${pastTimeExit ? '⏰ PAST 10:30 — time-exit mode' : 'within window'}`);
 
-  // Fetch LTP for all open positions in one call (needed for breakeven trailing)
+  // Fetch LTP for all open positions in one call
   const ltpSymbols = entered.map(c => `NSE:${c.symbol}`);
   let ltpData = {};
   try {
     ltpData = await kiteOrderService.getLTP(ltpSymbols);
-  } catch (_) {}
+    console.log(`${LOG} [MONITOR] LTP fetched for ${Object.keys(ltpData).length}/${ltpSymbols.length} symbols`);
+  } catch (err) {
+    console.error(`${LOG} [MONITOR] ⚠️  LTP fetch failed (${err.message}) — continuing with order status checks only`);
+  }
 
   let changed = false;
+  let exitedThisRun = 0;
 
   for (const c of entered) {
-    // ── 10:30 time-exit — stalled breakout, cut the position ────────────────
+    const ltp = ltpData[`NSE:${c.symbol}`]?.last_price;
+    console.log(`${LOG} [MONITOR] ── ${c.symbol} ──────────────────────────`);
+    console.log(`${LOG} [MONITOR]   entry=₹${c.entryPrice}  stop=₹${c.stopPrice}  target=₹${c.targetPrice}  LTP=${ltp ? `₹${ltp}` : 'N/A'}`);
+    console.log(`${LOG} [MONITOR]   SL orderId=${c.stopOrderId || 'none'}  TGT orderId=${c.targetOrderId || 'none'}  beTrailed=${c._beTrailed || false}`);
+
+    if (ltp) {
+      const unrealised = parseFloat(((ltp - c.entryPrice) * c.qty).toFixed(2));
+      const pct        = parseFloat(((ltp - c.entryPrice) / c.entryPrice * 100).toFixed(2));
+      console.log(`${LOG} [MONITOR]   unrealised PnL=₹${unrealised >= 0 ? '+' : ''}${unrealised} (${pct >= 0 ? '+' : ''}${pct}%)`);
+    }
+
+    // ── 10:30 time-exit ─────────────────────────────────────────────────────
     if (pastTimeExit) {
-      if (c.stopOrderId)   { try { await kiteOrderService.cancelOrder(c.stopOrderId);   } catch (_) {} }
-      if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); } catch (_) {} }
+      console.log(`${LOG} [MONITOR]   ⏰ TIME EXIT — cancelling SL+TGT and placing market sell`);
+      if (c.stopOrderId)   {
+        try { await kiteOrderService.cancelOrder(c.stopOrderId);   console.log(`${LOG} [MONITOR]   SL cancel sent`);   } catch (e) { console.warn(`${LOG} [MONITOR]   SL cancel failed: ${e.message}`); }
+      }
+      if (c.targetOrderId) {
+        try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [MONITOR]   TGT cancel sent`); } catch (e) { console.warn(`${LOG} [MONITOR]   TGT cancel failed: ${e.message}`); }
+      }
       await delay(500);
       try {
         const res = await kiteOrderService.placeOrder({
@@ -485,11 +639,13 @@ export async function monitorOrbPositions() {
           source:           'ORB',
         });
         if (res.success) {
+          console.log(`${LOG} [MONITOR]   time-exit order placed — orderId=${res.orderId}`);
           await delay(2000);
           let exitPrice = c.entryPrice;
           try {
             const ord = await kiteOrderService.getOrderDetails(res.orderId);
             if (ord?.average_price) exitPrice = ord.average_price;
+            console.log(`${LOG} [MONITOR]   fill: avg_price=₹${exitPrice}  status=${ord?.status}`);
           } catch (_) {}
           c.status     = 'TIME_EXIT';
           c.exitPrice  = exitPrice;
@@ -497,19 +653,21 @@ export async function monitorOrbPositions() {
           c.exitReason = 'time_exit_10:30am';
           c.pnl        = parseFloat(((exitPrice - c.entryPrice) * c.qty).toFixed(2));
           c.returnPct  = parseFloat(((exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-          console.log(`${LOG} [MONITOR] ${c.symbol}: TIME EXIT (10:30) @ ₹${exitPrice}  PnL=₹${c.pnl}`);
+          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} TIME EXIT @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl} (${c.returnPct >= 0 ? '+' : ''}${c.returnPct}%)`);
+          exitedThisRun++;
           changed = true;
         }
       } catch (err) {
-        console.error(`${LOG} [MONITOR] ${c.symbol}: time-exit order failed:`, err.message);
+        console.error(`${LOG} [MONITOR]   ❌ time-exit order FAILED:`, err.message);
       }
       continue;
     }
 
-    // ── Check if stop order filled ───────────────────────────────────────────
+    // ── Check stop order status ──────────────────────────────────────────────
     if (c.stopOrderId) {
       try {
         const ord = await kiteOrderService.getOrderDetails(c.stopOrderId);
+        console.log(`${LOG} [MONITOR]   SL order status=${ord?.status}  avg_price=${ord?.average_price || 'N/A'}`);
         if (ord?.status === 'COMPLETE') {
           c.status     = 'STOPPED_OUT';
           c.exitPrice  = ord.average_price;
@@ -517,18 +675,26 @@ export async function monitorOrbPositions() {
           c.exitReason = 'stop_hit';
           c.pnl        = parseFloat(((c.exitPrice - c.entryPrice) * c.qty).toFixed(2));
           c.returnPct  = parseFloat(((c.exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-          if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); } catch (_) {} }
-          console.log(`${LOG} [MONITOR] ${c.symbol}: STOPPED OUT @ ₹${c.exitPrice}  PnL=₹${c.pnl}`);
+          if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [MONITOR]   TGT cancelled (stop hit)`); } catch (_) {} }
+          console.log(`${LOG} [MONITOR]   🔴 ${c.symbol} STOPPED OUT @ ₹${c.exitPrice}  PnL=₹${c.pnl}`);
+          exitedThisRun++;
           changed = true;
           continue;
+        } else if (ord?.status === 'CANCELLED' || ord?.status === 'REJECTED') {
+          console.error(`${LOG} [MONITOR]   ⚠️  SL order is ${ord.status} — position UNPROTECTED! reason=${ord?.status_message}`);
         }
-      } catch (_) {}
+      } catch (err) {
+        console.error(`${LOG} [MONITOR]   SL status check failed:`, err.message);
+      }
+    } else {
+      console.error(`${LOG} [MONITOR]   ⚠️  ${c.symbol} has no SL orderId — position UNPROTECTED`);
     }
 
-    // ── Check if target order filled ─────────────────────────────────────────
+    // ── Check target order status ────────────────────────────────────────────
     if (c.targetOrderId) {
       try {
         const ord = await kiteOrderService.getOrderDetails(c.targetOrderId);
+        console.log(`${LOG} [MONITOR]   TGT order status=${ord?.status}  avg_price=${ord?.average_price || 'N/A'}`);
         if (ord?.status === 'COMPLETE') {
           c.status     = 'TARGET_HIT';
           c.exitPrice  = ord.average_price;
@@ -536,21 +702,29 @@ export async function monitorOrbPositions() {
           c.exitReason = 'target_hit';
           c.pnl        = parseFloat(((c.exitPrice - c.entryPrice) * c.qty).toFixed(2));
           c.returnPct  = parseFloat(((c.exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-          if (c.stopOrderId) { try { await kiteOrderService.cancelOrder(c.stopOrderId); } catch (_) {} }
-          console.log(`${LOG} [MONITOR] ${c.symbol}: TARGET HIT @ ₹${c.exitPrice}  PnL=₹${c.pnl}`);
+          if (c.stopOrderId) { try { await kiteOrderService.cancelOrder(c.stopOrderId); console.log(`${LOG} [MONITOR]   SL cancelled (target hit)`); } catch (_) {} }
+          console.log(`${LOG} [MONITOR]   🟢 ${c.symbol} TARGET HIT @ ₹${c.exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+          exitedThisRun++;
           changed = true;
           continue;
         }
-      } catch (_) {}
+      } catch (err) {
+        console.error(`${LOG} [MONITOR]   TGT status check failed:`, err.message);
+      }
     }
 
-    // ── Breakeven trail — move stop to entry once 1R in profit ───────────────
+    // ── Breakeven trail — move stop to entry once 1R in profit ──────────────
     if (c.status === 'ENTERED' && c.stopOrderId && !c._beTrailed) {
-      const ltp   = ltpData[`NSE:${c.symbol}`]?.last_price;
-      const risk  = c.entryPrice - c.stopPrice;
+      const risk         = c.entryPrice - c.stopPrice;
+      const gainNeeded   = risk;
+      const currentGain  = ltp ? ltp - c.entryPrice : null;
+      if (ltp) {
+        console.log(`${LOG} [MONITOR]   BE trail check: risk=₹${risk.toFixed(2)}  current gain=₹${currentGain?.toFixed(2)}  need ₹${gainNeeded.toFixed(2)} for 1R`);
+      }
       if (ltp && risk > 0 && (ltp - c.entryPrice) >= risk) {
         const beStop      = snapToNSETick(c.entryPrice, 0.05, 'floor');
         const beStopLimit = snapToNSETick(c.entryPrice - 5, 0.05, 'ceil');
+        console.log(`${LOG} [MONITOR]   1R achieved → moving stop to breakeven=₹${beStop} (limit=₹${beStopLimit})`);
         try {
           await kiteOrderService.modifyOrder(c.stopOrderId, {
             trigger_price: beStop,
@@ -558,21 +732,12 @@ export async function monitorOrbPositions() {
           });
           c.stopPrice  = beStop;
           c._beTrailed = true;
-          console.log(`${LOG} [MONITOR] ${c.symbol}: breakeven trail → stop moved to ₹${beStop} (LTP=₹${ltp}, 1R achieved)`);
+          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} breakeven trail done — stop=₹${beStop}`);
           changed = true;
         } catch (err) {
-          console.error(`${LOG} [MONITOR] ${c.symbol}: breakeven trail failed:`, err.message);
+          console.error(`${LOG} [MONITOR]   ❌ breakeven trail FAILED:`, err.message);
         }
       }
-    }
-
-    if (c.status === 'ENTERED') {
-      const ltp = ltpData[`NSE:${c.symbol}`]?.last_price;
-      console.log(
-        `${LOG} [MONITOR] ${c.symbol}: still open  ` +
-        `entry=₹${c.entryPrice}  stop=₹${c.stopPrice}  target=₹${c.targetPrice}` +
-        (ltp ? `  LTP=₹${ltp}` : '')
-      );
     }
   }
 
@@ -581,7 +746,12 @@ export async function monitorOrbPositions() {
       doc.candidates.reduce((s, c) => s + (c.pnl || 0), 0).toFixed(2)
     );
     await doc.save();
+    console.log(`${LOG} [MONITOR] Doc saved — totalPnl=₹${doc.totalPnl}`);
   }
+
+  const stillOpen = doc.candidates.filter(c => c.status === 'ENTERED').length;
+  console.log(`${LOG} [MONITOR] ─── run complete — exited=${exitedThisRun}  still open=${stillOpen} ───`);
+  return { active: stillOpen, exited: exitedThisRun };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -589,21 +759,47 @@ export async function monitorOrbPositions() {
 // ══════════════════════════════════════════════════════════════════════════
 
 export async function forceExitOrb() {
-  console.log(`${LOG} ═══ Phase 5: Force exit all ORB positions ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} ═══ PHASE 5: Force exit [${istTimeStr()}] ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
 
   const doc = await OrbTrade.findToday();
-  if (!doc) { console.log(`${LOG} No ORB doc today`); return; }
+  if (!doc) {
+    console.log(`${LOG} [FORCE-EXIT] No ORB doc today — nothing to do`);
+    return { exited: 0 };
+  }
 
   const entered = doc.candidates.filter(c => c.status === 'ENTERED');
   if (!entered.length) {
-    console.log(`${LOG} No open ORB positions — nothing to exit`);
-    return;
+    console.log(`${LOG} [FORCE-EXIT] No ENTERED positions — all already closed`);
+
+    // Print day summary even if nothing to exit
+    const allDone = doc.candidates.filter(c => ['STOPPED_OUT','TARGET_HIT','TIME_EXIT'].includes(c.status));
+    if (allDone.length) {
+      console.log(`${LOG} [FORCE-EXIT] ─── Day summary ───`);
+      allDone.forEach(c =>
+        console.log(`${LOG} [FORCE-EXIT]   ${c.symbol.padEnd(14)} ${c.status.padEnd(12)} @ ₹${c.exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl} (${c.returnPct >= 0 ? '+' : ''}${c.returnPct}%)`)
+      );
+      console.log(`${LOG} [FORCE-EXIT]   Total PnL: ₹${doc.totalPnl >= 0 ? '+' : ''}${doc.totalPnl}`);
+    }
+    return { exited: 0 };
   }
 
+  console.log(`${LOG} [FORCE-EXIT] ${entered.length} position(s) still open — hard-flat all`);
+  let exited = 0;
+
   for (const c of entered) {
-    // Cancel protective orders first
-    if (c.stopOrderId)   { try { await kiteOrderService.cancelOrder(c.stopOrderId);   } catch (_) {} }
-    if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); } catch (_) {} }
+    console.log(`${LOG} [FORCE-EXIT] ── ${c.symbol} ──`);
+    console.log(`${LOG} [FORCE-EXIT]   entry=₹${c.entryPrice}  stop=₹${c.stopPrice}  target=₹${c.targetPrice}  qty=${c.qty}`);
+
+    if (c.stopOrderId) {
+      try { await kiteOrderService.cancelOrder(c.stopOrderId);   console.log(`${LOG} [FORCE-EXIT]   SL cancelled`);   }
+      catch (e) { console.warn(`${LOG} [FORCE-EXIT]   SL cancel failed: ${e.message}`); }
+    }
+    if (c.targetOrderId) {
+      try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [FORCE-EXIT]   TGT cancelled`); }
+      catch (e) { console.warn(`${LOG} [FORCE-EXIT]   TGT cancel failed: ${e.message}`); }
+    }
     await delay(500);
 
     try {
@@ -620,23 +816,26 @@ export async function forceExitOrb() {
       });
 
       if (res.success) {
+        console.log(`${LOG} [FORCE-EXIT]   exit order placed — orderId=${res.orderId}`);
         await delay(2000);
         let exitPrice = c.entryPrice;
         try {
           const ord = await kiteOrderService.getOrderDetails(res.orderId);
           if (ord?.average_price) exitPrice = ord.average_price;
+          console.log(`${LOG} [FORCE-EXIT]   fill: avg_price=₹${exitPrice}  status=${ord?.status}`);
         } catch (_) {}
 
-        c.status    = 'TIME_EXIT';
-        c.exitPrice = exitPrice;
-        c.exitTime  = new Date();
+        c.status     = 'TIME_EXIT';
+        c.exitPrice  = exitPrice;
+        c.exitTime   = new Date();
         c.exitReason = 'time_exit_3:15pm';
         c.pnl        = parseFloat(((exitPrice - c.entryPrice) * c.qty).toFixed(2));
         c.returnPct  = parseFloat(((exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-        console.log(`${LOG} ✅ ${c.symbol}: force-exited @ ₹${exitPrice}  PnL=₹${c.pnl}`);
+        console.log(`${LOG} [FORCE-EXIT]   ✅ ${c.symbol} exited @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+        exited++;
       }
     } catch (err) {
-      console.error(`${LOG} ${c.symbol}: force exit failed:`, err.message);
+      console.error(`${LOG} [FORCE-EXIT]   ❌ exit order FAILED:`, err.message);
     }
   }
 
@@ -645,10 +844,14 @@ export async function forceExitOrb() {
   );
   await doc.save();
 
-  console.log(`${LOG} ═══ ORB day complete ═══`);
-  console.log(`${LOG} Total PnL today: ₹${doc.totalPnl}`);
-  const completed = doc.candidates.filter(c => ['STOPPED_OUT','TARGET_HIT','TIME_EXIT'].includes(c.status));
-  completed.forEach(c =>
-    console.log(`${LOG}   ${c.symbol.padEnd(14)} ${c.status.padEnd(12)} ₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`)
+  console.log(`${LOG} ════════════ ORB DAY COMPLETE ════════════`);
+  console.log(`${LOG} Entries: ${doc.entriesCount || 0}  Exited today: ${exited}`);
+  const allDone = doc.candidates.filter(c => ['STOPPED_OUT','TARGET_HIT','TIME_EXIT'].includes(c.status));
+  allDone.forEach(c =>
+    console.log(`${LOG}   ${c.symbol.padEnd(14)} ${c.status.padEnd(12)} @ ₹${c.exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl} (${c.returnPct >= 0 ? '+' : ''}${c.returnPct}%)`)
   );
+  console.log(`${LOG} Total PnL: ₹${doc.totalPnl >= 0 ? '+' : ''}${doc.totalPnl}`);
+  console.log(`${LOG} ═══════════════════════════════════════════`);
+
+  return { exited };
 }
