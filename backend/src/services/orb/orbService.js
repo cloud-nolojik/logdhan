@@ -74,7 +74,7 @@ async function fetchNsePreOpenRaw() {
   await delay(1200);
   // Step 2: fetch actual pre-open data
   const resp = await client.get(
-    'https://www.nseindia.com/api/market-data-pre-open?key=NIFTY',
+    'https://www.nseindia.com/api/market-data-pre-open?key=FO',
     { headers: { 'Accept': 'application/json, text/plain, */*' } }
   );
   return resp.data;

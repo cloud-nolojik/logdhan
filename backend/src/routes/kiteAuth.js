@@ -357,17 +357,34 @@ router.post('/test-login', simpleAdminAuth, async (req, res) => {
  */
 router.post('/postback', async (req, res) => {
   try {
-    // Kite sends postback as application/x-www-form-urlencoded with JSON as the body.
-    // Express urlencoded parser puts the JSON string as a key with empty value: { "{...}": "" }
-    // Detect this and parse the JSON string from the key.
+    // Kite sends postback as application/x-www-form-urlencoded with a raw JSON blob as body.
+    // We register express.text({type:'*/*'}) for this route in index.js BEFORE the global
+    // json/urlencoded parsers, so req.body arrives here as a plain string. Parse it directly.
+    // Fallback paths handle legacy cases or if Kite ever switches to individual url-encoded fields.
     let postback = req.body;
-    if (!postback.order_id && typeof postback === 'object') {
+
+    if (typeof postback === 'string') {
+      // Normal path: express.text() captured the raw body
+      try {
+        postback = JSON.parse(postback);
+      } catch (_jsonErr) {
+        // Maybe Kite sent individual key=value pairs instead of a JSON blob
+        try {
+          postback = Object.fromEntries(new URLSearchParams(postback));
+        } catch (urlErr) {
+          console.error('[KITE POSTBACK] Failed to parse body as JSON or URL-encoded:', urlErr.message);
+          postback = {};
+        }
+      }
+    } else if (typeof postback === 'object' && !postback?.order_id) {
+      // Legacy fallback: qs put the JSON blob as a single key { "{...}": "" }
+      // (only fires if express.text somehow didn't run)
       const keys = Object.keys(postback);
       if (keys.length > 0 && keys[0].startsWith('{')) {
         try {
           postback = JSON.parse(keys[0]);
         } catch (e) {
-          console.error('[KITE POSTBACK] Failed to parse JSON from key:', e.message);
+          console.error('[KITE POSTBACK] Legacy fallback: failed to parse JSON from key:', e.message);
         }
       }
     }

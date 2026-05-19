@@ -83,6 +83,16 @@ const app = express();
 
 // Middleware
 app.use(cors());
+
+// ── Kite postback: capture raw body BEFORE qs can mangle it ──────────────────
+// Kite sends application/x-www-form-urlencoded with a raw JSON blob as the body
+// (not individual key=value pairs). express.urlencoded uses qs which fragments
+// the JSON into broken keys, so JSON.parse(keys[0]) fails silently → all fields
+// undefined. express.text() with type:'*/*' grabs the raw string first and sets
+// req._body=true, which prevents the json/urlencoded parsers from re-consuming
+// the (already-drained) stream. The postback handler then JSON.parses it directly.
+app.use(['/api/kite/auth/postback', '/api/kite/orders/postback'], express.text({ type: '*/*' }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
