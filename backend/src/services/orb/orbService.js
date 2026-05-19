@@ -70,13 +70,16 @@ function createNseClient() {
 async function fetchNsePreOpenRaw() {
   const client = createNseClient();
   // Step 1: establish session + get cookies
-  await client.get('https://www.nseindia.com', { timeout: 15000 });
+  const homeResp = await client.get('https://www.nseindia.com', { timeout: 15000 });
+  console.log(`${LOG} NSE homepage GET: status=${homeResp.status}`);
   await delay(1200);
   // Step 2: fetch actual pre-open data
   const resp = await client.get(
     'https://www.nseindia.com/api/market-data-pre-open?key=FO',
     { headers: { 'Accept': 'application/json, text/plain, */*' } }
   );
+  const list = resp.data?.data || [];
+  console.log(`${LOG} NSE pre-open API: status=${resp.status} records=${list.length}`);
   return resp.data;
 }
 
