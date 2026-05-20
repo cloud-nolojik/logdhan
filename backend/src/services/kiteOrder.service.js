@@ -855,6 +855,14 @@ class KiteOrderService {
       const from      = `${istDateStr} 09:15:00`;
       const to        = fmt(toDate);
 
+      // Guard: if market hasn't opened yet (or exactly at 9:15), `to` < `from` — Kite returns 400.
+      // Return empty shells immediately; caller handles 0 bars gracefully.
+      const marketOpenMs = new Date(`${istDateStr}T09:15:00+05:30`).getTime();
+      if (toDate.getTime() <= marketOpenMs) {
+        console.log(`[KITE ORDER] getIntradayMultiCandles: too early (to=${to} <= market open 09:15) — returning empty`);
+        return result;
+      }
+
       console.log(`[KITE ORDER] getIntradayMultiCandles: from=${from} to=${to} symbols=${symbols.join(',')} intervals=${intervalsConfig.map(c => `${c.interval}(${c.count})`).join(',')}`);
 
       // ── All symbol × interval combinations in parallel (no extra LTP calls) ──

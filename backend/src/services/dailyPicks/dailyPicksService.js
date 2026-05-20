@@ -3368,7 +3368,21 @@ async function monitorDailyPickOrders(options = {}) {
                 }
                 console.log(`${LOG} [CANDLE] ${pick.symbol}: Layer 2 already trailed this cycle — skipping modifyOrder, noted stop ₹${decision.newStop} [${decision.action}]`);
               } else {
-                const snappedCandelStop = snapToNSETick(decision.newStop, 0.05, isBullish ? 'floor' : 'ceil');
+                let snappedCandelStop = snapToNSETick(decision.newStop, 0.05, isBullish ? 'floor' : 'ceil');
+
+                // Guard: Kite rejects SL-M modify when trigger_price >= LTP (for SELL) or <= LTP (for BUY).
+                // Use last 5-min close as LTP proxy. If trigger would equal/cross LTP, nudge by 1 tick.
+                const ltpProxy = sym5m.length > 0 ? sym5m[sym5m.length - 1].close : null;
+                if (ltpProxy !== null) {
+                  if (isBullish && snappedCandelStop >= ltpProxy) {
+                    snappedCandelStop = snapToNSETick(ltpProxy - 0.05, 0.05, 'floor');
+                    console.log(`${LOG} [CANDLE] ${pick.symbol}: tighten nudged to ₹${snappedCandelStop} (was ≥ LTP proxy ₹${ltpProxy})`);
+                  } else if (!isBullish && snappedCandelStop <= ltpProxy) {
+                    snappedCandelStop = snapToNSETick(ltpProxy + 0.05, 0.05, 'ceil');
+                    console.log(`${LOG} [CANDLE] ${pick.symbol}: tighten nudged to ₹${snappedCandelStop} (was ≤ LTP proxy ₹${ltpProxy})`);
+                  }
+                }
+
                 try {
                   await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
                     trigger_price: snappedCandelStop,
