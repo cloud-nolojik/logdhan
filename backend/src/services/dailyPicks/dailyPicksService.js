@@ -2997,78 +2997,148 @@ async function monitorDailyPickOrders(options = {}) {
       } else if (stopStatus === 'REJECTED') {
         // ── SL-M REJECTED: clear dead order ID and re-place a fresh one ──────────
         // Kite rejects SL-M orders immediately in some edge cases (price band,
-        // tick mismatch, transient exchange error). The dead order ID cannot be
-        // modified — every modifyOrder call returns "Order cannot be modified as
-        // it is being processed." Re-place from scratch using the current stop level.
+        // tick mismatch, circuit limit). The dead order ID cannot be modified.
+        // We track consecutive rejections in pick._slRejectedCount:
+        //   • Each cycle: nudge stop 1 tick toward LTP (away from circuit)
+        //   • After SL_REJECT_FORCE_EXIT_THRESHOLD consecutive failures:
+        //     place a MARKET exit to close the naked position rather than loop forever.
+        const SL_REJECT_FORCE_EXIT_THRESHOLD = 3;
+
+        pick._slRejectedCount = (pick._slRejectedCount || 0) + 1;
+
         const deadOrderId = pick.kite.stop_order_id;
-        console.warn(`${LOG} ⚠️ ${pick.symbol}: SL order ${deadOrderId} REJECTED — clearing dead ID and re-placing fresh SL-M @ ₹${pick.levels.stop}`);
+        const isBullishSL = pick.direction === 'LONG';
+        const slTick      = getNseTickSize(pick.levels.stop);
+
+        // Nudge stop 1 tick toward LTP on every consecutive rejection so we
+        // walk away from the circuit price. For LONG (SELL SL-M) → nudge UP.
+        // For SHORT (BUY SL-M) → nudge DOWN.
+        const nudgedStop = isBullishSL
+          ? snapToNSETick(pick.levels.stop + slTick, null, 'ceil')
+          : snapToNSETick(pick.levels.stop - slTick, null, 'floor');
+
+        console.warn(
+          `${LOG} ⚠️ ${pick.symbol}: SL order ${deadOrderId} REJECTED ` +
+          `(consecutive #${pick._slRejectedCount}) — ` +
+          `clearing dead ID, nudging stop ₹${pick.levels.stop} → ₹${nudgedStop} (+${slTick} tick, ${isBullishSL ? 'up' : 'down'})`
+        );
         pick.kite.stop_order_id = null; // clear immediately so candle monitor won't try to modify it
+        pick.levels.stop        = nudgedStop; // adopt nudged level before re-placing
 
-        try {
-          await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
-            `⚠️ ${pick.symbol}: SL-M Rejected — Re-placing`,
-            `SL order ${deadOrderId} rejected. Placing fresh SL-M @ ₹${pick.levels.stop}. Check position.`,
-            { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
+        // ── Force-exit path: too many consecutive rejections ─────────────────
+        if (pick._slRejectedCount >= SL_REJECT_FORCE_EXIT_THRESHOLD) {
+          console.error(
+            `${LOG} 🚨 ${pick.symbol}: SL rejected ${pick._slRejectedCount}× in a row — ` +
+            `circuit or band blocks every re-placement. Forcing MARKET exit now.`
           );
-        } catch (_) { /* ignore notification failure */ }
+          try {
+            await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
+              `🚨 ${pick.symbol}: Force-Exit — SL Blocked`,
+              `SL-M rejected ${pick._slRejectedCount}× (circuit/band). Placing MARKET ${isBullishSL ? 'SELL' : 'BUY'} to close position.`,
+              { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
+            );
+          } catch (_) { /* ignore */ }
 
-        if (!dryRun) {
-          const exitSide   = pick.direction === 'LONG' ? 'SELL' : 'BUY';
-          const isBullishSL = pick.direction === 'LONG';
-          let slTrigger    = snapToNSETick(pick.levels.stop, null, isBullishSL ? 'floor' : 'ceil');
-          let slReplaced   = false;
-
-          for (let attempt = 1; attempt <= 2 && !slReplaced; attempt++) {
+          if (!dryRun) {
             try {
-              if (attempt > 1) {
-                console.log(`${LOG} ${pick.symbol}: SL re-place retry 2/2 (trigger=₹${slTrigger})`);
-                await delay(500);
-              }
-              const slResult = await kiteOrderService.placeOrder({
+              const exitResult = await kiteOrderService.placeOrder({
                 tradingsymbol:    pick.symbol,
                 exchange:         'NSE',
-                transaction_type: exitSide,
-                order_type:       'SL-M',
-                trigger_price:    slTrigger,
+                transaction_type: isBullishSL ? 'SELL' : 'BUY',
+                order_type:       'MARKET',
                 product:          'MIS',
                 quantity:         pick.trade.qty,
-                simulationId:     `daily_pick_sl_replay_${pick.symbol}`,
-                orderType:        'STOP_LOSS',
+                simulationId:     `daily_pick_sl_forced_exit_${pick.symbol}`,
+                orderType:        'EXIT',
                 source:           'DAILY_PICKS',
               });
-              if (slResult.success) {
-                pick.kite.stop_order_id = slResult.orderId;
-                pick.levels.stop        = slTrigger;
-                slReplaced = true;
-                console.log(`${LOG} ✅ ${pick.symbol}: Fresh SL-M placed @ ₹${slTrigger} — orderId=${slResult.orderId}${attempt > 1 ? ' (attempt 2)' : ''}`);
+              if (exitResult.success) {
+                pick.trade.exit_reason   = 'sl_force_exit';
+                pick.trade.exit_time     = new Date();
+                pick.kite.kite_status    = 'completed';
+                pick._slRejectedCount    = 0;
+                console.log(`${LOG} ✅ ${pick.symbol}: Force MARKET exit placed — orderId=${exitResult.orderId}`);
               }
-            } catch (slErr) {
-              const tick = parseKiteTickError(slErr.message);
-              if (tick && attempt === 1) {
-                // Kite told us the real tick — re-snap and the retry will use it
-                slTrigger = snapToNSETick(pick.levels.stop, tick, isBullishSL ? 'floor' : 'ceil');
-                console.log(`${LOG} ${pick.symbol}: SL re-place tick re-snap → ₹${slTrigger} (tick=${tick})`);
-              } else {
-                console.error(`${LOG} ${pick.symbol}: SL re-place error (attempt ${attempt}/2):`, slErr.message);
-              }
+            } catch (exitErr) {
+              console.error(`${LOG} ${pick.symbol}: Force-exit MARKET order failed:`, exitErr.message);
             }
           }
 
-          if (!slReplaced) {
-            console.error(`${LOG} ⚠️ NAKED POSITION: ${pick.symbol} SL re-placement failed — no stop protection. Candle monitor will attempt recovery.`);
-            try {
-              await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
-                `🚨 ${pick.symbol}: NAKED POSITION — SL Re-place Failed`,
-                `Could not place replacement SL-M @ ₹${pick.levels.stop}. Manual intervention required.`,
-                { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
-              );
-            } catch (_) { /* ignore */ }
-          }
-        }
+          statusChanged = true;
+          // Skip the normal re-place block below
+        } else {
+          // ── Normal re-place path (attempt 1-2 with tick re-snap on error) ──
+          try {
+            await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
+              `⚠️ ${pick.symbol}: SL-M Rejected — Re-placing (#${pick._slRejectedCount})`,
+              `SL order ${deadOrderId} rejected. Re-placing SL-M @ ₹${nudgedStop} (nudged ${slTick} tick). Check position.`,
+              { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
+            );
+          } catch (_) { /* ignore notification failure */ }
 
-        // statusChanged = true so the end-of-monitor DB persist writes the new
-        // stop_order_id (either the fresh order ID or null on failure)
-        statusChanged = true;
+          if (!dryRun) {
+            const exitSide = isBullishSL ? 'SELL' : 'BUY';
+            let slTrigger  = snapToNSETick(nudgedStop, null, isBullishSL ? 'floor' : 'ceil');
+            let slReplaced = false;
+
+            for (let attempt = 1; attempt <= 2 && !slReplaced; attempt++) {
+              try {
+                if (attempt > 1) {
+                  console.log(`${LOG} ${pick.symbol}: SL re-place retry 2/2 (trigger=₹${slTrigger})`);
+                  await delay(500);
+                }
+                const slResult = await kiteOrderService.placeOrder({
+                  tradingsymbol:    pick.symbol,
+                  exchange:         'NSE',
+                  transaction_type: exitSide,
+                  order_type:       'SL-M',
+                  trigger_price:    slTrigger,
+                  product:          'MIS',
+                  quantity:         pick.trade.qty,
+                  simulationId:     `daily_pick_sl_replay_${pick.symbol}`,
+                  orderType:        'STOP_LOSS',
+                  source:           'DAILY_PICKS',
+                });
+                if (slResult.success) {
+                  pick.kite.stop_order_id = slResult.orderId;
+                  // pick.levels.stop already set to nudgedStop above
+                  slReplaced = true;
+                  console.log(
+                    `${LOG} ✅ ${pick.symbol}: Fresh SL-M placed @ ₹${slTrigger} — ` +
+                    `orderId=${slResult.orderId}${attempt > 1 ? ' (attempt 2)' : ''}`
+                  );
+                }
+              } catch (slErr) {
+                const tick = parseKiteTickError(slErr.message);
+                if (tick && attempt === 1) {
+                  slTrigger = snapToNSETick(nudgedStop, tick, isBullishSL ? 'floor' : 'ceil');
+                  console.log(`${LOG} ${pick.symbol}: SL re-place tick re-snap → ₹${slTrigger} (tick=${tick})`);
+                } else {
+                  console.error(`${LOG} ${pick.symbol}: SL re-place error (attempt ${attempt}/2):`, slErr.message);
+                }
+              }
+            }
+
+            if (!slReplaced) {
+              console.error(
+                `${LOG} ⚠️ NAKED POSITION: ${pick.symbol} SL re-placement failed — ` +
+                `no stop protection. Consecutive rejections: ${pick._slRejectedCount}/${SL_REJECT_FORCE_EXIT_THRESHOLD}. ` +
+                `Next cycle will retry with further nudge.`
+              );
+              try {
+                await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
+                  `🚨 ${pick.symbol}: NAKED — SL Re-place Failed (#${pick._slRejectedCount})`,
+                  `Could not place SL-M @ ₹${slTrigger}. Force-exit in ${SL_REJECT_FORCE_EXIT_THRESHOLD - pick._slRejectedCount} more failure(s).`,
+                  { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
+                );
+              } catch (_) { /* ignore */ }
+            }
+          }
+
+          // statusChanged = true so the end-of-monitor DB persist writes the new
+          // stop_order_id (fresh order ID or null) and updated levels.stop
+          statusChanged = true;
+        }
       }
     } catch (err) {
       console.error(`${LOG} ${pick.symbol}: Monitor error —`, err.message);
@@ -3481,7 +3551,19 @@ async function monitorDailyPickOrders(options = {}) {
                   statusChanged = true;
                   console.log(`${LOG} [CANDLE] ${pick.symbol}: Stop ₹${currentStop} → ₹${snappedCandelStop} [${decision.action}] — ${decision.reason}`);
                 } catch (err) {
-                  console.error(`${LOG} [CANDLE] ${pick.symbol}: modifyOrder failed:`, err.message);
+                  // "lower than the last traded price" / "higher than the last traded price" means
+                  // our ltpProxy (candle close) was stale — actual LTP moved past our snapped stop.
+                  // The existing SL order stays active at its current trigger, so this is benign.
+                  const isTriggerVsLtpError = /lower than the last traded price|higher than the last traded price/i.test(err.message);
+                  if (isTriggerVsLtpError) {
+                    console.warn(
+                      `${LOG} [CANDLE] ${pick.symbol}: modifyOrder skipped — ` +
+                      `snapped trigger ₹${snappedCandelStop} crossed real-time LTP (proxy was stale). ` +
+                      `Existing SL @ ₹${currentStop} remains active. Will retry next cycle.`
+                    );
+                  } else {
+                    console.error(`${LOG} [CANDLE] ${pick.symbol}: modifyOrder failed:`, err.message);
+                  }
                 }
               }
             } else {
