@@ -3022,6 +3022,15 @@ async function monitorDailyPickOrders(options = {}) {
           `(consecutive #${pick._slRejectedCount}) — ` +
           `clearing dead ID, nudging stop ₹${pick.levels.stop} → ₹${nudgedStop} (+${slTick} tick, ${isBullishSL ? 'up' : 'down'})`
         );
+        // Attempt cancel on the dead order before nulling it — guards against it
+        // somehow surviving as OPEN alongside the fresh order (double-fill risk).
+        // Terminal orders (REJECTED/CANCELLED) will throw; catch and ignore.
+        try {
+          await kiteOrderService.cancelOrder(deadOrderId);
+          console.log(`${LOG} ${pick.symbol}: Cancelled dead SL order ${deadOrderId}`);
+        } catch (cancelErr) {
+          console.log(`${LOG} ${pick.symbol}: Cancel of ${deadOrderId} failed (likely already terminal): ${cancelErr.message}`);
+        }
         pick.kite.stop_order_id = null; // clear immediately so candle monitor won't try to modify it
         pick.levels.stop        = nudgedStop; // adopt nudged level before re-placing
 
@@ -3551,16 +3560,63 @@ async function monitorDailyPickOrders(options = {}) {
                   statusChanged = true;
                   console.log(`${LOG} [CANDLE] ${pick.symbol}: Stop ₹${currentStop} → ₹${snappedCandelStop} [${decision.action}] — ${decision.reason}`);
                 } catch (err) {
-                  // "lower than the last traded price" / "higher than the last traded price" means
-                  // our ltpProxy (candle close) was stale — actual LTP moved past our snapped stop.
-                  // The existing SL order stays active at its current trigger, so this is benign.
-                  const isTriggerVsLtpError = /lower than the last traded price|higher than the last traded price/i.test(err.message);
+                  const isTriggerVsLtpError  = /lower than the last traded price|higher than the last traded price/i.test(err.message);
+                  const isBeingProcessed     = /being processed/i.test(err.message);
+
                   if (isTriggerVsLtpError) {
+                    // ltpProxy (candle close) was stale — actual LTP moved past our snapped stop.
+                    // Existing SL stays active at its current trigger; retry next cycle.
                     console.warn(
                       `${LOG} [CANDLE] ${pick.symbol}: modifyOrder skipped — ` +
-                      `snapped trigger ₹${snappedCandelStop} crossed real-time LTP (proxy was stale). ` +
-                      `Existing SL @ ₹${currentStop} remains active. Will retry next cycle.`
+                      `trigger ₹${snappedCandelStop} crossed real-time LTP (proxy was stale). ` +
+                      `Existing SL @ ₹${currentStop} remains active.`
                     );
+                  } else if (isBeingProcessed) {
+                    // Order is transitioning to REJECTED in the exchange — modifyOrder is impossible.
+                    // Cancel the old order first (guards against it somehow ending up OPEN with a
+                    // second fresh order → double-fill → naked short). Cancel will throw if the order
+                    // is already in a terminal state (REJECTED/CANCELLED) — that's fine, we ignore it.
+                    const deadId = pick.kite.stop_order_id;
+                    console.warn(
+                      `${LOG} [CANDLE] ${pick.symbol}: modifyOrder → "being processed" on ` +
+                      `${deadId} (likely exchange-REJECTED). ` +
+                      `Attempting cancel of dead order before placing fresh SL-M @ ₹${snappedCandelStop}.`
+                    );
+                    try {
+                      await kiteOrderService.cancelOrder(deadId);
+                      console.log(`${LOG} [CANDLE] ${pick.symbol}: Cancelled dead order ${deadId}`);
+                    } catch (cancelErr) {
+                      // Expected if already REJECTED/terminal — safe to proceed
+                      console.log(`${LOG} [CANDLE] ${pick.symbol}: Cancel of ${deadId} failed (likely already terminal): ${cancelErr.message}`);
+                    }
+                    pick.kite.stop_order_id = null;
+                    if (!dryRun) {
+                      try {
+                        const freshResult = await kiteOrderService.placeOrder({
+                          tradingsymbol:    pick.symbol,
+                          exchange:         'NSE',
+                          transaction_type: isBullish ? 'SELL' : 'BUY',
+                          order_type:       'SL-M',
+                          trigger_price:    snappedCandelStop,
+                          product:          'MIS',
+                          quantity:         pick.trade.qty,
+                          simulationId:     `daily_pick_sl_candle_fresh_${pick.symbol}`,
+                          orderType:        'STOP_LOSS',
+                          source:           'DAILY_PICKS',
+                        });
+                        if (freshResult.success) {
+                          pick.kite.stop_order_id = freshResult.orderId;
+                          pick.levels.stop        = snappedCandelStop;
+                          statusChanged = true;
+                          console.log(
+                            `${LOG} [CANDLE] ✅ ${pick.symbol}: Fresh SL-M placed @ ₹${snappedCandelStop} ` +
+                            `— orderId=${freshResult.orderId} [${decision.action}]`
+                          );
+                        }
+                      } catch (freshErr) {
+                        console.error(`${LOG} [CANDLE] ${pick.symbol}: fresh SL-M place failed:`, freshErr.message);
+                      }
+                    }
                   } else {
                     console.error(`${LOG} [CANDLE] ${pick.symbol}: modifyOrder failed:`, err.message);
                   }
