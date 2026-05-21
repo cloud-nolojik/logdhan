@@ -157,9 +157,14 @@ class KiteOrderService {
       // Market protection: required by Kite for MARKET and SL-M orders
       // (SEBI retail-algo rules, effective 2026-04-01). Without it the API
       // rejects with: "Market orders without market protection are not allowed".
-      if (params.order_type === 'MARKET' || params.order_type === 'SL-M') {
+      // SL-M uses a tighter default (1%) than MARKET (10%) because NSE error
+      // 16448 fires when trigger × (1 - mp%) goes below the day's circuit band.
+      if (params.order_type === 'MARKET') {
         params.market_protection = orderParams.market_protection
           ?? kiteConfig.DEFAULT_MARKET_PROTECTION;
+      } else if (params.order_type === 'SL-M') {
+        params.market_protection = orderParams.market_protection
+          ?? kiteConfig.DEFAULT_SLM_MARKET_PROTECTION;
       }
 
       console.log('[KITE ORDER] Placing order:', params);
@@ -287,9 +292,12 @@ class KiteOrderService {
       }
 
       // Market protection — required for MARKET and SL-M (see placeOrder for context).
-      if (params.order_type === 'MARKET' || params.order_type === 'SL-M') {
+      if (params.order_type === 'MARKET') {
         params.market_protection = orderParams.market_protection
           ?? kiteConfig.DEFAULT_MARKET_PROTECTION;
+      } else if (params.order_type === 'SL-M') {
+        params.market_protection = orderParams.market_protection
+          ?? kiteConfig.DEFAULT_SLM_MARKET_PROTECTION;
       }
 
       console.log('[KITE AMO] Placing AMO order:', params);

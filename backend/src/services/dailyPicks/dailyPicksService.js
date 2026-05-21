@@ -2899,9 +2899,51 @@ async function monitorDailyPickOrders(options = {}) {
   // If midday risk-off is needed in future, re-import from globalMarketIntel.js
   // and restore this block — the modifyOrder logic is correct, just needs the import.
 
+  // ── POSITION RECONCILIATION: detect manual closes before any order activity ──
+  // If the user manually exits a position in Kite, our DB still shows ENTERED.
+  // Without this check every subsequent monitor cycle tries to re-place SL orders
+  // or even fire a candle-structure exit — creating an unintended naked short.
+  // We fetch the actual Kite day positions once per monitor run and mark any
+  // ENTERED pick with net qty = 0 as manually_exited before touching anything else.
+  const kiteNetQty = {}; // symbol → net qty
+  try {
+    const posData = await kiteOrderService.getPositions();
+    const dayPos  = posData?.data?.day || [];
+    for (const p of dayPos) {
+      kiteNetQty[p.tradingsymbol] = (kiteNetQty[p.tradingsymbol] || 0) + p.quantity;
+    }
+  } catch (posErr) {
+    console.warn(`${LOG} Position fetch failed — skipping reconciliation: ${posErr.message}`);
+  }
+
   let statusChanged = false;
 
   for (const pick of enteredPicks) {
+    // ── Manual-close guard ──────────────────────────────────────────────────────
+    // If Kite shows net qty = 0 for this symbol, the user closed it manually.
+    // Mark it completed in DB and skip all order logic for this cycle.
+    if (Object.keys(kiteNetQty).length > 0 && (kiteNetQty[pick.symbol] ?? pick.trade.qty) === 0) {
+      console.warn(`${LOG} ⚠️ ${pick.symbol}: Kite net qty = 0 but DB shows ENTERED — marking as manually exited`);
+      // Cancel any lingering SL / target orders before closing out
+      if (pick.kite.stop_order_id)   { try { await kiteOrderService.cancelOrder(pick.kite.stop_order_id);   } catch (_) {} }
+      if (pick.kite.target_order_id) { try { await kiteOrderService.cancelOrder(pick.kite.target_order_id); } catch (_) {} }
+      pick.kite.stop_order_id   = null;
+      pick.kite.target_order_id = null;
+      pick.trade.status         = 'TIME_EXIT';
+      pick.trade.exit_reason    = 'manual_close';
+      pick.trade.exit_time      = new Date();
+      pick.kite.kite_status     = 'completed';
+      statusChanged = true;
+      try {
+        await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
+          `ℹ️ ${pick.symbol}: Manual Close Detected`,
+          `Kite position = 0 but DB showed ENTERED. Marked as completed. Lingering SL/target orders cancelled.`,
+          { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
+        );
+      } catch (_) {}
+      continue; // skip SL/target/candle logic for this pick
+    }
+
     if (!pick.kite.stop_order_id && !pick.kite.target_order_id) {
       console.log(`${LOG} ${pick.symbol}: No protective orders — will be handled by 3 PM exit`);
       continue;
@@ -2998,13 +3040,15 @@ async function monitorDailyPickOrders(options = {}) {
         // ── SL-M REJECTED: clear dead order ID and re-place a fresh one ──────────
         // Kite rejects SL-M orders immediately in some edge cases (price band,
         // tick mismatch, circuit limit). The dead order ID cannot be modified.
-        // We track consecutive rejections in pick._slRejectedCount:
+        // We track consecutive rejections in pick.kite.sl_rejected_count (DB field
+        // so it survives across 5-min monitor cycles; _slRejectedCount was in-memory
+        // only and reset to 0 every cycle when DailyPick.findToday() re-loaded picks):
         //   • Each cycle: nudge stop 1 tick toward LTP (away from circuit)
         //   • After SL_REJECT_FORCE_EXIT_THRESHOLD consecutive failures:
         //     place a MARKET exit to close the naked position rather than loop forever.
         const SL_REJECT_FORCE_EXIT_THRESHOLD = 3;
 
-        pick._slRejectedCount = (pick._slRejectedCount || 0) + 1;
+        pick.kite.sl_rejected_count = (pick.kite.sl_rejected_count || 0) + 1;
 
         const deadOrderId = pick.kite.stop_order_id;
         const isBullishSL = pick.direction === 'LONG';
@@ -3019,7 +3063,7 @@ async function monitorDailyPickOrders(options = {}) {
 
         console.warn(
           `${LOG} ⚠️ ${pick.symbol}: SL order ${deadOrderId} REJECTED ` +
-          `(consecutive #${pick._slRejectedCount}) — ` +
+          `(consecutive #${pick.kite.sl_rejected_count}) — ` +
           `clearing dead ID, nudging stop ₹${pick.levels.stop} → ₹${nudgedStop} (+${slTick} tick, ${isBullishSL ? 'up' : 'down'})`
         );
         // Attempt cancel on the dead order before nulling it — guards against it
@@ -3035,15 +3079,15 @@ async function monitorDailyPickOrders(options = {}) {
         pick.levels.stop        = nudgedStop; // adopt nudged level before re-placing
 
         // ── Force-exit path: too many consecutive rejections ─────────────────
-        if (pick._slRejectedCount >= SL_REJECT_FORCE_EXIT_THRESHOLD) {
+        if (pick.kite.sl_rejected_count >= SL_REJECT_FORCE_EXIT_THRESHOLD) {
           console.error(
-            `${LOG} 🚨 ${pick.symbol}: SL rejected ${pick._slRejectedCount}× in a row — ` +
+            `${LOG} 🚨 ${pick.symbol}: SL rejected ${pick.kite.sl_rejected_count}× in a row — ` +
             `circuit or band blocks every re-placement. Forcing MARKET exit now.`
           );
           try {
             await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
               `🚨 ${pick.symbol}: Force-Exit — SL Blocked`,
-              `SL-M rejected ${pick._slRejectedCount}× (circuit/band). Placing MARKET ${isBullishSL ? 'SELL' : 'BUY'} to close position.`,
+              `SL-M rejected ${pick.kite.sl_rejected_count}× (circuit/band). Placing MARKET ${isBullishSL ? 'SELL' : 'BUY'} to close position.`,
               { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
             );
           } catch (_) { /* ignore */ }
@@ -3065,7 +3109,7 @@ async function monitorDailyPickOrders(options = {}) {
                 pick.trade.exit_reason   = 'sl_force_exit';
                 pick.trade.exit_time     = new Date();
                 pick.kite.kite_status    = 'completed';
-                pick._slRejectedCount    = 0;
+                pick.kite.sl_rejected_count    = 0;
                 console.log(`${LOG} ✅ ${pick.symbol}: Force MARKET exit placed — orderId=${exitResult.orderId}`);
               }
             } catch (exitErr) {
@@ -3079,7 +3123,7 @@ async function monitorDailyPickOrders(options = {}) {
           // ── Normal re-place path (attempt 1-2 with tick re-snap on error) ──
           try {
             await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
-              `⚠️ ${pick.symbol}: SL-M Rejected — Re-placing (#${pick._slRejectedCount})`,
+              `⚠️ ${pick.symbol}: SL-M Rejected — Re-placing (#${pick.kite.sl_rejected_count})`,
               `SL order ${deadOrderId} rejected. Re-placing SL-M @ ₹${nudgedStop} (nudged ${slTick} tick). Check position.`,
               { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
             );
@@ -3131,13 +3175,13 @@ async function monitorDailyPickOrders(options = {}) {
             if (!slReplaced) {
               console.error(
                 `${LOG} ⚠️ NAKED POSITION: ${pick.symbol} SL re-placement failed — ` +
-                `no stop protection. Consecutive rejections: ${pick._slRejectedCount}/${SL_REJECT_FORCE_EXIT_THRESHOLD}. ` +
+                `no stop protection. Consecutive rejections: ${pick.kite.sl_rejected_count}/${SL_REJECT_FORCE_EXIT_THRESHOLD}. ` +
                 `Next cycle will retry with further nudge.`
               );
               try {
                 await firebaseService.sendToUser(kiteConfig.ADMIN_USER_ID,
-                  `🚨 ${pick.symbol}: NAKED — SL Re-place Failed (#${pick._slRejectedCount})`,
-                  `Could not place SL-M @ ₹${slTrigger}. Force-exit in ${SL_REJECT_FORCE_EXIT_THRESHOLD - pick._slRejectedCount} more failure(s).`,
+                  `🚨 ${pick.symbol}: NAKED — SL Re-place Failed (#${pick.kite.sl_rejected_count})`,
+                  `Could not place SL-M @ ₹${slTrigger}. Force-exit in ${SL_REJECT_FORCE_EXIT_THRESHOLD - pick.kite.sl_rejected_count} more failure(s).`,
                   { type: 'DAILY_PICKS_ALERT', route: '/daily-picks' }
                 );
               } catch (_) { /* ignore */ }

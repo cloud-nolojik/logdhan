@@ -83,7 +83,8 @@ const pickSchema = new mongoose.Schema({
       type: String,
       enum: ['pending', 'collecting_orb', 'validated', 'order_placed', 'gtt_placed', 'amo_placed', 'entered', 'sl_target_placed', 'completed', 'cancelled', 'failed', 'skipped'],
       default: 'pending'
-    }
+    },
+    sl_rejected_count: { type: Number, default: 0 }, // consecutive SL-M rejections (circuit/band); persisted so force-exit threshold survives across 5-min monitor cycles
   },
 
   // ORB (Opening Range Breakout) data — collected across passes (9:30, 9:46, 10:01)

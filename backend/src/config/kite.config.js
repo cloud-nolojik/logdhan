@@ -96,6 +96,15 @@ const kiteConfig = {
   // slippage. Kite web UI uses 1% as its default; we override for algo AMOs.
   DEFAULT_MARKET_PROTECTION: 10,
 
+  // Market protection for SL-M orders specifically. Must be much tighter than
+  // AMO MARKET because NSE error 16448 fires when the computed limit price
+  // (trigger × (1 - mp%)) is too far from trigger OR below the day's lower
+  // circuit price. At 10%, trigger=₹1687 → limit=₹1518, which is below
+  // TATACOMM's circuit (₹1686.82) → 16448 every single cycle.
+  // 1% keeps limit within NSE's permissible band for stocks well above circuit.
+  // For stops near circuit, the protect-profit trail override handles escalation.
+  DEFAULT_SLM_MARKET_PROTECTION: 1,
+
   // Product types
   PRODUCT_TYPES: {
     CNC: 'CNC',         // Cash & Carry (delivery)
