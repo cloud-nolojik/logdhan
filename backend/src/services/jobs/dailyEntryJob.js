@@ -78,6 +78,24 @@ class DailyEntryJob {
       } catch (recoveryErr) {
         console.error(`${LOG} Startup recovery failed (non-fatal):`, recoveryErr.message);
       }
+
+      // Immediate monitor run on mid-session restart
+      // Agenda waits for the next scheduled tick after startup, so a restart at e.g.
+      // 14:40:19 skips the 14:40 cycle entirely and doesn't run until 14:45.
+      // If we're inside the 09:30–14:59 monitoring window fire one run right now so
+      // active positions aren't left unguarded for up to 5 extra minutes.
+      try {
+        const nowIST = new Date(Date.now() + (5.5 * 60 * 60 * 1000)); // UTC → IST
+        const hhmm   = nowIST.getUTCHours() * 100 + nowIST.getUTCMinutes();
+        const inMonitorWindow = hhmm >= 930 && hhmm < 1500;
+        if (inMonitorWindow && await MarketHoursUtil.isTradingDay()) {
+          console.log(`${LOG} Mid-session restart detected (${String(Math.floor(hhmm/100)).padStart(2,'0')}:${String(hhmm%100).padStart(2,'0')} IST) — firing immediate monitor run`);
+          await monitorDailyPickOrders();
+          console.log(`${LOG} Immediate startup monitor run complete`);
+        }
+      } catch (immErr) {
+        console.error(`${LOG} Immediate startup monitor run failed (non-fatal):`, immErr.message);
+      }
     } catch (error) {
       console.error(`${LOG} Failed to initialize:`, error);
       throw error;

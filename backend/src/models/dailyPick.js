@@ -81,7 +81,7 @@ const pickSchema = new mongoose.Schema({
     target_order_id: String,      // LIMIT SELL order ID (structural target)
     kite_status: {
       type: String,
-      enum: ['pending', 'collecting_orb', 'validated', 'order_placed', 'gtt_placed', 'amo_placed', 'entered', 'sl_target_placed', 'completed', 'cancelled', 'failed', 'skipped'],
+      enum: ['pending', 'collecting_orb', 'validated', 'order_placed', 'gtt_placed', 'amo_placed', 'entered', 'entered_awaiting_915', 'sl_target_placed', 'completed', 'cancelled', 'failed', 'skipped'],
       default: 'pending'
     },
     sl_rejected_count: { type: Number, default: 0 }, // consecutive SL-M rejections (circuit/band); persisted so force-exit threshold survives across 5-min monitor cycles
@@ -160,7 +160,7 @@ const dailyPickSchema = new mongoose.Schema({
 
   // Market context at decision time
   market_context: {
-    regime: { type: String, enum: ['EXTREME_BULL', 'STRONG_BULL', 'WEAK_BULL', 'NEUTRAL', 'WEAK_BEAR', 'STRONG_BEAR', 'EXTREME_BEAR', 'CONFLICT', 'RANGING', 'STRONG_BULLISH', 'BULLISH', 'BEARISH', 'STRONG_BEARISH', 'UNKNOWN'] },
+    regime: { type: String, enum: ['EXTREME_BULL', 'STRONG_BULL', 'WEAK_BULL', 'NEUTRAL', 'WEAK_BEAR', 'STRONG_BEAR', 'EXTREME_BEAR', 'CONFLICT', 'RANGING', 'STRONG_BULLISH', 'BULLISH', 'BEARISH', 'STRONG_BEARISH', 'UNKNOWN', 'SCANNER'] },
     nifty_prev_close: Number,
     distance_pct: Number,
     decided_at: Date,
