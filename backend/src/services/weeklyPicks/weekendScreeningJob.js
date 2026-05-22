@@ -502,12 +502,11 @@ class WeekendScreeningJob {
         console.log(`[SCREENING JOB] Levels stats: ${metadata.levels_stats.with_levels} with levels, ${metadata.levels_stats.without_levels} without`);
       }
 
-      // Filter for quality stocks - scan-type-aware minimum score threshold
-      // Pullback stocks use different scoring framework with inverted priorities,
-      // so they need a lower threshold (50) vs momentum (60)
+      // Filter for quality stocks — only A+ setups qualify (score >= 90).
+      // Both scan types use the same bar: if a pullback stock can't reach 90 it's not worth the risk.
       const MIN_SCORES = {
-        a_plus_momentum: 60,
-        pullback: 50
+        a_plus_momentum: 90,
+        pullback: 90
       };
       const MAX_STOCKS = 3;
 

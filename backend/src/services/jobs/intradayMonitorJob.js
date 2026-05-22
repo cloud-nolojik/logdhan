@@ -17,10 +17,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import WeeklyWatchlist from '../../models/weeklyWatchlist.js';
+import KiteOrder from '../../models/kiteOrder.js';
 import priceCacheService from '../priceCache.service.js';
 import { firebaseService } from '../firebase/firebase.service.js';
 import kiteOrderService from '../kiteOrder.service.js';
 import { isKiteIntegrationEnabled } from '../kiteTradeIntegration.service.js';
+import { analyzeIntradayStructure } from '../dailyPicks/tradingDecisions.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -765,6 +767,204 @@ class IntradayMonitorJob {
             console.log(`${runLabel} [DRY-RUN] Would send T3 notification (skipped)`);
           }
         }
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // CANDLE STRUCTURE ANALYSIS — 15-min (fast) + 1-hour (slow)
+    // Runs for all ENTERED stocks after price-level checks above.
+    // Detects weakening positions via candle patterns and structure breaks.
+    // Exit: CNC MARKET SELL (Kite auto-cancels OCO GTT on position close).
+    // Trail/Tighten: cancel old OCO GTT + place new one with updated stop.
+    // ══════════════════════════════════════════════════════════════════
+    const enteredStocks = activeStocks.filter(s => s.trade_simulation?.status === 'ENTERED' || s.trade_simulation?.status === 'PARTIAL_EXIT');
+
+    if (enteredStocks.length > 0 && !dryRun && isKiteIntegrationEnabled()) {
+      try {
+        const candleSymbols = enteredStocks.map(s => s.symbol);
+        console.log(`${runLabel} [CANDLE] ── Weekly candle analysis (15min+1h) ──────────────`);
+        console.log(`${runLabel} [CANDLE] Fetching candles for: ${candleSymbols.join(', ')}`);
+
+        const multiCandles = await kiteOrderService.getIntradayMultiCandles(candleSymbols, [
+          { interval: '15minute', count: 6 },
+          { interval: '60minute', count: 4 },
+        ]);
+        const candles15m = multiCandles['15minute'] || {};
+        const candles60m = multiCandles['60minute'] || {};
+
+        for (const stock of enteredStocks) {
+          // Skip if already stopped/exited by price-level check above
+          const simStatus = stock.trade_simulation?.status;
+          if (simStatus === 'STOPPED_OUT' || simStatus === 'FULL_EXIT') continue;
+
+          const sym15m = candles15m[stock.symbol] || [];
+          const sym60m = candles60m[stock.symbol] || [];
+
+          console.log(`${runLabel} [CANDLE] ${stock.symbol}: 15m_bars=${sym15m.length} 60m_bars=${sym60m.length} stop=₹${stock.trade_simulation?.trailing_stop || stock.levels?.stop}`);
+
+          if (sym15m.length < 2 || sym60m.length < 2) {
+            console.log(`${runLabel} [CANDLE] ${stock.symbol}: insufficient candle data — skipping`);
+            continue;
+          }
+
+          // analyzeIntradayStructure: fast=15min, slow=1h (weekly-appropriate timeframes)
+          const sim = stock.trade_simulation;
+          const currentStop = sim.trailing_stop || stock.levels?.stop;
+
+          const decision = analyzeIntradayStructure({
+            candles5m:   sym15m,   // 'fast' timeframe — 15-min for weekly swings
+            candles15m:  sym60m,   // 'slow' timeframe — 1-hour for weekly swings
+            direction:   'LONG',   // weekly picks are always LONG
+            currentStop,
+          });
+
+          console.log(`${runLabel} [CANDLE] ${stock.symbol}: ▶ action=${decision.action}${decision.newStop ? ` newStop=₹${decision.newStop}` : ''}`);
+          console.log(`${runLabel} [CANDLE] ${stock.symbol}:   ${decision.reason}`);
+
+          // ── EXIT: 1-hour structure broken ──────────────────────────
+          if (decision.action === 'exit') {
+            console.log(`${runLabel} [CANDLE] ${stock.symbol}: STRUCTURE BREAK — placing CNC MARKET SELL`);
+            try {
+              const exitResult = await kiteOrderService.placeOrder({
+                tradingsymbol:    stock.symbol,
+                exchange:         'NSE',
+                transaction_type: 'SELL',
+                order_type:       'MARKET',
+                product:          'CNC',
+                quantity:         sim.qty_remaining,
+                simulationId:     `weekly_candle_exit_${stock.symbol}`,
+                orderType:        'CANDLE_STRUCTURE_EXIT',
+                source:           'WEEKLY_PICKS',
+              });
+
+              if (exitResult.success) {
+                // Brief wait for fill
+                await new Promise(r => setTimeout(r, 1500));
+                let exitPrice = sym15m[sym15m.length - 1]?.close || sim.entry_price;
+                try {
+                  const filled = await kiteOrderService.getOrderDetails(exitResult.orderId);
+                  if (filled?.average_price) exitPrice = filled.average_price;
+                } catch (_) {}
+
+                const exitPnl = (exitPrice - sim.entry_price) * sim.qty_remaining;
+                sim.realized_pnl   = (sim.realized_pnl || 0) + exitPnl;
+                sim.qty_exited     = (sim.qty_exited || 0) + sim.qty_remaining;
+                sim.qty_remaining  = 0;
+                sim.unrealized_pnl = 0;
+                sim.status         = 'FULL_EXIT';
+                sim.total_pnl      = Math.round(sim.realized_pnl);
+                sim.total_return_pct = parseFloat(((sim.total_pnl / sim.capital) * 100).toFixed(2));
+
+                if (!sim.events) sim.events = [];
+                sim.events.push({
+                  date:   new Date(),
+                  type:   'STOPPED_OUT',
+                  price:  exitPrice,
+                  qty:    sim.qty_exited,
+                  pnl:    Math.round(exitPnl),
+                  detail: `Candle structure exit: ${decision.reason}`
+                });
+
+                stock.tracking_status = 'FULL_EXIT';
+                needsSave = true;
+
+                const alert = {
+                  date:    new Date(),
+                  type:    'STOP_HIT',
+                  price:   exitPrice,
+                  level:   currentStop,
+                  message: `Structure exit at ₹${exitPrice.toFixed(2)} — ${decision.reason.split('|')[0].trim()}`
+                };
+                stock.intraday_alerts.push(alert);
+                alerts.push({ symbol: stock.symbol, ...alert });
+
+                console.log(`${runLabel} [CANDLE] ✅ ${stock.symbol}: Exited @ ₹${exitPrice} PnL=₹${Math.round(exitPnl)}`);
+
+                try {
+                  await firebaseService.sendAnalysisCompleteToAllUsers(
+                    `⚠️ Exit: ${stock.symbol}`,
+                    alert.message,
+                    { type: 'candle_exit', symbol: stock.symbol, route: '/weekly-watchlist' }
+                  );
+                } catch (_) {}
+              } else {
+                console.error(`${runLabel} [CANDLE] ${stock.symbol}: MARKET SELL failed — ${JSON.stringify(exitResult)}`);
+              }
+            } catch (exitErr) {
+              console.error(`${runLabel} [CANDLE] ${stock.symbol}: Exit order error — ${exitErr.message}`);
+            }
+
+          // ── TRAIL / TIGHTEN: update stop + replace OCO GTT ─────────
+          } else if ((decision.action === 'trail' || decision.action === 'tighten') && decision.newStop) {
+            const isImprovement = decision.newStop > currentStop; // LONG only
+            if (!isImprovement) {
+              console.log(`${runLabel} [CANDLE] ${stock.symbol}: ${decision.action} ₹${decision.newStop} would not improve stop ₹${currentStop} — skipping`);
+              continue;
+            }
+
+            console.log(`${runLabel} [CANDLE] ${stock.symbol}: ${decision.action} stop ₹${currentStop} → ₹${decision.newStop}`);
+
+            // Update sim trailing stop in DB (always succeeds)
+            sim.trailing_stop = decision.newStop;
+            needsSave = true;
+
+            // Replace the OCO GTT with the new stop level
+            try {
+              const activeGtt = await KiteOrder.findOne({
+                trading_symbol: stock.symbol,
+                is_gtt:         true,
+                gtt_status:     'active',
+              }).sort({ created_at: -1 });
+
+              if (activeGtt?.gtt_id) {
+                // Cancel old GTT
+                try {
+                  await kiteOrderService.cancelGTT(activeGtt.gtt_id, {
+                    reason: `weekly candle ${decision.action} — stop ₹${currentStop} → ₹${decision.newStop}`,
+                    source: 'WEEKLY_PICKS_CANDLE'
+                  });
+                  console.log(`${runLabel} [CANDLE] ${stock.symbol}: Cancelled old GTT ${activeGtt.gtt_id}`);
+                } catch (cancelErr) {
+                  console.warn(`${runLabel} [CANDLE] ${stock.symbol}: GTT cancel failed (may already be inactive): ${cancelErr.message}`);
+                }
+
+                // Place new OCO GTT with updated stop, keeping same target
+                const livePrice = sym15m[sym15m.length - 1]?.close || sim.entry_price;
+                const t1 = stock.levels?.target1 || stock.levels?.target2;
+                if (t1) {
+                  const newGttResult = await kiteOrderService.placeOCOGTT({
+                    tradingSymbol: stock.symbol,
+                    currentPrice:  livePrice,
+                    stopLoss:      decision.newStop,
+                    target:        t1,
+                    quantity:      sim.qty_remaining,
+                    stockId:       stock._id,
+                    simulationId:  `weekly_trail_${stock.symbol}_${Date.now()}`,
+                    orderType:     'STOP_LOSS'
+                  });
+                  console.log(`${runLabel} [CANDLE] ✅ ${stock.symbol}: New OCO GTT placed @ SL=₹${decision.newStop} T1=₹${t1} — id=${newGttResult.triggerId}`);
+                }
+              } else {
+                console.log(`${runLabel} [CANDLE] ${stock.symbol}: No active GTT found — stop updated in DB only (₹${decision.newStop})`);
+              }
+            } catch (gttErr) {
+              console.error(`${runLabel} [CANDLE] ${stock.symbol}: GTT replace failed — stop updated in DB only: ${gttErr.message}`);
+            }
+
+            const alert = {
+              date:    new Date(),
+              type:    'ENTRY_APPROACHING', // reusing closest enum — no dedicated trail type
+              price:   sym15m[sym15m.length - 1]?.close,
+              level:   decision.newStop,
+              message: `Stop trailed ₹${currentStop} → ₹${decision.newStop} (${decision.action})`
+            };
+            stock.intraday_alerts.push(alert);
+            alerts.push({ symbol: stock.symbol, ...alert });
+          }
+          // 'hold' → no action
+        }
+      } catch (candleErr) {
+        console.error(`${runLabel} [CANDLE] Weekly candle analysis failed: ${candleErr.message}`);
       }
     }
 
