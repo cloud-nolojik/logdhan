@@ -90,11 +90,13 @@ const kiteConfig = {
   // Market protection (%) — required by Kite for MARKET and SL-M orders
   // post SEBI retail-algo rules (effective 2026-04-01). Caps slippage from
   // the reference price; orders that would fill outside this band are rejected.
-  // Set to 10 (10%) — AMO MARKET orders for gap stocks (e.g. +4.64%) were
-  // silently not filling with 1% protection because the opening price exceeded
-  // the band. 10% accommodates large pre-open gaps while still capping runaway
-  // slippage. Kite web UI uses 1% as its default; we override for algo AMOs.
-  DEFAULT_MARKET_PROTECTION: 10,
+  // Set to 9 (not 10) — at 10%, Kite computes limit = prev_close × 1.10, which
+  // after tick-snap rounds UP to exactly the upper circuit (also 10%), and NSE
+  // rejects ("outside circuit limits"). GRASIM: 3154.5 × 1.10 = 3469.95 → snapped
+  // to ₹3470.00, rejected (circuit was ₹3469.90). 9% stays comfortably below the
+  // 10% circuit band regardless of tick rounding while still accommodating large
+  // pre-open gaps. Kite web UI uses 1% as its default; we override for algo AMOs.
+  DEFAULT_MARKET_PROTECTION: 9,
 
   // Market protection for SL-M orders specifically. Must be much tighter than
   // AMO MARKET because NSE error 16448 fires when the computed limit price

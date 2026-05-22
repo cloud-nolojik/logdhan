@@ -1628,6 +1628,39 @@ async function placePreMarketEntries(doc) {
     return { pick, capital };
   });
 
+  // Redistribute capital from picks that can't afford ≥1 share to the remaining picks.
+  // Example: APOLLOHOSP at ₹8308 gets proportional budget ₹5451 → qty=0 → freed capital
+  // rolls into GRASIM + ABFRL so the full intraday pool is deployed.
+  // Iterates until stable (no further picks become unaffordable after redistribution).
+  // Picks with capital=0 (regime-blocked) are never funded.
+  {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      let freedCapital = 0;
+      const viable = [];
+      for (const a of allocations) {
+        if (a.capital <= 0) continue;
+        if (Math.floor(a.capital / a.pick.levels.entry) < 1) {
+          console.log(`${LOG} [Step 7.5] ${a.pick.symbol}: qty=0 at ₹${a.capital} — freeing ₹${a.capital} for redistribution`);
+          freedCapital += a.capital;
+          a.capital = 0;
+          changed = true;
+        } else {
+          viable.push(a);
+        }
+      }
+      if (freedCapital > 0 && viable.length > 0) {
+        const viableScoreSum = viable.reduce((s, a) => s + a.pick.rank_score, 0);
+        for (const a of viable) {
+          const added = Math.floor(freedCapital * (a.pick.rank_score / viableScoreSum));
+          a.capital += added;
+          console.log(`${LOG} [Step 7.5] ${a.pick.symbol}: +₹${added} redistributed → new capital ₹${a.capital}`);
+        }
+      }
+    }
+  }
+
   console.log(`${LOG} [Step 7.5] Capital allocation: totalScore=${totalScore} totalPool=₹${totalPool} (all MIS intraday)`);
   for (const { pick, capital } of allocations) {
     const cappedAmount = Math.min(capital, kiteConfig.MAX_ORDER_VALUE);
@@ -2265,6 +2298,35 @@ async function validateAndPlaceEntries(options = {}) {
     }
     return { pick, capital };
   });
+
+  // Redistribute capital from picks that can't afford ≥1 share to the remaining picks.
+  {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      let freedCapital = 0;
+      const viable = [];
+      for (const a of allocations) {
+        if (a.capital <= 0) continue;
+        if (Math.floor(a.capital / a.pick.levels.entry) < 1) {
+          console.log(`${LOG} [Step 3.5] ${a.pick.symbol}: qty=0 at ₹${a.capital} — freeing ₹${a.capital} for redistribution`);
+          freedCapital += a.capital;
+          a.capital = 0;
+          changed = true;
+        } else {
+          viable.push(a);
+        }
+      }
+      if (freedCapital > 0 && viable.length > 0) {
+        const viableScoreSum = viable.reduce((s, a) => s + a.pick.rank_score, 0);
+        for (const a of viable) {
+          const added = Math.floor(freedCapital * (a.pick.rank_score / viableScoreSum));
+          a.capital += added;
+          console.log(`${LOG} [Step 3.5] ${a.pick.symbol}: +₹${added} redistributed → new capital ₹${a.capital}`);
+        }
+      }
+    }
+  }
 
   console.log(`${LOG} Capital allocation: totalScore=${totalScore} intradayBudget=₹${balance.usableIntraday}`);
   for (const { pick, capital } of allocations) {
@@ -3276,7 +3338,7 @@ async function monitorDailyPickOrders(options = {}) {
                     try {
                       await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
                         trigger_price: newStop,
-                        price: snapToNSETick(pick.direction === 'LONG' ? newStop - 13 : newStop + 13, null, pick.direction === 'LONG' ? 'ceil' : 'floor'),
+                        price: snapToNSETick(pick.direction === 'LONG' ? newStop * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : newStop * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, pick.direction === 'LONG' ? 'floor' : 'ceil'),
                       });
                       if (!pick.trailing_history) pick.trailing_history = [];
                       pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: newStop, price_at_trail: currentPrice });
@@ -3313,7 +3375,7 @@ async function monitorDailyPickOrders(options = {}) {
             try {
               await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
                 trigger_price: snappedBE,
-                price: snapToNSETick(isBullish ? snappedBE - 13 : snappedBE + 13, null, isBullish ? 'ceil' : 'floor'),
+                price: snapToNSETick(isBullish ? snappedBE * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : snappedBE * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, isBullish ? 'floor' : 'ceil'),
               });
               if (!pick.trailing_history) pick.trailing_history = [];
               pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: snappedBE, price_at_trail: currentPrice, reason: 'breakeven_1R' });
@@ -3363,7 +3425,7 @@ async function monitorDailyPickOrders(options = {}) {
           try {
             await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
               trigger_price: snappedTrail,
-              price: snapToNSETick(isBullish ? snappedTrail - 13 : snappedTrail + 13, null, isBullish ? 'ceil' : 'floor'),
+              price: snapToNSETick(isBullish ? snappedTrail * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : snappedTrail * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, isBullish ? 'floor' : 'ceil'),
             });
             if (!pick.trailing_history) pick.trailing_history = [];
             pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: snappedTrail, price_at_trail: currentPrice, phase: trail.phase, method: trail.method });
@@ -3590,7 +3652,7 @@ async function monitorDailyPickOrders(options = {}) {
                 try {
                   await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
                     trigger_price: snappedCandelStop,
-                    price: snapToNSETick(isBullish ? snappedCandelStop - 13 : snappedCandelStop + 13, null, isBullish ? 'ceil' : 'floor'),
+                    price: snapToNSETick(isBullish ? snappedCandelStop * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : snappedCandelStop * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, isBullish ? 'floor' : 'ceil'),
                   });
                   if (!pick.trailing_history) pick.trailing_history = [];
                   pick.trailing_history.push({
@@ -3838,7 +3900,7 @@ async function tightenStops(options = {}) {
         try {
           await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
             trigger_price: newStop,
-            price: snapToNSETick(pick.direction === 'LONG' ? newStop - 13 : newStop + 13, null, pick.direction === 'LONG' ? 'ceil' : 'floor'),
+            price: snapToNSETick(pick.direction === 'LONG' ? newStop * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : newStop * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, pick.direction === 'LONG' ? 'floor' : 'ceil'),
           });
 
           const trailEntry = {
