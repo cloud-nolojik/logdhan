@@ -89,8 +89,12 @@ import {
   // NR7_NEUTRAL_BONUS,
   MAX_COUNTER_REGIME_PICKS, // kept: selectDiversePicks still references it (dead branch now, harmless)
   // COUNTER_REGIME_MIN_SCORE, // removed — Step 4 hard-rejects counter-regime, no threshold needed
+  resolveOrbAtrRatioForVix,    // VIX → MAX_ORB_ATR_RATIO scaling + extreme sit-out
 } from './dailyPicksConstants.js';
 import { computeDynamicTrail, checkPartialBooking, checkSidewaysExit, analyzeIntradayStructure } from './tradingDecisions.js';
+import { fetchVixData } from '../../engine/regimeDataFetchers.js';
+// Regime-aware routing (added May 2026): regime engine drives scanner.py mode
+import { computeMarketContextV2 } from '../../engine/regimeV2.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -168,7 +172,77 @@ function getAnthropicClient() {
 // stop, target from structural pivots). Replaces Steps 0–6.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function runScannerPy() {
+// ═══════════════════════════════════════════════════════════════════════════════
+// REGIME → SCANNER MODE ROUTER (May 2026)
+//
+// Maps the regime label to one of scanner.py's --mode values. Returns null
+// when the regime says "sit out" (EXTREME_BEAR). Default fallback is
+// 'recovery_breakout' so any unknown label keeps the legacy behavior.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const REGIME_TO_SCANNER_MODE = {
+  STRONG_BULL:  'momentum_leader',
+  WEAK_BULL:    'recovery_breakout',   // unchanged from prior behavior
+  NEUTRAL:      'nr7_compression',
+  WEAK_BEAR:    'failed_bounce',
+  STRONG_BEAR:  'breakdown',
+  EXTREME_BEAR: null,                  // sit out — no picks
+};
+
+/**
+ * Pick the first scanner.py target (t1 → t2 → t3) that achieves at least
+ * `minRR` reward:risk. For LONG: targets above close, sl below; reward is
+ * target − close. For SHORT: targets below close, sl above; reward is
+ * close − target. Falls back to the widest viable target if none meet
+ * the threshold (caller can choose to log).
+ *
+ * Exported for unit testing. The `runScannerPy` IIFE wraps a logging-only
+ * variant; this is the pure-function core.
+ *
+ * @param {Object} s — scanner.py Score-shaped object with at minimum:
+ *   { direction, close, sl, t1, t2, t3, t1_pct, t2_pct, t3_pct, rr_t1, rr_t2, rr_t3 }
+ * @param {number} [minRR=1.0]
+ * @returns {{ t, pct, rr, label, isFallback }}
+ */
+export function pickScannerTarget(s, minRR = 1.0) {
+  const isLong = (s.direction || 'LONG') === 'LONG';
+  const risk = isLong ? (s.close - s.sl) : (s.sl - s.close);
+  const candidates = [
+    { t: s.t1, pct: s.t1_pct, rr: s.rr_t1, label: 't1' },
+    { t: s.t2, pct: s.t2_pct, rr: s.rr_t2, label: 't2' },
+    { t: s.t3, pct: s.t3_pct, rr: s.rr_t3, label: 't3' },
+  ].filter(c => c.t && (isLong ? c.t > s.close : c.t < s.close));
+  const reward = (c) => isLong ? (c.t - s.close) : (s.close - c.t);
+  const viable = candidates.find(c => reward(c) >= risk * minRR);
+  if (viable) return { ...viable, isFallback: false };
+  const fallback = candidates[candidates.length - 1]
+                || { t: s.t1, pct: s.t1_pct, rr: s.rr_t1, label: 't1' };
+  return { ...fallback, isFallback: true };
+}
+
+export function selectScannerModeForRegime(regimeLabel) {
+  // Null / missing regime → sit out. Do NOT default to recovery_breakout —
+  // a missing label means the regime engine failed or returned nothing
+  // useful, and trading LONG on a guess in that state is the failure mode
+  // we want to avoid (especially on a bear morning where a fetcher broke).
+  if (regimeLabel == null) return null;
+  // Use Object.hasOwn (ES2022) to avoid:
+  //   - calling .hasOwnProperty as an inherited method (which can be
+  //     shadowed by an own property with the same name), AND
+  //   - the `in` operator walking the prototype chain (so a regime label
+  //     of 'toString' / 'constructor' / '__proto__' would otherwise return
+  //     the inherited function from Object.prototype). Caught by unit test.
+  if (Object.hasOwn(REGIME_TO_SCANNER_MODE, regimeLabel)) {
+    return REGIME_TO_SCANNER_MODE[regimeLabel];
+  }
+  // Unknown / HALT / legacy labels (e.g. 'SCANNER', 'UNKNOWN', 'HALT', 'CONFLICT')
+  // → sit out. Same principle: if we don't know what regime we're in, don't
+  // pretend we do. The regime engine signals this by returning HALT with
+  // max_trades=0; we honor that intent by returning null here.
+  return null;
+}
+
+async function runScannerPy({ mode = 'recovery_breakout' } = {}) {
   const { getFnoSymbols } = await import('../../constants/fnoUniverse.js');
   const symbolSet = await getFnoSymbols();
   const symbols = [...symbolSet];
@@ -177,7 +251,11 @@ async function runScannerPy() {
   const watchlistPath = path.join(os.tmpdir(), `logdhan_fno_${Date.now()}.txt`);
   await fs.writeFile(watchlistPath, symbols.join('\n'), 'utf8');
 
-  console.log(`${LOG} [Scanner] Running scanner.py on ${symbols.length} F&O symbols (path=${SCANNER_PY_PATH})...`);
+  console.log(`${LOG} [Scanner] ─── Step 3: run scanner.py ───`);
+  console.log(`${LOG} [Scanner]   mode=${mode}`);
+  console.log(`${LOG} [Scanner]   universe=${symbols.length} F&O symbols, top=${MAX_DAILY_PICKS}, min-score=0.3, no-tv`);
+  console.log(`${LOG} [Scanner]   python path=${SCANNER_PY_PATH}`);
+  console.log(`${LOG} [Scanner]   watchlist temp=${watchlistPath}`);
   const t0 = Date.now();
 
   try {
@@ -188,47 +266,71 @@ async function runScannerPy() {
       '--json',
       '--no-tv',
       '--min-score', '0.3',
+      '--mode', mode,
     ], { timeout: 180_000 }); // 3 min max — yfinance batch can be slow on 400 symbols
+    const ms = Date.now() - t0;
 
-    if (stderr) console.warn(`${LOG} [Scanner] stderr: ${stderr.slice(0, 800)}`);
-    console.log(`${LOG} [Scanner] Done in ${Date.now() - t0}ms`);
+    // Always log stderr if present — scanner.py uses it for progress + warnings.
+    // Truncate to 2000 chars so we don't blow up the log.
+    if (stderr && stderr.trim()) {
+      console.log(`${LOG} [Scanner]   stderr (${stderr.length} chars): ${stderr.slice(0, 2000)}${stderr.length > 2000 ? '...[truncated]' : ''}`);
+    }
+    console.log(`${LOG} [Scanner]   completed in ${ms}ms (${(ms / 1000).toFixed(1)}s)`);
 
-    // stdout has progress lines ("[scanner] N symbols...") + one JSON array line
-    const jsonLine = stdout.split('\n').map(l => l.trim()).find(l => l.startsWith('[{') || l === '[]');
+    // stdout has progress lines + one JSON array line (the picks)
+    const stdoutLines = stdout.split('\n');
+    const jsonLine = stdoutLines.map(l => l.trim()).find(l => l.startsWith('[{') || l === '[]');
     if (!jsonLine) {
-      console.warn(`${LOG} [Scanner] No JSON array found in stdout. stdout=${stdout.slice(0, 400)}`);
+      console.error(`${LOG} [Scanner] ❌ No JSON array found in stdout.`);
+      console.error(`${LOG} [Scanner]   stdout (${stdout.length} chars): ${stdout.slice(0, 1500)}${stdout.length > 1500 ? '...[truncated]' : ''}`);
+      console.error(`${LOG} [Scanner]   typical cause: yfinance threw before the JSON line was printed; check stderr above`);
       return [];
     }
 
-    const raw = JSON.parse(jsonLine); // array of Score dicts from scanner.py
-    console.log(`${LOG} [Scanner] ${raw.length} picks returned: ${raw.map(p => `${p.symbol}(${p.composite?.toFixed(2)})`).join(', ')}`);
-
-    // Pick the first target (t1 → t2 → t3) that achieves at least 1:1 R:R.
-    // T1 is often the nearest pivot and sits just above price — terrible R:R.
-    // T2/T3 are wider levels that usually give a sensible reward.
-    const MIN_RR = 1.0;
-    function pickTarget(s) {
-      const risk = s.close - s.sl; // always positive for LONG (sl < close)
-      const candidates = [
-        { t: s.t1, pct: s.t1_pct, rr: s.rr_t1, label: 't1' },
-        { t: s.t2, pct: s.t2_pct, rr: s.rr_t2, label: 't2' },
-        { t: s.t3, pct: s.t3_pct, rr: s.rr_t3, label: 't3' },
-      ].filter(c => c.t && c.t > s.close);
-      const viable = candidates.find(c => (c.t - s.close) >= risk * MIN_RR);
-      const chosen = viable || candidates[candidates.length - 1]; // fallback: widest available
-      if (!viable) console.warn(`${LOG} [Scanner] ${s.symbol}: no target ≥ 1:1 R:R — using ${chosen?.label} (rr=${chosen?.rr?.toFixed(2)})`);
-      return chosen || { t: s.t1, pct: s.t1_pct, rr: s.rr_t1, label: 't1' };
+    let raw;
+    try {
+      raw = JSON.parse(jsonLine);
+    } catch (parseErr) {
+      console.error(`${LOG} [Scanner] ❌ JSON.parse failed: ${parseErr.message}`);
+      console.error(`${LOG} [Scanner]   offending line: ${jsonLine.slice(0, 800)}${jsonLine.length > 800 ? '...' : ''}`);
+      return [];
     }
 
-    // Map scanner.py Score → internal pick shape
+    if (raw.length === 0) {
+      console.warn(`${LOG} [Scanner] ⚠️  scanner.py returned ZERO picks (composite scores all below min-score=0.3 or all symbols failed history fetch)`);
+      console.warn(`${LOG} [Scanner]   for mode=${mode} this usually means: no F&O stock matched the setup criteria today`);
+      return [];
+    }
+    console.log(`${LOG} [Scanner] ✔ ${raw.length} picks returned, top-of-list scores: ${raw.slice(0, 5).map(p => `${p.symbol}=${p.composite?.toFixed(2)}`).join(', ')}`);
+    // Per-pick detail line so a failure can be diagnosed pick-by-pick later
+    for (const p of raw) {
+      console.log(`${LOG} [Scanner]   ${p.symbol.padEnd(12)} dir=${p.direction || 'LONG'} mode=${p.mode || mode} close=${p.close} sl=${p.sl} t1=${p.t1} t2=${p.t2} t3=${p.t3} RR(t1/t2/t3)=${(p.rr_t1 || 0).toFixed(2)}/${(p.rr_t2 || 0).toFixed(2)}/${(p.rr_t3 || 0).toFixed(2)} composite=${(p.composite || 0).toFixed(3)}`);
+    }
+
+    // Wrap the exported pure-function helper so we get the same behavior
+    // PLUS a warn log when we fall back. See pickScannerTarget() above.
+    const MIN_RR = 1.0;
+    function pickTarget(s) {
+      const chosen = pickScannerTarget(s, MIN_RR);
+      if (chosen.isFallback) {
+        console.warn(`${LOG} [Scanner] ${s.symbol}: no target ≥ 1:1 R:R — using ${chosen?.label} (rr=${chosen?.rr?.toFixed(2)})`);
+      }
+      return chosen;
+    }
+
+    // Map scanner.py Score → internal pick shape.
+    // scan_type now comes from the scanner's mode (e.g. 'momentum_leader'),
+    // direction from the scanner's direction field (LONG or SHORT).
     return raw.map(s => {
       const tgt = pickTarget(s);
+      const scanType = s.mode || 'recovery_breakout';
+      const direction = s.direction || 'LONG';
       return {
       symbol: s.symbol,
       stock_name: s.symbol,
       instrument_key: null,
-      scan_type: 'recovery_breakout',
-      direction: 'LONG', // scanner.py is a bullish recovery-breakout screener
+      scan_type: scanType,
+      direction,
       rank_score: Math.round((s.composite || 0) * 100),
       levels: {
         entry:       s.close,
@@ -241,7 +343,7 @@ async function runScannerPy() {
         risk_reward: tgt.rr,
         entry_type:  'market',
         mode:        'scanner',
-        source:      `scanner.py | sl_src=${s.sl_src} | tgt_src=${tgt.label}`,
+        source:      `scanner.py mode=${scanType} | sl_src=${s.sl_src} | tgt_src=${tgt.label}`,
       },
       scan_scores: {
         volume_ratio:       round2(s.volume_spike || 0),
@@ -250,6 +352,10 @@ async function runScannerPy() {
         close_in_range_pct: Math.round((s.range_pos || 0) * 100),
         avg_volume_50d:     null, // not provided by scanner.py
       },
+      // scan_meta — per-mode telemetry from scanner.py. Currently populated
+      // by nr7_compression (records LONG-default + setup features). Other
+      // modes leave this null; safe to read with optional chaining.
+      scan_meta: s.scan_meta || null,
       _ohlcv: {
         atr:   s.atr,
         close: s.close,
@@ -283,34 +389,187 @@ async function runDailyPicks(options = {}) {
 
   try {
     // ═══════════════════════════════════════════════════════════════════════
-    // SCANNER.PY — Steps 0–6 replaced by recovery-breakout screener
+    // REGIME-AWARE ROUTING (May 2026, always on — no env flag)
     //
-    // scanner.py runs on the full F&O universe (yfinance, 6mo history) and
-    // returns top-N picks with pre-computed entry/stop/target from structural
-    // pivots. The ORB entry flow is bypassed — orders are placed at market open
-    // in validateAndPlaceEntries (MARKET order, balance.usableIntraday sizing).
+    // 1. Compute the real market regime via computeMarketContextV2(). Result
+    //    is persisted onto the DailyPick doc so audit data records actual
+    //    regimes instead of the legacy "SCANNER" placeholder.
+    // 2. The regime label decides which scanner.py mode runs today.
+    //    Mapping is REGIME_TO_SCANNER_MODE (defined at the top of this file).
+    //    EXTREME_BEAR sits out — no picks. Other regimes always produce a
+    //    mode and run the scanner.
+    // 3. If the chosen mode throws, fall back to recovery_breakout so we
+    //    never end the morning with zero picks due to a scanner-side bug.
     // ═══════════════════════════════════════════════════════════════════════
-    const picksWithLevels = await runScannerPy();
+    console.log(`${LOG} [Regime] ─── Step 1: compute market regime ───`);
+    const regimeT0 = Date.now();
+    let realContext = null;
+    try {
+      realContext = await computeMarketContextV2();
+      const regimeMs = Date.now() - regimeT0;
+      console.log(`${LOG} [Regime] computeMarketContextV2 OK in ${regimeMs}ms`);
+      console.log(`${LOG} [Regime]   regime=${realContext?.regime} score=${realContext?.regime_score} playbook=${realContext?.playbook}`);
+      console.log(`${LOG} [Regime]   max_trades=${realContext?.max_trades} size_mult=${realContext?.size_multiplier}`);
+      if (realContext?.inputs) {
+        console.log(`${LOG} [Regime]   inputs: structure=${realContext.inputs.structure} breadth=${realContext.inputs.breadth} volatility=${realContext.inputs.volatility} overnight=${realContext.inputs.overnight} flow=${realContext.inputs.flow}`);
+      }
+      if (realContext?.raw_data) {
+        const r = realContext.raw_data;
+        console.log(`${LOG} [Regime]   raw: nifty=${r.nifty_close} ema20=${r.ema20} ema50=${r.ema50} vix=${r.vix_close}(${r.vix_percentile}p) breadth=${r.breadth_pct}% gift=${r.gift_pct}% fii=${r.fii_cr}cr dii=${r.dii_cr}cr`);
+      }
+      if (realContext?.halt_reason) {
+        console.warn(`${LOG} [Regime]   ⚠️  halt_reason: ${realContext.halt_reason}`);
+      }
+    } catch (rErr) {
+      const regimeMs = Date.now() - regimeT0;
+      console.error(`${LOG} [Regime] computeMarketContextV2 THREW after ${regimeMs}ms: ${rErr.message}`);
+      console.error(`${LOG} [Regime] stack: ${rErr.stack?.split('\n').slice(0, 5).join(' | ') || '(no stack)'}`);
+      console.warn(`${LOG} [Regime] → regimeLabel will fall through to UNKNOWN → system will SIT OUT today`);
+    }
+
+    // ─── Regime → scanner-mode routing (always on) ────────────────────────
+    // No env flag. Every morning the regime label decides which scanner mode
+    // runs. The system SITS OUT (no picks, no orders) in any of these cases:
+    //   • EXTREME_BEAR regime (intentional defensive sit-out)
+    //   • UNKNOWN regime (regime engine threw or returned no label)
+    //   • HALT / CONFLICT / SCANNER / any unrecognized label
+    //   • The chosen scanner mode itself throws
+    //
+    // Mapping (REGIME_TO_SCANNER_MODE, defined above):
+    //   STRONG_BULL  → momentum_leader   (LONG)
+    //   WEAK_BULL    → recovery_breakout (LONG)
+    //   NEUTRAL      → nr7_compression   (LONG)
+    //   WEAK_BEAR    → failed_bounce     (SHORT)
+    //   STRONG_BEAR  → breakdown         (SHORT)
+    //   EXTREME_BEAR / unknown / HALT → null (sit out)
+    //
+    // Rationale: when the regime engine fails or returns a non-trading label,
+    // running recovery_breakout LONG on a guess is the worst failure mode —
+    // it biases us to LONG on a morning that may genuinely be bearish. Sitting
+    // out is the correct response when conviction is unavailable.
+    const regimeLabel = realContext?.regime || 'UNKNOWN';
+    const haltReason = realContext?.halt_reason || null;
+    let chosenMode;
+    let chosenPath;
+    let sitOutReason = null;
+    let picksWithLevels = [];
+
+    console.log(`${LOG} [Route] ─── Step 2: regime → scanner-mode routing ───`);
+    console.log(`${LOG} [Route] regimeLabel="${regimeLabel}" haltReason=${haltReason ? `"${haltReason}"` : 'null'}`);
+
+    // Decision is made in a linear sequence of guards. The first guard that
+    // produces a `chosenPath` short-circuits the rest. This is easier to
+    // reason about than the prior nested if/else.
+    const indiaVixForRoute = realContext?.raw_data?.vix_close ?? null;
+
+    // Guard 1: catastrophic VIX → sit out regardless of regime label
+    if (chosenPath == null && typeof indiaVixForRoute === 'number' && indiaVixForRoute > 0) {
+      if (resolveOrbAtrRatioForVix(indiaVixForRoute) === 'SIT_OUT') {
+        chosenMode = null;
+        chosenPath = 'sit_out_extreme_vix';
+        sitOutReason = `India VIX=${indiaVixForRoute} > VIX_EXTREME_SIT_OUT_THRESHOLD — catastrophic-vol day, system not calibrated`;
+        console.warn(`${LOG} [Route] DECISION: SIT OUT — ${sitOutReason}`);
+      }
+    }
+
+    // Guard 2: regime is EXTREME_BEAR → defensive sit-out
+    if (chosenPath == null && regimeLabel === 'EXTREME_BEAR') {
+      chosenMode = null;
+      chosenPath = 'sit_out_extreme_bear';
+      sitOutReason = 'EXTREME_BEAR — defensive sit-out';
+      console.warn(`${LOG} [Route] DECISION: SIT OUT (regime=EXTREME_BEAR by design)`);
+    }
+
+    // Guard 3: map regime → scanner mode. null means UNKNOWN / HALT / etc.
+    if (chosenPath == null) {
+      chosenMode = selectScannerModeForRegime(regimeLabel);
+      if (chosenMode == null) {
+        chosenPath = `sit_out_${regimeLabel.toLowerCase()}`;
+        sitOutReason = haltReason
+          ? `regime=${regimeLabel} (${haltReason}) — sitting out`
+          : `regime=${regimeLabel} not recognized — sitting out (regime engine likely failed)`;
+        console.warn(`${LOG} [Route] DECISION: SIT OUT — ${sitOutReason}`);
+        console.warn(`${LOG} [Route]   to debug: check the [REGIME V2] log lines above. If they are missing, computeMarketContextV2 threw — look for its stack trace.`);
+        console.warn(`${LOG} [Route]   typical causes: India VIX fetcher failed, FII data unavailable, breadth scan timed out, MongoDB read error on regime inputs.`);
+      } else {
+        chosenPath = `regime_scanner_${chosenMode}`;
+        const direction = (chosenMode === 'failed_bounce' || chosenMode === 'breakdown') ? 'SHORT' : 'LONG';
+        console.log(`${LOG} [Route] DECISION: regime="${regimeLabel}" → scanner --mode=${chosenMode} (${direction})`);
+      }
+    }
+
+    // Run the chosen scanner mode (if one was selected). If the scanner
+    // throws, we sit out — we do NOT silently fall back to recovery_breakout,
+    // for the same reason we sit out on unknown regimes: a guessed-direction
+    // trade is the wrong response to "we don't know what to do today."
+    if (chosenMode && picksWithLevels.length === 0) {
+      try {
+        picksWithLevels = await runScannerPy({ mode: chosenMode });
+        if (picksWithLevels.length === 0) {
+          // Scanner ran cleanly but found nothing. Different failure mode
+          // from "scanner crashed" — record it so the audit trail is honest.
+          sitOutReason = `scanner ${chosenMode} returned 0 picks (no setups today)`;
+          chosenPath = `${chosenPath}_zero_picks`;
+          console.warn(`${LOG} [Route] ⚠️  scanner returned no picks for mode=${chosenMode} — will save empty doc`);
+        }
+      } catch (scErr) {
+        console.error(`${LOG} [Route] ❌ scanner mode=${chosenMode} THREW: ${scErr.message}`);
+        console.error(`${LOG} [Route]   stack: ${scErr.stack?.split('\n').slice(0, 6).join(' | ') || '(no stack)'}`);
+        if (scErr.stdout) console.error(`${LOG} [Route]   scanner stdout: ${String(scErr.stdout).slice(0, 1500)}`);
+        if (scErr.stderr) console.error(`${LOG} [Route]   scanner stderr: ${String(scErr.stderr).slice(0, 1500)}`);
+        console.error(`${LOG} [Route]   typical causes: python3 not on PATH, yfinance throttled, scanner.py raised an unhandled exception, network timeout`);
+        sitOutReason = `scanner ${chosenMode} failed: ${scErr.message}`;
+        chosenPath = `${chosenPath}_scanner_failed`;
+        picksWithLevels = [];
+      }
+    }
+    console.log(`${LOG} [Route] ─── Step 4: finalize ───`);
+    console.log(`${LOG} [Route]   final path=${chosenPath}`);
+    console.log(`${LOG} [Route]   picks=${picksWithLevels.length}${sitOutReason ? `, sit_out_reason="${sitOutReason}"` : ''}`);
+
     // compat aliases used by Step 7/8 logging
     const enriched  = picksWithLevels;
     const scored    = picksWithLevels;
     const allViable = picksWithLevels;
 
-    const marketContext = {
-      regime:         'SCANNER',
-      regime_score:   1.0,
-      playbook:       'recovery_breakout',
-      max_trades:     MAX_DAILY_PICKS,
-      size_multiplier: 1,
-      inputs:         { source: 'scanner.py' },
-      decided_at:     new Date().toISOString(),
-    };
+    // marketContext: use the REAL regime if we have one; otherwise mark
+    // explicitly as UNKNOWN with the sit-out reason so the audit DB doesn't
+    // get the misleading "SCANNER" placeholder.
+    const marketContext = realContext
+      ? {
+          ...realContext,
+          source_path:    chosenPath,
+          sit_out_reason: sitOutReason,                 // null when we traded
+          decided_at:     realContext.decided_at || new Date().toISOString(),
+        }
+      : {
+          regime:          'UNKNOWN',
+          regime_score:    null,
+          playbook:        'halt',
+          max_trades:      0,
+          size_multiplier: 0,
+          halt_reason:     'computeMarketContextV2 failed or returned no regime',
+          source_path:     chosenPath,
+          sit_out_reason:  sitOutReason || 'regime engine failed',
+          inputs:          { source: 'no regime context available' },
+          decided_at:      new Date().toISOString(),
+        };
 
     if (picksWithLevels.length === 0) {
-      console.log(`${LOG} [Scanner] No picks above threshold — saving empty doc.`);
-      const emptyDoc = await saveToDB(marketContext, [], { candidates: [], bullish_count: 0, bearish_count: 0 });
-      await sendNotification(marketContext, [], emptyDoc);
-      return { success: true, picks: 0, doc: emptyDoc };
+      console.log(`${LOG} [Empty] ─── Step 5a: empty-picks path ───`);
+      console.log(`${LOG} [Empty]   reason=${sitOutReason || 'unknown (no sit_out_reason captured)'}`);
+      console.log(`${LOG} [Empty]   regime=${marketContext.regime} chosenPath=${chosenPath}`);
+      console.log(`${LOG} [Empty]   saving empty DailyPick doc + sending "no picks today" notification`);
+      try {
+        const emptyDoc = await saveToDB(marketContext, [], { candidates: [], bullish_count: 0, bearish_count: 0 });
+        console.log(`${LOG} [Empty]   ✔ empty doc saved id=${emptyDoc?._id}`);
+        await sendNotification(marketContext, [], emptyDoc);
+        console.log(`${LOG} [Empty]   ✔ notification sent`);
+        return { success: true, picks: 0, doc: emptyDoc, halted: true, reason: sitOutReason };
+      } catch (emptyErr) {
+        console.error(`${LOG} [Empty] ❌ failed to save empty doc / send notification: ${emptyErr.message}`);
+        throw emptyErr;
+      }
     }
 
     const scanResult = {
@@ -2129,8 +2388,26 @@ async function validateAndPlaceEntries(options = {}) {
     console.warn(`${LOG} [WARN] fetchOrbVolume failed: ${volErr.message} — Check 6 will auto-pass`);
   }
 
-  console.log(`${LOG} [DEBUG] Calling validatePicks() — regime=${regime}, orbPass=${orbPass}`);
-  validatePicks(eligiblePicks, orbData, regime, orbPass, orbVolumeMap);
+  // India VIX for Check 5 scaling. PREFER the value already on the saved
+  // marketContext (computed at 8:30 by computeMarketContextV2) so we don't
+  // re-fetch the same value an hour later — avoids both an extra API call
+  // and any risk of value mismatch between the regime decision and the
+  // validation gate. Falls back to a live fetch only if the saved value is
+  // missing (e.g. legacy doc from before the regime engine was wired).
+  let indiaVix = doc.market_context?.raw_data?.vix_close ?? null;
+  if (indiaVix == null) {
+    console.warn(`${LOG} [DEBUG] India VIX not on marketContext — falling back to live fetch`);
+    try {
+      const vix = await fetchVixData();
+      indiaVix = typeof vix?.close === 'number' ? vix.close : null;
+    } catch (vixErr) {
+      console.warn(`${LOG} [WARN] fetchVixData failed: ${vixErr.message} — Check 5 will use baseline ratio`);
+    }
+  }
+  console.log(`${LOG} [DEBUG] India VIX for Check 5 scaling: ${indiaVix ?? 'unavailable (baseline ratio)'}`);
+
+  console.log(`${LOG} [DEBUG] Calling validatePicks() — regime=${regime}, orbPass=${orbPass}, vix=${indiaVix ?? 'n/a'}`);
+  validatePicks(eligiblePicks, orbData, regime, orbPass, orbVolumeMap, indiaVix);
   console.log(`${LOG} [DEBUG] validatePicks() complete — results: ${eligiblePicks.map(p => `${p.symbol}=${p.validation?.passed ? 'PASS' : 'FAIL(' + (p.validation?.skip_reason || '?') + ')'}`).join(', ')}`);
 
   // Record pass history on each pick for analytics
@@ -3568,11 +3845,45 @@ async function monitorDailyPickOrders(options = {}) {
           candles15m:  sym15m,
           direction:   pick.direction,
           currentStop: pick.levels.stop,
+          // R-cushion context: pass actual fill + original planned stop so the
+          // structural-exit cushion (STRUCTURE_EXIT_MIN_R_CUSHION) can gate
+          // single-bar break-outs that haven't built any profit yet.
+          entryPrice:  pick.trade?.entry_price,
+          plannedStop: pick.validation?.original_levels?.stop ?? pick.levels?.stop,
         });
 
         // Full decision + all intermediate values (the reason string embeds the debug dump)
         console.log(`${LOG} [CANDLE] ${pick.symbol}: ▶ action=${decision.action}${decision.newStop ? ` newStop=₹${decision.newStop}` : ''}`);
         console.log(`${LOG} [CANDLE] ${pick.symbol}:   ${decision.reason}`);
+
+        // ── Telemetry: track how often each structural-exit gate blocked an
+        //    exit. Counters persist on the pick.trade subdoc so post-trade
+        //    analytics can answer "did the cushion / two-bar rule cost us
+        //    real winners or save us real losers?" (review S2).
+        if (decision.action !== 'exit' && /15-min structure broken/i.test(decision.reason || '')) {
+          if (!pick.trade.exit_gate_blocks) {
+            pick.trade.exit_gate_blocks = { cushion: 0, two_bar: 0, missing_r_ctx: 0 };
+          }
+          if (/cushion/i.test(decision.reason)) {
+            pick.trade.exit_gate_blocks.cushion = (pick.trade.exit_gate_blocks.cushion || 0) + 1;
+          } else if (/single bar|unconfirmed|insufficient 15-min history/i.test(decision.reason)) {
+            pick.trade.exit_gate_blocks.two_bar = (pick.trade.exit_gate_blocks.two_bar || 0) + 1;
+          }
+        }
+        if (decision.action === 'hold' && /MISSING_R_CONTEXT/.test(decision.reason || '')) {
+          if (!pick.trade.exit_gate_blocks) {
+            pick.trade.exit_gate_blocks = { cushion: 0, two_bar: 0, missing_r_ctx: 0 };
+          }
+          pick.trade.exit_gate_blocks.missing_r_ctx = (pick.trade.exit_gate_blocks.missing_r_ctx || 0) + 1;
+          // ERROR level — this is a programming error, not a normal operational
+          // metric. Counter persists in DB for monitoring (`exit_gate_blocks
+          // .missing_r_ctx > 0` over any window = active bug). Stack trace
+          // helps identify the caller — though the call site in this file is
+          // line ~3820, the stack reveals the chain (monitor cron → here).
+          const stack = new Error('R-context missing').stack
+            .split('\n').slice(0, 6).join(' | ');
+          console.error(`${LOG} [CANDLE] ${pick.symbol}: 🚨 PROGRAMMING ERROR — analyzeIntradayStructure called without entryPrice/plannedStop. Hard stop still active but structural management is OFF. Stack: ${stack}`);
+        }
 
         if (decision.action === 'exit') {
           // ── CANDLE EXIT — 15-min structure broken ──

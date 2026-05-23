@@ -816,6 +816,9 @@ class IntradayMonitorJob {
             candles15m:  sym60m,   // 'slow' timeframe — 1-hour for weekly swings
             direction:   'LONG',   // weekly picks are always LONG
             currentStop,
+            // R-cushion context — see analyzeIntradayStructure docstring.
+            entryPrice:  sim.entry_price,
+            plannedStop: stock.levels?.stop,
           });
 
           console.log(`${runLabel} [CANDLE] ${stock.symbol}: ▶ action=${decision.action}${decision.newStop ? ` newStop=₹${decision.newStop}` : ''}`);

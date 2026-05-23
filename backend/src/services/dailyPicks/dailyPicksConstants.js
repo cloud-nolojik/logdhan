@@ -57,8 +57,57 @@ export const MIN_ORB_RR_BY_REGIME = {
  * The absolute 5% backstop prevents edge-case acceptance on very high-ATR
  * low-priced midcaps where position sizing shrinks to near-trivial quantity.
  */
-export const MAX_ORB_ATR_RATIO = 1.25;         // reject if ORB range > 1.25× effective ATR
+export const MAX_ORB_ATR_RATIO = 1.25;         // reject if ORB range > 1.25× effective ATR (normal VIX baseline)
 export const MAX_ORB_RANGE_PCT_ABSOLUTE = 5.0; // absolute backstop regardless of ATR
+
+// ── VIX-aware scaling of MAX_ORB_ATR_RATIO ─────────────────────────────────
+// Problem (May 2026 audit): on high-VIX panic days the ORB range routinely
+// exceeds 1.25× the (already inflated) effective ATR, so Check 5 rejects
+// almost every candidate. The system effectively sits out the days where
+// intraday breakout edge is highest. Solution: scale the ratio threshold by
+// India VIX so high-vol environments use a looser gate. Position sizing
+// (computePositionSize) already shrinks qty via inverse-ATR, so the
+// risk-per-trade impact of the looser gate is bounded.
+//
+// Calibration: 1.25× baseline keeps current behavior in normal markets;
+// 1.5× covers post-event days (election, budget) without exploding stops;
+// 2.0× covers true panic regimes (India VIX > 25) where any opening range
+// looks "wide" relative to ATR. Above 2.0× we'd be trading random noise.
+// ───────────────────────────────────────────────────────────────────────────
+export const VIX_NORMAL_MAX_THRESHOLD    = 16;   // ≤ this: use 1.25× baseline
+export const VIX_ELEVATED_MAX_THRESHOLD  = 22;   // ≤ this: use 1.50×
+export const VIX_EXTREME_SIT_OUT_THRESHOLD = 35; // > this: SIT OUT entirely (once-a-decade vol)
+export const MAX_ORB_ATR_RATIO_NORMAL    = 1.25;
+export const MAX_ORB_ATR_RATIO_ELEVATED  = 1.50;
+export const MAX_ORB_ATR_RATIO_PANIC     = 2.00;
+
+/**
+ * Resolve the VIX-adjusted MAX_ORB_ATR_RATIO for the day. Pass the day's
+ * India VIX close (or current value if available pre-open). If VIX is
+ * missing/0, defaults to the normal baseline.
+ *
+ * Returns one of:
+ *   number — the ratio to use
+ *   'SIT_OUT' — VIX is above VIX_EXTREME_SIT_OUT_THRESHOLD (catastrophic).
+ *               Caller should not trade at all today.
+ */
+export function resolveOrbAtrRatioForVix(indiaVix) {
+  if (!indiaVix || indiaVix <= 0) return MAX_ORB_ATR_RATIO_NORMAL;
+  if (indiaVix <= VIX_NORMAL_MAX_THRESHOLD)   return MAX_ORB_ATR_RATIO_NORMAL;
+  if (indiaVix <= VIX_ELEVATED_MAX_THRESHOLD) return MAX_ORB_ATR_RATIO_ELEVATED;
+  if (indiaVix <= VIX_EXTREME_SIT_OUT_THRESHOLD) return MAX_ORB_ATR_RATIO_PANIC;
+  return 'SIT_OUT';   // VIX > 35 — historical 99th percentile, system should not trade
+}
+
+// ── Absolute risk floor (per-trade) ─────────────────────────────────────────
+// Problem (May 2026 audit): on low-VIX days the planned stop sits 0.3–0.5%
+// from entry, which is within typical SL-M slippage + Indian retail fees
+// (~0.3% round-trip). Trades have near-zero net edge regardless of hit rate.
+// Solution: require risk_pct ≥ MIN_RISK_PCT_PER_TRADE at the ORB check.
+// Below that, the trade is rejected with reason "risk_too_small". The R:R
+// gate remains separate and still applies.
+// ───────────────────────────────────────────────────────────────────────────
+export const MIN_RISK_PCT_PER_TRADE = 0.5;   // entry-relative %, e.g. 0.5%
 /** >0.3% opposing NIFTY move blocks trade */
 export const NIFTY_THRESHOLD_PCT = 0.3;
 /** Gap direction threshold — gap opposing scan bias beyond this % fails Check 2 */
@@ -126,6 +175,33 @@ export const TRAIL_EOD_TIGHTEN = 0.5;
 export const TRAIL_ATR_LOOKBACK = 14;
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// STRUCTURAL EXIT CUSHION (15-min candle_structure_exit override)
+//
+// Problem this addresses (May 2026 audit):
+//   In 17 days of live trading, ZERO trades reached planned TARGET_HIT — every
+//   exit was via stop_hit, time_exit, or analyzeIntradayStructure's 15-min
+//   structural break. The structure break is too sensitive: a single 15-min
+//   candle closing below the prior 15-min low fires an immediate market exit
+//   regardless of whether the trade is up, flat, or down.
+//
+// On a planned 2R trade this means the structural exit consistently fires
+// before the target is reached, capping realized_rr around 0.8–1.0 vs
+// planned_rr ≈ 1.5–2.0.
+//
+// Fix: require a minimum unrealized profit cushion (in R-multiples) before
+// the structural exit is allowed to override the planned target. Below the
+// cushion the planned stop continues to apply normally; once the trade is
+// in profit by at least this much, the structural break becomes a "lock in
+// the win" rule rather than a "kill the marginal winner" rule.
+//
+// Conservative default: 0.5R. Tune higher to be more patient, lower to be
+// more reactive. Set to 0 to disable the cushion (legacy behavior).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Minimum unrealized R multiple before 15-min structural break can trigger exit */
+export const STRUCTURE_EXIT_MIN_R_CUSHION = 0.5;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SIDEWAYS EXIT
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -151,6 +227,27 @@ export const EXIT_HOUR = 15;
 export const INTRADAY_CAPITAL_PCT = 0.40;
 /** Maximum daily picks */
 export const MAX_PICKS = 3;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REGIME-AWARE SCANNERS (May 2026)
+//
+// Per-regime stock-selection strategies are owned by scanner.py (one --mode
+// per regime). The Node side just routes regime → mode in
+// dailyPicksService.selectScannerModeForRegime. There used to be JS-side
+// constants here (STRONG_BULL_MIN_SCORE, RSI gates, lookback windows) that
+// were added in anticipation of a JS scanner implementation. That work
+// stayed in Python instead, so those constants were never consumed and
+// were removed. If a future task moves any scanner logic back to JS,
+// re-add the relevant tuning constants here.
+//
+// Active routing (see dailyPicksService.REGIME_TO_SCANNER_MODE):
+//   STRONG_BULL  → momentum_leader   (LONG)
+//   WEAK_BULL    → recovery_breakout (LONG, unchanged from legacy)
+//   NEUTRAL      → nr7_compression   (LONG default, scan_meta flags break direction)
+//   WEAK_BEAR    → failed_bounce     (SHORT)
+//   STRONG_BEAR  → breakdown         (SHORT)
+//   EXTREME_BEAR → sit out
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ATR-BASED POSITION SIZING (inverse volatility weighting)

@@ -29,7 +29,11 @@ export const BREADTH_BAND_PCT = 25;
 
 /** Volatility: median percentile rank = neutral */
 export const VOL_CENTER_PERCENTILE = 50;
-/** Volatility: ±25 percentile = ±1 (25th = +1 calm, 75th = -1 stressed) */
+/** Volatility: ±25 percentile = ±1.
+ *  POLARITY (May 2026): 75th percentile = +1 (high VIX/stress → AMPLIFY directional score);
+ *                       25th percentile = -1 (low VIX/calm → DAMPEN directional score).
+ *  Rationale: intraday breakout edge is highest in elevated-VIX regimes;
+ *  calm sideways tape produces the most chop and the smallest payouts. */
 export const VOL_BAND_PERCENTILE = 25;
 
 /** Overnight equity indices: ±0.75% change maps to ±1 */
@@ -50,7 +54,9 @@ export const WEIGHT_BREADTH   = 0.25;
 export const WEIGHT_OVERNIGHT = 0.15;
 export const WEIGHT_FLOW      = 0.15;
 
-/** Volatility magnitude modifier range: vol_factor ∈ [1 - 0.30, 1 + 0.30] */
+/** Volatility magnitude modifier range: vol_factor ∈ [1 - 0.30, 1 + 0.30].
+ *  After the May-2026 polarity flip, high VIX produces vol_factor > 1 (amplify);
+ *  low VIX produces vol_factor < 1 (dampen). */
 export const VOL_MULTIPLIER_RANGE = 0.30;
 
 // ═══════════════════════════════════════════════════════════════════════════════

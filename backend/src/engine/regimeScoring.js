@@ -69,12 +69,24 @@ export function computeBreadth(pctAbove50DMA) {
 }
 
 /**
+ * Convert India VIX percentile rank to a magnitude modifier ∈ [-1, +1].
+ *
+ * FLIPPED (May 2026):
+ *   Previous behavior: high VIX (stress) returned -1 → dampened the directional
+ *   score. That made the engine downgrade conviction in exactly the panics
+ *   where intraday breakout edge is highest, and over-trust trend signals on
+ *   calm sideways days where chop is greatest.
+ *
+ *   New behavior: high VIX returns +1 → amplifies the directional score;
+ *   low VIX returns -1 → dampens it. So a -0.7 bearish day in panic VIX now
+ *   amplifies to -0.91 (STRONG_BEAR) instead of dampening to -0.49 (WEAK_BEAR).
+ *
  * @param {number|null} vixPercentileRank - 0..100
- * @returns {number|null}
+ * @returns {number|null}  +1 stressed (amplify), 0 median, -1 calm (dampen)
  */
 export function computeVolatility(vixPercentileRank) {
   if (!isNum(vixPercentileRank)) return null;
-  return clamp((VOL_CENTER_PERCENTILE - vixPercentileRank) / VOL_BAND_PERCENTILE, -1, 1);
+  return clamp((vixPercentileRank - VOL_CENTER_PERCENTILE) / VOL_BAND_PERCENTILE, -1, 1);
 }
 
 /**

@@ -830,6 +830,9 @@ export async function monitorOrbPositions() {
         candles15m:  sym15m,
         direction:   'LONG',          // ORB only takes long breakouts
         currentStop: c.stopPrice,
+        // R-cushion context — see analyzeIntradayStructure docstring.
+        entryPrice:  c.entryPrice,
+        plannedStop: c.originalStop ?? c.stopPrice,
       });
 
       console.log(`${LOG} [CANDLE] ${c.symbol}: action=${decision.action}${decision.newStop ? `  newStop=₹${decision.newStop}` : ''}`);

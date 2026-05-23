@@ -71,7 +71,16 @@ const pickSchema = new mongoose.Schema({
     pnl: Number,
     return_pct: Number,
     partial_exit_qty: Number,     // Qty sold via partial profit booking
-    partial_exit_price: Number    // Price at partial profit booking
+    partial_exit_price: Number,    // Price at partial profit booking
+    // Telemetry (May 2026 review S2): per-trade counters for how often each
+    // structural-exit gate blocked an exit. Useful in Path B backtest to
+    // attribute the impact of each gate independently. Always either null
+    // (no blocks fired) or an object with three integer counters.
+    exit_gate_blocks: {
+      cushion:        { type: Number, default: 0 },
+      two_bar:        { type: Number, default: 0 },
+      missing_r_ctx:  { type: Number, default: 0 }
+    }
   },
 
   // Kite order tracking

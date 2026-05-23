@@ -30,6 +30,7 @@ import {
   BASELINE_ATR_PCT,
   MIN_ATR_MULT,
   MAX_ATR_MULT,
+  STRUCTURE_EXIT_MIN_R_CUSHION,
 } from './dailyPicksConstants.js';
 
 // Re-export trailing engine (it's already a shared pure function)
@@ -296,9 +297,20 @@ export function computePositionSize({
  * @param {Object[]} candles15m  - last N completed 15-min candles
  * @param {string}   direction   - 'LONG' | 'SHORT'
  * @param {number}   currentStop - current stop level (for trail direction guard)
+ * @param {number}  [entryPrice] - actual fill price; required to apply structural-exit cushion
+ * @param {number}  [plannedStop] - original planned stop; required to compute R-cushion
  * @returns {{ action: string, reason: string, newStop: number|null }}
+ *
+ * STRUCTURAL EXIT CUSHION (May 2026):
+ *   When entryPrice and plannedStop are supplied, the 15-min structural break
+ *   ONLY triggers exit if the trade is at least STRUCTURE_EXIT_MIN_R_CUSHION R
+ *   in profit (default 0.5R). Below that cushion, the function downgrades the
+ *   exit to a 'tighten' or 'hold' so the planned stop continues to govern risk.
+ *   This stops marginally-profitable winners getting cut on a single retrace.
+ *   Backward-compat: omit entryPrice/plannedStop to keep legacy (immediate exit)
+ *   behavior — the function still works but logs a warning.
  */
-export function analyzeIntradayStructure({ candles5m, candles15m, direction, currentStop }) {
+export function analyzeIntradayStructure({ candles5m, candles15m, direction, currentStop, entryPrice, plannedStop }) {
   const NO_CHANGE = (reason) => ({ action: 'hold', reason, newStop: null });
 
   if (!candles5m  || candles5m.length  < 2) return NO_CHANGE('insufficient 5-min candle data');
@@ -371,11 +383,90 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
   // ── Decision matrix ──
 
   if (struct15Broken) {
+    // ── Structural-exit gating (May 2026, two layers) ──
+    //
+    // Layer 1 (cushion): if entryPrice + plannedStop are supplied, require
+    // the trade to be at least STRUCTURE_EXIT_MIN_R_CUSHION R in profit
+    // before any structural exit can fire. Below the cushion we just tighten
+    // — the planned stop continues to manage risk.
+    //
+    // Layer 2 (two-bar confirmation): even when above the cushion, a SINGLE
+    // 15-min break is too jumpy — one noisy bar can take out the prior low
+    // intra-trend. We now require the prior 15-min candle ALSO to have closed
+    // below its own prior low (for LONGs; mirror for SHORTs) before firing
+    // a market exit. If only the latest bar broke, we tighten instead of
+    // exit, awaiting confirmation on the next 15-min bar.
+    //
+    // This is the change requested after observing zero TARGET_HIT trades
+    // and many structure-exits firing on first-bar noise.
+
+    const haveRContext =
+      typeof entryPrice === 'number' && entryPrice > 0 &&
+      typeof plannedStop === 'number' && plannedStop > 0;
+    const cushion = STRUCTURE_EXIT_MIN_R_CUSHION;
+
+    // ── Layer 1: profit-cushion gate ──
+    if (haveRContext && cushion > 0) {
+      const riskPerShare = Math.abs(entryPrice - plannedStop);
+      if (riskPerShare > 0) {
+        const unrealizedPerShare = isBullish
+          ? c15last.close - entryPrice
+          : entryPrice - c15last.close;
+        const unrealizedR = unrealizedPerShare / riskPerShare;
+
+        if (unrealizedR < cushion) {
+          const tightenLevel = isBullish ? round2(c15prev.low) : round2(c15prev.high);
+          const isImprovement = isBullish ? tightenLevel > currentStop : tightenLevel < currentStop;
+          return {
+            action: isImprovement ? 'tighten' : 'hold',
+            reason: `15-min structure broken but unrealized R=${round2(unrealizedR)} < cushion ${cushion}R — downgraded to ${isImprovement ? 'tighten' : 'hold'} (planned stop still active) | ${dbg}`,
+            newStop: isImprovement ? tightenLevel : null,
+          };
+        }
+      }
+    } else if (!haveRContext) {
+      // FAIL LOUD: a caller without R-context bypasses HALF of the structural-
+      // exit protection (Layer 1, the cushion). All 3 known callers in this
+      // codebase pass both fields; if we hit this, a new caller was added or
+      // an existing caller was refactored to drop them. Refuse to act —
+      // return `hold` with an explicit reason so the calling job logs the
+      // miss and a human can find it. The hard planned stop is still active,
+      // so risk is bounded; we just won't tighten or exit on structure today.
+      return {
+        action: 'hold',
+        reason: `MISSING_R_CONTEXT: analyzeIntradayStructure called without entryPrice/plannedStop. Caller must pass both. Hard stop still active, but structural management is disabled until fixed. dbg: ${dbg}`,
+        newStop: null,
+      };
+    }
+
+    // ── Layer 2: two-bar confirmation gate ──
+    // Needs at least 3 completed 15-min candles to look back one bar.
+    // Without a third candle we can't confirm, so we downgrade to tighten
+    // and wait. The hard planned stop is still active in the meantime.
+    const c15prev2 = candles15m.length >= 3 ? candles15m[candles15m.length - 3] : null;
+    const priorBarBroke = c15prev2
+      ? (isBullish ? c15prev.close < c15prev2.low : c15prev.close > c15prev2.high)
+      : null;
+
+    if (priorBarBroke !== true) {
+      const tightenLevel = isBullish ? round2(c15prev.low) : round2(c15prev.high);
+      const isImprovement = isBullish ? tightenLevel > currentStop : tightenLevel < currentStop;
+      const reasonDetail = priorBarBroke === null
+        ? 'insufficient 15-min history (need 3 candles) — awaiting next bar'
+        : `prior 15-min candle closed ${isBullish ? `at ${c15prev.close} ≥ its prior low ${c15prev2.low}` : `at ${c15prev.close} ≤ its prior high ${c15prev2.high}`} — single-bar break unconfirmed`;
+      return {
+        action: isImprovement ? 'tighten' : 'hold',
+        reason: `15-min structure broken (single bar, unconfirmed): ${reasonDetail} — downgraded to ${isImprovement ? 'tighten' : 'hold'} | ${dbg}`,
+        newStop: isImprovement ? tightenLevel : null,
+      };
+    }
+
+    // ── Both gates passed: cushion OK + two-bar confirmation ──
     return {
       action: 'exit',
       reason: isBullish
-        ? `15-min structure broken: close ₹${c15last.close} < prior low ₹${c15prev.low} | ${dbg}`
-        : `15-min structure broken: close ₹${c15last.close} > prior high ₹${c15prev.high} | ${dbg}`,
+        ? `15-min structure CONFIRMED broken (2 bars): last close ₹${c15last.close} < prior low ₹${c15prev.low}, prior close ₹${c15prev.close} < its prior low ₹${c15prev2.low} | ${dbg}`
+        : `15-min structure CONFIRMED broken (2 bars): last close ₹${c15last.close} > prior high ₹${c15prev.high}, prior close ₹${c15prev.close} > its prior high ₹${c15prev2.high} | ${dbg}`,
       newStop: null,
     };
   }

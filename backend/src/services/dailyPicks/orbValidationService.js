@@ -13,7 +13,19 @@
 import kiteOrderService from '../kiteOrder.service.js';
 import { rateLimitedGet } from '../../utils/upstoxRateLimiter.js';
 import { round2 } from './dailyPicksHelpers.js';
-import { MIN_ORB_RR_BY_REGIME, GAP_DIRECTION_THRESHOLD_PCT, GAP_FADE_MAX_PASS, GAP_SIZE_ADVERSE_MAX_PCT, GAP_SIZE_ALIGNED_MAX_PCT, MIN_ORB_VOLUME_RATIO, TRADING_CANDLES_PER_DAY, MAX_ORB_ATR_RATIO, MAX_ORB_RANGE_PCT_ABSOLUTE } from './dailyPicksConstants.js';
+import {
+  MIN_ORB_RR_BY_REGIME,
+  GAP_DIRECTION_THRESHOLD_PCT,
+  GAP_FADE_MAX_PASS,
+  GAP_SIZE_ADVERSE_MAX_PCT,
+  GAP_SIZE_ALIGNED_MAX_PCT,
+  MIN_ORB_VOLUME_RATIO,
+  TRADING_CANDLES_PER_DAY,
+  MAX_ORB_ATR_RATIO,
+  MAX_ORB_RANGE_PCT_ABSOLUTE,
+  MIN_RISK_PCT_PER_TRADE,
+  resolveOrbAtrRatioForVix,
+} from './dailyPicksConstants.js';
 
 const LOG = '[ORB]';
 
@@ -211,16 +223,46 @@ async function collectOpeningRange(symbols, picks) {
  * @param {number} orbPass — Current ORB pass number (1, 2, or 3)
  * @returns {Array} — Same picks array with orb + validation fields populated
  */
-function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null) {
-  if (!MIN_ORB_RR_BY_REGIME[regime]) {
-    throw new Error(`[ORB] validatePicks called with unknown regime "${regime}" — must be one of: ${Object.keys(MIN_ORB_RR_BY_REGIME).join(', ')}`);
+function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null, indiaVix = null) {
+  // Defensive: if regime is missing from MIN_ORB_RR_BY_REGIME (e.g. caller
+  // somehow passed UNKNOWN / HALT / a future label we haven't added), fall
+  // back to NEUTRAL's threshold (most conservative R:R = 2.0) and log a loud
+  // warning. Throwing here would crash the entire 9:30 validation pass when
+  // a single misconfigured pick reaches us; loud-warn + safe-default keeps
+  // the rest of the picks validating. The new pre-flight router upstream
+  // shouldn't allow this in practice, but this is the second line of defense.
+  let minRR = MIN_ORB_RR_BY_REGIME[regime];
+  if (minRR == null) {
+    console.warn(`${LOG} ⚠️  validatePicks: unknown regime "${regime}" — not in MIN_ORB_RR_BY_REGIME (expected one of ${Object.keys(MIN_ORB_RR_BY_REGIME).join(', ')}). Falling back to NEUTRAL R:R=${MIN_ORB_RR_BY_REGIME.NEUTRAL}.`);
+    console.warn(`${LOG}    upstream router should have sat out for this regime — investigate why the pick reached ORB validation.`);
+    minRR = MIN_ORB_RR_BY_REGIME.NEUTRAL;
   }
   const niftyOrb = orbData['_NIFTY'];
   const niftyDir = niftyOrb?.orb_direction || 'NEUTRAL';
   const niftyChangePct = niftyOrb?.nifty_change_pct ?? 0;
-  const minRR = MIN_ORB_RR_BY_REGIME[regime];
 
-  console.log(`${LOG} Validating ${picks.length} picks (NIFTY dir: ${niftyDir} change: ${niftyChangePct}% regime: ${regime} minRR: ${minRR})`);
+  // VIX-aware Check 5 threshold: on high-vol days use a looser ratio so the
+  // system doesn't sit out exactly when intraday breakout edge is highest.
+  // Falls back to the static baseline when indiaVix is null/0.
+  let dynMaxOrbAtrRatio = indiaVix
+    ? resolveOrbAtrRatioForVix(indiaVix)
+    : MAX_ORB_ATR_RATIO;
+
+  // Defense in depth: resolveOrbAtrRatioForVix returns the string 'SIT_OUT'
+  // when VIX > VIX_EXTREME_SIT_OUT_THRESHOLD. Upstream Guard 1 in
+  // runDailyPicks is supposed to catch this and sit out before scanner runs,
+  // so reaching this code path means either (a) Guard 1 was bypassed by a
+  // future caller, or (b) VIX rose between 8:30 and 9:30. In either case we
+  // refuse to validate — clamp to the strictest available ratio and fail
+  // every pick with an explicit reason. Without this guard, a 'SIT_OUT'
+  // string would coerce to NaN in comparisons and silently fail-pass.
+  const vixSitOut = dynMaxOrbAtrRatio === 'SIT_OUT';
+  if (vixSitOut) {
+    console.warn(`${LOG} ⚠️  resolveOrbAtrRatioForVix returned 'SIT_OUT' at VIX=${indiaVix} — Guard 1 in runDailyPicks should have caught this. Failing all picks with risk=extreme_vix.`);
+    dynMaxOrbAtrRatio = MAX_ORB_ATR_RATIO;  // use the strictest baseline for downstream code that reads the number
+  }
+
+  console.log(`${LOG} Validating ${picks.length} picks (NIFTY dir: ${niftyDir} change: ${niftyChangePct}% regime: ${regime} minRR: ${minRR} VIX=${indiaVix ?? 'n/a'} maxOrbAtrRatio=${dynMaxOrbAtrRatio})`);
 
   // TEMPORARY: Skip all validation when FORCE_CONDITIONS_MET is true (for testing order placement)
   // if (process.env.FORCE_CONDITIONS_MET === 'true') {
@@ -261,6 +303,19 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
   // }
 
   for (const pick of picks) {
+    // VIX-extreme sit-out — short-circuit all per-pick validation if Guard 1
+    // missed and we ended up here with catastrophic VIX. Mark each pick as
+    // failed with an explicit reason rather than silently NaN-passing.
+    if (vixSitOut) {
+      pick.validation = {
+        passed: false,
+        checks: {},
+        skip_reason: `extreme_vix_sit_out (VIX=${indiaVix} > sit_out_threshold)`,
+      };
+      console.warn(`${LOG} ${pick.symbol}: ❌ extreme_vix_sit_out (defense-in-depth — Guard 1 should have caught this upstream)`);
+      continue;
+    }
+
     const orb = orbData[pick.symbol];
     console.log(`${LOG} ┌─── ${pick.symbol} (${pick.direction} ${pick.scan_type}) VALIDATION ───`);
     if (!orb) {
@@ -368,8 +423,15 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
     const reward = Math.abs(orbTarget - orbEntry);
     const newRR = risk > 0 ? round2(reward / risk) : 0;
 
+    // ── Absolute risk floor (May 2026): reject sub-fee trades ──
+    // On a 0.3% stop with ~0.3% round-trip fees, expectancy is near zero
+    // regardless of hit rate. Require risk_pct >= MIN_RISK_PCT_PER_TRADE.
+    const orbRiskPct = orbEntry > 0 ? round2((risk / orbEntry) * 100) : 0;
+    const riskTooSmall = orbRiskPct < MIN_RISK_PCT_PER_TRADE;
+    const rrPassed = newRR >= minRR && !riskTooSmall;
+
     checks.orb_alignment = {
-      passed: newRR >= minRR,
+      passed: rrPassed,
       scan_bias: pick.direction,
       orb_dir: orb.orb_direction,
       new_entry: orbEntry,
@@ -382,13 +444,18 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
       orb_high: orb.high,
       orb_low: orb.low,
       risk,
+      risk_pct: orbRiskPct,
+      min_risk_pct: MIN_RISK_PCT_PER_TRADE,
+      risk_too_small: riskTooSmall,
     };
     console.log(`${LOG} │ Check 3 ORB levels (fixed ${MAX_RR}:1):`);
     console.log(`${LOG} │   entry  = ${isBullish ? 'ORB_high' : 'ORB_low'}(${isBullish ? orb.high : orb.low}) × ${isBullish ? 1 + ORB_BUFFER_PCT : 1 - ORB_BUFFER_PCT} = ${orbEntry}`);
     console.log(`${LOG} │   stop   = ${isBullish ? 'ORB_low'  : 'ORB_high'}(${isBullish ? orb.low  : orb.high}) × ${isBullish ? 1 - ORB_BUFFER_PCT : 1 + ORB_BUFFER_PCT} = ${orbStop}`);
     console.log(`${LOG} │   risk   = |entry - stop| = ${round2(risk)}`);
     console.log(`${LOG} │   target = entry ± risk × ${MAX_RR} = ${orbTarget} (fixed_2r)`);
-    console.log(`${LOG} │   R:R    = ${newRR} (min ${minRR} [${regime}]) → ${checks.orb_alignment.passed ? '✅ PASS' : '❌ FAIL'}`);
+    console.log(`${LOG} │   risk%  = ${orbRiskPct}% (min ${MIN_RISK_PCT_PER_TRADE}%) → ${riskTooSmall ? '❌ TOO SMALL' : '✅ ok'}`);
+    console.log(`${LOG} │   R:R    = ${newRR} (min ${minRR} [${regime}]) → ${(newRR >= minRR) ? '✅ ok' : '❌ FAIL'}`);
+    console.log(`${LOG} │   Check 3 OVERALL → ${rrPassed ? '✅ PASS' : `❌ FAIL (${riskTooSmall ? 'risk_too_small' : 'rr_below_min'})`}`);
 
     // Check 4: Nifty alignment — opposing move blocks trade
     // Regime-aligned trades get wider threshold to tolerate normal morning counter-moves:
@@ -422,8 +489,11 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
       ? round2(Math.max(dailyAtrPct, Math.abs(orb.gap_percent || 0)))
       : 0;
     const orbAtrRatio = effectiveAtr > 0 ? round2(orbRangePct / effectiveAtr) : null;
+    // VIX-aware: use dynMaxOrbAtrRatio (1.25 normal / 1.50 elevated / 2.00 panic)
+    // instead of static MAX_ORB_ATR_RATIO so panic days don't filter out
+    // every candidate.
     const orbRangePassed = orbAtrRatio !== null
-      ? orbAtrRatio <= MAX_ORB_ATR_RATIO && orbRangePct <= MAX_ORB_RANGE_PCT_ABSOLUTE
+      ? orbAtrRatio <= dynMaxOrbAtrRatio && orbRangePct <= MAX_ORB_RANGE_PCT_ABSOLUTE
       : orbRangePct <= MAX_ORB_RANGE_PCT_ABSOLUTE; // fallback: no ATR on pick
     checks.orb_range_width = {
       passed: orbRangePassed,
@@ -431,11 +501,13 @@ function validatePicks(picks, orbData, regime, orbPass = 1, orbVolumeMap = null)
       orb_atr_ratio: orbAtrRatio,
       daily_atr_pct: dailyAtrPct,
       effective_atr_pct: effectiveAtr,
-      max_ratio: MAX_ORB_ATR_RATIO,
+      max_ratio: dynMaxOrbAtrRatio,
+      max_ratio_baseline: MAX_ORB_ATR_RATIO,
+      india_vix: indiaVix,
       max_absolute_pct: MAX_ORB_RANGE_PCT_ABSOLUTE
     };
     const ratioStr = orbAtrRatio !== null
-      ? `ratio=${orbAtrRatio}x ATR (max ${MAX_ORB_ATR_RATIO}x), `
+      ? `ratio=${orbAtrRatio}x ATR (max ${dynMaxOrbAtrRatio}x ${indiaVix ? `@ VIX=${indiaVix}` : ''}), `
       : '';
     console.log(`${LOG} │ Check 5 ORB RANGE: ${orbRangePct}% / effectiveATR=${effectiveAtr}% → ${ratioStr}abs max=${MAX_ORB_RANGE_PCT_ABSOLUTE}% → ${orbRangePassed ? '✅ PASS' : '❌ FAIL'}`);
 

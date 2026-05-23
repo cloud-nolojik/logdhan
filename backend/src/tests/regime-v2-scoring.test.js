@@ -26,10 +26,14 @@ describe('regime v2 input computation', () => {
     expect(computeBreadth(null)).toBeNull();
   });
 
-  it('volatility inverts VIX: low pct → +1, high pct → -1', () => {
-    expect(computeVolatility(25)).toBe(1);
-    expect(computeVolatility(50)).toBe(0);
-    expect(computeVolatility(75)).toBe(-1);
+  // POLARITY FLIPPED May 2026: high VIX (stressed) returns +1 to AMPLIFY
+  // the directional score; low VIX (calm) returns -1 to DAMPEN it. Reverses
+  // the prior "high VIX = -1 dampener" semantics. See regimeScoring.js
+  // computeVolatility() docstring for rationale.
+  it('volatility flipped: high VIX amplifies, low VIX dampens', () => {
+    expect(computeVolatility(25)).toBe(-1);   // calm → dampen
+    expect(computeVolatility(50)).toBe(0);    // median → neutral
+    expect(computeVolatility(75)).toBe(1);    // stressed → amplify
     expect(computeVolatility(null)).toBeNull();
   });
 
