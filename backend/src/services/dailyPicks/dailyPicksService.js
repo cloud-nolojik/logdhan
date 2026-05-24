@@ -25,8 +25,16 @@ import { fileURLToPath } from 'url';
 const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// scanner.py lives at logdhan/scanner.py — 4 dirs up from dailyPicks/
-const SCANNER_PY_PATH = path.resolve(__dirname, '../../../..', 'scanner.py');
+// Two scanner scripts live at logdhan/ — 4 dirs up from dailyPicks/.
+//   scanner.py        — INTRADAY scanner (default, May 2026 v3). Same-day setups.
+//   scanner_swing.py  — SWING scanner (the previous 8-mode scanner). Kept for
+//                       A/B comparison and for SCANNER_TYPE=swing override.
+// Selection is controlled by the SCANNER_TYPE env var via getActiveScannerType().
+const SCANNER_INTRADAY_PY_PATH = path.resolve(__dirname, '../../../..', 'scanner.py');
+const SCANNER_SWING_PY_PATH    = path.resolve(__dirname, '../../../..', 'scanner_swing.py');
+// Backwards-compat alias — some legacy log strings still reference this.
+// Always equals the *active* script (intraday by default).
+const SCANNER_PY_PATH = SCANNER_INTRADAY_PY_PATH;
 
 import { SCAN_LABELS, SCAN_ARCHETYPE } from './dailyPicksScans.js';
 import { buildShortlist } from '../shortlist/shortlistService.js';
@@ -90,6 +98,15 @@ import {
   MAX_COUNTER_REGIME_PICKS, // kept: selectDiversePicks still references it (dead branch now, harmless)
   // COUNTER_REGIME_MIN_SCORE, // removed — Step 4 hard-rejects counter-regime, no threshold needed
   resolveOrbAtrRatioForVix,    // VIX → MAX_ORB_ATR_RATIO scaling + extreme sit-out
+  // 9:30 scanner confirmation (Tier-1 intraday upgrade, May 2026)
+  SCANNER_ORB_CONFIRM_MIN_MOVE_PCT,
+  SCANNER_ORB_CONFIRM_VOL_RATIO_THRESHOLD,
+  SCANNER_ORB_CONFIRM_NIFTY_AGAINST_PCT,
+  SCANNER_ORB_CONFIRM_MIN_FAILS_FOR_EXIT,
+  // Pre-open shortlist (Commit 1 of the 9:32 selection architecture)
+  SHORTLIST_SIZE,
+  // Risk floor for ORB-breakout entry (mirror the scanner's MIN_RISK_PCT)
+  MIN_RISK_PCT_PER_TRADE,
 } from './dailyPicksConstants.js';
 import { computeDynamicTrail, checkPartialBooking, checkSidewaysExit, analyzeIntradayStructure } from './tradingDecisions.js';
 import { fetchVixData } from '../../engine/regimeDataFetchers.js';
@@ -123,9 +140,15 @@ function snapToNSETick(price, tick, mode = 'round') {
   const t = tick ?? getNseTickSize(price);
   // Use integer arithmetic to avoid floating-point drift (e.g., 0.05 × 20 = 1)
   const factor = Math.round(1 / t);
-  if (mode === 'floor') return Math.floor(price * factor) / factor;
-  if (mode === 'ceil')  return Math.ceil(price * factor)  / factor;
-  return Math.round(price * factor) / factor;
+  let snapped;
+  if (mode === 'floor')      snapped = Math.floor(price * factor) / factor;
+  else if (mode === 'ceil')  snapped = Math.ceil(price * factor)  / factor;
+  else                       snapped = Math.round(price * factor) / factor;
+  // Final precision fix: serialize at exactly the tick's decimal count so Kite
+  // never sees a value like 1104.8500000000001 (which it rejects as "not on
+  // tick"). Decimals = 0 for ticks ≥ 1, else 2 (covers 0.01/0.05/0.10).
+  const decimals = t >= 1 ? 0 : 2;
+  return parseFloat(snapped.toFixed(decimals));
 }
 
 /**
@@ -180,14 +203,76 @@ function getAnthropicClient() {
 // 'recovery_breakout' so any unknown label keeps the legacy behavior.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const REGIME_TO_SCANNER_MODE = {
-  STRONG_BULL:  'momentum_leader',
-  WEAK_BULL:    'recovery_breakout',   // unchanged from prior behavior
-  NEUTRAL:      'nr7_compression',
-  WEAK_BEAR:    'failed_bounce',
-  STRONG_BEAR:  'breakdown',
-  EXTREME_BEAR: null,                  // sit out — no picks
+// Regime → scanner mode mappings.
+//
+// Two separate routing tables — one per scanner script. The active table is
+// chosen at runtime by SCANNER_TYPE (see getActiveScannerType() below).
+//
+// ─── SWING table (May 2026 v2) ──────────────────────────────────────────────
+// Used when SCANNER_TYPE=swing → spawns scanner_swing.py. Modes selected from
+// research review (Minervini VCP, Raschke Holy Grail, Connors RSI(2),
+// Daniel-Moskowitz crash overlay) + 80-day backtest. failed_bounce is the
+// only mode with confirmed live edge (+0.14R, 69% hit in WEAK_BEAR).
+export const REGIME_TO_SWING_MODE = {
+  STRONG_BULL:  'vcp_pivot',         // Minervini VCP — base-break with contraction
+  WEAK_BULL:    'pullback_20ema',    // Raschke Holy Grail — first 20-EMA touch in uptrend
+  NEUTRAL:      'rsi2_meanrev',      // Connors RSI(2) — deep dip in long-term uptrend
+  WEAK_BEAR:    'failed_bounce',     // proven winner — kept
+  STRONG_BEAR:  'failed_bounce',     // route to winner (was broken 'breakdown')
+  EXTREME_BEAR: null,                // sit out
 };
+
+// ─── INTRADAY table (May 2026 v3 — default) ─────────────────────────────────
+// Used when SCANNER_TYPE=intraday (default) → spawns scanner.py. One intraday
+// mode per regime, tuned for same-day exit (1R/2R/3R via ATR) rather than
+// multi-day swings. The live ORB validator refines the actual entry at 9:30am.
+export const REGIME_TO_INTRADAY_MODE = {
+  STRONG_BULL:  'intraday_gap_long',       // close in top-quartile + vol + near 20d high
+  WEAK_BULL:    'intraday_breakout_long',  // 3-day coil + above-rising-20EMA + near 20d high
+  NEUTRAL:      'intraday_range_fade',     // ADX<20 + RSI(2)<15 + bottom-quartile of 10d range
+  WEAK_BEAR:    'intraday_failed_rally',   // SHORT — yesterday rallied >2% intraday but closed red
+  STRONG_BEAR:  'intraday_gap_short',      // SHORT — closed near low, below 20/50 EMA, near 20d low
+  EXTREME_BEAR: null,                      // sit out
+};
+
+// SHORT-direction mode set — used by the routing log to print direction.
+// Update this whenever a new SHORT mode is added to either map.
+const SHORT_SCANNER_MODES = new Set([
+  // swing SHORTs
+  'failed_bounce', 'breakdown',
+  // intraday SHORTs
+  'intraday_failed_rally', 'intraday_gap_short',
+]);
+
+/**
+ * Returns 'intraday' or 'swing' based on SCANNER_TYPE env var.
+ * Defaults to 'intraday' (the new May 2026 v3 scanner.py).
+ */
+export function getActiveScannerType() {
+  const raw = (process.env.SCANNER_TYPE || 'intraday').toString().toLowerCase().trim();
+  return raw === 'swing' ? 'swing' : 'intraday';
+}
+
+/**
+ * Returns the regime → mode map for the given scanner type. Defaults to the
+ * active type. Exported so tests + diagnostics can introspect either map.
+ */
+export function getRegimeToScannerMode(scannerType = getActiveScannerType()) {
+  return scannerType === 'swing' ? REGIME_TO_SWING_MODE : REGIME_TO_INTRADAY_MODE;
+}
+
+/**
+ * Returns the absolute path to the python script for the given scanner type.
+ */
+function getScannerScriptPath(scannerType = getActiveScannerType()) {
+  return scannerType === 'swing' ? SCANNER_SWING_PY_PATH : SCANNER_INTRADAY_PY_PATH;
+}
+
+// Backwards-compat alias — DEPRECATED. Older test files + log strings still
+// import this name. Points to the active map at module-load time, so flipping
+// SCANNER_TYPE before `node` boots picks the right table. New call sites
+// should use getRegimeToScannerMode() so the choice is dynamic.
+export const REGIME_TO_SCANNER_MODE = getRegimeToScannerMode();
 
 /**
  * Pick the first scanner.py target (t1 → t2 → t3) that achieves at least
@@ -220,20 +305,21 @@ export function pickScannerTarget(s, minRR = 1.0) {
   return { ...fallback, isFallback: true };
 }
 
-export function selectScannerModeForRegime(regimeLabel) {
-  // Null / missing regime → sit out. Do NOT default to recovery_breakout —
+export function selectScannerModeForRegime(regimeLabel, scannerType = getActiveScannerType()) {
+  // Null / missing regime → sit out. Do NOT default to a LONG mode —
   // a missing label means the regime engine failed or returned nothing
   // useful, and trading LONG on a guess in that state is the failure mode
   // we want to avoid (especially on a bear morning where a fetcher broke).
   if (regimeLabel == null) return null;
+  const map = getRegimeToScannerMode(scannerType);
   // Use Object.hasOwn (ES2022) to avoid:
   //   - calling .hasOwnProperty as an inherited method (which can be
   //     shadowed by an own property with the same name), AND
   //   - the `in` operator walking the prototype chain (so a regime label
   //     of 'toString' / 'constructor' / '__proto__' would otherwise return
   //     the inherited function from Object.prototype). Caught by unit test.
-  if (Object.hasOwn(REGIME_TO_SCANNER_MODE, regimeLabel)) {
-    return REGIME_TO_SCANNER_MODE[regimeLabel];
+  if (Object.hasOwn(map, regimeLabel)) {
+    return map[regimeLabel];
   }
   // Unknown / HALT / legacy labels (e.g. 'SCANNER', 'UNKNOWN', 'HALT', 'CONFLICT')
   // → sit out. Same principle: if we don't know what regime we're in, don't
@@ -242,31 +328,1157 @@ export function selectScannerModeForRegime(regimeLabel) {
   return null;
 }
 
-async function runScannerPy({ mode = 'recovery_breakout' } = {}) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCANNER 09:30 ORB CONFIRMATION (Tier-1 intraday upgrade, May 2026)
+//
+// Scanner picks fill at the 9:08 auction without ever seeing today's tape.
+// This step re-introduces a *day-of* gate that runs at 09:32 IST and exits
+// any pick whose 9:15-9:30 opening range disagrees with the pre-open thesis.
+//
+// Pure decision (evaluateScannerOrbConfirmation) is split from I/O so we can
+// unit-test the logic without a broker. The orchestrator wires the I/O.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Pure function: given a pick, its 9:15-9:30 opening-range OHLCV, a volume
+ * ratio (actual/expected from fetchOrbVolume), and Nifty's % change since
+ * open, return a decision object. No side effects.
+ *
+ * @param {Object} args
+ * @param {{ direction:'LONG'|'SHORT' }} args.pick
+ * @param {{ open:number, high:number, low:number, close:number, volume?:number }} args.orb
+ *        — opening 15-min OHLCV. close should be the LTP at ~09:30. Pass null
+ *          if OHLC isn't available (returns SKIPPED).
+ * @param {number|null} args.volumeRatio  — actual_volume / expected_volume from
+ *        fetchOrbVolume. null/undefined means we don't know — the volume check
+ *        auto-passes (consistent with orbValidationService's behavior).
+ * @param {number|null} args.niftyChangePct — Nifty % change since open. null
+ *        means we don't know — the nifty check auto-passes.
+ * @returns {{ decision:'CONFIRMED'|'WARN'|'EXITED'|'SKIPPED',
+ *            fail_count:number, fail_reasons:string[],
+ *            checks:object, stock_change_pct:number }}
+ */
+export function evaluateScannerOrbConfirmation({ pick, orb, volumeRatio, niftyChangePct }) {
+  if (!orb || !Number.isFinite(orb.open) || orb.open <= 0 ||
+      !Number.isFinite(orb.close) || orb.close <= 0) {
+    return {
+      decision: 'SKIPPED',
+      fail_count: 0,
+      fail_reasons: ['missing_or_invalid_orb'],
+      checks: {},
+      stock_change_pct: 0,
+    };
+  }
+
+  const isLong = (pick?.direction || 'LONG') === 'LONG';
+  const stockChangePct = ((orb.close / orb.open) - 1) * 100;
+  const minMove = SCANNER_ORB_CONFIRM_MIN_MOVE_PCT;
+
+  // ── CHECK 1: DIRECTION ─────────────────────────────────────────────────
+  // For LONG: stock should be ≥ +minMove% above open. For SHORT: ≤ -minMove%.
+  // A stock drifting flat (within ±minMove) counts as a failed direction
+  // check — the pre-open thesis predicted a move, and the open didn't deliver.
+  const inTradeDirection = isLong ? stockChangePct >= minMove : stockChangePct <= -minMove;
+  const directionCheck = {
+    passed: inTradeDirection,
+    stock_change_pct: stockChangePct,
+    in_trade_direction: inTradeDirection,
+  };
+
+  // ── CHECK 2: VOLUME ────────────────────────────────────────────────────
+  // Null volumeRatio = unknown → auto-pass (we don't penalize on missing data).
+  const volThreshold = SCANNER_ORB_CONFIRM_VOL_RATIO_THRESHOLD;
+  const volumePassed = (volumeRatio == null) || (volumeRatio >= volThreshold);
+  const volumeCheck = {
+    passed: volumePassed,
+    ratio: volumeRatio == null ? null : Number(volumeRatio),
+    threshold: volThreshold,
+  };
+
+  // ── CHECK 3: NIFTY ALIGNMENT ───────────────────────────────────────────
+  // Nifty moving against trade direction by more than the threshold = fail.
+  // Null/zero nifty change = auto-pass.
+  const niftyAgainstThreshold = SCANNER_ORB_CONFIRM_NIFTY_AGAINST_PCT;
+  let niftyAgainst = false;
+  if (niftyChangePct != null && Number.isFinite(niftyChangePct)) {
+    if (isLong) niftyAgainst = niftyChangePct < -niftyAgainstThreshold;
+    else        niftyAgainst = niftyChangePct >  niftyAgainstThreshold;
+  }
+  const niftyCheck = {
+    passed: !niftyAgainst,
+    nifty_change_pct: niftyChangePct == null ? null : Number(niftyChangePct),
+    threshold: niftyAgainstThreshold,
+    against: niftyAgainst,
+  };
+
+  const checks = { direction: directionCheck, volume: volumeCheck, nifty_alignment: niftyCheck };
+  const fail_reasons = [];
+  if (!directionCheck.passed) fail_reasons.push('direction');
+  if (!volumeCheck.passed)    fail_reasons.push('volume');
+  if (!niftyCheck.passed)     fail_reasons.push('nifty');
+
+  const fail_count = fail_reasons.length;
+  let decision;
+  if (fail_count === 0)                                       decision = 'CONFIRMED';
+  else if (fail_count >= SCANNER_ORB_CONFIRM_MIN_FAILS_FOR_EXIT) decision = 'EXITED';
+  else                                                        decision = 'WARN';
+
+  return { decision, fail_count, fail_reasons, checks, stock_change_pct: stockChangePct };
+}
+
+/**
+ * Cancel both protective legs and place a market exit for a single pick.
+ * Mirrors the pattern in dailyPicksExitService.js (cancel → wait → market).
+ * Returns true on success, false on failure (caller decides what to do).
+ *
+ * @param {Object} pick — DailyPick sub-doc, must have kite.{stop_order_id,target_order_id}
+ *                        and trade.{qty,status}
+ * @param {string} reason — for logging / pick.trade.exit_reason
+ */
+/**
+ * Generic force-exit: cancel both protective legs and place a market exit.
+ * Used by both the 9:32 scanner ORB confirmation path AND the live VWAP
+ * exit path. The caller passes a `tag` for log clarity and a `reasonPrefix`
+ * for pick.trade.exit_reason so each exit path is auditable.
+ *
+ * @param {Object} pick — DailyPick sub-doc, must have kite.{stop_order_id,target_order_id}
+ *                        and trade.{qty,status}
+ * @param {Object} opts
+ * @param {string} opts.tag           — log prefix, e.g. '[VWAP-EXIT]'
+ * @param {string} opts.reasonPrefix  — exit_reason prefix, e.g. 'vwap_exit'
+ * @param {string} opts.reason        — detail (concatenated to prefix)
+ * @param {string} opts.orderType     — Kite orderType label (audit-only)
+ */
+async function _forceExitPick(pick, { tag, reasonPrefix, reason, orderType }) {
+  console.log(`${LOG} ${tag} ${pick.symbol}: FORCE EXIT — ${reason}`);
+
+  // Step 1 — cancel both protective legs (best-effort, idempotent)
+  if (pick.kite?.stop_order_id) {
+    try {
+      await kiteOrderService.cancelOrder(pick.kite.stop_order_id);
+      console.log(`${LOG} ${tag} ${pick.symbol}: cancelled SL-M ${pick.kite.stop_order_id}`);
+    } catch (e) {
+      console.error(`${LOG} ${tag} ${pick.symbol}: SL cancel failed — ${e.message}`);
+    }
+  }
+  if (pick.kite?.target_order_id) {
+    try {
+      await kiteOrderService.cancelOrder(pick.kite.target_order_id);
+      console.log(`${LOG} ${tag} ${pick.symbol}: cancelled target ${pick.kite.target_order_id}`);
+    } catch (e) {
+      console.error(`${LOG} ${tag} ${pick.symbol}: target cancel failed — ${e.message}`);
+    }
+  }
+
+  // Wait for cancellations to settle so the market-exit qty isn't double-counted
+  await delay(2000);
+
+  // Step 2 — re-check status: a leg might have triggered while we were cancelling
+  if (pick.trade.status !== 'ENTERED') {
+    console.log(`${LOG} ${tag} ${pick.symbol}: status changed to ${pick.trade.status} during cancel — skip market exit`);
+    return true;
+  }
+
+  // Step 3 — place MARKET exit (opposite side)
+  const exitSide = pick.direction === 'LONG' ? 'SELL' : 'BUY';
+  try {
+    const result = await kiteOrderService.placeOrder({
+      tradingsymbol: pick.symbol,
+      exchange: 'NSE',
+      transaction_type: exitSide,
+      order_type: 'MARKET',
+      product: 'MIS',
+      quantity: pick.trade.qty,
+      simulationId: `${reasonPrefix}_${pick.symbol}`,
+      orderType: orderType || reasonPrefix.toUpperCase(),
+      source: 'DAILY_PICKS',
+    });
+    if (!result?.success) throw new Error(`placeOrder returned ${JSON.stringify(result)}`);
+    console.log(`${LOG} ${tag} ${pick.symbol}: ✅ market ${exitSide} placed — orderId=${result.orderId}`);
+    pick.trade.status = 'TIME_EXIT';
+    pick.trade.exit_reason = `${reasonPrefix}_${reason}`;
+    pick.trade.exit_time = new Date();
+    return true;
+  } catch (err) {
+    console.error(`${LOG} ${tag} ${pick.symbol}: ❌ market exit FAILED — ${err.message}`);
+    console.error(`${LOG} ${tag} ${pick.symbol}: position remains open; broker auto-square at 15:20 is the backstop`);
+    return false;
+  }
+}
+
+/**
+ * Back-compat wrapper for the existing 9:32 scanner ORB confirmation path.
+ */
+async function _scannerForceExitPick(pick, reason) {
+  return _forceExitPick(pick, {
+    tag: '[SCANNER-ORB-CONFIRM]',
+    reasonPrefix: 'scanner_orb_confirm',
+    reason,
+    orderType: 'SCANNER_ORB_EXIT',
+  });
+}
+
+/**
+ * Orchestrator: at 09:32 IST, for each scanner pick that filled at the 9:08
+ * auction (status ENTERED, levels.mode === 'scanner', not yet confirmed),
+ * fetch 9:15-9:30 OHLC + volume + Nifty change, run evaluateScannerOrbConfirmation,
+ * persist the audit, and force-exit positions that fail confirmation.
+ *
+ * Returns a summary: { success, picks_processed, confirmed, warned, exited, skipped }
+ */
+export async function confirmScannerOpeningRange({ allowOutsideHours = false } = {}) {
+  const tag = '[SCANNER-ORB-CONFIRM]';
+  const t0 = Date.now();
+  console.log(`${LOG} ${tag} ─── 09:32 confirmation step starting ───`);
+
+  // Find today's DailyPick doc
+  const today = getISTMidnight();
+  const doc = await DailyPick.findOne({ trading_date: today });
+  if (!doc || !doc.picks?.length) {
+    console.log(`${LOG} ${tag} no DailyPick doc for today — nothing to confirm`);
+    return { success: true, picks_processed: 0, confirmed: 0, warned: 0, exited: 0, skipped: 0 };
+  }
+
+  // Filter: scanner picks that ENTERED but haven't been confirmed yet.
+  // Skip entered_awaiting_915 — the SL-M leg isn't placed yet, the fill-fallback
+  // will handle it; confirmation runs on the *next* invocation after status flips.
+  const eligible = doc.picks.filter(p =>
+    p.levels?.mode === 'scanner' &&
+    p.trade?.status === 'ENTERED' &&
+    !p.scanner_orb_confirmation?.checked_at
+  );
+
+  if (eligible.length === 0) {
+    console.log(`${LOG} ${tag} no eligible scanner picks (statuses: ${doc.picks.map(p => `${p.symbol}=${p.trade?.status}`).join(', ')})`);
+    return { success: true, picks_processed: 0, confirmed: 0, warned: 0, exited: 0, skipped: 0 };
+  }
+
+  console.log(`${LOG} ${tag} ${eligible.length} pick(s) to confirm: ${eligible.map(p => `${p.symbol}(${p.direction})`).join(', ')}`);
+
+  // Single batched API call for OHLC + Nifty (cheaper than per-pick).
+  const symbols = eligible.map(p => p.symbol);
+  let orbMap = {};
+  try {
+    orbMap = await collectOpeningRange(symbols, eligible);
+  } catch (err) {
+    console.error(`${LOG} ${tag} collectOpeningRange threw — ${err.message}. All picks → SKIPPED.`);
+  }
+
+  // Volume ratios (best-effort; null on missing data → auto-pass in evaluator).
+  let volMap = {};
+  try {
+    volMap = await fetchOrbVolume(eligible) || {};
+  } catch (err) {
+    console.error(`${LOG} ${tag} fetchOrbVolume threw — ${err.message}. Volume checks auto-pass.`);
+  }
+
+  const niftyEntry = orbMap?._NIFTY;
+  const niftyChangePct = niftyEntry?.nifty_change_pct ?? null;
+
+  const summary = { success: true, picks_processed: 0, confirmed: 0, warned: 0, exited: 0, skipped: 0 };
+
+  for (const pick of eligible) {
+    summary.picks_processed++;
+    const orb = orbMap?.[pick.symbol] || null;
+    const vol = volMap?.[pick.symbol]?.ratio ?? null;
+
+    // Build the OHLC payload for the pure evaluator
+    const orbPayload = orb ? {
+      open: orb.opening_price,
+      high: orb.high,
+      low: orb.low,
+      // collectOpeningRange returns `last` or similar; if not present, fall back
+      // to mid of high/low as a defensive default so close-ish is always defined
+      close: orb.close ?? orb.last ?? orb.ltp ?? ((orb.high + orb.low) / 2),
+      volume: volMap?.[pick.symbol]?.actual ?? null,
+    } : null;
+
+    const result = evaluateScannerOrbConfirmation({
+      pick,
+      orb: orbPayload,
+      volumeRatio: vol,
+      niftyChangePct,
+    });
+
+    console.log(`${LOG} ${tag} ${pick.symbol} (${pick.direction}): decision=${result.decision} fails=${result.fail_count}${result.fail_reasons.length ? ` [${result.fail_reasons.join(',')}]` : ''}  Δ=${result.stock_change_pct?.toFixed(2)}%`);
+
+    // Persist the audit object regardless of decision
+    pick.scanner_orb_confirmation = {
+      checked_at: new Date(),
+      orb_high: orbPayload?.high ?? null,
+      orb_low: orbPayload?.low ?? null,
+      orb_open: orbPayload?.open ?? null,
+      orb_close: orbPayload?.close ?? null,
+      orb_volume: orbPayload?.volume ?? null,
+      expected_volume: volMap?.[pick.symbol]?.expected ?? null,
+      nifty_change_pct: niftyChangePct,
+      checks: result.checks,
+      decision: result.decision,
+      fail_count: result.fail_count,
+      fail_reasons: result.fail_reasons,
+      exit_placed: false,
+      notes: null,
+    };
+
+    if (result.decision === 'EXITED') {
+      const exitOk = await _scannerForceExitPick(pick, result.fail_reasons.join('+'));
+      pick.scanner_orb_confirmation.exit_placed = exitOk;
+      pick.scanner_orb_confirmation.notes = exitOk
+        ? 'force-exit placed; awaiting fill'
+        : 'force-exit FAILED — broker auto-square is backstop';
+      summary.exited++;
+    } else if (result.decision === 'CONFIRMED') {
+      summary.confirmed++;
+    } else if (result.decision === 'WARN') {
+      summary.warned++;
+    } else {
+      summary.skipped++;
+    }
+  }
+
+  doc.markModified('picks');
+  await doc.save();
+
+  console.log(`${LOG} ${tag} ─── done in ${Date.now() - t0}ms ───`);
+  console.log(`${LOG} ${tag}   processed=${summary.picks_processed}  confirmed=${summary.confirmed}  warned=${summary.warned}  exited=${summary.exited}  skipped=${summary.skipped}`);
+  return summary;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 09:32 ORB-BREAKOUT ENTRY (Commit 2 — replaces 8:30 AMO market entries)
+//
+// Flow:
+//   08:30  scanner.py → 15-candidate shortlist saved to doc.candidates_shortlist
+//   09:15-30  opening range candle forms
+//   09:32  THIS PATH:
+//          a. For each shortlist candidate, read 9:15-9:30 OHLC + volume
+//          b. Score each: combined = 0.5 × scanner_composite + 0.5 × intraday_score
+//          c. Filter to direction-confirmed (else the entry would fire backwards)
+//          d. Take top MAX_DAILY_PICKS by combined score
+//          e. For each selected: compute ORB-based entry trigger / SL / R targets,
+//             place SL-M BUY (LONG) or SELL (SHORT) entry order at 9:30_close ± buffer
+//          f. Persist new pick.levels, pick.kite.entry_order_id, pick.trade.qty
+//          g. Entries trigger only on actual breakout; if price doesn't cross
+//             trigger by 12:00 IST, the cancel-pending-stops cron kills the order
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Compute ORB-breakout entry levels from a 9:15-9:30 candle.
+ *
+ *   LONG  entry = ORB close + buffer,  SL = ORB low,  T_n = entry + n×R
+ *   SHORT entry = ORB close - buffer,  SL = ORB high, T_n = entry - n×R
+ *
+ * Buffer = max(1 NSE tick, bufferPct% of price). Default bufferPct = 0.05%.
+ * The buffer keeps us from buying inside the noise band immediately above
+ * the close — we want a meaningful break, not a wick.
+ *
+ * @param {Object} args
+ * @param {'LONG'|'SHORT'} args.direction
+ * @param {{ high:number, low:number, close:number }} args.orb
+ * @param {number} [args.bufferPct=0.05]  buffer in % of price (0.05 = 0.05%)
+ * @returns {{ entry:number, sl:number, t1:number, t2:number, t3:number,
+ *             risk:number, risk_pct:number, reward_pct:number, risk_reward:1,
+ *             valid:boolean, reason?:string }}
+ */
+export function computeOrbBreakoutLevels({ direction, orb, bufferPct = 0.05 }) {
+  const empty = (reason) => ({
+    entry: 0, sl: 0, t1: 0, t2: 0, t3: 0, risk: 0,
+    risk_pct: 0, reward_pct: 0, risk_reward: 0, valid: false, reason,
+  });
+
+  if (!orb || !Number.isFinite(orb.high) || !Number.isFinite(orb.low) ||
+      !Number.isFinite(orb.close) || orb.close <= 0) {
+    return empty('missing_or_invalid_orb');
+  }
+  if (orb.high <= orb.low) return empty('zero_or_negative_orb_range');
+  if (orb.close > orb.high + 1e-6 || orb.close < orb.low - 1e-6) {
+    return empty('orb_close_outside_high_low');
+  }
+
+  const isLong = direction === 'LONG';
+  const tick   = getNseTickSize(orb.close);
+  const buffer = Math.max(tick, orb.close * (bufferPct / 100));
+  const entry  = isLong ? (orb.close + buffer) : (orb.close - buffer);
+  const sl     = isLong ? orb.low : orb.high;
+  const risk   = isLong ? (entry - sl) : (sl - entry);
+
+  if (risk <= 0) return empty('non_positive_risk');
+
+  const t1 = isLong ? (entry + risk * 1.0) : (entry - risk * 1.0);
+  const t2 = isLong ? (entry + risk * 2.0) : (entry - risk * 2.0);
+  const t3 = isLong ? (entry + risk * 3.0) : (entry - risk * 3.0);
+  const risk_pct = (risk / entry) * 100;
+  const reward_pct = (Math.abs(t1 - entry) / entry) * 100;
+
+  return {
+    entry, sl, t1, t2, t3,
+    risk, risk_pct, reward_pct, risk_reward: 1.0, valid: true,
+  };
+}
+
+// ─── VWAP helpers ───────────────────────────────────────────────────────────
+// VWAP = Σ(typical_price × volume) / Σ(volume), accumulated from 9:15 IST.
+// Used for two purposes:
+//   1. Entry filter — 1-bar close above trigger AND above VWAP (literature
+//      standard: institutional flow is on our side at the moment of breakout)
+//   2. Exit signal — 2 consecutive 5-min closes on the wrong side of VWAP
+//      (LONG closes below / SHORT closes above) → institutional flow has
+//      flipped, exit before the hard SL fires
+// All three functions are pure so they're trivially testable; the state-
+// machine + Mongo persistence lives in the orchestrator/monitor.
+
+/**
+ * Compute cumulative VWAP from a list of 5-min OHLCV bars.
+ * Returns { vwap, totalVol, totalTpVol } — pass the result back in via
+ * `prev` for an incremental update when a new bar arrives.
+ */
+export function computeVwap(bars, prev = null) {
+  let cumTpVol = prev?.totalTpVol ?? 0;
+  let cumVol   = prev?.totalVol   ?? 0;
+  for (const b of bars) {
+    if (!Number.isFinite(b?.high) || !Number.isFinite(b?.low) || !Number.isFinite(b?.close)) continue;
+    if (!Number.isFinite(b?.volume) || b.volume <= 0) continue;
+    const tp = (b.high + b.low + b.close) / 3;
+    cumTpVol += tp * b.volume;
+    cumVol   += b.volume;
+  }
+  return {
+    vwap:        cumVol > 0 ? cumTpVol / cumVol : null,
+    totalVol:    cumVol,
+    totalTpVol:  cumTpVol,
+  };
+}
+
+/**
+ * Decide whether to exit a position based on VWAP. Returns { exit, reason,
+ * consecutiveBelow }. State is passed in (the `consecutiveBelow` counter)
+ * and the new counter value is returned — caller persists it.
+ *
+ * Rules:
+ *   LONG  — exit when latestClose < vwap AND prevWasBelowVwap (2nd consecutive)
+ *   SHORT — exit when latestClose > vwap AND prevWasAboveVwap (2nd consecutive)
+ *
+ * If vwap is null (not enough volume), abstain — return { exit: false, reason: 'no_vwap' }
+ *
+ * @param {Object} args
+ * @param {'LONG'|'SHORT'} args.direction
+ * @param {number} args.latestClose      — close of the just-closed 5-min bar
+ * @param {number|null} args.vwap        — current cumulative VWAP
+ * @param {number} args.consecutiveOpp   — counter of consecutive bars on wrong side
+ * @returns {{ exit:boolean, reason:string|null, consecutiveOpp:number, side:string }}
+ */
+export function evaluateVwapExit({ direction, latestClose, vwap, consecutiveOpp = 0 }) {
+  if (vwap == null || !Number.isFinite(vwap) || !Number.isFinite(latestClose)) {
+    return { exit: false, reason: 'no_vwap', consecutiveOpp, side: 'unknown' };
+  }
+  const isLong = direction === 'LONG';
+  const onWrongSide = isLong ? (latestClose < vwap) : (latestClose > vwap);
+  const newCount = onWrongSide ? consecutiveOpp + 1 : 0;
+
+  if (newCount >= 2) {
+    return {
+      exit: true,
+      reason: isLong ? 'two_consecutive_closes_below_vwap' : 'two_consecutive_closes_above_vwap',
+      consecutiveOpp: newCount,
+      side: 'wrong',
+    };
+  }
+  return {
+    exit: false,
+    reason: onWrongSide ? 'first_close_on_wrong_side' : 'on_correct_side',
+    consecutiveOpp: newCount,
+    side: onWrongSide ? 'wrong' : 'correct',
+  };
+}
+
+/**
+ * Pure function: score a single shortlist candidate against its 9:15-9:30
+ * opening range. Returns whether it passes the gate + a combined score for
+ * ranking + the computed entry levels. No side effects.
+ *
+ *   combined_score = 0.5 × scanner_composite + 0.5 × intraday_score
+ *   intraday_score = 0.5×direction_pass + 0.3×volume_pass + 0.2×nifty_pass
+ *
+ * Direction MUST pass for `passes = true` (we never enter against direction).
+ * RR of computed entry must be valid (>0) for `passes = true`.
+ * VWAP MUST be on the correct side of trigger (LONG: trigger>vwap, SHORT: trigger<vwap)
+ * — when `vwapAtOrbClose` is provided. If omitted (null), the VWAP check is skipped.
+ *
+ * @returns {{ passes:boolean, rejection_reason:string|null,
+ *             intradayScore:number, combinedScore:number,
+ *             computedLevels:object, confirmation:object,
+ *             vwapAtEntry:number|null }}
+ */
+export function evaluateShortlistCandidate({ candidate, orb, volumeRatio, niftyChangePct, bufferPct = 0.05, vwapAtOrbClose = null }) {
+  // Use the existing intraday confirmation primitive to score direction/volume/nifty.
+  const confirmation = evaluateScannerOrbConfirmation({
+    pick: candidate, orb, volumeRatio, niftyChangePct,
+  });
+
+  if (confirmation.decision === 'SKIPPED') {
+    return {
+      passes: false, rejection_reason: 'no_orb_data',
+      intradayScore: 0, combinedScore: 0, computedLevels: null, confirmation,
+    };
+  }
+
+  // Direction is a hard gate — we never enter a trade where today's open
+  // already moved against the pre-open thesis.
+  if (!confirmation.checks?.direction?.passed) {
+    return {
+      passes: false, rejection_reason: 'direction_not_confirmed',
+      intradayScore: 0, combinedScore: 0, computedLevels: null, confirmation,
+    };
+  }
+
+  // Intraday score: weighted sum of the three checks
+  const intradayScore =
+    (confirmation.checks.direction?.passed       ? 0.5 : 0) +
+    (confirmation.checks.volume?.passed          ? 0.3 : 0) +
+    (confirmation.checks.nifty_alignment?.passed ? 0.2 : 0);
+
+  // Compute ORB-based entry levels
+  const computedLevels = computeOrbBreakoutLevels({
+    direction: candidate.direction,
+    orb,
+    bufferPct,
+  });
+
+  if (!computedLevels.valid) {
+    return {
+      passes: false, rejection_reason: `levels_invalid_${computedLevels.reason}`,
+      intradayScore, combinedScore: 0, computedLevels, confirmation,
+    };
+  }
+
+  // Reject sub-floor risk picks (mirror the scanner's MIN_RISK_PCT_PER_TRADE
+  // floor; ORB ranges can be tiny on quiet stocks).
+  if (computedLevels.risk_pct < MIN_RISK_PCT_PER_TRADE) {
+    return {
+      passes: false,
+      rejection_reason: `risk_pct_${computedLevels.risk_pct.toFixed(2)}%_below_floor_${MIN_RISK_PCT_PER_TRADE}%`,
+      intradayScore, combinedScore: 0, computedLevels, confirmation,
+      vwapAtEntry: vwapAtOrbClose,
+    };
+  }
+
+  // ── VWAP entry filter ────────────────────────────────────────────────────
+  // For LONG: trigger MUST be above VWAP at the moment of breakout.
+  //           Buying below VWAP means we're chasing while institutional
+  //           sellers are still active — a known fake-breakout signature.
+  // For SHORT: trigger MUST be below VWAP.
+  // Null vwap (no volume data) → skip the check (don't penalize on missing data).
+  if (vwapAtOrbClose != null && Number.isFinite(vwapAtOrbClose)) {
+    const isLong = candidate.direction === 'LONG';
+    const triggerVsVwap = isLong
+      ? computedLevels.entry > vwapAtOrbClose
+      : computedLevels.entry < vwapAtOrbClose;
+    if (!triggerVsVwap) {
+      return {
+        passes: false,
+        rejection_reason: `trigger_${computedLevels.entry.toFixed(2)}_on_wrong_side_of_vwap_${vwapAtOrbClose.toFixed(2)}`,
+        intradayScore, combinedScore: 0, computedLevels, confirmation,
+        vwapAtEntry: vwapAtOrbClose,
+      };
+    }
+  }
+
+  const composite = (candidate.composite != null)
+    ? candidate.composite
+    : (Number(candidate.rank_score || 0) / 100);
+  const combinedScore = 0.5 * composite + 0.5 * intradayScore;
+
+  return {
+    passes: true, rejection_reason: null,
+    intradayScore, combinedScore, computedLevels, confirmation,
+    vwapAtEntry: vwapAtOrbClose,
+  };
+}
+
+/**
+ * Pure function: given an array of evaluated shortlist entries, sort by
+ * combinedScore (desc), filter to passers only, return top `limit`.
+ */
+export function selectTopOrbEntries(evaluated, limit) {
+  return evaluated
+    .filter(e => e.passes)
+    .sort((a, b) => b.combinedScore - a.combinedScore)
+    .slice(0, limit);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Orchestrator: read shortlist, score against ORB, place SL-M entries.
+// Called by the 09:32 cron in dailyEntryJob.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * 09:32 IST: score the 8:30 shortlist against today's 9:15-9:30 opening range,
+ * select top MAX_DAILY_PICKS, place SL-M STOP entry orders that trigger only
+ * if price actually breaks the 9:30 close in our direction.
+ *
+ * Returns a summary object usable for logging + the agenda job.
+ */
+// ═══════════════════════════════════════════════════════════════════════════════
+// DAILY TRACKING LOGS — single-source observability for day-by-day review
+//
+// Two functions, both pure formatting + I/O:
+//   logMorningBriefing(doc, ctx)  — called from runDailyPicks Step 7 after save.
+//                                    One concise block summarizing today's setup.
+//   logEndOfDaySummary()          — called by the 15:30 cron. Comprehensive
+//                                    pick-by-pick lifecycle, VWAP effectiveness,
+//                                    shortlist post-mortem, P&L breakdown.
+//                                    Also persists to daily_metrics collection.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _hr(ch = '─', n = 78) { return ch.repeat(n); }
+function _pad(s, n) { return String(s ?? '').padEnd(n); }
+function _padl(s, n) { return String(s ?? '').padStart(n); }
+
+/**
+ * Called at the end of runDailyPicks (8:31ish IST) — one block summarizing
+ * today's regime + shortlist + the 3 picks that WILL be candidates for
+ * 9:32 SL-M entry. Easy to grep in production logs.
+ */
+function logMorningBriefing(doc, marketContext) {
+  const tag = '[MORNING-BRIEFING]';
+  try {
+    const date = doc?.trading_date ? new Date(doc.trading_date).toISOString().slice(0, 10) : 'unknown';
+    const regime = marketContext?.regime || 'UNKNOWN';
+    const score = marketContext?.regime_score ?? '?';
+    const shortlist = doc?.candidates_shortlist || [];
+    const picks = doc?.picks || [];
+    console.log(`${LOG} ${tag} ${_hr('═')}`);
+    console.log(`${LOG} ${tag}  MORNING BRIEFING — ${date}`);
+    console.log(`${LOG} ${tag} ${_hr('═')}`);
+    console.log(`${LOG} ${tag}  regime              = ${regime}  (score ${score})`);
+    console.log(`${LOG} ${tag}  playbook            = ${marketContext?.playbook || '-'}`);
+    console.log(`${LOG} ${tag}  shortlist size      = ${shortlist.length}`);
+    console.log(`${LOG} ${tag}  top-3 candidates (pre-open, will be re-evaluated at 9:32):`);
+    picks.slice(0, 3).forEach((p, i) => {
+      const risk = p.levels?.risk_pct?.toFixed?.(2) ?? '?';
+      const rr   = p.levels?.risk_reward?.toFixed?.(2) ?? '?';
+      console.log(`${LOG} ${tag}    ${i+1}. ${_pad(p.symbol, 12)} ${_pad(p.direction, 5)} score=${p.rank_score}  risk=${risk}%  RR=${rr}  scan=${p.scan_type}`);
+      // ── Daily pivot reference (observability only — see if pivots sit near targets) ──
+      const pv = p.scan_meta?.pivots;
+      if (pv && Number.isFinite(pv.P)) {
+        const entry = p.levels?.entry;
+        const t1    = p.levels?.target;
+        const t2    = p.levels?.target2;
+        const t3    = p.levels?.target3;
+        const sl    = p.levels?.stop;
+        const isLong = p.direction === 'LONG';
+        // Mark each pivot with whether it sits between entry and a target —
+        // an "INSIDE" pivot is a hint that the target may overshoot or fall short.
+        const annotate = (label, level) => {
+          if (!Number.isFinite(level) || !Number.isFinite(entry)) return `${label}=${level}`;
+          // for LONG: pivot is "ahead" if level > entry; "behind" if level < entry
+          // for SHORT: pivot is "ahead" if level < entry; "behind" if level > entry
+          const ahead = isLong ? level > entry : level < entry;
+          if (!ahead) return `${label}=${level}`;
+          // which target tier does it sit just below?
+          let zone = '';
+          if (isLong) {
+            if (t1 && level < t1) zone = ' <T1';
+            else if (t2 && level < t2) zone = ' (T1..T2)';
+            else if (t3 && level < t3) zone = ' (T2..T3)';
+            else zone = ' >T3';
+          } else {
+            if (t1 && level > t1) zone = ' <T1';
+            else if (t2 && level > t2) zone = ' (T1..T2)';
+            else if (t3 && level > t3) zone = ' (T2..T3)';
+            else zone = ' >T3';
+          }
+          return `${label}=${level}${zone}`;
+        };
+        // Show pivots in trade direction (resistances for LONG, supports for SHORT)
+        const aheadLevels = isLong
+          ? [['R1', pv.R1], ['R2', pv.R2], ['R3', pv.R3]]
+          : [['S1', pv.S1], ['S2', pv.S2], ['S3', pv.S3]];
+        const aheadStr = aheadLevels.map(([k, v]) => annotate(k, v)).join('  ');
+        console.log(`${LOG} ${tag}        pivots:  P=${pv.P}  ${aheadStr}`);
+        console.log(`${LOG} ${tag}        levels:  entry=${entry}  SL=${sl}  T1=${t1}  T2=${t2}  T3=${t3}`);
+      }
+    });
+    if (shortlist.length > 3) {
+      const extras = shortlist.slice(3, 8).map(c => c.symbol).join(', ');
+      const more = shortlist.length - 8 > 0 ? ` (+${shortlist.length - 8} more)` : '';
+      console.log(`${LOG} ${tag}  9:32 re-selection pool: ${extras}${more}`);
+    }
+    console.log(`${LOG} ${tag}  9:32 cron will: re-score against 9:15-9:30 ORB, apply VWAP+direction filters, place SL-M STOPs for top 3`);
+    console.log(`${LOG} ${tag} ${_hr('═')}`);
+  } catch (err) {
+    console.error(`${LOG} ${tag} failed to print briefing: ${err.message}`);
+  }
+}
+
+/**
+ * Called at 15:30 IST (after 15:15 hard flat) — comprehensive end-of-day
+ * summary. Prints to console AND upserts a `daily_metrics` doc for
+ * week-over-week analysis. Idempotent — safe to call multiple times.
+ *
+ * Returns the metrics object that was persisted.
+ */
+export async function logEndOfDaySummary({ dateOverride = null } = {}) {
+  const tag = '[EOD-SUMMARY]';
+  const tradingDate = dateOverride ? new Date(dateOverride + 'T00:00:00Z') : getISTMidnight();
+  const doc = await DailyPick.findOne({ trading_date: tradingDate });
+  if (!doc) {
+    console.log(`${LOG} ${tag} no DailyPick doc for ${tradingDate.toISOString().slice(0,10)} — nothing to summarize`);
+    return null;
+  }
+
+  const date = tradingDate.toISOString().slice(0, 10);
+  const regime = doc.market_context?.regime || 'UNKNOWN';
+  const shortlist = doc.candidates_shortlist || [];
+  const picks = doc.picks || [];
+
+  // ── Pick-by-pick lifecycle ────────────────────────────────────────────────
+  const triggered  = picks.filter(p => p.trade?.entry_price);
+  const winners    = triggered.filter(p => (p.trade?.pnl || 0) > 0);
+  const losers     = triggered.filter(p => (p.trade?.pnl || 0) < 0);
+  const scratched  = triggered.filter(p => (p.trade?.pnl || 0) === 0);
+  const totalPnl   = triggered.reduce((s, p) => s + (p.trade?.pnl || 0), 0);
+  const totalRsum  = triggered.reduce((s, p) => {
+    if (!p.trade?.entry_price || !p.trade?.exit_price || !p.levels?.stop) return s;
+    const isLong = p.direction === 'LONG';
+    const risk = isLong ? (p.trade.entry_price - p.levels.stop) : (p.levels.stop - p.trade.entry_price);
+    const reward = isLong ? (p.trade.exit_price - p.trade.entry_price) : (p.trade.entry_price - p.trade.exit_price);
+    return s + (risk > 0 ? reward / risk : 0);
+  }, 0);
+
+  // ── VWAP exit effectiveness ───────────────────────────────────────────────
+  const vwapExits = triggered.filter(p => p.trade?.exit_reason?.startsWith?.('vwap_exit'));
+  const hardSLs   = triggered.filter(p => p.trade?.exit_reason === 'stop_hit' || p.trade?.status === 'STOPPED_OUT');
+  const targetHits = triggered.filter(p => p.trade?.exit_reason === 'target_hit' || p.trade?.status === 'TARGET_HIT');
+  const timeExits  = triggered.filter(p => p.trade?.status === 'TIME_EXIT' && !p.trade?.exit_reason?.startsWith?.('vwap_exit'));
+
+  // ── Shortlist post-mortem ─────────────────────────────────────────────────
+  const slSelected = shortlist.filter(c => c.shortlist_decision === 'SELECTED_AT_932');
+  const slFiltered = shortlist.filter(c => c.shortlist_decision === 'FILTERED_AT_932');
+  const slUnused   = shortlist.filter(c => c.shortlist_decision === 'UNUSED' || !c.shortlist_decision);
+
+  // ── Print ─────────────────────────────────────────────────────────────────
+  console.log(`${LOG} ${tag} ${_hr('═')}`);
+  console.log(`${LOG} ${tag}  END-OF-DAY SUMMARY — ${date}  (regime ${regime})`);
+  console.log(`${LOG} ${tag} ${_hr('═')}`);
+  console.log(`${LOG} ${tag}`);
+  console.log(`${LOG} ${tag}  SHORTLIST FLOW:`);
+  console.log(`${LOG} ${tag}    8:30   scanner produced ${shortlist.length} candidates`);
+  console.log(`${LOG} ${tag}    9:32   ${slSelected.length} selected for entry, ${slFiltered.length} filtered out, ${slUnused.length} unused`);
+  console.log(`${LOG} ${tag}    -----  entries triggered = ${triggered.length}, never triggered = ${picks.length - triggered.length}`);
+  console.log(`${LOG} ${tag}`);
+
+  if (triggered.length > 0) {
+    console.log(`${LOG} ${tag}  TRADE LIFECYCLE:`);
+    console.log(`${LOG} ${tag}    ${_pad('symbol', 12)} ${_pad('dir', 5)} ${_padl('entry', 9)} ${_padl('exit', 9)} ${_pad('outcome', 18)} ${_padl('P&L₹', 9)} ${_padl('P&L%', 7)} ${_padl('R', 6)}`);
+    console.log(`${LOG} ${tag}    ${_hr('-', 75)}`);
+    for (const p of triggered) {
+      const entryPx = p.trade?.entry_price || 0;
+      const exitPx  = p.trade?.exit_price  || 0;
+      const pnlR    = (entryPx && exitPx && p.levels?.stop)
+        ? (p.direction === 'LONG'
+            ? (exitPx - entryPx) / (entryPx - p.levels.stop)
+            : (entryPx - exitPx) / (p.levels.stop - entryPx))
+        : 0;
+      const outcome = p.trade?.exit_reason || p.trade?.status || '?';
+      console.log(`${LOG} ${tag}    ${_pad(p.symbol, 12)} ${_pad(p.direction, 5)} ${_padl(entryPx.toFixed(2), 9)} ${_padl(exitPx.toFixed(2), 9)} ${_pad(outcome.slice(0,18), 18)} ${_padl((p.trade?.pnl || 0).toFixed(0), 9)} ${_padl((p.trade?.return_pct || 0).toFixed(2)+'%', 7)} ${_padl(pnlR.toFixed(2)+'R', 6)}`);
+    }
+    console.log(`${LOG} ${tag}`);
+    console.log(`${LOG} ${tag}  EXIT BREAKDOWN:`);
+    console.log(`${LOG} ${tag}    target hits     ${targetHits.length}`);
+    console.log(`${LOG} ${tag}    hard SL hits    ${hardSLs.length}`);
+    console.log(`${LOG} ${tag}    VWAP exits      ${vwapExits.length}   ← these are the "saved from full SL" exits`);
+    console.log(`${LOG} ${tag}    time/sideways   ${timeExits.length}`);
+    console.log(`${LOG} ${tag}`);
+    console.log(`${LOG} ${tag}  DAY P&L:`);
+    console.log(`${LOG} ${tag}    winners / losers / scratch = ${winners.length} / ${losers.length} / ${scratched.length}`);
+    console.log(`${LOG} ${tag}    hit rate                   = ${triggered.length ? (winners.length / triggered.length * 100).toFixed(0) : 0}%`);
+    console.log(`${LOG} ${tag}    total P&L                  = ₹${totalPnl.toFixed(0)}`);
+    console.log(`${LOG} ${tag}    sum-R (across triggered)   = ${totalRsum.toFixed(2)}R`);
+    console.log(`${LOG} ${tag}    avg R per triggered trade  = ${triggered.length ? (totalRsum / triggered.length).toFixed(2) : 0}R`);
+  } else {
+    console.log(`${LOG} ${tag}  NO TRADES TAKEN — either all 15 filtered at 9:32 or no SL-M triggered before 12:00`);
+  }
+  console.log(`${LOG} ${tag} ${_hr('═')}`);
+
+  // ── Persist to daily_metrics for week-over-week ──────────────────────────
+  const metrics = {
+    trading_date: tradingDate,
+    regime,
+    shortlist_size:       shortlist.length,
+    selected_at_932:      slSelected.length,
+    filtered_at_932:      slFiltered.length,
+    entries_triggered:    triggered.length,
+    entries_never_fired:  picks.length - triggered.length,
+    winners:              winners.length,
+    losers:               losers.length,
+    scratched:            scratched.length,
+    total_pnl_rupees:     totalPnl,
+    total_r_multiples:    totalRsum,
+    hit_rate_pct:         triggered.length ? (winners.length / triggered.length * 100) : null,
+    exit_breakdown: {
+      target_hits:    targetHits.length,
+      hard_sl_hits:   hardSLs.length,
+      vwap_exits:     vwapExits.length,
+      time_exits:     timeExits.length,
+    },
+    pick_summaries: triggered.map(p => ({
+      symbol: p.symbol, direction: p.direction,
+      entry_price: p.trade?.entry_price, exit_price: p.trade?.exit_price,
+      pnl: p.trade?.pnl, return_pct: p.trade?.return_pct,
+      exit_reason: p.trade?.exit_reason, scan_type: p.scan_type,
+    })),
+    generated_at: new Date(),
+  };
+  try {
+    const mongoose = (await import('mongoose')).default;
+    const DailyMetrics = mongoose.models.DailyMetrics || mongoose.model('DailyMetrics',
+      new mongoose.Schema({}, { strict: false, collection: 'daily_metrics' })
+    );
+    await DailyMetrics.findOneAndUpdate(
+      { trading_date: tradingDate },
+      { $set: metrics },
+      { upsert: true, new: true }
+    );
+    console.log(`${LOG} ${tag} metrics persisted to daily_metrics collection`);
+  } catch (err) {
+    console.error(`${LOG} ${tag} failed to persist metrics: ${err.message}`);
+  }
+
+  return metrics;
+}
+
+export async function executeShortlistOrbEntry({ dryRun = false } = {}) {
+  const tag = '[SHORTLIST-ORB-ENTRY]';
+  const t0 = Date.now();
+  console.log(`${LOG} ${tag} ─── 09:32 ORB-breakout entry starting${dryRun ? ' [DRY RUN]' : ''} ───`);
+
+  const today = getISTMidnight();
+  const doc = await DailyPick.findOne({ trading_date: today });
+  if (!doc) {
+    console.log(`${LOG} ${tag} no DailyPick doc for today — nothing to do`);
+    return { success: true, picks_placed: 0, message: 'no_doc' };
+  }
+  const shortlist = doc.candidates_shortlist || [];
+  if (shortlist.length === 0) {
+    console.log(`${LOG} ${tag} shortlist empty — nothing to do`);
+    return { success: true, picks_placed: 0, message: 'empty_shortlist' };
+  }
+  console.log(`${LOG} ${tag} processing ${shortlist.length} shortlist candidate(s): ${shortlist.map(c => `${c.symbol}(${c.direction})`).join(', ')}`);
+
+  // ── Batch fetch 9:15-9:30 OHLC + volume + Nifty ──
+  const symbols = shortlist.map(c => c.symbol);
+  let orbMap = {};
+  let volMap = {};
+  try {
+    orbMap = await collectOpeningRange(symbols, shortlist);
+  } catch (err) {
+    console.error(`${LOG} ${tag} collectOpeningRange threw — ${err.message}. All picks → SKIPPED.`);
+  }
+  try {
+    volMap = await fetchOrbVolume(shortlist) || {};
+  } catch (err) {
+    console.error(`${LOG} ${tag} fetchOrbVolume threw — ${err.message}. Volume checks will auto-pass.`);
+  }
+  const niftyChangePct = orbMap?._NIFTY?.nifty_change_pct ?? null;
+  console.log(`${LOG} ${tag} Nifty change since open = ${niftyChangePct == null ? 'unknown' : niftyChangePct.toFixed(2) + '%'}`);
+
+  // ── Score every candidate ──
+  const evaluated = shortlist.map(c => {
+    const orb = orbMap?.[c.symbol] || null;
+    const orbPayload = orb ? {
+      open:   orb.opening_price,
+      high:   orb.high,
+      low:    orb.low,
+      close:  orb.close ?? orb.last ?? orb.ltp ?? ((orb.high + orb.low) / 2),
+    } : null;
+    const volumeRatio = volMap?.[c.symbol]?.ratio ?? null;
+
+    const result = evaluateShortlistCandidate({
+      candidate: c, orb: orbPayload, volumeRatio, niftyChangePct,
+    });
+
+    return {
+      candidate: c, orb: orbPayload, volumeRatio,
+      ...result,
+    };
+  });
+
+  // Visibility — log every candidate's score + decision
+  evaluated
+    .sort((a, b) => b.combinedScore - a.combinedScore)
+    .forEach((e, i) => {
+      const status = e.passes ? '✓' : '✗';
+      const reason = e.rejection_reason ? ` (${e.rejection_reason})` : '';
+      console.log(`${LOG} ${tag}   ${status} ${e.candidate.symbol.padEnd(12)} dir=${e.candidate.direction} composite=${(e.candidate.composite ?? 0).toFixed(2)} intra=${e.intradayScore.toFixed(2)} combined=${e.combinedScore.toFixed(3)}${reason}`);
+    });
+
+  // ── Select top MAX_DAILY_PICKS ──
+  const selected = selectTopOrbEntries(evaluated, MAX_DAILY_PICKS);
+  console.log(`${LOG} ${tag} selected ${selected.length} of ${evaluated.length} for entry: ${selected.map(s => s.candidate.symbol).join(', ') || '(none)'}`);
+
+  // ── Update shortlist decisions on the doc ──
+  const selectedSymbols = new Set(selected.map(s => s.candidate.symbol));
+  for (const c of doc.candidates_shortlist) {
+    const ev = evaluated.find(e => e.candidate.symbol === c.symbol);
+    if (!ev) {
+      c.shortlist_decision = 'UNUSED';
+      continue;
+    }
+    c.intraday_score = ev.intradayScore;
+    c.combined_score = ev.combinedScore;
+    c.shortlist_decision = selectedSymbols.has(c.symbol) ? 'SELECTED_AT_932' : 'FILTERED_AT_932';
+  }
+
+  if (selected.length === 0) {
+    doc.markModified('candidates_shortlist');
+    await doc.save();
+    console.log(`${LOG} ${tag} no candidates passed the ORB gate — sitting out today`);
+    return {
+      success: true, picks_placed: 0, evaluated: evaluated.length,
+      passed: 0, selected: 0, duration_ms: Date.now() - t0,
+      message: 'all_filtered_at_932',
+    };
+  }
+
+  // ── Place SL-M STOP entry orders ──
+  let balance = null;
+  if (!dryRun && isKiteIntegrationEnabled()) {
+    try {
+      balance = await kiteOrderService.getFunds();
+    } catch (e) {
+      console.error(`${LOG} ${tag} getFunds failed: ${e.message} — aborting entry placement`);
+      doc.markModified('candidates_shortlist');
+      await doc.save();
+      return { success: false, picks_placed: 0, error: 'getFunds_failed', duration_ms: Date.now() - t0 };
+    }
+  }
+  const totalCapital = balance?.available?.cash ?? balance?.available ?? null;
+  if (!dryRun && (!totalCapital || totalCapital <= 0)) {
+    console.error(`${LOG} ${tag} no available capital — aborting`);
+    doc.markModified('candidates_shortlist');
+    await doc.save();
+    return { success: false, picks_placed: 0, error: 'no_capital', duration_ms: Date.now() - t0 };
+  }
+
+  const ordersPlaced = [];
+  for (const sel of selected) {
+    const c = sel.candidate;
+    const levels = sel.computedLevels;
+    const isLong = c.direction === 'LONG';
+
+    // Snap entry trigger via snapToNSETick (integer arithmetic + final .toFixed
+    // for clean float serialization to Kite). Use ceil for LONG / floor for
+    // SHORT so the trigger sits at-or-above (LONG) the breakout level.
+    let trigger = snapToNSETick(levels.entry, null, isLong ? 'ceil' : 'floor');
+
+    // Position size (uses existing computePositionSize helper)
+    const sizing = computePositionSize({
+      totalCapital:  totalCapital || 100000,  // dry-run fallback
+      entryPrice:    trigger,
+      pickScore:     c.rank_score || 50,
+      allPicks:      selected.map(s => ({ rank_score: s.candidate.rank_score || 50 })),
+      atrPct:        c.scan_scores?.atr_pct ?? c.scan_meta?.atr_pct ?? 2.0,
+      leverageFactor: 5,
+    });
+
+    if (sizing.qty <= 0) {
+      console.warn(`${LOG} ${tag} ${c.symbol}: qty=0 (capital_per_pick=₹${sizing.perPickCapital} margin=₹${sizing.marginPerShare}) — skipping`);
+      continue;
+    }
+
+    const txnType = isLong ? 'BUY' : 'SELL';
+    console.log(`${LOG} ${tag} ${c.symbol}: place SL-M ${txnType} qty=${sizing.qty} trigger=₹${trigger} sl=₹${roundToTick(levels.sl)} t1=₹${roundToTick(levels.t1)} risk=${levels.risk_pct.toFixed(2)}%`);
+
+    // ── Retry loop: try-twice with tick re-snap on first failure ──
+    // Mirror of the placeSLAndTarget retry pattern. If Kite rejects with
+    // "Tick size for this script is X" we parse the actual tick from the
+    // error, re-snap the trigger, and retry once. Failures after that are
+    // logged + the pick is skipped for the day.
+    let orderResult = null;
+    if (!dryRun) {
+      for (let attempt = 1; attempt <= 2 && !orderResult?.success; attempt++) {
+        try {
+          if (attempt > 1) {
+            console.log(`${LOG} ${tag} ${c.symbol}: SL-M retry attempt 2/2 (trigger=₹${trigger})`);
+            await delay(500);
+          }
+          orderResult = await kiteOrderService.placeOrder({
+            tradingsymbol: c.symbol,
+            exchange:      'NSE',
+            transaction_type: txnType,
+            order_type:    'SL-M',
+            trigger_price: trigger,
+            product:       'MIS',
+            quantity:      sizing.qty,
+            simulationId:  `daily_pick_orb_entry_${c.symbol}`,
+            orderType:     'ENTRY',
+            source:        'DAILY_PICKS',
+          });
+          if (!orderResult?.success) {
+            throw new Error(`placeOrder returned ${JSON.stringify(orderResult)}`);
+          }
+          console.log(`${LOG} ${tag} ${c.symbol}: ✅ SL-M placed orderId=${orderResult.orderId}${attempt > 1 ? ' (attempt 2)' : ''}`);
+        } catch (err) {
+          const brokerTick = parseKiteTickError(err.message);
+          if (brokerTick && attempt === 1) {
+            // Kite told us the real tick — re-snap and the retry loop will use it
+            const newTrigger = snapToNSETick(levels.entry, brokerTick, isLong ? 'ceil' : 'floor');
+            console.log(`${LOG} ${tag} ${c.symbol}: Kite says tick=${brokerTick} — re-snapping trigger ₹${trigger} → ₹${newTrigger}`);
+            trigger = newTrigger;
+          } else {
+            console.error(`${LOG} ${tag} ${c.symbol}: ❌ SL-M placement failed (attempt ${attempt}/2) — ${err.message}`);
+            orderResult = null;
+          }
+        }
+      }
+      if (!orderResult?.success) {
+        console.error(`${LOG} ${tag} ${c.symbol}: ❌ all SL-M attempts failed — skipping this pick`);
+        continue;
+      }
+    } else {
+      console.log(`${LOG} ${tag} ${c.symbol}: [DRY RUN] would place SL-M trigger=₹${trigger}`);
+      orderResult = { success: true, orderId: `dry_${c.symbol}_${Date.now()}` };
+    }
+
+    // ── Promote shortlist candidate → pick (or update existing pick) ──
+    let pick = doc.picks?.find(p => p.symbol === c.symbol);
+    if (!pick) {
+      pick = {
+        symbol:         c.symbol,
+        stock_name:     c.stock_name || c.symbol,
+        instrument_key: c.instrument_key || null,
+        scan_type:      c.scan_type,
+        direction:      c.direction,
+        rank_score:     c.rank_score,
+        scan_scores:    c.scan_scores || {},
+        scan_meta:      c.scan_meta || {},
+        levels:         { mode: 'scanner', entry_type: 'sl-m' },
+        trade:          { status: 'PENDING' },
+        kite:           { kite_status: 'pending' },
+      };
+      doc.picks.push(pick);
+    }
+
+    // Refresh levels with the ORB-derived numbers
+    pick.levels.entry       = trigger;
+    pick.levels.stop        = roundToTick(levels.sl);
+    pick.levels.target      = roundToTick(levels.t1);
+    pick.levels.target2     = roundToTick(levels.t2);
+    pick.levels.target3     = roundToTick(levels.t3);
+    pick.levels.risk_pct    = levels.risk_pct;
+    pick.levels.reward_pct  = levels.reward_pct;
+    pick.levels.risk_reward = 1.0;
+    pick.levels.entry_type  = 'sl-m';
+    pick.levels.mode        = 'scanner';
+    pick.levels.source      = `orb_breakout 9:30_close=${roundToTick(sel.orb.close)} sl=orb_${isLong ? 'low' : 'high'}`;
+
+    pick.kite.entry_order_id = orderResult.orderId;
+    pick.kite.kite_status    = 'order_placed';
+    pick.trade.status        = 'ORDER_PLACED';
+    pick.trade.qty           = sizing.qty;
+
+    ordersPlaced.push({
+      symbol: c.symbol, orderId: orderResult.orderId,
+      trigger, sl: pick.levels.stop, qty: sizing.qty, direction: c.direction,
+    });
+  }
+
+  doc.markModified('candidates_shortlist');
+  doc.markModified('picks');
+  await doc.save();
+
+  console.log(`${LOG} ${tag} ─── done in ${Date.now() - t0}ms ───`);
+  console.log(`${LOG} ${tag}   evaluated=${evaluated.length}  passed=${evaluated.filter(e => e.passes).length}  selected=${selected.length}  orders_placed=${ordersPlaced.length}`);
+
+  return {
+    success: true,
+    picks_placed: ordersPlaced.length,
+    orders: ordersPlaced,
+    evaluated: evaluated.length,
+    passed: evaluated.filter(e => e.passes).length,
+    selected: selected.length,
+    duration_ms: Date.now() - t0,
+  };
+}
+
+/**
+ * 12:00 IST: cancel any ORDER_PLACED SL-M entries that haven't triggered.
+ * The breakout we were waiting for didn't happen — better to free the
+ * capital + margin than to be filled into a 13:30 lunch-time chop.
+ */
+export async function cancelStaleOrbEntries() {
+  const tag = '[ORB-ENTRY-CANCEL]';
+  const t0 = Date.now();
+  const today = getISTMidnight();
+  const doc = await DailyPick.findOne({ trading_date: today });
+  if (!doc?.picks?.length) {
+    console.log(`${LOG} ${tag} no picks today — nothing to cancel`);
+    return { success: true, cancelled: 0 };
+  }
+  const unfilled = doc.picks.filter(p => p.trade?.status === 'ORDER_PLACED' && p.kite?.entry_order_id);
+  if (!unfilled.length) {
+    console.log(`${LOG} ${tag} all picks already filled or no entry orders — nothing to cancel`);
+    return { success: true, cancelled: 0 };
+  }
+  console.log(`${LOG} ${tag} cancelling ${unfilled.length} unfilled SL-M entry order(s): ${unfilled.map(p => p.symbol).join(', ')}`);
+  let cancelled = 0;
+  for (const pick of unfilled) {
+    try {
+      await kiteOrderService.cancelOrder(pick.kite.entry_order_id);
+      pick.trade.status = 'SKIPPED';
+      pick.trade.exit_reason = 'orb_breakout_did_not_trigger_by_1200';
+      pick.kite.kite_status = 'cancelled';
+      cancelled++;
+      console.log(`${LOG} ${tag} ${pick.symbol}: ✅ cancelled ${pick.kite.entry_order_id}`);
+    } catch (err) {
+      console.error(`${LOG} ${tag} ${pick.symbol}: ❌ cancel failed — ${err.message}`);
+    }
+  }
+  doc.markModified('picks');
+  await doc.save();
+  console.log(`${LOG} ${tag} done in ${Date.now() - t0}ms — cancelled ${cancelled}/${unfilled.length}`);
+  return { success: true, cancelled };
+}
+
+
+async function runScannerPy({ mode, scannerType = getActiveScannerType(), top = MAX_DAILY_PICKS } = {}) {
   const { getFnoSymbols } = await import('../../constants/fnoUniverse.js');
   const symbolSet = await getFnoSymbols();
   const symbols = [...symbolSet];
 
-  // Write watchlist to a temp file — scanner.py reads one symbol per line
+  // Choose the right python script based on SCANNER_TYPE (intraday | swing).
+  const scriptPath = getScannerScriptPath(scannerType);
+  const scriptName = path.basename(scriptPath);
+
+  // Sensible default mode per scanner type if caller didn't pass one.
+  const effectiveMode = mode || (scannerType === 'swing' ? 'recovery_breakout' : 'intraday_gap_long');
+
+  // Bounded top — at minimum 1, at most 50 (anything bigger is wasted compute
+  // since the F&O universe rarely has 50 valid setups per regime per day).
+  const effectiveTop = Math.max(1, Math.min(50, Math.floor(Number(top) || MAX_DAILY_PICKS)));
+
+  // Write watchlist to a temp file — both scanners read one symbol per line
   const watchlistPath = path.join(os.tmpdir(), `logdhan_fno_${Date.now()}.txt`);
   await fs.writeFile(watchlistPath, symbols.join('\n'), 'utf8');
 
-  console.log(`${LOG} [Scanner] ─── Step 3: run scanner.py ───`);
-  console.log(`${LOG} [Scanner]   mode=${mode}`);
-  console.log(`${LOG} [Scanner]   universe=${symbols.length} F&O symbols, top=${MAX_DAILY_PICKS}, min-score=0.3, no-tv`);
-  console.log(`${LOG} [Scanner]   python path=${SCANNER_PY_PATH}`);
+  console.log(`${LOG} [Scanner] ─── Step 3: run ${scriptName} ───`);
+  console.log(`${LOG} [Scanner]   scanner_type=${scannerType}  mode=${effectiveMode}`);
+  console.log(`${LOG} [Scanner]   universe=${symbols.length} F&O symbols, top=${effectiveTop}, min-score=0.3, no-tv`);
+  console.log(`${LOG} [Scanner]   python path=${scriptPath}`);
   console.log(`${LOG} [Scanner]   watchlist temp=${watchlistPath}`);
   const t0 = Date.now();
 
   try {
     const { stdout, stderr } = await execFileAsync('python3', [
-      SCANNER_PY_PATH,
+      scriptPath,
       '--watchlist', watchlistPath,
-      '--top', String(MAX_DAILY_PICKS),
+      '--top', String(effectiveTop),
       '--json',
       '--no-tv',
       '--min-score', '0.3',
-      '--mode', mode,
+      '--mode', effectiveMode,
     ], { timeout: 180_000 }); // 3 min max — yfinance batch can be slow on 400 symbols
     const ms = Date.now() - t0;
 
@@ -297,14 +1509,14 @@ async function runScannerPy({ mode = 'recovery_breakout' } = {}) {
     }
 
     if (raw.length === 0) {
-      console.warn(`${LOG} [Scanner] ⚠️  scanner.py returned ZERO picks (composite scores all below min-score=0.3 or all symbols failed history fetch)`);
-      console.warn(`${LOG} [Scanner]   for mode=${mode} this usually means: no F&O stock matched the setup criteria today`);
+      console.warn(`${LOG} [Scanner] ⚠️  ${scriptName} returned ZERO picks (composite scores all below min-score=0.3 or all symbols failed history fetch)`);
+      console.warn(`${LOG} [Scanner]   for mode=${effectiveMode} this usually means: no F&O stock matched the setup criteria today`);
       return [];
     }
     console.log(`${LOG} [Scanner] ✔ ${raw.length} picks returned, top-of-list scores: ${raw.slice(0, 5).map(p => `${p.symbol}=${p.composite?.toFixed(2)}`).join(', ')}`);
     // Per-pick detail line so a failure can be diagnosed pick-by-pick later
     for (const p of raw) {
-      console.log(`${LOG} [Scanner]   ${p.symbol.padEnd(12)} dir=${p.direction || 'LONG'} mode=${p.mode || mode} close=${p.close} sl=${p.sl} t1=${p.t1} t2=${p.t2} t3=${p.t3} RR(t1/t2/t3)=${(p.rr_t1 || 0).toFixed(2)}/${(p.rr_t2 || 0).toFixed(2)}/${(p.rr_t3 || 0).toFixed(2)} composite=${(p.composite || 0).toFixed(3)}`);
+      console.log(`${LOG} [Scanner]   ${p.symbol.padEnd(12)} dir=${p.direction || 'LONG'} mode=${p.mode || effectiveMode} close=${p.close} sl=${p.sl} t1=${p.t1} t2=${p.t2} t3=${p.t3} RR(t1/t2/t3)=${(p.rr_t1 || 0).toFixed(2)}/${(p.rr_t2 || 0).toFixed(2)}/${(p.rr_t3 || 0).toFixed(2)} composite=${(p.composite || 0).toFixed(3)}`);
     }
 
     // Wrap the exported pure-function helper so we get the same behavior
@@ -323,7 +1535,7 @@ async function runScannerPy({ mode = 'recovery_breakout' } = {}) {
     // direction from the scanner's direction field (LONG or SHORT).
     return raw.map(s => {
       const tgt = pickTarget(s);
-      const scanType = s.mode || 'recovery_breakout';
+      const scanType = s.mode || effectiveMode;
       const direction = s.direction || 'LONG';
       return {
       symbol: s.symbol,
@@ -436,11 +1648,11 @@ async function runDailyPicks(options = {}) {
     //   • The chosen scanner mode itself throws
     //
     // Mapping (REGIME_TO_SCANNER_MODE, defined above):
-    //   STRONG_BULL  → momentum_leader   (LONG)
-    //   WEAK_BULL    → recovery_breakout (LONG)
-    //   NEUTRAL      → nr7_compression   (LONG)
-    //   WEAK_BEAR    → failed_bounce     (SHORT)
-    //   STRONG_BEAR  → breakdown         (SHORT)
+    //   STRONG_BULL  → vcp_pivot         (LONG, Minervini VCP)
+    //   WEAK_BULL    → pullback_20ema    (LONG, Raschke 20-EMA bounce)
+    //   NEUTRAL      → rsi2_meanrev      (LONG, Connors RSI-2 mean reversion)
+    //   WEAK_BEAR    → failed_bounce     (SHORT, proven 69% hit)
+    //   STRONG_BEAR  → failed_bounce     (SHORT, route to winner — was 'breakdown')
     //   EXTREME_BEAR / unknown / HALT → null (sit out)
     //
     // Rationale: when the regime engine fails or returns a non-trading label,
@@ -481,8 +1693,11 @@ async function runDailyPicks(options = {}) {
     }
 
     // Guard 3: map regime → scanner mode. null means UNKNOWN / HALT / etc.
+    // The active scanner type (intraday | swing) is decided at startup from
+    // SCANNER_TYPE and selects which of the two routing maps to consult.
+    const activeScannerType = getActiveScannerType();
     if (chosenPath == null) {
-      chosenMode = selectScannerModeForRegime(regimeLabel);
+      chosenMode = selectScannerModeForRegime(regimeLabel, activeScannerType);
       if (chosenMode == null) {
         chosenPath = `sit_out_${regimeLabel.toLowerCase()}`;
         sitOutReason = haltReason
@@ -493,19 +1708,32 @@ async function runDailyPicks(options = {}) {
         console.warn(`${LOG} [Route]   typical causes: India VIX fetcher failed, FII data unavailable, breadth scan timed out, MongoDB read error on regime inputs.`);
       } else {
         chosenPath = `regime_scanner_${chosenMode}`;
-        const direction = (chosenMode === 'failed_bounce' || chosenMode === 'breakdown') ? 'SHORT' : 'LONG';
-        console.log(`${LOG} [Route] DECISION: regime="${regimeLabel}" → scanner --mode=${chosenMode} (${direction})`);
+        const direction = SHORT_SCANNER_MODES.has(chosenMode) ? 'SHORT' : 'LONG';
+        console.log(`${LOG} [Route] DECISION: scanner_type=${activeScannerType}  regime="${regimeLabel}" → --mode=${chosenMode} (${direction})`);
       }
     }
 
-    // Run the chosen scanner mode (if one was selected). If the scanner
-    // throws, we sit out — we do NOT silently fall back to recovery_breakout,
-    // for the same reason we sit out on unknown regimes: a guessed-direction
-    // trade is the wrong response to "we don't know what to do today."
+    // Run the chosen scanner mode (if one was selected). We request the FULL
+    // shortlist (SHORTLIST_SIZE candidates) in one call:
+    //   • the top MAX_DAILY_PICKS become today's `picks` (placed as AMO at 8:30
+    //     — preserves existing behavior)
+    //   • all SHORTLIST_SIZE entries are persisted to candidates_shortlist for
+    //     the 9:32 re-selection job (Commit 2)
+    // If the scanner throws, we sit out — we do NOT silently fall back, for the
+    // same reason we sit out on unknown regimes: a guessed-direction trade is
+    // the wrong response to "we don't know what to do today."
+    let scannerShortlist = [];
     if (chosenMode && picksWithLevels.length === 0) {
       try {
-        picksWithLevels = await runScannerPy({ mode: chosenMode });
-        if (picksWithLevels.length === 0) {
+        scannerShortlist = await runScannerPy({
+          mode: chosenMode,
+          scannerType: activeScannerType,
+          top: SHORTLIST_SIZE,
+        });
+        // Top MAX_DAILY_PICKS become the AMO picks. Rest stay in shortlist only.
+        picksWithLevels = scannerShortlist.slice(0, MAX_DAILY_PICKS);
+        console.log(`${LOG} [Route] scanner returned ${scannerShortlist.length} candidates → picks=${picksWithLevels.length}, shortlist_extras=${Math.max(0, scannerShortlist.length - picksWithLevels.length)}`);
+        if (scannerShortlist.length === 0) {
           // Scanner ran cleanly but found nothing. Different failure mode
           // from "scanner crashed" — record it so the audit trail is honest.
           sitOutReason = `scanner ${chosenMode} returned 0 picks (no setups today)`;
@@ -521,6 +1749,7 @@ async function runDailyPicks(options = {}) {
         sitOutReason = `scanner ${chosenMode} failed: ${scErr.message}`;
         chosenPath = `${chosenPath}_scanner_failed`;
         picksWithLevels = [];
+        scannerShortlist = [];
       }
     }
     console.log(`${LOG} [Route] ─── Step 4: finalize ───`);
@@ -935,10 +2164,16 @@ async function runDailyPicks(options = {}) {
     // ─────────────────────────────────────────────────────────────────────────
 
 
-    // Step 7: Save to DB
-    console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks`);
-    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, null);
+    // Step 7: Save to DB (picks + pre-open shortlist)
+    console.log(`${LOG} [Step 7] Saving to DB: ${picksWithInsights.length} picks + ${scannerShortlist.length} shortlist candidates`);
+    const doc = await saveToDB(marketContext, picksWithInsights, scanResult, candidatesReview, null, scannerShortlist);
     console.log(`${LOG} [Step 7] Saved DailyPick doc: ${doc._id}`);
+    if (doc.candidates_shortlist?.length) {
+      console.log(`${LOG} [Step 7] Shortlist: ${doc.candidates_shortlist.map(c => `${c.symbol}(rank=${c.shortlist_rank},dec=${c.shortlist_decision})`).join(', ')}`);
+    }
+
+    // Morning briefing — concise day-1 summary easy to grep at 8:31 IST
+    logMorningBriefing(doc, marketContext);
     for (const p of doc.picks) {
       const ss = p.scan_scores;
       console.log(`${LOG} [Step 7] ${p.symbol}: entry=₹${p.levels?.entry} stop=₹${p.levels?.stop} target=₹${p.levels?.target} vol_ratio=${ss?.volume_ratio} rsi=${ss?.rsi} atr_pct=${ss?.atr_pct}%`);
@@ -949,15 +2184,18 @@ async function runDailyPicks(options = {}) {
     // This avoids any separate 9:30 AM scheduled step — by the time market opens,
     // orders are already in the system. The 9:30 validateAndPlaceEntries call
     // becomes a no-op (picks are already ORDER_PLACED, eligiblePicks filter skips them).
-    if (picksWithInsights.length > 0) {
-      console.log(`${LOG} [Step 7.5] Placing AMO MARKET orders for ${picksWithInsights.length} picks...`);
-      try {
-        const amoResult = await placePreMarketEntries(doc);
-        console.log(`${LOG} [Step 7.5] AMO done: ${amoResult.ordersPlaced ?? 0} orders placed`);
-      } catch (amoErr) {
-        console.error(`${LOG} [Step 7.5] AMO placement failed (non-fatal — picks saved, manual entry possible): ${amoErr.message}`);
-      }
-    }
+    // ─── Step 7.5: AMO placement DISABLED ────────────────────────────────────
+    // May 2026 architecture shift: we no longer market-order at the 9:08 auction.
+    // The 8:30 scanner now produces a 15-candidate shortlist (persisted on the
+    // doc). At 9:32, executeShortlistOrbEntry re-scores against the 9:15-9:30
+    // opening range and places SL-M STOP entries at the 9:30 close ± buffer —
+    // entries trigger only on actual breakout. picks[] is populated then.
+    //
+    // The placePreMarketEntries function is preserved (not deleted) for fast
+    // rollback if the new path proves unreliable. To re-enable, swap the block
+    // below for the original `await placePreMarketEntries(doc)` call.
+    console.log(`${LOG} [Step 7.5] AMO placement skipped — using 9:32 SL-M STOP entries instead (see executeShortlistOrbEntry)`);
+    void placePreMarketEntries; // keep reference so unused-vars linter doesn't complain
 
     // Step 8: Send notification
     console.log(`${LOG} [Step 8] Sending notification...`);
@@ -1547,7 +2785,7 @@ Generate 1-2 sentence insights for each pick.`
 // STEP 7: SAVE TO DB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function saveToDB(marketContext, picks, scanResult, candidatesReview = [], globalIntel = null) {
+async function saveToDB(marketContext, picks, scanResult, candidatesReview = [], globalIntel = null, candidatesShortlist = []) {
   // Determine scan_date and trading_date based on when we're running:
   // - 8:30 AM scheduled run: scan_date = yesterday, trading_date = today
   // - Manual evening run:    scan_date = today,     trading_date = next trading day
@@ -1619,6 +2857,41 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [],
     };
   });
 
+  // ─── Pre-open shortlist (Commit 1) ─────────────────────────────────────────
+  // Persist every scanner candidate (typically SHORTLIST_SIZE = 15) so the
+  // 9:32 selection job (Commit 2) has a richer pool than just the 3 picks.
+  // The top MAX_DAILY_PICKS candidates that became actual picks are tagged
+  // SELECTED_AT_830; the rest are UNUSED until the 9:32 job re-scores them.
+  const selectedSymbols = new Set((picks || []).map(p => p.symbol));
+  const shortlistDocs = (candidatesShortlist || []).map((c, idx) => ({
+    symbol:        c.symbol,
+    stock_name:    c.stock_name || c.symbol,
+    instrument_key: c.instrument_key || null,
+    scan_type:     c.scan_type || null,
+    direction:     c.direction || 'LONG',
+    rank_score:    c.rank_score ?? null,
+    composite:     (c.rank_score != null) ? c.rank_score / 100 : null,
+    levels: c.levels ? {
+      entry:       c.levels.entry,
+      stop:        c.levels.stop,
+      target:      c.levels.target,
+      target2:     c.levels.target2 ?? null,
+      target3:     c.levels.target3 ?? null,
+      risk_pct:    c.levels.risk_pct,
+      reward_pct:  c.levels.reward_pct,
+      risk_reward: c.levels.risk_reward,
+      entry_type:  c.levels.entry_type,
+      mode:        c.levels.mode,
+      source:      c.levels.source,
+    } : null,
+    scan_scores: c.scan_scores || null,
+    scan_meta:   c.scan_meta || null,
+    shortlist_rank: idx + 1,
+    shortlist_decision: selectedSymbols.has(c.symbol) ? 'SELECTED_AT_830' : 'UNUSED',
+    intraday_score: null,
+    combined_score: null,
+  }));
+
   // Upsert: one document per trading day
   const doc = await DailyPick.findOneAndUpdate(
     { trading_date: tradingDate },
@@ -1628,6 +2901,7 @@ async function saveToDB(marketContext, picks, scanResult, candidatesReview = [],
         scan_date: scanDate,
         market_context: marketContext,
         picks: pickDocs,
+        candidates_shortlist: shortlistDocs,
         summary: {
           total_candidates: scanResult.candidates?.length || 0,
           bullish_count: scanResult.bullish_count || 0,
@@ -1689,7 +2963,7 @@ async function sendNotification(marketContext, picks, doc) {
     } else {
       title = `${paperTag}Daily Picks: ${picks[0].direction === 'LONG' ? 'BUY' : 'SELL'} ${picks.length} stocks`;
     }
-    body = `${pickSummary} — AMO orders placing now (entry/stop/target from scanner pivots)`;
+    body = `${pickSummary} — pre-open candidates from a ${doc?.candidates_shortlist?.length || picks.length}-shortlist. Final entry decision at 9:32 IST after 9:15-9:30 ORB confirmation. SL-M STOPs will be placed only for picks that pass direction + VWAP gates.`;
   } else if (marketContext.regime === 'CONFLICT') {
     title = 'Daily Picks: CONFLICT — Sitting Out';
     body = `Structure vs SGX beyond dynamic threshold. No trades today.`;
@@ -2834,23 +4108,43 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
     }
   }
 
-  try {
-    const tgtResult = await kiteOrderService.placeOrder({
-      tradingsymbol: pick.symbol, exchange: 'NSE',
-      transaction_type: exitSide, order_type: 'LIMIT',
-      price: tgtPrice, product: 'MIS',
-      quantity: pick.trade.qty,
-      simulationId: `daily_pick_tgt_${pick.symbol}`,
-      orderType: 'TARGET', source: 'DAILY_PICKS'
-    });
-    if (tgtResult.success) {
-      pick.kite.target_order_id = tgtResult.orderId;
-      pick.levels.target = tgtPrice; // sync levels with accepted price
-      tgtPlaced = true;
-      console.log(`${LOG} ${pick.symbol}: Target LIMIT placed @ ₹${tgtPrice} — orderId=${tgtResult.orderId}`);
+  // Target LIMIT retry loop — same try-twice + tick-re-snap pattern as SL-M.
+  // Critical: before this fix, a target tick rejection abandoned the order and
+  // left the position with only a hard SL (no profit target = exit relies on
+  // monitor/15:15 only). Now we re-snap and retry once on tick errors.
+  for (let tgtAttempt = 1; tgtAttempt <= 2 && !tgtPlaced; tgtAttempt++) {
+    try {
+      if (tgtAttempt > 1) {
+        console.log(`${LOG} ${pick.symbol}: Target LIMIT retry attempt 2/2 (price=₹${tgtPrice})`);
+        await delay(500);
+      }
+      const tgtResult = await kiteOrderService.placeOrder({
+        tradingsymbol: pick.symbol, exchange: 'NSE',
+        transaction_type: exitSide, order_type: 'LIMIT',
+        price: tgtPrice, product: 'MIS',
+        quantity: pick.trade.qty,
+        simulationId: `daily_pick_tgt_${pick.symbol}`,
+        orderType: 'TARGET', source: 'DAILY_PICKS'
+      });
+      if (tgtResult.success) {
+        pick.kite.target_order_id = tgtResult.orderId;
+        pick.levels.target = tgtPrice; // sync levels with accepted price
+        tgtPlaced = true;
+        console.log(`${LOG} ${pick.symbol}: Target LIMIT placed @ ₹${tgtPrice} — orderId=${tgtResult.orderId}${tgtAttempt > 1 ? ' (attempt 2)' : ''}`);
+      }
+    } catch (err) {
+      const brokerTick = parseKiteTickError(err.message);
+      if (brokerTick && tgtAttempt === 1) {
+        const newTgt = snapToNSETick(target, brokerTick, isBullishSL ? 'ceil' : 'floor');
+        console.log(`${LOG} ${pick.symbol}: Target tick mismatch — Kite says tick=${brokerTick} — re-snapping ₹${tgtPrice} → ₹${newTgt}`);
+        tgtPrice = newTgt;
+      } else {
+        console.error(`${LOG} ${pick.symbol}: Target LIMIT error (attempt ${tgtAttempt}/2):`, err.message);
+      }
     }
-  } catch (err) {
-    console.error(`${LOG} ${pick.symbol}: Target error:`, err.message);
+  }
+  if (!tgtPlaced) {
+    console.error(`${LOG} ${pick.symbol}: ⚠️  Target LIMIT NOT PLACED after retries — position has SL but no profit target. Monitor + 15:15 hard-flat are the only exit paths.`);
   }
 
   if (slPlaced && tgtPlaced) {
@@ -3777,9 +5071,11 @@ async function monitorDailyPickOrders(options = {}) {
         .map(p => p.symbol);
 
       console.log(`${LOG} [CANDLE] ── Candle analysis cycle ──────────────────────────`);
-      console.log(`${LOG} [CANDLE] Fetching 5-min (6 bars) + 15-min (4 bars) for: ${candleSymbols.join(', ')}`);
+      // 5-min: 80 bars covers 9:15→15:15 — needed for full-session VWAP.
+      // 15-min: 4 bars suffices for structural analysis (last 60 min).
+      console.log(`${LOG} [CANDLE] Fetching 5-min (80 bars) + 15-min (4 bars) for: ${candleSymbols.join(', ')}`);
       const multiCandles = await kiteOrderService.getIntradayMultiCandles(candleSymbols, [
-        { interval: '5minute',  count: 6 },
+        { interval: '5minute',  count: 80 },
         { interval: '15minute', count: 4 },
       ]);
       const candles5m  = multiCandles['5minute']  || {};
@@ -3792,6 +5088,53 @@ async function monitorDailyPickOrders(options = {}) {
         const sym15m = candles15m[pick.symbol] || [];
 
         console.log(`${LOG} [CANDLE] ${pick.symbol}: 5m_bars=${sym5m.length} 15m_bars=${sym15m.length} currentStop=₹${pick.levels.stop} hasSL=${!!pick.kite.stop_order_id} layer2Trailed=${!!pick._layer2TrailedThisCycle}`);
+
+        // ── VWAP EXIT (NEW, May 2026 — fires BEFORE cushion-gated structural exit) ──
+        // Compute cumulative day-VWAP from all available 5-min bars (today only —
+        // getIntradayMultiCandles returns same-day bars). If price has closed on
+        // the wrong side of VWAP for 2 consecutive 5-min bars, exit immediately
+        // — institutional flow has flipped against the trade, no need to ride
+        // the hard SL. This is NOT cushion-gated (works even at break-even or
+        // slight loss) because VWAP-flip is itself a directional signal.
+        if (sym5m.length >= 2) {
+          const vwapResult = computeVwap(sym5m);
+          const latestBar = sym5m[sym5m.length - 1];
+          const latestClose = Number(latestBar.close);
+          const prevConsecutive = Number(pick.vwap_consecutive_opp || 0);
+
+          const vwapDecision = evaluateVwapExit({
+            direction: pick.direction,
+            latestClose,
+            vwap: vwapResult.vwap,
+            consecutiveOpp: prevConsecutive,
+          });
+
+          // Persist updated counter + latest VWAP for next cycle
+          pick.vwap_consecutive_opp = vwapDecision.consecutiveOpp;
+          pick.vwap_last_value      = vwapResult.vwap;
+          pick.vwap_last_checked_at = new Date();
+
+          console.log(`${LOG} [VWAP] ${pick.symbol}: close=₹${latestClose} vwap=₹${vwapResult.vwap?.toFixed(2) ?? 'null'} side=${vwapDecision.side} consec=${vwapDecision.consecutiveOpp} exit=${vwapDecision.exit}`);
+
+          if (vwapDecision.exit) {
+            console.log(`${LOG} [VWAP] ${pick.symbol}: 🚨 VWAP EXIT FIRED — ${vwapDecision.reason}`);
+            const exitOk = await _forceExitPick(pick, {
+              tag: '[VWAP-EXIT]',
+              reasonPrefix: 'vwap_exit',
+              reason: vwapDecision.reason,
+              orderType: 'VWAP_EXIT',
+            });
+            if (exitOk && pick.trade.status === 'TIME_EXIT') {
+              statusChanged = true;
+              // P&L using latest close as exit-price proxy (will be refined when
+              // the order's actual fill comes back via fill-fallback)
+              pick.trade.exit_price = latestClose;
+              pick.trade.exit_price_source = 'vwap_exit_close_proxy';
+              calculatePnl(pick);
+            }
+            continue;   // skip the rest of the monitor logic for this pick this cycle
+          }
+        }
 
         // ── SIDEWAYS EXIT for no-SL picks (Layer 2 skips them; use 5-min close as LTP proxy) ──
         if (!pick.kite.stop_order_id) {

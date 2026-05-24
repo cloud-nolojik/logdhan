@@ -1,10 +1,10 @@
 /**
  * Regime v2 — one-shot backfill runner for all three data sources.
  *
- * Runs each of the three existing backfill scripts sequentially:
- *   1. backfillIndiaVix.js  (~1 year history from NSE / CSV)
- *   2. backfillFiiFlow.js   (~1 year history from NSE)
- *   3. backfillBreadth.js   (~400 trading days × Nifty 500 — heaviest)
+ * Runs each backfill script sequentially with the same `days` argument:
+ *   1. backfillIndiaVixYahoo.js  (Yahoo — hands-off, no CSV required)
+ *   2. backfillFiiFlow.js        (NSE historical endpoint)
+ *   3. backfillBreadth.js        (Upstox candles × Nifty 500 — heaviest)
  *
  * Run BEFORE enabling the new regime in production so that the first live
  * compute has a populated `india_vix_daily` (for percentile rank),
@@ -12,10 +12,13 @@
  * (for Nifty 500 % above 50-DMA).
  *
  * Usage:
- *   node src/scripts/backfillAll.js            # default ranges (1 yr / 400 d)
- *   node src/scripts/backfillAll.js 250        # passes "250" to breadth only
+ *   node src/scripts/backfillAll.js            # default 400 days
+ *   node src/scripts/backfillAll.js 120        # 4-month backfill for backtest
+ *   node src/scripts/backfillAll.js 250        # 1-year for production
  *
- * The VIX and FII scripts don't take a numeric arg; breadth does.
+ * Note: the `days` arg is calendar days for VIX/FII, trading days for
+ * breadth. ~400 calendar ≈ 250 trading days. For a 4-month backtest pass
+ * 120 (calendar) — it covers ~80 trading days comfortably.
  *
  * Expects .env to be loaded (MONGO_URI, Upstox creds, etc.). If you usually
  * start the server with a dotenv wrapper, use the same wrapper here.
@@ -28,12 +31,15 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const breadthDaysArg = process.argv[2] || '400';
+const daysArg = process.argv[2] || '400';
 
 const steps = [
-  { label: 'india VIX',  script: 'backfillIndiaVix.js', args: [] },
-  { label: 'FII/DII',    script: 'backfillFiiFlow.js',  args: [] },
-  { label: 'breadth',    script: 'backfillBreadth.js',  args: [breadthDaysArg] },
+  // Yahoo-based VIX backfill takes days-back as argv[2], default 730. Pass through.
+  { label: 'india VIX',  script: 'backfillIndiaVixYahoo.js', args: [daysArg] },
+  // FII/DII script takes days-back as argv[2], default 500. Pass through.
+  { label: 'FII/DII',    script: 'backfillFiiFlow.js',       args: [daysArg] },
+  // Breadth takes trading-days as argv[2], default 400. Same arg works fine.
+  { label: 'breadth',    script: 'backfillBreadth.js',       args: [daysArg] },
 ];
 
 function runStep({ label, script, args }) {

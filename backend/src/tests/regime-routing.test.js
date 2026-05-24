@@ -1,18 +1,25 @@
 /**
  * Unit tests for regime-aware routing pure functions added May 2026.
  *
+ * Now covers TWO scanner types (May 2026 v3):
+ *   - SWING    (scanner_swing.py)  — 8-mode swing scanner, multi-day setups
+ *   - INTRADAY (scanner.py)         — 5-mode intraday scanner, same-day exit
+ *
  * Coverage:
- *   - selectScannerModeForRegime: regime label → scanner.py mode mapping
+ *   - selectScannerModeForRegime(regime, scannerType): regime → mode for each type
+ *   - REGIME_TO_SWING_MODE / REGIME_TO_INTRADAY_MODE: mapping completeness
+ *   - getActiveScannerType + getRegimeToScannerMode: env-driven routing
  *   - resolveOrbAtrRatioForVix:   India VIX → MAX_ORB_ATR_RATIO scaling
- *   - REGIME_TO_SCANNER_MODE:     mapping completeness vs regime engine output
- *   - MIN_ORB_RR_BY_REGIME:       coverage check vs router output (Blocker #1)
- *   - resolveOrbAtrRatioForVix's SIT_OUT signal at VIX > 35
+ *   - MIN_ORB_RR_BY_REGIME:       coverage check vs router output
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   selectScannerModeForRegime,
-  REGIME_TO_SCANNER_MODE,
+  REGIME_TO_SWING_MODE,
+  REGIME_TO_INTRADAY_MODE,
+  getRegimeToScannerMode,
+  getActiveScannerType,
 } from '../services/dailyPicks/dailyPicksService.js';
 import {
   resolveOrbAtrRatioForVix,
@@ -25,98 +32,198 @@ import {
   VIX_EXTREME_SIT_OUT_THRESHOLD,
 } from '../services/dailyPicks/dailyPicksConstants.js';
 
-describe('selectScannerModeForRegime — routing table', () => {
-  it('STRONG_BULL → momentum_leader', () => {
-    expect(selectScannerModeForRegime('STRONG_BULL')).toBe('momentum_leader');
+describe('selectScannerModeForRegime — SWING table (v2 May 2026)', () => {
+  it('STRONG_BULL → vcp_pivot (Minervini VCP)', () => {
+    expect(selectScannerModeForRegime('STRONG_BULL', 'swing')).toBe('vcp_pivot');
   });
 
-  it('WEAK_BULL → recovery_breakout (unchanged from legacy)', () => {
-    expect(selectScannerModeForRegime('WEAK_BULL')).toBe('recovery_breakout');
+  it('WEAK_BULL → pullback_20ema (Raschke 20-EMA touch)', () => {
+    expect(selectScannerModeForRegime('WEAK_BULL', 'swing')).toBe('pullback_20ema');
   });
 
-  it('NEUTRAL → nr7_compression', () => {
-    expect(selectScannerModeForRegime('NEUTRAL')).toBe('nr7_compression');
+  it('NEUTRAL → rsi2_meanrev (Connors RSI-2)', () => {
+    expect(selectScannerModeForRegime('NEUTRAL', 'swing')).toBe('rsi2_meanrev');
   });
 
-  it('WEAK_BEAR → failed_bounce', () => {
-    expect(selectScannerModeForRegime('WEAK_BEAR')).toBe('failed_bounce');
+  it('WEAK_BEAR → failed_bounce (the proven winner)', () => {
+    expect(selectScannerModeForRegime('WEAK_BEAR', 'swing')).toBe('failed_bounce');
   });
 
-  it('STRONG_BEAR → breakdown', () => {
-    expect(selectScannerModeForRegime('STRONG_BEAR')).toBe('breakdown');
+  it('STRONG_BEAR → failed_bounce (was broken breakdown)', () => {
+    expect(selectScannerModeForRegime('STRONG_BEAR', 'swing')).toBe('failed_bounce');
   });
 
   it('EXTREME_BEAR → null (sit out)', () => {
-    expect(selectScannerModeForRegime('EXTREME_BEAR')).toBeNull();
+    expect(selectScannerModeForRegime('EXTREME_BEAR', 'swing')).toBeNull();
   });
 });
 
-describe('selectScannerModeForRegime — sit-out fallback', () => {
-  it('UNKNOWN → null (sit out, do NOT default to recovery_breakout)', () => {
-    expect(selectScannerModeForRegime('UNKNOWN')).toBeNull();
+describe('selectScannerModeForRegime — INTRADAY table (v3 May 2026)', () => {
+  it('STRONG_BULL → intraday_gap_long', () => {
+    expect(selectScannerModeForRegime('STRONG_BULL', 'intraday')).toBe('intraday_gap_long');
   });
 
-  it('HALT → null (regime engine signals halt)', () => {
-    expect(selectScannerModeForRegime('HALT')).toBeNull();
+  it('WEAK_BULL → intraday_breakout_long', () => {
+    expect(selectScannerModeForRegime('WEAK_BULL', 'intraday')).toBe('intraday_breakout_long');
   });
 
-  it('legacy SCANNER placeholder → null', () => {
-    expect(selectScannerModeForRegime('SCANNER')).toBeNull();
+  it('NEUTRAL → intraday_range_fade', () => {
+    expect(selectScannerModeForRegime('NEUTRAL', 'intraday')).toBe('intraday_range_fade');
   });
 
-  it('CONFLICT → null', () => {
-    expect(selectScannerModeForRegime('CONFLICT')).toBeNull();
+  it('WEAK_BEAR → intraday_failed_rally (SHORT)', () => {
+    expect(selectScannerModeForRegime('WEAK_BEAR', 'intraday')).toBe('intraday_failed_rally');
   });
 
-  it('null → null', () => {
-    expect(selectScannerModeForRegime(null)).toBeNull();
+  it('STRONG_BEAR → intraday_gap_short (SHORT)', () => {
+    expect(selectScannerModeForRegime('STRONG_BEAR', 'intraday')).toBe('intraday_gap_short');
   });
 
-  it('undefined → null', () => {
-    expect(selectScannerModeForRegime(undefined)).toBeNull();
-  });
-
-  it('empty string → null', () => {
-    expect(selectScannerModeForRegime('')).toBeNull();
-  });
-
-  it('prototype-pollution-style key ("toString") → null', () => {
-    // Regression for the `in` operator vs `.hasOwnProperty` fix
-    expect(selectScannerModeForRegime('toString')).toBeNull();
-    expect(selectScannerModeForRegime('constructor')).toBeNull();
-    expect(selectScannerModeForRegime('__proto__')).toBeNull();
+  it('EXTREME_BEAR → null (sit out)', () => {
+    expect(selectScannerModeForRegime('EXTREME_BEAR', 'intraday')).toBeNull();
   });
 });
 
-describe('REGIME_TO_SCANNER_MODE — mapping integrity', () => {
+describe('selectScannerModeForRegime — default scanner type', () => {
+  it('default (no second arg) uses the active scanner type', () => {
+    // The default arg path must round-trip through getActiveScannerType()
+    // and return the same value as an explicit call with that type.
+    const active = getActiveScannerType();
+    expect(['intraday', 'swing']).toContain(active);
+    expect(selectScannerModeForRegime('STRONG_BULL'))
+      .toBe(selectScannerModeForRegime('STRONG_BULL', active));
+  });
+});
+
+describe('selectScannerModeForRegime — sit-out fallback (applies to both types)', () => {
+  for (const t of ['intraday', 'swing']) {
+    it(`[${t}] UNKNOWN → null`, () => {
+      expect(selectScannerModeForRegime('UNKNOWN', t)).toBeNull();
+    });
+    it(`[${t}] HALT → null`, () => {
+      expect(selectScannerModeForRegime('HALT', t)).toBeNull();
+    });
+    it(`[${t}] legacy 'SCANNER' placeholder → null`, () => {
+      expect(selectScannerModeForRegime('SCANNER', t)).toBeNull();
+    });
+    it(`[${t}] CONFLICT → null`, () => {
+      expect(selectScannerModeForRegime('CONFLICT', t)).toBeNull();
+    });
+    it(`[${t}] null → null`, () => {
+      expect(selectScannerModeForRegime(null, t)).toBeNull();
+    });
+    it(`[${t}] undefined → null`, () => {
+      expect(selectScannerModeForRegime(undefined, t)).toBeNull();
+    });
+    it(`[${t}] empty string → null`, () => {
+      expect(selectScannerModeForRegime('', t)).toBeNull();
+    });
+    it(`[${t}] prototype-pollution keys → null`, () => {
+      expect(selectScannerModeForRegime('toString', t)).toBeNull();
+      expect(selectScannerModeForRegime('constructor', t)).toBeNull();
+      expect(selectScannerModeForRegime('__proto__', t)).toBeNull();
+    });
+  }
+});
+
+describe('REGIME_TO_SWING_MODE — mapping integrity', () => {
   it('contains all 5 active regime engine labels', () => {
     const labels = ['STRONG_BULL', 'WEAK_BULL', 'NEUTRAL', 'WEAK_BEAR', 'STRONG_BEAR'];
     for (const label of labels) {
-      expect(REGIME_TO_SCANNER_MODE).toHaveProperty(label);
+      expect(REGIME_TO_SWING_MODE).toHaveProperty(label);
     }
   });
 
   it('EXTREME_BEAR is present and mapped to null', () => {
-    expect(REGIME_TO_SCANNER_MODE).toHaveProperty('EXTREME_BEAR');
-    expect(REGIME_TO_SCANNER_MODE.EXTREME_BEAR).toBeNull();
+    expect(REGIME_TO_SWING_MODE).toHaveProperty('EXTREME_BEAR');
+    expect(REGIME_TO_SWING_MODE.EXTREME_BEAR).toBeNull();
   });
 
   it('SHORT modes are only for bear regimes', () => {
     const shortModes = ['failed_bounce', 'breakdown'];
-    for (const [regime, mode] of Object.entries(REGIME_TO_SCANNER_MODE)) {
+    for (const [regime, mode] of Object.entries(REGIME_TO_SWING_MODE)) {
       if (mode && shortModes.includes(mode)) {
         expect(regime).toMatch(/BEAR/);
       }
     }
   });
 
-  it('LONG modes are for bull or neutral regimes', () => {
-    const longModes = ['momentum_leader', 'recovery_breakout', 'nr7_compression'];
-    for (const [regime, mode] of Object.entries(REGIME_TO_SCANNER_MODE)) {
+  it('LONG modes only fire on bull or neutral regimes (not bear)', () => {
+    const longModes = [
+      'momentum_leader', 'recovery_breakout', 'nr7_compression',
+      'vcp_pivot', 'pullback_20ema', 'rsi2_meanrev',
+    ];
+    for (const [regime, mode] of Object.entries(REGIME_TO_SWING_MODE)) {
       if (mode && longModes.includes(mode)) {
         expect(regime).not.toMatch(/BEAR/);
       }
     }
+  });
+
+  it('EXTREME_BEAR is the only built-in sit-out (NEUTRAL re-enabled v2)', () => {
+    expect(REGIME_TO_SWING_MODE.EXTREME_BEAR).toBeNull();
+    expect(REGIME_TO_SWING_MODE.NEUTRAL).not.toBeNull();   // v2 — uses rsi2_meanrev
+  });
+});
+
+describe('REGIME_TO_INTRADAY_MODE — mapping integrity', () => {
+  it('contains all 5 active regime engine labels', () => {
+    const labels = ['STRONG_BULL', 'WEAK_BULL', 'NEUTRAL', 'WEAK_BEAR', 'STRONG_BEAR'];
+    for (const label of labels) {
+      expect(REGIME_TO_INTRADAY_MODE).toHaveProperty(label);
+    }
+  });
+
+  it('EXTREME_BEAR is present and mapped to null', () => {
+    expect(REGIME_TO_INTRADAY_MODE).toHaveProperty('EXTREME_BEAR');
+    expect(REGIME_TO_INTRADAY_MODE.EXTREME_BEAR).toBeNull();
+  });
+
+  it('every value is either null or starts with "intraday_"', () => {
+    for (const [, mode] of Object.entries(REGIME_TO_INTRADAY_MODE)) {
+      if (mode != null) {
+        expect(mode.startsWith('intraday_')).toBe(true);
+      }
+    }
+  });
+
+  it('SHORT intraday modes only fire on bear regimes', () => {
+    const intradayShorts = ['intraday_failed_rally', 'intraday_gap_short'];
+    for (const [regime, mode] of Object.entries(REGIME_TO_INTRADAY_MODE)) {
+      if (mode && intradayShorts.includes(mode)) {
+        expect(regime).toMatch(/BEAR/);
+      }
+    }
+  });
+
+  it('LONG intraday modes only fire on bull or neutral regimes', () => {
+    const intradayLongs = ['intraday_gap_long', 'intraday_breakout_long', 'intraday_range_fade'];
+    for (const [regime, mode] of Object.entries(REGIME_TO_INTRADAY_MODE)) {
+      if (mode && intradayLongs.includes(mode)) {
+        expect(regime).not.toMatch(/BEAR/);
+      }
+    }
+  });
+
+  it('the two maps cover the same set of regime labels', () => {
+    // If we add a new regime to the engine, we must add it to BOTH maps.
+    expect(new Set(Object.keys(REGIME_TO_SWING_MODE)))
+      .toEqual(new Set(Object.keys(REGIME_TO_INTRADAY_MODE)));
+  });
+});
+
+describe('getRegimeToScannerMode — explicit type resolution', () => {
+  it('"swing" returns the swing map', () => {
+    expect(getRegimeToScannerMode('swing')).toBe(REGIME_TO_SWING_MODE);
+  });
+
+  it('"intraday" returns the intraday map', () => {
+    expect(getRegimeToScannerMode('intraday')).toBe(REGIME_TO_INTRADAY_MODE);
+  });
+
+  it('default (no arg) returns one of the two maps', () => {
+    const m = getRegimeToScannerMode();
+    expect([REGIME_TO_INTRADAY_MODE, REGIME_TO_SWING_MODE]).toContain(m);
   });
 });
 

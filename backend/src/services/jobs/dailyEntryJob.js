@@ -20,6 +20,10 @@ import {
   checkFillsFallback,
   gapProtectionCheck,
   monitorDailyPickOrders,
+  confirmScannerOpeningRange,
+  executeShortlistOrbEntry,
+  cancelStaleOrbEntries,
+  logEndOfDaySummary,
 } from '../dailyPicks/dailyPicksService.js';
 import { runDailyExit } from '../dailyPicks/dailyPicksExitService.js';
 import { reconcilePositionsOnStartup } from '../dailyPicks/dailyPicksRiskService.js';
@@ -213,6 +217,92 @@ class DailyEntryJob {
       }
     });
 
+    // Job 4.5: 09:32 IST — Shortlist ORB entry (Tier-1 intraday upgrade, May 2026).
+    // Reads the 8:30 candidates_shortlist (15 candidates), scores each against
+    // the 9:15-9:30 opening range, selects top MAX_DAILY_PICKS by combined
+    // score, and places SL-M STOP entry orders at 9:30_close ± buffer. Entries
+    // trigger only on actual breakout — eliminates blind market-orders.
+    //
+    // Replaces the earlier 9:32 confirmation job (which only filtered AMO-
+    // filled positions). The old `confirmScannerOpeningRange` function is kept
+    // in the codebase for the rollback path.
+    this.agenda.define('daily-picks-shortlist-orb-entry', async (job) => {
+      if (this.runningJobs.has('shortlist-orb-entry')) {
+        console.log(`${LOG} Shortlist ORB entry already running, skipping`);
+        return;
+      }
+      this.runningJobs.add('shortlist-orb-entry');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) return { skipped: true, reason: 'not_trading_day' };
+
+        const t0 = Date.now();
+        console.log(`${LOG} [SHORTLIST-ORB-ENTRY] Calling executeShortlistOrbEntry()...`);
+        const result = await executeShortlistOrbEntry();
+        this.stats.lastRunAt = new Date();
+        console.log(`${LOG} [SHORTLIST-ORB-ENTRY] Done in ${Date.now() - t0}ms: evaluated=${result.evaluated} passed=${result.passed} selected=${result.selected} orders_placed=${result.picks_placed}`);
+        return result;
+      } catch (error) {
+        console.error(`${LOG} Shortlist ORB entry failed:`, error);
+        this.stats.errors++;
+        throw error;
+      } finally {
+        this.runningJobs.delete('shortlist-orb-entry');
+      }
+    });
+
+    // Job 4.6: 12:00 IST — Cancel unfilled SL-M entries (stale-stop cleanup).
+    // If the breakout didn't trigger by lunchtime, the thesis has lost its
+    // edge. Cancel the pending entry order so the margin is freed.
+    this.agenda.define('daily-picks-cancel-stale-orb', async (job) => {
+      if (this.runningJobs.has('cancel-stale-orb')) {
+        console.log(`${LOG} Cancel stale ORB already running, skipping`);
+        return;
+      }
+      this.runningJobs.add('cancel-stale-orb');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) return { skipped: true, reason: 'not_trading_day' };
+        const t0 = Date.now();
+        console.log(`${LOG} [ORB-ENTRY-CANCEL] Calling cancelStaleOrbEntries()...`);
+        const result = await cancelStaleOrbEntries();
+        console.log(`${LOG} [ORB-ENTRY-CANCEL] Done in ${Date.now() - t0}ms: cancelled=${result.cancelled}`);
+        return result;
+      } catch (error) {
+        console.error(`${LOG} Cancel stale ORB failed:`, error);
+        this.stats.errors++;
+        throw error;
+      } finally {
+        this.runningJobs.delete('cancel-stale-orb');
+      }
+    });
+
+    // Job 4.7: 15:30 IST — End-of-day summary.
+    // Runs 15 min after the 15:15 hard-flat so all exits have settled. Prints
+    // comprehensive lifecycle log per pick + persists daily_metrics doc.
+    this.agenda.define('daily-picks-eod-summary', async (job) => {
+      if (this.runningJobs.has('eod-summary')) {
+        console.log(`${LOG} EOD summary already running, skipping`);
+        return;
+      }
+      this.runningJobs.add('eod-summary');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) return { skipped: true, reason: 'not_trading_day' };
+        const t0 = Date.now();
+        console.log(`${LOG} [EOD-SUMMARY] Calling logEndOfDaySummary()...`);
+        const metrics = await logEndOfDaySummary();
+        console.log(`${LOG} [EOD-SUMMARY] Done in ${Date.now() - t0}ms`);
+        return { success: true, metrics };
+      } catch (error) {
+        console.error(`${LOG} EOD summary failed:`, error);
+        this.stats.errors++;
+        throw error;
+      } finally {
+        this.runningJobs.delete('eod-summary');
+      }
+    });
+
     // Job 5: Monitor orders every 5 min (9:30-14:59)
     this.agenda.define('daily-picks-monitor', async (job) => {
       if (this.runningJobs.has('monitor')) {
@@ -393,19 +483,36 @@ class DailyEntryJob {
         });
       }
 
-      // 9:05 AM IST — Gap protection.
-      // Pre-open session runs 9:00–9:08 AM. Indicative prices are live from 9:00 AM
-      // and cancel requests are accepted up to ~9:07 AM before the auction settles.
-      // 9:05 AM gives us a price read + cancellation window before the 9:08 fill.
-      await this.agenda.every('5 9 * * 1-5', 'daily-picks-gap-protection', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // 9:05 AM IST — Gap protection — DISABLED in the new ORB-entry architecture.
+      // There are no AMO orders to cancel before the 9:08 auction; entries
+      // are placed at 09:32 as SL-M STOPs that trigger only on actual breakout.
+      // Cron kept commented-out so rollback is one-line.
+      // await this.agenda.every('5 9 * * 1-5', 'daily-picks-gap-protection', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
 
       // Every 2 min, 9:00–10:59 AM IST — Fill fallback.
       // Detects AMO fills (MARKET orders fill at 9:08 AM pre-open auction).
       // Fills detected before 9:15 AM are deferred (entered_awaiting_915) and
       // SL-M + target are placed on the first poll at or after 9:15 AM.
       await this.agenda.every('*/2 9-10 * * 1-5', 'daily-picks-fill-fallback', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+
+      // 9:32 AM IST — Shortlist ORB-breakout entry (Tier-1 intraday upgrade).
+      // The 9:30 candle closes at exactly 9:30; we fire at 9:32 so the broker's
+      // OHLC API has had two minutes to update. Scores the 8:30 shortlist of
+      // 15 candidates against the 9:15-9:30 opening range, selects top
+      // MAX_DAILY_PICKS, and places SL-M STOP entry orders that trigger only
+      // if price actually breaks the 9:30 close ± buffer in our direction.
+      await this.agenda.every('32 9 * * 1-5', 'daily-picks-shortlist-orb-entry', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+
+      // 12:00 IST — Cancel any unfilled SL-M entry orders. If the breakout
+      // didn't trigger by lunch, the thesis has lost its edge — better to
+      // free the margin than to be filled during the 13:30 chop.
+      await this.agenda.every('0 12 * * 1-5', 'daily-picks-cancel-stale-orb', {}, {
         timezone: 'Asia/Kolkata'
       });
 
@@ -427,13 +534,23 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
+      // 3:30 PM IST — End-of-day summary. Prints comprehensive pick-by-pick
+      // lifecycle + VWAP exit effectiveness + shortlist post-mortem + day P&L.
+      // Also persists to `daily_metrics` collection for week-over-week analysis.
+      await this.agenda.every('30 15 * * 1-5', 'daily-picks-eod-summary', {}, {
+        timezone: 'Asia/Kolkata'
+      });
+
       console.log(`${LOG} ═══════════════════════════════════════`);
-      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — SCANNER/AMO PATH:`);
-      console.log(`${LOG}   08:30 — scanner.py → AMO MARKET MIS orders placed`);
-      console.log(`${LOG}   09:05 — gap protection (cancel adverse-gap AMOs before 9:08 auction)`);
-      console.log(`${LOG}   09:00–10:59 — fill fallback every 2 min → SL-M + target placed on fills`);
+      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — SHORTLIST + ORB-BREAKOUT PATH (May 2026):`);
+      console.log(`${LOG}   08:30       — scanner.py → 15-candidate shortlist saved (NO orders placed)`);
+      console.log(`${LOG}   09:32       — shortlist ORB entry → re-score against 9:15-9:30 candle, place SL-M STOPs for top 3`);
+      console.log(`${LOG}   09:00–10:59 — fill fallback every 2 min → SL + target legs placed on SL-M triggers`);
       console.log(`${LOG}   09:30–14:59 — monitor every 5 min → SL/target detection, +1R BE, candle structure (5-min+15-min)`);
-      console.log(`${LOG}   15:15 — force-exit (5 min before Zerodha auto-square)`);
+      console.log(`${LOG}   12:00       — cancel any unfilled SL-M entries (breakout failed to trigger)`);
+      console.log(`${LOG}   15:15       — force-exit (5 min before Zerodha auto-square)`);
+      console.log(`${LOG}   15:30       — end-of-day summary log + daily_metrics persistence`);
+      console.log(`${LOG}   [disabled]  — 09:05 gap protection (no AMO to protect in new architecture)`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);

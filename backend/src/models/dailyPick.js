@@ -116,6 +116,44 @@ const pickSchema = new mongoose.Schema({
     }]
   },
 
+  // VWAP exit state (May 2026) — populated by the live 5-min monitor each
+  // cycle. The monitor recomputes cumulative day-VWAP from the 5-min bars and
+  // increments `vwap_consecutive_opp` on every close on the wrong side of
+  // VWAP (below for LONG, above for SHORT). Two consecutive wrong-side closes
+  // triggers an immediate market exit via _forceExitPick. The counter resets
+  // to zero on any correct-side close.
+  vwap_consecutive_opp: { type: Number, default: 0 },
+  vwap_last_value:      { type: Number, default: null },
+  vwap_last_checked_at: { type: Date,   default: null },
+
+  // Scanner ORB confirmation — runs at 09:32 IST for scanner.py picks that
+  // filled at the 9:08 auction. The legacy `validation` block (below) is
+  // bypassed for scanner picks because their levels are pre-computed.
+  // This block re-introduces a *day-of* confirmation step: we read the
+  // 9:15-9:30 candle and check whether direction + volume + Nifty alignment
+  // support the thesis. If 2+ checks fail, the position is force-exited at
+  // ~9:32 instead of riding to the SL-M. Persisted for post-trade audit.
+  scanner_orb_confirmation: {
+    checked_at: Date,
+    orb_high: Number,
+    orb_low: Number,
+    orb_open: Number,
+    orb_close: Number,
+    orb_volume: Number,
+    expected_volume: Number,
+    nifty_change_pct: Number,
+    checks: {
+      direction:        { passed: Boolean, stock_change_pct: Number, in_trade_direction: Boolean },
+      volume:           { passed: Boolean, ratio: Number, threshold: Number },
+      nifty_alignment:  { passed: Boolean, nifty_change_pct: Number, threshold: Number, against: Boolean },
+    },
+    decision: { type: String, enum: ['CONFIRMED', 'EXITED', 'WARN', 'SKIPPED'] },
+    fail_count: Number,
+    fail_reasons: [String],
+    exit_placed: Boolean,
+    notes: String,
+  },
+
   // Validation gate — checked at 9:30 AM before placing entry
   validation: {
     passed: Boolean,
@@ -182,8 +220,57 @@ const dailyPickSchema = new mongoose.Schema({
     }
   },
 
-  // Selected picks (max 3 from ChartInk scans)
+  // Selected picks (max 3 — placed as AMO at 8:30 in current architecture)
   picks: [pickSchema],
+
+  // Pre-open shortlist (Commit 1 of the 9:32 selection architecture, May 2026)
+  // The scanner emits SHORTLIST_SIZE candidates at 8:30; the top 3 become
+  // `picks` (above) and trade as AMO. The full shortlist is persisted here so
+  // that at 9:32 (Commit 2) a new job can re-score the candidates against
+  // actual 9:15-9:30 opening-range data and select the FINAL top 3.
+  //
+  // Entries here are NOT trades — there's no `trade` / `kite` sub-doc. They
+  // are scored candidates with pre-computed levels, awaiting the 9:32 gate.
+  candidates_shortlist: [{
+    symbol: { type: String, required: true },
+    stock_name: String,
+    instrument_key: String,
+    scan_type: String,                 // e.g. 'intraday_gap_long'
+    direction: { type: String, enum: ['LONG', 'SHORT'] },
+    rank_score: Number,                // composite × 100
+    composite: Number,                 // raw scanner composite (0..1)
+    levels: {
+      entry:       Number,
+      stop:        Number,
+      target:      Number,
+      target2:     Number,
+      target3:     Number,
+      risk_pct:    Number,
+      reward_pct:  Number,
+      risk_reward: Number,
+      entry_type:  String,
+      mode:        String,
+      source:      String,
+    },
+    scan_scores: {
+      volume_ratio:       Number,
+      rsi:                Number,
+      atr_pct:            Number,
+      close_in_range_pct: Number,
+      avg_volume_50d:     Number,
+    },
+    scan_meta: mongoose.Schema.Types.Mixed,
+    shortlist_rank: Number,            // 1..N, 1 = highest composite
+    // Set by Commit 2's 9:32 selection job. Until then, all entries are UNUSED.
+    shortlist_decision: {
+      type: String,
+      enum: ['UNUSED', 'SELECTED_AT_830', 'SELECTED_AT_932', 'FILTERED_AT_932'],
+      default: 'UNUSED',
+    },
+    // 9:32 selection job will fill these in (Commit 2)
+    intraday_score: { type: Number, default: null },
+    combined_score: { type: Number, default: null },
+  }],
 
   // Upstox "Stocks to Watch" news picks — ALL scraped stocks shown (not filtered by top-3 cap)
   // Each has entry/stop/target from the levels engine, but none are excluded for R:R

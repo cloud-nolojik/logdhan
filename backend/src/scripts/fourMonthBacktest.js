@@ -42,7 +42,7 @@ import { fileURLToPath } from 'url';
 import DailyPickBacktest from '../models/dailyPickBacktest.js';
 import { computeMarketContextV2 } from '../engine/regimeV2.js';
 import {
-  REGIME_TO_SCANNER_MODE,
+  REGIME_TO_SWING_MODE,
   selectScannerModeForRegime,
 } from '../services/dailyPicks/dailyPicksService.js';
 import { resolveOrbAtrRatioForVix } from '../services/dailyPicks/dailyPicksConstants.js';
@@ -50,7 +50,12 @@ import { resolveOrbAtrRatioForVix } from '../services/dailyPicks/dailyPicksConst
 const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const SCANNER_PY_PATH = path.resolve(__dirname, '../../..', 'scanner.py');
+// Backtest harness is locked to the SWING scanner (scanner_swing.py). The new
+// intraday scanner.py is too fresh to have backtest equivalence and would
+// invalidate the v2 result corpus this harness was built to extend. Switch
+// to scanner.py only after we add intraday-aware result evaluation.
+const SCANNER_PY_PATH = path.resolve(__dirname, '../../..', 'scanner_swing.py');
+const BT_SCANNER_TYPE = 'swing';
 
 const LOG = '[BT]';
 
@@ -103,10 +108,20 @@ async function getTradingDays(daysBack, fromDate = null, toDate = null) {
 
 /**
  * Reconstruct the regime engine inputs for a historical date by reading
- * the backfilled snapshots from Mongo. This avoids re-running the live
- * fetchers (which would always return TODAY's data).
+ * the backfilled snapshots from Mongo.
  *
- * Returns null if any required input is missing — caller skips the day.
+ * Hard requirement: VIX. Without VIX percentile we can't compute the
+ *   magnitude modifier and the regime engine's structure-less path becomes
+ *   too thin. Skip the day if VIX is missing.
+ *
+ * Soft (optional) inputs: FII flow and breadth. The NSE historical FII
+ *   endpoint was retired before May 2026 — backfillFiiFlow.js can only
+ *   accumulate forward, so historical days will be missing it. Breadth
+ *   backfill MAY also have gaps on days where < 50 stocks could be
+ *   evaluated. The regime engine handles null inputs by re-normalizing
+ *   the weighted average over whatever is available.
+ *
+ * Logs WHICH inputs were available per day for audit.
  */
 async function regimeForDate(date) {
   const VIX     = mongoose.connection.collection('india_vix_daily');
@@ -119,36 +134,32 @@ async function regimeForDate(date) {
     BREADTH.findOne({ date }),
   ]);
 
-  const missing = [];
-  if (!vixRow)     missing.push('vix');
-  if (!flowRow)    missing.push('fii_flow');
-  if (!breadthRow) missing.push('breadth');
-  if (missing.length > 0) {
-    return { ok: false, missing };
+  // Hard skip: VIX missing
+  if (!vixRow) {
+    return { ok: false, missing: ['vix'] };
   }
 
-  // Re-implement the minimum required for buildMarketContext without re-fetching:
-  // we already have the raw inputs, we just need to assemble them.
-  // To keep parity with production, prefer calling computeMarketContextV2()
-  // but it fetches live; instead, we manually construct the data + call
-  // buildMarketContext from regimeScoring directly.
+  const softMissing = [];
+  if (!flowRow)    softMissing.push('fii_flow');
+  if (!breadthRow) softMissing.push('breadth');
+
   const { buildMarketContext } = await import('../engine/regimeScoring.js');
-  // We also need Nifty structure (close/ema20/ema50/ema50_prev5) from the
-  // daily candles for that date. Reconstruct from prefetched RELIANCE-as-proxy
-  // is wrong — find a real Nifty source. For now, accept the limitation: if
-  // Nifty index data isn't backfilled, we can't compute structure → skip.
-  // TODO: backfill Nifty index daily candles (currently NOT in prefetcheddatas).
-  // For the MVP harness, we'll stub Nifty structure with neutral values and
-  // let breadth + flow + vix carry the signal.
   const data = {
-    niftyStructure: null,        // null → buildMarketContext skips structure input
-    breadthPct: breadthRow.breadth_pct ?? null,
-    vixData:    { close: vixRow.close, percentileRank: vixRow.percentileRank ?? null },
-    overnightData: null,         // TODO: backfill SGX/Asia/DXY too
-    flowData:   { fiiCr: flowRow.fii_cr ?? null, diiCr: flowRow.dii_cr ?? null },
+    // Nifty structure: stubbed null because we don't have Nifty index OHLC
+    // in prefetcheddatas. Engine treats null inputs by re-normalizing.
+    niftyStructure: null,
+    breadthPct:    breadthRow?.pct_above_50dma ?? null,   // soft
+    vixData:       { close: vixRow.close, percentileRank: vixRow.percentileRank ?? null },
+    overnightData: null,                                   // soft, no backfill source
+    flowData:      flowRow ? { fiiCr: flowRow.fii_net_cr ?? null, diiCr: flowRow.dii_net_cr ?? null } : null, // soft
   };
   const ctx = buildMarketContext(data);
-  return { ok: true, ctx, raw: { vix: vixRow, flow: flowRow, breadth: breadthRow } };
+  return {
+    ok: true,
+    ctx,
+    raw: { vix: vixRow, flow: flowRow, breadth: breadthRow },
+    softMissing,
+  };
 }
 
 // ─── scanner.py invocation with --asof ──────────────────────────────────────
@@ -172,6 +183,11 @@ async function runScannerAsof(mode, asof, top = 3) {
       '--mode', mode,
       '--asof', asof,
       '--period', '1y',   // bump from default 6mo for older asof dates
+      // Read daily candles from MongoDB instead of yfinance — avoids
+      // rate-limit failures when running 80 consecutive backtest days.
+      // Requires `pip install pymongo` and the prefetcheddatas collection
+      // populated (the `breadth` backfill in Step 1 already does this).
+      '--candles-from-mongo', process.env.MONGODB_URI,
     ], { timeout: 300_000 });   // 5 min — backtest can be slower
     const jsonLine = stdout.split('\n').map(s => s.trim()).find(l => l.startsWith('[{') || l === '[]');
     if (!jsonLine) {
@@ -217,9 +233,29 @@ async function evaluatePickDailyResolution(pick, asof, holdDays = 5, feepct = 0.
     return { status: 'NO_DATA', reason: 'no candles on or after asof' };
   }
 
-  const entryCandle = candles.find(c => c.date > asof);   // entry on next bar's open
+  const asofCandle = candles.find(c => c.date === asof);    // the day scanner ran
+  const entryCandle = candles.find(c => c.date > asof);     // entry on next bar's open
   if (!entryCandle) return { status: 'NO_DATA', reason: 'no next-day candle for entry' };
   const entryPrice = entryCandle.open;
+
+  // ── SPLIT / CORP-ACTION GUARD (May 2026) ────────────────────────────────
+  // The May backtest produced a VEDL pick with +153% net return — almost
+  // certainly an unadjusted split or demerger in the yfinance-cached daily
+  // candles. Any equity move > 30% between two consecutive trading sessions
+  // is overwhelmingly a corporate action, not a real intraday gap. Skip
+  // these trades with explicit SPLIT_DETECTED status so the aggregate
+  // numbers aren't poisoned by data artifacts.
+  if (asofCandle && asofCandle.close > 0) {
+    const overnightGapPct = Math.abs((entryPrice - asofCandle.close) / asofCandle.close) * 100;
+    if (overnightGapPct > 30) {
+      return {
+        status: 'SPLIT_DETECTED',
+        reason: `overnight gap ${overnightGapPct.toFixed(1)}% between ${asof} close=${asofCandle.close} and ${entryCandle.date} open=${entryPrice} — almost certainly split/demerger/corp-action in cached candles`,
+      };
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   const isLong = pick.direction === 'LONG';
   const stop = pick.sl;
   const target = pick.t1;
@@ -313,11 +349,12 @@ async function main() {
     if (!reg.ok) {
       summary.days_skipped_missing_data++;
       summary.skipReasons.push({ date, reason: `missing: ${reg.missing.join(',')}` });
-      console.log(`${LOG} ${date}: SKIP — missing ${reg.missing.join(',')}`);
+      console.log(`${LOG} ${date}: SKIP — missing ${reg.missing.join(',')} (hard skip)`);
       continue;
     }
     const regimeLabel = reg.ctx.regime;
-    console.log(`${LOG} ${date}: regime=${regimeLabel} score=${reg.ctx.regime_score} vix=${reg.raw.vix.close}`);
+    const softNote = reg.softMissing.length > 0 ? ` (soft-missing: ${reg.softMissing.join(',')})` : '';
+    console.log(`${LOG} ${date}: regime=${regimeLabel} score=${reg.ctx.regime_score} vix=${reg.raw.vix.close}${softNote}`);
 
     // 2. VIX sit-out check
     const vixVerdict = resolveOrbAtrRatioForVix(reg.raw.vix.close);
@@ -336,7 +373,8 @@ async function main() {
       console.log(`${LOG} ${date}: SIT OUT — EXTREME_BEAR`);
       continue;
     } else {
-      mode = selectScannerModeForRegime(regimeLabel);
+      // Pin to the swing map — the backtest harness is locked to scanner_swing.py
+      mode = selectScannerModeForRegime(regimeLabel, BT_SCANNER_TYPE);
       if (mode == null) {
         summary.days_skipped_missing_data++;
         summary.skipReasons.push({ date, reason: `unmappable regime ${regimeLabel}` });
@@ -409,10 +447,20 @@ async function main() {
         ran_at:    new Date(),
       },
     });
+    // Strip _id (top-level and from every nested sub-document) before upsert.
+    // Mongoose generates fresh ObjectIds on `new DailyPickBacktest(...)`,
+    // and MongoDB refuses to update the immutable _id field on an existing
+    // matched doc → ImmutableField error. We use $set with a sanitized
+    // payload and $setOnInsert for the trading_date so the upsert is safe
+    // whether the day already exists or not.
+    const payload = backtestDoc.toObject();
+    delete payload._id;
+    if (Array.isArray(payload.picks)) payload.picks.forEach(p => delete p._id);
+    if (Array.isArray(payload.candidates_review)) payload.candidates_review.forEach(c => delete c._id);
     await DailyPickBacktest.findOneAndUpdate(
       { trading_date: backtestDoc.trading_date },
-      backtestDoc.toObject(),
-      { upsert: true }
+      { $set: payload },
+      { upsert: true, setDefaultsOnInsert: true }
     );
     summary.days_simulated++;
     summary.perDay.push({
@@ -424,6 +472,8 @@ async function main() {
   }
 
   // ─── Aggregate roll-up ────────────────────────────────────────────────────
+  // Exclude SPLIT_DETECTED trades from the aggregate — they're data
+  // artifacts (unadjusted corporate actions), not real outcomes.
   const allClosed = await DailyPickBacktest.aggregate([
     { $match: {} },
     { $unwind: '$picks' },
@@ -434,11 +484,21 @@ async function main() {
   const total  = allClosed.length;
   const avgRet = total > 0 ? allClosed.reduce((s, d) => s + (d.picks.trade.return_pct || 0), 0) / total : 0;
 
+  // How many picks were filtered out as suspected splits — track for audit
+  const splitDetected = await DailyPickBacktest.aggregate([
+    { $match: {} },
+    { $unwind: '$picks' },
+    { $match: { 'picks.trade.status': 'SPLIT_DETECTED' } },
+    { $count: 'n' }
+  ]);
+  const splitCount = splitDetected[0]?.n || 0;
+
   summary.aggregate = {
     trades_closed: total,
     wins, losses,
     hit_rate_pct: total > 0 ? (wins / total * 100).toFixed(2) : null,
     avg_net_return_pct_per_trade: Number(avgRet.toFixed(3)),
+    picks_filtered_split_detected: splitCount,
   };
   summary.runFinishedAt = new Date();
 
@@ -452,6 +512,9 @@ async function main() {
   if (summary.aggregate) {
     console.log(`${LOG}   trades_closed=${summary.aggregate.trades_closed}`);
     console.log(`${LOG}   hit_rate=${summary.aggregate.hit_rate_pct}%`);
+    if (summary.aggregate.picks_filtered_split_detected > 0) {
+      console.log(`${LOG}   picks_filtered_split_detected=${summary.aggregate.picks_filtered_split_detected} (likely unadjusted corp actions in cached candles)`);
+    }
     console.log(`${LOG}   avg net return per trade=${summary.aggregate.avg_net_return_pct_per_trade}%`);
   }
   console.log(`${LOG} ════════════════════════════════════════`);

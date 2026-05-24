@@ -229,6 +229,49 @@ export const INTRADAY_CAPITAL_PCT = 0.40;
 export const MAX_PICKS = 3;
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PRE-OPEN SHORTLIST (Commit 1 of the 9:32 selection architecture)
+//
+// At 8:30 the scanner produces a SHORTLIST of candidates (not just the 3 we'll
+// trade). The shortlist is persisted to DailyPick.candidates_shortlist. At 9:32
+// (Commit 2) a new job re-scores this shortlist using actual 9:15-9:30 opening
+// range data + RS-vs-Nifty + VWAP, and selects the final top 3 from there.
+//
+// Commit 1 = produce the shortlist. No behavior change — the existing top-3
+// still get placed as AMO at 8:30. The shortlist sits idle, ready for Commit 2.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Number of candidates the scanner emits at 8:30 for the 9:32 re-selection pool */
+export const SHORTLIST_SIZE = 15;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCANNER 9:30 ORB CONFIRMATION (Tier-1 intraday upgrade, May 2026)
+//
+// Scanner.py picks fill at the 9:08 auction — long before any intraday signal
+// is visible. Without a day-of confirmation step the system blindly rides the
+// pre-open setup, paying full SL on every gap-and-fade. This block defines
+// the thresholds used at 09:32 IST to decide CONFIRM / WARN / EXIT.
+//
+// A pick must clear three checks against the 9:15-9:30 opening range:
+//   1. DIRECTION — stock moved in our trade direction by ≥ 0.15%
+//   2. VOLUME    — 9:15-9:30 cumulative volume ≥ 50% of expected
+//   3. NIFTY     — Nifty NOT moving against us by more than 0.3%
+//
+// Failure counts → decision:
+//   0 fails → CONFIRMED (hold)
+//   1 fail  → WARN (hold, audit-only)
+//   2+ fails → EXITED (cancel SL-M + target, place market exit)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Minimum absolute stock move in 9:15-9:30 (%) to count as having a direction */
+export const SCANNER_ORB_CONFIRM_MIN_MOVE_PCT = 0.15;
+/** Opening-range volume must be ≥ this fraction of expected (per fetchOrbVolume) */
+export const SCANNER_ORB_CONFIRM_VOL_RATIO_THRESHOLD = 0.50;
+/** Nifty moving against us by more than this % is a failed check */
+export const SCANNER_ORB_CONFIRM_NIFTY_AGAINST_PCT = 0.30;
+/** Number of failed checks that triggers exit (instead of warn-only) */
+export const SCANNER_ORB_CONFIRM_MIN_FAILS_FOR_EXIT = 2;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // REGIME-AWARE SCANNERS (May 2026)
 //
 // Per-regime stock-selection strategies are owned by scanner.py (one --mode

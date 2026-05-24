@@ -341,8 +341,15 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
   const c5prevBody = Math.abs(c5prev.close - c5prev.open);
   const bodyRatio  = c5Range > 0 ? c5Body / c5Range : 0;
   const upperWick  = c5last.high - Math.max(c5last.open, c5last.close);
+  const lowerWick  = Math.min(c5last.open, c5last.close) - c5last.low;
 
+  // Strong directional bars (filter out wicks via body-ratio > 50%)
   const is5mBullish = c5last.close > c5last.open && bodyRatio > 0.50;
+  const is5mBearish = c5last.close < c5last.open && bodyRatio > 0.50;
+
+  // ── Reversal patterns — only activate when AGAINST the trade direction ──
+  // For LONG: bearish patterns warn of reversal → tighten the stop
+  // For SHORT: bullish patterns warn of reversal → tighten the stop (mirror)
 
   // Bearish engulfing intraday: relaxed gap condition (>= not >) since consecutive
   // 5-min bars open at the prior bar's close — a strict gap-up almost never happens.
@@ -352,10 +359,28 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
     && c5last.close  <= c5prev.open          // closes at or below prior open
     && c5Body        >  c5prevBody;          // body larger than prior — confirms engulf
 
+  // Bullish engulfing (SHORT mirror): only relevant when we're SHORT — a strong
+  // bullish bar engulfing the prior bar is the reversal signal we'd want to
+  // tighten our stop on. Same relaxed-gap logic as bearish engulfing.
+  const is5mBullEngulf = !isBullish
+    && c5last.close  >  c5last.open          // bullish body
+    && c5last.open   <= c5prev.close         // opens at or below prior close (relaxed)
+    && c5last.close  >= c5prev.open          // closes at or above prior open
+    && c5Body        >  c5prevBody;          // body larger than prior — confirms engulf
+
   // Shooting star: upper wick > 2× body, small body in lower third of range
+  // (only relevant for LONGs — bearish reversal signal at a top)
   const is5mShootingStar = isBullish
     && c5Range > 0
     && upperWick > 2 * c5Body
+    && c5Body   < 0.30 * c5Range;
+
+  // Hammer (SHORT mirror): long lower wick > 2× body, small body in upper third
+  // of range. Bullish reversal signal at a bottom — what we'd want to see to
+  // tighten a SHORT stop.
+  const is5mHammer = !isBullish
+    && c5Range > 0
+    && lowerWick > 2 * c5Body
     && c5Body   < 0.30 * c5Range;
 
   const is5mDoji   = bodyRatio < 0.15;
@@ -375,8 +400,8 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
     `dir=${direction} stop=₹${currentStop}`,
     `15m: prev[L=${c15prev.low} H=${c15prev.high} C=${c15prev.close}] last[L=${c15last.low} H=${c15last.high} C=${c15last.close}] broken=${struct15Broken} intact=${struct15Intact}`,
     `5m:  prev[O=${c5prev.open} H=${c5prev.high} L=${c5prev.low} C=${c5prev.close} body=${round2(c5prevBody)}]`,
-    `5m:  last[O=${c5last.open} H=${c5last.high} L=${c5last.low} C=${c5last.close} body=${round2(c5Body)} range=${round2(c5Range)} bodyRatio=${round2(bodyRatio)} upperWick=${round2(upperWick)}]`,
-    `5m:  bullish=${is5mBullish} bearEngulf=${is5mBearEngulf} shootingStar=${is5mShootingStar} doji=${is5mDoji} inside=${is5mInside}`,
+    `5m:  last[O=${c5last.open} H=${c5last.high} L=${c5last.low} C=${c5last.close} body=${round2(c5Body)} range=${round2(c5Range)} bodyRatio=${round2(bodyRatio)} upperWick=${round2(upperWick)} lowerWick=${round2(lowerWick)}]`,
+    `5m:  bullish=${is5mBullish} bearish=${is5mBearish} bearEngulf=${is5mBearEngulf} bullEngulf=${is5mBullEngulf} shootingStar=${is5mShootingStar} hammer=${is5mHammer} doji=${is5mDoji} inside=${is5mInside}`,
     `vol: last=${c5last.volume} avg=${round2(avgVol)} ratio=${round2(volRatio)}x drying=${volDrying} expanding=${volExpanding}`,
   ].join(' | ');
 
@@ -471,13 +496,22 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
     };
   }
 
-  // Reversal candle → tighten stop to the candle's LOW (LONG) / HIGH (SHORT)
-  // i.e. below the reversal body — NOT to the candle high which would be above price
-  if (is5mBearEngulf || is5mShootingStar) {
+  // Reversal candle → tighten stop. Each pattern is direction-gated above so
+  // only against-trade-direction reversals trigger here:
+  //   LONG  → bearish engulfing or shooting star at a top → tighten to last LOW
+  //   SHORT → bullish engulfing or hammer at a bottom    → tighten to last HIGH
+  const reversalLong  = is5mBearEngulf || is5mShootingStar;     // for LONG positions
+  const reversalShort = is5mBullEngulf || is5mHammer;            // for SHORT positions
+  if (reversalLong || reversalShort) {
     const tightStop = isBullish ? round2(c5last.low) : round2(c5last.high);
+    const patternName = is5mBearEngulf  ? '5-min bearish engulfing'
+                      : is5mShootingStar ? '5-min shooting star'
+                      : is5mBullEngulf  ? '5-min bullish engulfing'
+                      : is5mHammer       ? '5-min hammer'
+                      : 'reversal candle';
     return {
       action: 'tighten',
-      reason: `${is5mBearEngulf ? '5-min bearish engulfing' : '5-min shooting star'} | ${dbg}`,
+      reason: `${patternName} (against ${direction} trade) | ${dbg}`,
       newStop: tightStop,
     };
   }
@@ -487,21 +521,25 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
     return NO_CHANGE(`${is5mDoji ? '5-min doji — indecision' : '5-min inside bar — consolidation'} | ${dbg}`);
   }
 
-  // Bullish + 15-min intact + volume not drying → trail stop to 5-min candle low
-  if (is5mBullish && struct15Intact && !volDrying) {
+  // Continuation candle (WITH the trade direction) + 15-min intact + volume not drying
+  //   LONG  → bullish 5-min bar → trail stop UP to bar's low
+  //   SHORT → bearish 5-min bar → trail stop DOWN to bar's high
+  const continuationBar = isBullish ? is5mBullish : is5mBearish;
+  if (continuationBar && struct15Intact && !volDrying) {
     const trailStop = isBullish ? round2(c5last.low) : round2(c5last.high);
     const isImprovement = isBullish ? trailStop > currentStop : trailStop < currentStop;
-    if (!isImprovement) return NO_CHANGE(`5-min bullish but trail ₹${trailStop} would not improve stop ₹${currentStop} | ${dbg}`);
+    if (!isImprovement) return NO_CHANGE(`5-min ${isBullish ? 'bullish' : 'bearish'} but trail ₹${trailStop} would not improve stop ₹${currentStop} | ${dbg}`);
     return {
       action: 'trail',
-      reason: `5-min bullish${volExpanding ? ' + expanding volume' : ''}, 15-min intact | ${dbg}`,
+      reason: `5-min ${isBullish ? 'bullish' : 'bearish'}${volExpanding ? ' + expanding volume' : ''}, 15-min intact (continuation with ${direction}) | ${dbg}`,
       newStop: trailStop,
     };
   }
 
-  // Bullish candle but volume drying up → hold, exhaustion warning
-  if (is5mBullish && volDrying) {
-    return NO_CHANGE(`5-min bullish but volume drying (${round2(volRatio)}× avg) — exhaustion risk | ${dbg}`);
+  // Continuation bar but volume drying up → hold, exhaustion warning
+  // (mirror logic for SHORT — a bearish bar with drying volume = bears tiring too)
+  if (continuationBar && volDrying) {
+    return NO_CHANGE(`5-min ${isBullish ? 'bullish' : 'bearish'} but volume drying (${round2(volRatio)}× avg) — exhaustion risk on ${direction} | ${dbg}`);
   }
 
   return NO_CHANGE(`5-min candle neutral | ${dbg}`);

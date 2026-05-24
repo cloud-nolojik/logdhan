@@ -1,0 +1,865 @@
+nolojik@Vijeshs-MacBook-M4 backend % node src/scripts/fourMonthBacktest.js --days 80 --capital 100000 --feepct 0.25 --hold 5
+[BT] ════════════════════════════════════════
+[BT] Four-month backtest starting
+[BT] args: {
+  days: 80,
+  from: null,
+  to: null,
+  capital: 100000,
+  feepct: 0.25,
+  holdDays: 5,
+  dryRun: false
+}
+[BT] ════════════════════════════════════════
+(node:33393) [MONGOOSE] Warning: Duplicate schema index on {"trading_date":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[BT] Mongo connected
+[BT] trading-day window: 80 days (2026-01-06 → 2026-05-06)
+
+[BT] ─── DAY 2026-01-06 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.446 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.446 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.535
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-06: regime=WEAK_BEAR score=-0.446 vix=10.020000457763672 (soft-missing: fii_flow)
+[fnoUniverse] loaded 220 F&O underlyings from instrument master
+[BT] 2026-01-06: scanner mode=failed_bounce returned 3 picks in 19756ms
+[BT]   RELIANCE: TARGET_HIT netR%=0.876 realizedR=0.49
+[BT]   HDFCAMC: TARGET_HIT netR%=0.785 realizedR=0.421
+[BT]   ADANIPORTS: TARGET_HIT netR%=0.164 realizedR=0.158
+
+[BT] ─── DAY 2026-01-07 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.348 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.348 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.418
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-07: regime=WEAK_BEAR score=-0.348 vix=9.949999809265137 (soft-missing: fii_flow)
+[BT] 2026-01-07: scanner mode=failed_bounce returned 3 picks in 19021ms
+[BT]   POWERGRID: TARGET_HIT netR%=0.293 realizedR=0.119
+[BT]   CIPLA: TARGET_HIT netR%=0.297 realizedR=0.214
+[BT]   BIOCON: TARGET_HIT netR%=-0.056 realizedR=0.047
+
+[BT] ─── DAY 2026-01-08 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.748 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.748 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=0.897
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-08: regime=STRONG_BEAR score=-0.748 vix=10.600000381469727 (soft-missing: fii_flow)
+[BT] 2026-01-08: scanner mode=breakdown returned 1 picks in 18970ms
+[BT]   ANGELONE: TARGET_HIT netR%=0.381 realizedR=0.14
+
+[BT] ─── DAY 2026-01-09 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-09: regime=STRONG_BEAR score=-1 vix=10.930000305175781 (soft-missing: fii_flow)
+[BT] 2026-01-09: scanner mode=breakdown returned 1 picks in 19108ms
+[BT]   ANGELONE: TARGET_HIT netR%=0.362 realizedR=0.186
+
+[BT] ─── DAY 2026-01-12 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-12: regime=STRONG_BEAR score=-1 vix=11.369999885559082 (soft-missing: fii_flow)
+[BT] 2026-01-12: scanner mode=breakdown returned 1 picks in 17073ms
+[BT]   ANGELONE: STOPPED_OUT netR%=-4.831 realizedR=-1
+
+[BT] ─── DAY 2026-01-13 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-13: regime=STRONG_BEAR score=-1 vix=11.199999809265137 (soft-missing: fii_flow)
+[BT] 2026-01-13: scanner mode=breakdown returned 1 picks in 16984ms
+[BT]   ANGELONE: STOPPED_OUT netR%=-3.233 realizedR=-1
+
+[BT] ─── DAY 2026-01-14 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.93 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.93 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-14: regime=STRONG_BEAR score=-0.93 vix=11.319999694824219 (soft-missing: fii_flow)
+[BT] 2026-01-14: scanner mode=breakdown returned 0 picks in 17541ms
+
+[BT] ─── DAY 2026-01-16 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.968 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.968 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-16: regime=STRONG_BEAR score=-0.968 vix=11.369999885559082 (soft-missing: fii_flow)
+[BT] 2026-01-16: scanner mode=breakdown returned 0 picks in 18068ms
+
+[BT] ─── DAY 2026-01-19 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-19: regime=STRONG_BEAR score=-1 vix=11.829999923706055 (soft-missing: fii_flow)
+[BT] 2026-01-19: scanner mode=breakdown returned 0 picks in 17352ms
+
+[BT] ─── DAY 2026-01-20 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-20: regime=STRONG_BEAR score=-1 vix=12.729999542236328 (soft-missing: fii_flow)
+[BT] 2026-01-20: scanner mode=breakdown returned 0 picks in 17614ms
+
+[BT] ─── DAY 2026-01-21 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-21: regime=STRONG_BEAR score=-1 vix=13.779999732971191 (soft-missing: fii_flow)
+[BT] 2026-01-21: scanner mode=breakdown returned 0 picks in 17355ms
+
+[BT] ─── DAY 2026-01-22 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-22: regime=STRONG_BEAR score=-1 vix=13.350000381469727 (soft-missing: fii_flow)
+[BT] 2026-01-22: scanner mode=breakdown returned 0 picks in 16740ms
+
+[BT] ─── DAY 2026-01-23 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-23: regime=STRONG_BEAR score=-1 vix=14.1899995803833 (soft-missing: fii_flow)
+[BT] 2026-01-23: scanner mode=breakdown returned 0 picks in 17895ms
+
+[BT] ─── DAY 2026-01-27 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-27: regime=STRONG_BEAR score=-1 vix=14.449999809265137 (soft-missing: fii_flow)
+[BT] 2026-01-27: scanner mode=breakdown returned 0 picks in 18279ms
+
+[BT] ─── DAY 2026-01-28 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-28: regime=STRONG_BEAR score=-1 vix=13.529999732971191 (soft-missing: fii_flow)
+[BT] 2026-01-28: scanner mode=breakdown returned 0 picks in 18869ms
+
+[BT] ─── DAY 2026-01-29 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-29: regime=STRONG_BEAR score=-1 vix=13.369999885559082 (soft-missing: fii_flow)
+[BT] 2026-01-29: scanner mode=breakdown returned 0 picks in 17966ms
+
+[BT] ─── DAY 2026-01-30 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-01-30: regime=STRONG_BEAR score=-1 vix=13.630000114440918 (soft-missing: fii_flow)
+[BT] 2026-01-30: scanner mode=breakdown returned 0 picks in 19576ms
+
+[BT] ─── DAY 2026-02-01 ───
+[BT] 2026-02-01: SKIP — missing vix (hard skip)
+
+[BT] ─── DAY 2026-02-02 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-02: regime=STRONG_BEAR score=-1 vix=13.869999885559082 (soft-missing: fii_flow)
+[BT] 2026-02-02: scanner mode=breakdown returned 1 picks in 18550ms
+[BT]   ANGELONE: STOPPED_OUT netR%=-1.105 realizedR=-1
+
+[BT] ─── DAY 2026-02-03 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.703 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.703 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=0.844
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-03: regime=STRONG_BEAR score=-0.703 vix=12.899999618530273 (soft-missing: fii_flow)
+[BT] 2026-02-03: scanner mode=breakdown returned 0 picks in 20973ms
+
+[BT] ─── DAY 2026-02-04 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.449 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.449 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.539
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-04: regime=WEAK_BEAR score=-0.449 vix=12.25 (soft-missing: fii_flow)
+[BT] 2026-02-04: scanner mode=failed_bounce returned 3 picks in 20597ms
+[BT]   TCS: TARGET_HIT netR%=-0.385 realizedR=-0.028
+[BT]   MANKIND: TARGET_HIT netR%=0.603 realizedR=0.181
+[BT]   INFY: TARGET_HIT netR%=0.111 realizedR=0.071
+
+[BT] ─── DAY 2026-02-05 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.536 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.536 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.644
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-05: regime=WEAK_BEAR score=-0.536 vix=12.170000076293945 (soft-missing: fii_flow)
+[BT] 2026-02-05: scanner mode=failed_bounce returned 3 picks in 19798ms
+[BT]   HINDUNILVR: TARGET_HIT netR%=0.319 realizedR=0.144
+[BT]   BHARTIARTL: TARGET_HIT netR%=-0.16 realizedR=0.024
+[BT]   KAYNES: TARGET_HIT netR%=-5.521 realizedR=-0.471
+
+[BT] ─── DAY 2026-02-06 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.549 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.549 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.659
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-06: regime=WEAK_BEAR score=-0.549 vix=11.9399995803833 (soft-missing: fii_flow)
+[BT] 2026-02-06: scanner mode=failed_bounce returned 3 picks in 17351ms
+[BT]   UNOMINDA: TARGET_HIT netR%=0.22 realizedR=0.091
+[BT]   CONCOR: TARGET_HIT netR%=1.595 realizedR=0.476
+[BT]   TATATECH: TARGET_HIT netR%=1.596 realizedR=0.442
+
+[BT] ─── DAY 2026-02-09 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.011 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.011 v=null o=null f=null
+[REGIME V2] max_trades=0 size_mult=0.013
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-09: regime=NEUTRAL score=-0.011 vix=12.1899995803833 (soft-missing: fii_flow)
+[BT] 2026-02-09: scanner mode=nr7_compression returned 3 picks in 17823ms
+[BT]   IDFCFIRSTB: STOPPED_OUT netR%=-2.773 realizedR=-1
+[BT]   TATAELXSI: TARGET_HIT netR%=-0.079 realizedR=0.045
+[BT]   HINDPETRO: TARGET_HIT netR%=0.653 realizedR=0.284
+
+[BT] ─── DAY 2026-02-10 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.176 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.176 v=null o=null f=null
+[REGIME V2] max_trades=1 size_mult=0.212
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-10: regime=NEUTRAL score=0.176 vix=11.670000076293945 (soft-missing: fii_flow)
+[BT] 2026-02-10: scanner mode=nr7_compression returned 3 picks in 17884ms
+[BT]   BRITANNIA: TARGET_HIT netR%=-1.781 realizedR=-0.346
+[BT]   SBILIFE: TARGET_HIT netR%=0.902 realizedR=0.34
+[BT]   PAGEIND: STOPPED_OUT netR%=-3.121 realizedR=-1
+
+[BT] ─── DAY 2026-02-11 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.119 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.119 v=null o=null f=null
+[REGIME V2] max_trades=1 size_mult=0.143
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-11: regime=NEUTRAL score=0.119 vix=11.550000190734863 (soft-missing: fii_flow)
+[BT] 2026-02-11: scanner mode=nr7_compression returned 3 picks in 19252ms
+[BT]   BAJFINANCE: TARGET_HIT netR%=0.514 realizedR=0.322
+[BT]   PPLPHARMA: TARGET_HIT netR%=1.089 realizedR=0.302
+[BT]   EXIDEIND: TARGET_HIT netR%=0.258 realizedR=0.157
+
+[BT] ─── DAY 2026-02-12 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.126 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.126 v=null o=null f=null
+[REGIME V2] max_trades=1 size_mult=0.151
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-12: regime=NEUTRAL score=-0.126 vix=11.729999542236328 (soft-missing: fii_flow)
+[BT] 2026-02-12: scanner mode=nr7_compression returned 3 picks in 19469ms
+[BT]   JSWSTEEL: TARGET_HIT netR%=1.159 realizedR=0.958
+[BT]   GRASIM: STOPPED_OUT netR%=-2.439 realizedR=-1
+[BT]   OBEROIRLTY: STOPPED_OUT netR%=-1.364 realizedR=-1
+
+[BT] ─── DAY 2026-02-13 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.448 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.448 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.537
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-13: regime=WEAK_BEAR score=-0.448 vix=13.289999961853027 (soft-missing: fii_flow)
+[BT] 2026-02-13: scanner mode=failed_bounce returned 3 picks in 20756ms
+[BT]   HINDUNILVR: TARGET_HIT netR%=0 realizedR=0.105
+[BT]   ALKEM: TARGET_HIT netR%=0.385 realizedR=0.262
+[BT]   KOTAKBANK: TARGET_HIT netR%=0.005 realizedR=0.063
+
+[BT] ─── DAY 2026-02-16 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.524 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.524 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.628
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-16: regime=WEAK_BEAR score=-0.524 vix=13.329999923706055 (soft-missing: fii_flow)
+[BT] 2026-02-16: scanner mode=failed_bounce returned 3 picks in 20491ms
+[BT]   BSE: TARGET_HIT netR%=2.056 realizedR=0.48
+[BT]   PIIND: TARGET_HIT netR%=1.611 realizedR=0.601
+[BT]   HINDCOPPER: TARGET_HIT netR%=0.768 realizedR=0.204
+
+[BT] ─── DAY 2026-02-17 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.346 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.346 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.416
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-17: regime=WEAK_BEAR score=-0.346 vix=12.670000076293945 (soft-missing: fii_flow)
+[BT] 2026-02-17: scanner mode=failed_bounce returned 3 picks in 19179ms
+[BT]   AMBUJACEM: TARGET_HIT netR%=0.81 realizedR=0.399
+[BT]   BSE: TARGET_HIT netR%=0.583 realizedR=0.201
+[BT]   DALBHARAT: TARGET_HIT netR%=0.403 realizedR=0.18
+
+[BT] ─── DAY 2026-02-18 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.24 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.24 v=null o=null f=null
+[REGIME V2] max_trades=1 size_mult=0.288
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-18: regime=NEUTRAL score=-0.24 vix=12.220000267028809 (soft-missing: fii_flow)
+[BT] 2026-02-18: scanner mode=nr7_compression returned 3 picks in 18921ms
+[BT]   INDIGO: STOPPED_OUT netR%=-1.972 realizedR=-1
+[BT]   BHARTIARTL: STOPPED_OUT netR%=-3.053 realizedR=-1
+[BT]   HDFCBANK: TIME_EXIT netR%=-2.554 realizedR=-0.596
+
+[BT] ─── DAY 2026-02-19 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.525 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.525 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.63
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-19: regime=WEAK_BEAR score=-0.525 vix=13.460000038146973 (soft-missing: fii_flow)
+[BT] 2026-02-19: scanner mode=failed_bounce returned 3 picks in 20185ms
+[BT]   MANKIND: TARGET_HIT netR%=0.536 realizedR=0.391
+[BT]   ICICIBANK: TARGET_HIT netR%=-0.159 realizedR=0.032
+[BT]   HINDPETRO: TARGET_HIT netR%=-0.738 realizedR=-0.081
+
+[BT] ─── DAY 2026-02-20 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.534 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.534 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.641
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-20: regime=WEAK_BEAR score=-0.534 vix=14.359999656677246 (soft-missing: fii_flow)
+[BT] 2026-02-20: scanner mode=failed_bounce returned 3 picks in 20562ms
+[BT]   PERSISTENT: TARGET_HIT netR%=1.204 realizedR=0.288
+[BT]   GRASIM: TARGET_HIT netR%=0.242 realizedR=0.107
+[BT]   BALKRISIND: TARGET_HIT netR%=0.983 realizedR=0.311
+
+[BT] ─── DAY 2026-02-23 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.482 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.482 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.578
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-23: regime=WEAK_BEAR score=-0.482 vix=14.170000076293945 (soft-missing: fii_flow)
+[BT] 2026-02-23: scanner mode=failed_bounce returned 3 picks in 20237ms
+[BT]   AUBANK: TARGET_HIT netR%=0.059 realizedR=0.057
+[BT]   INDHOTEL: TARGET_HIT netR%=-0.773 realizedR=-0.1
+[BT]   DMART: TARGET_HIT netR%=0.521 realizedR=0.206
+
+[BT] ─── DAY 2026-02-24 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.658 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.658 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=0.79
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-24: regime=STRONG_BEAR score=-0.658 vix=14.149999618530273 (soft-missing: fii_flow)
+[BT] 2026-02-24: scanner mode=breakdown returned 0 picks in 19927ms
+
+[BT] ─── DAY 2026-02-25 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.562 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.562 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.674
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-25: regime=WEAK_BEAR score=-0.562 vix=13.489999771118164 (soft-missing: fii_flow)
+[BT] 2026-02-25: scanner mode=failed_bounce returned 3 picks in 19794ms
+[BT]   MANAPPURAM: TARGET_HIT netR%=-3.124 realizedR=-0.339
+[BT]   AUBANK: TARGET_HIT netR%=0.237 realizedR=0.126
+[BT]   IRCTC: TARGET_HIT netR%=-0.063 realizedR=0.067
+
+[BT] ─── DAY 2026-02-26 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.546 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.546 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.655
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-26: regime=WEAK_BEAR score=-0.546 vix=13.0600004196167 (soft-missing: fii_flow)
+[BT] 2026-02-26: scanner mode=failed_bounce returned 3 picks in 21621ms
+[BT]   ETERNAL: TARGET_HIT netR%=0.204 realizedR=0.099
+[BT]   COFORGE: TARGET_HIT netR%=1.648 realizedR=0.533
+[BT]   UNITDSPR: TARGET_HIT netR%=-0.089 realizedR=0.039
+
+[BT] ─── DAY 2026-02-27 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.752 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.752 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=0.903
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-02-27: regime=STRONG_BEAR score=-0.752 vix=13.699999809265137 (soft-missing: fii_flow)
+[BT] 2026-02-27: scanner mode=breakdown returned 0 picks in 22376ms
+
+[BT] ─── DAY 2026-03-02 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-02: regime=STRONG_BEAR score=-1 vix=17.1299991607666 (soft-missing: fii_flow)
+[BT] 2026-03-02: scanner mode=breakdown returned 0 picks in 25682ms
+
+[BT] ─── DAY 2026-03-04 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-04: regime=STRONG_BEAR score=-1 vix=21.139999389648438 (soft-missing: fii_flow)
+[BT] 2026-03-04: scanner mode=breakdown returned 0 picks in 19080ms
+
+[BT] ─── DAY 2026-03-05 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-05: regime=STRONG_BEAR score=-1 vix=17.860000610351562 (soft-missing: fii_flow)
+[BT] 2026-03-05: scanner mode=breakdown returned 0 picks in 20065ms
+
+[BT] ─── DAY 2026-03-06 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-06: regime=STRONG_BEAR score=-1 vix=19.8799991607666 (soft-missing: fii_flow)
+[BT] 2026-03-06: scanner mode=breakdown returned 0 picks in 21280ms
+
+[BT] ─── DAY 2026-03-09 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-09: regime=STRONG_BEAR score=-1 vix=23.360000610351562 (soft-missing: fii_flow)
+[BT] 2026-03-09: scanner mode=breakdown returned 0 picks in 19526ms
+
+[BT] ─── DAY 2026-03-10 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-10: regime=STRONG_BEAR score=-1 vix=18.90999984741211 (soft-missing: fii_flow)
+[BT] 2026-03-10: scanner mode=breakdown returned 0 picks in 18087ms
+
+[BT] ─── DAY 2026-03-11 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-11: regime=STRONG_BEAR score=-1 vix=21.059999465942383 (soft-missing: fii_flow)
+[BT] 2026-03-11: scanner mode=breakdown returned 0 picks in 16404ms
+
+[BT] ─── DAY 2026-03-12 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-12: regime=STRONG_BEAR score=-1 vix=21.520000457763672 (soft-missing: fii_flow)
+[BT] 2026-03-12: scanner mode=breakdown returned 0 picks in 18938ms
+
+[BT] ─── DAY 2026-03-13 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-13: regime=STRONG_BEAR score=-1 vix=22.649999618530273 (soft-missing: fii_flow)
+[BT] 2026-03-13: scanner mode=breakdown returned 0 picks in 19815ms
+
+[BT] ─── DAY 2026-03-16 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-16: regime=STRONG_BEAR score=-1 vix=21.600000381469727 (soft-missing: fii_flow)
+[BT] 2026-03-16: scanner mode=breakdown returned 0 picks in 18521ms
+
+[BT] ─── DAY 2026-03-17 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-17: regime=STRONG_BEAR score=-1 vix=19.790000915527344 (soft-missing: fii_flow)
+[BT] 2026-03-17: scanner mode=breakdown returned 0 picks in 17632ms
+
+[BT] ─── DAY 2026-03-18 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-18: regime=STRONG_BEAR score=-1 vix=18.719999313354492 (soft-missing: fii_flow)
+[BT] 2026-03-18: scanner mode=breakdown returned 0 picks in 19074ms
+
+[BT] ─── DAY 2026-03-19 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-19: regime=STRONG_BEAR score=-1 vix=22.799999237060547 (soft-missing: fii_flow)
+[BT] 2026-03-19: scanner mode=breakdown returned 0 picks in 16986ms
+
+[BT] ─── DAY 2026-03-20 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-20: regime=STRONG_BEAR score=-1 vix=22.809999465942383 (soft-missing: fii_flow)
+[BT] 2026-03-20: scanner mode=breakdown returned 0 picks in 19106ms
+
+[BT] ─── DAY 2026-03-23 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-23: regime=STRONG_BEAR score=-1 vix=26.729999542236328 (soft-missing: fii_flow)
+[BT] 2026-03-23: scanner mode=breakdown returned 0 picks in 18131ms
+
+[BT] ─── DAY 2026-03-24 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-24: regime=STRONG_BEAR score=-1 vix=24.739999771118164 (soft-missing: fii_flow)
+[BT] 2026-03-24: scanner mode=breakdown returned 0 picks in 19022ms
+
+[BT] ─── DAY 2026-03-25 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-25: regime=STRONG_BEAR score=-1 vix=24.639999389648438 (soft-missing: fii_flow)
+[BT] 2026-03-25: scanner mode=breakdown returned 0 picks in 19659ms
+
+[BT] ─── DAY 2026-03-27 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-27: regime=STRONG_BEAR score=-1 vix=26.799999237060547 (soft-missing: fii_flow)
+[BT] 2026-03-27: scanner mode=breakdown returned 0 picks in 19942ms
+
+[BT] ─── DAY 2026-03-30 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-03-30: regime=STRONG_BEAR score=-1 vix=27.889999389648438 (soft-missing: fii_flow)
+[BT] 2026-03-30: scanner mode=breakdown returned 0 picks in 20460ms
+
+[BT] ─── DAY 2026-04-01 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-01: regime=STRONG_BEAR score=-1 vix=25.010000228881836 (soft-missing: fii_flow)
+[BT] 2026-04-01: scanner mode=breakdown returned 0 picks in 20155ms
+
+[BT] ─── DAY 2026-04-02 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-02: regime=STRONG_BEAR score=-1 vix=25.520000457763672 (soft-missing: fii_flow)
+[BT] 2026-04-02: scanner mode=breakdown returned 0 picks in 21516ms
+
+[BT] ─── DAY 2026-04-06 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-1 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-1 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-06: regime=STRONG_BEAR score=-1 vix=25.469999313354492 (soft-missing: fii_flow)
+[BT] 2026-04-06: scanner mode=breakdown returned 0 picks in 27818ms
+
+[BT] ─── DAY 2026-04-07 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.926 Label=STRONG_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.926 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-07: regime=STRONG_BEAR score=-0.926 vix=24.700000762939453 (soft-missing: fii_flow)
+[BT] 2026-04-07: scanner mode=breakdown returned 3 picks in 24170ms
+[BT]   MAXHEALTH: STOPPED_OUT netR%=-2.193 realizedR=-1
+[BT]   SRF: TARGET_HIT netR%=4.51 realizedR=12.081
+[BT]   CIPLA: STOPPED_OUT netR%=-1.262 realizedR=-1
+
+[BT] ─── DAY 2026-04-08 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.32 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.32 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.384
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-08: regime=WEAK_BEAR score=-0.32 vix=19.700000762939453 (soft-missing: fii_flow)
+[BT] 2026-04-08: scanner mode=failed_bounce returned 3 picks in 26446ms
+[BT]   OIL: TARGET_HIT netR%=-0.17 realizedR=0.016
+[BT]   SBIN: TIME_EXIT netR%=-0.915 realizedR=-0.193
+[BT]   MARICO: TARGET_HIT netR%=0.674 realizedR=0.233
+
+[BT] ─── DAY 2026-04-09 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=-0.309 Label=WEAK_BEAR Playbook=standard
+[REGIME V2] Inputs: s=null b=-0.309 v=null o=null f=null
+[REGIME V2] max_trades=2 size_mult=0.371
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-09: regime=WEAK_BEAR score=-0.309 vix=20.43000030517578 (soft-missing: fii_flow)
+[BT] 2026-04-09: scanner mode=failed_bounce returned 3 picks in 23812ms
+[BT]   CROMPTON: TARGET_HIT netR%=1.19 realizedR=0.338
+[BT]   SBIN: TARGET_HIT netR%=0.959 realizedR=0.32
+[BT]   UNOMINDA: STOPPED_OUT netR%=-4.322 realizedR=-1
+
+[BT] ─── DAY 2026-04-10 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.197 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.197 v=null o=null f=null
+[REGIME V2] max_trades=1 size_mult=0.236
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-10: regime=NEUTRAL score=0.197 vix=18.850000381469727 (soft-missing: fii_flow)
+[BT] 2026-04-10: scanner mode=nr7_compression returned 3 picks in 24242ms
+[BT]   ETERNAL: TARGET_HIT netR%=2.886 realizedR=1.624
+[BT]   MANAPPURAM: TARGET_HIT netR%=1.587 realizedR=0.91
+[BT]   TITAGARH: TARGET_HIT netR%=3.403 realizedR=1.659
+
+[BT] ─── DAY 2026-04-13 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.007 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.007 v=null o=null f=null
+[REGIME V2] max_trades=0 size_mult=0.009
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-13: regime=NEUTRAL score=0.007 vix=20.5 (soft-missing: fii_flow)
+[BT] 2026-04-13: scanner mode=nr7_compression returned 3 picks in 22195ms
+[BT]   M&M: TARGET_HIT netR%=-0.115 realizedR=0.029
+[BT]   PERSISTENT: TARGET_HIT netR%=0.625 realizedR=0.184
+[BT]   JUBLFOOD: TARGET_HIT netR%=1.244 realizedR=0.244
+
+[BT] ─── DAY 2026-04-15 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.609 Label=STRONG_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.609 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=0.731
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-15: regime=STRONG_BULL score=0.609 vix=18.670000076293945 (soft-missing: fii_flow)
+[BT] 2026-04-15: scanner mode=momentum_leader returned 3 picks in 21021ms
+[BT]   TATAPOWER: TARGET_HIT netR%=-1.069 realizedR=-0.131
+[BT]   AUROPHARMA: TARGET_HIT netR%=-1.02 realizedR=-0.198
+[BT]   GRANULES: TARGET_HIT netR%=0.139 realizedR=0.105
+
+[BT] ─── DAY 2026-04-16 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.752 Label=STRONG_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.752 v=null o=null f=null
+[REGIME V2] max_trades=3 size_mult=0.902
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-16: regime=STRONG_BULL score=0.752 vix=18.09000015258789 (soft-missing: fii_flow)
+[BT] 2026-04-16: scanner mode=momentum_leader returned 3 picks in 21427ms
+[BT]   PFC: TARGET_HIT netR%=0.692 realizedR=0.18
+[BT]   BHEL: TARGET_HIT netR%=0.168 realizedR=0.076
+[BT]   AUROPHARMA: TARGET_HIT netR%=-0.178 realizedR=0.019
+
+[BT] ─── DAY 2026-04-17 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.577 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.855 v=null o=null f=0.114
+[REGIME V2] max_trades=2 size_mult=0.692
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-17: regime=WEAK_BULL score=0.577 vix=17.209999084472656
+[BT] 2026-04-17: scanner mode=recovery_breakout returned 3 picks in 21245ms
+[BT]   TITAN: TARGET_HIT netR%=-0.065 realizedR=0.062
+[BT]   COLPAL: TARGET_HIT netR%=0.205 realizedR=0.081
+[BT]   VBL: TARGET_HIT netR%=-0.026 realizedR=0.052
+
+[BT] ─── DAY 2026-04-20 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.583 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.864 v=null o=null f=0.114
+[REGIME V2] max_trades=2 size_mult=0.7
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-20: regime=WEAK_BULL score=0.583 vix=18.790000915527344
+[BT] 2026-04-20: scanner mode=recovery_breakout returned 3 picks in 20725ms
+[BT]   CESC: TARGET_HIT netR%=-0.124 realizedR=0.023
+[BT]   GRANULES: TARGET_HIT netR%=1.224 realizedR=0.436
+[BT]   JSWSTEEL: TARGET_HIT netR%=0.243 realizedR=0.139
+
+[BT] ─── DAY 2026-04-21 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.559 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=1 v=null o=null f=-0.177
+[REGIME V2] max_trades=2 size_mult=0.671
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-21: regime=WEAK_BULL score=0.559 vix=17.530000686645508
+[BT] 2026-04-21: scanner mode=recovery_breakout returned 3 picks in 20491ms
+[BT]   NESTLEIND: TARGET_HIT netR%=-0.974 realizedR=-0.126
+[BT]   PNBHOUSING: TARGET_HIT netR%=0.622 realizedR=0.174
+[BT]   LICHSGFIN: STOPPED_OUT netR%=-5.627 realizedR=-1
+
+[BT] ─── DAY 2026-04-22 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.505 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=1 v=null o=null f=-0.32
+[REGIME V2] max_trades=2 size_mult=0.606
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-22: regime=WEAK_BULL score=0.505 vix=18.299999237060547
+[BT] 2026-04-22: scanner mode=recovery_breakout returned 3 picks in 21252ms
+[BT]   EXIDEIND: TARGET_HIT netR%=1.248 realizedR=0.312
+[BT]   ABB: TARGET_HIT netR%=0.37 realizedR=0.124
+[BT]   SJVN: TARGET_HIT netR%=0.523 realizedR=0.225
+
+[BT] ─── DAY 2026-04-23 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.196 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.729 v=null o=null f=-0.693
+[REGIME V2] max_trades=1 size_mult=0.235
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-23: regime=NEUTRAL score=0.196 vix=18.59000015258789
+[BT] 2026-04-23: scanner mode=nr7_compression returned 3 picks in 21143ms
+[BT]   DABUR: TIME_EXIT netR%=-4.272 realizedR=-0.804
+[BT]   PIDILITIND: STOPPED_OUT netR%=-3.311 realizedR=-1
+[BT]   PATANJALI: TIME_EXIT netR%=-2.909 realizedR=-0.706
+
+[BT] ─── DAY 2026-04-24 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.147 Label=NEUTRAL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.536 v=null o=null f=-0.5
+[REGIME V2] max_trades=1 size_mult=0.177
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-24: regime=NEUTRAL score=0.147 vix=19.709999084472656
+[BT] 2026-04-24: scanner mode=nr7_compression returned 3 picks in 24247ms
+[BT]   TORNTPHARM: TARGET_HIT netR%=-0.349 realizedR=-0.038
+[BT]   BAJFINANCE: TARGET_HIT netR%=0.72 realizedR=0.294
+[BT]   PNB: TARGET_HIT netR%=0.376 realizedR=0.194
+
+[BT] ─── DAY 2026-04-27 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.329 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.826 v=null o=null f=-0.5
+[REGIME V2] max_trades=2 size_mult=0.394
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-27: regime=WEAK_BULL score=0.329 vix=18.3799991607666
+[BT] 2026-04-27: scanner mode=recovery_breakout returned 3 picks in 22112ms
+[BT]   INDUSINDBK: TARGET_HIT netR%=1.04 realizedR=0.629
+[BT]   VBL: TARGET_HIT netR%=-0.752 realizedR=-0.092
+[BT]   SUNPHARMA: TARGET_HIT netR%=1.165 realizedR=0.316
+
+[BT] ─── DAY 2026-04-28 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.423 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.792 v=null o=null f=-0.192
+[REGIME V2] max_trades=2 size_mult=0.507
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-28: regime=WEAK_BULL score=0.423 vix=18.049999237060547
+[BT] 2026-04-28: scanner mode=recovery_breakout returned 3 picks in 21582ms
+[BT]   CROMPTON: TARGET_HIT netR%=1.179 realizedR=0.321
+[BT]   ONGC: TARGET_HIT netR%=-0.744 realizedR=-0.085
+[BT]   OIL: TARGET_HIT netR%=0.197 realizedR=0.101
+
+[BT] ─── DAY 2026-04-29 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.406 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.86 v=null o=null f=-0.351
+[REGIME V2] max_trades=2 size_mult=0.487
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-29: regime=WEAK_BULL score=0.406 vix=17.440000534057617
+[BT] 2026-04-29: scanner mode=recovery_breakout returned 3 picks in 22753ms
+[BT]   RBLBANK: TARGET_HIT netR%=0.186 realizedR=0.091
+[BT]   VEDL: STOPPED_OUT netR%=153.608 realizedR=1
+[BT]   CROMPTON: TARGET_HIT netR%=2.613 realizedR=0.765
+
+[BT] ─── DAY 2026-04-30 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.305 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.735 v=null o=null f=-0.411
+[REGIME V2] max_trades=2 size_mult=0.366
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-04-30: regime=WEAK_BULL score=0.305 vix=18.459999084472656
+[BT] 2026-04-30: scanner mode=recovery_breakout returned 3 picks in 20497ms
+[BT]   BAJAJ-AUTO: TARGET_HIT netR%=-2.248 realizedR=-0.411
+[BT]   CHOLAFIN: TARGET_HIT netR%=0.317 realizedR=0.111
+[BT]   GRASIM: TARGET_HIT netR%=-0.61 realizedR=-0.129
+
+[BT] ─── DAY 2026-05-04 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.381 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.909 v=null o=null f=-0.5
+[REGIME V2] max_trades=2 size_mult=0.457
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-05-04: regime=WEAK_BULL score=0.381 vix=18.299999237060547
+[BT] 2026-05-04: scanner mode=recovery_breakout returned 3 picks in 20628ms
+[BT]   LAURUSLABS: TARGET_HIT netR%=-0.378 realizedR=-0.031
+[BT]   CESC: STOPPED_OUT netR%=-5.096 realizedR=-1
+[BT]   ABFRL: TIME_EXIT netR%=1.533 realizedR=0.637
+
+[BT] ─── DAY 2026-05-05 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.893 Label=STRONG_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=0.862 v=null o=null f=0.945
+[REGIME V2] max_trades=3 size_mult=1
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-05-05: regime=STRONG_BULL score=0.893 vix=17.90999984741211
+[BT] 2026-05-05: scanner mode=momentum_leader returned 3 picks in 19086ms
+[BT]   LAURUSLABS: TARGET_HIT netR%=-0.95 realizedR=-0.166
+[BT]   ABCAPITAL: TARGET_HIT netR%=-0.78 realizedR=-0.109
+[BT]   MANAPPURAM: TARGET_HIT netR%=-0.11 realizedR=0.025
+
+[BT] ─── DAY 2026-05-06 ───
+[REGIME V2] ═══════════════════════════════════════
+[REGIME V2] Score=0.437 Label=WEAK_BULL Playbook=standard
+[REGIME V2] Inputs: s=null b=1 v=null o=null f=-0.5
+[REGIME V2] max_trades=2 size_mult=0.525
+[REGIME V2] ═══════════════════════════════════════
+[BT] 2026-05-06: regime=WEAK_BULL score=0.437 vix=16.68000030517578
+[BT] 2026-05-06: scanner mode=recovery_breakout returned 3 picks in 20073ms
+[BT]   SRF: NO_DATA netR%=? realizedR=?
+[BT]   PIDILITIND: NO_DATA netR%=? realizedR=?
+[BT]   ABFRL: NO_DATA netR%=? realizedR=?
+
+[BT] ════════════════════════════════════════
+[BT] BACKTEST COMPLETE
+[BT]   days_total=80
+[BT]   days_simulated=79
+[BT]   days_skipped_missing_data=1
+[BT]   days_skipped_vix_sitout=0
+[BT]   days_skipped_extreme_bear=0
+[BT]   trades_closed=118
+[BT]   hit_rate=57.63%
+[BT]   avg net return per trade=1.137%
+[BT] ════════════════════════════════════════
+[BT] summary persisted to backtest_runs
+nolojik@Vijeshs-MacBook-M4 backend % 
