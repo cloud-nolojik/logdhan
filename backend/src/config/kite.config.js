@@ -90,13 +90,18 @@ const kiteConfig = {
   // Market protection (%) — required by Kite for MARKET and SL-M orders
   // post SEBI retail-algo rules (effective 2026-04-01). Caps slippage from
   // the reference price; orders that would fill outside this band are rejected.
-  // Set to 9 (not 10) — at 10%, Kite computes limit = prev_close × 1.10, which
-  // after tick-snap rounds UP to exactly the upper circuit (also 10%), and NSE
-  // rejects ("outside circuit limits"). GRASIM: 3154.5 × 1.10 = 3469.95 → snapped
-  // to ₹3470.00, rejected (circuit was ₹3469.90). 9% stays comfortably below the
-  // 10% circuit band regardless of tick rounding while still accommodating large
-  // pre-open gaps. Kite web UI uses 1% as its default; we override for algo AMOs.
-  DEFAULT_MARKET_PROTECTION: 9,
+  //
+  // 1 (one percent) — Zerodha's web-UI default. PROVEN safe across the F&O
+  // universe. The earlier value of 9 caused every MIS MARKET BUY to fail on
+  // 2026-05-25: Kite computes limit = LTP × (1 + mp/100), and a 9% offset
+  // routinely lands OUTSIDE the day's upper circuit. Example:
+  //   CANBK LTP=₹131.50 × 1.09 = ₹143.34, but upper circuit was ₹141.05
+  //                                       → "outside circuit limits" REJECT
+  //   LICI  LTP=₹846.00 × 1.09 = ₹922.14, but upper circuit was ₹894.20 → REJECT
+  //   BPCL  LTP=₹307.75 × 1.09 = ₹335.45, but upper circuit was ₹325.15 → REJECT
+  // 1% keeps the protected limit comfortably inside any daily circuit (5-20%)
+  // while still giving the executing engine slippage tolerance on a gap fill.
+  DEFAULT_MARKET_PROTECTION: 1,
 
   // Market protection for SL-M orders specifically. Must be much tighter than
   // AMO MARKET because NSE error 16448 fires when the computed limit price

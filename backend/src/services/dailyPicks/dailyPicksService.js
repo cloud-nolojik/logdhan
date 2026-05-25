@@ -1243,24 +1243,45 @@ export async function executeShortlistOrbEntry({ dryRun = false } = {}) {
   }
 
   // ── Place SL-M STOP entry orders ──
+  // FIXED 2026-05-25: previously called kiteOrderService.getFunds() — which
+  // does NOT exist on the service. The real method is getAvailableBalance(),
+  // returning { total, available, usable, usableSwing, usableIntraday, ... }.
+  // The typo caught a TypeError silently (stderr only) and returned early
+  // with picks_placed=0 — the function never reached the placeOrder loop.
+  // Result on 2026-05-25: SHORTLIST selected LICI/DIVISLAB/TORNTPHARM but
+  // placed zero orders. usableIntraday is the MIS-leveraged pool net of
+  // pending orders — exactly the right number for an intraday SL-M entry.
   let balance = null;
   if (!dryRun && isKiteIntegrationEnabled()) {
     try {
-      balance = await kiteOrderService.getFunds();
+      balance = await kiteOrderService.getAvailableBalance();
     } catch (e) {
-      console.error(`${LOG} ${tag} getFunds failed: ${e.message} — aborting entry placement`);
+      console.error(`${LOG} ${tag} getAvailableBalance failed: ${e.message} — aborting entry placement`);
       doc.markModified('candidates_shortlist');
       await doc.save();
-      return { success: false, picks_placed: 0, error: 'getFunds_failed', duration_ms: Date.now() - t0 };
+      return {
+        success: false, picks_placed: 0,
+        evaluated: evaluated.length,
+        passed: evaluated.filter(e => e.passes).length,
+        selected: selected.length,
+        error: 'balance_fetch_failed', duration_ms: Date.now() - t0,
+      };
     }
   }
-  const totalCapital = balance?.available?.cash ?? balance?.available ?? null;
+  const totalCapital = balance?.usableIntraday ?? balance?.usable ?? balance?.available ?? null;
   if (!dryRun && (!totalCapital || totalCapital <= 0)) {
-    console.error(`${LOG} ${tag} no available capital — aborting`);
+    console.error(`${LOG} ${tag} no available intraday capital (usableIntraday=${balance?.usableIntraday}) — aborting`);
     doc.markModified('candidates_shortlist');
     await doc.save();
-    return { success: false, picks_placed: 0, error: 'no_capital', duration_ms: Date.now() - t0 };
+    return {
+      success: false, picks_placed: 0,
+      evaluated: evaluated.length,
+      passed: evaluated.filter(e => e.passes).length,
+      selected: selected.length,
+      error: 'no_capital', duration_ms: Date.now() - t0,
+    };
   }
+  console.log(`${LOG} ${tag} intraday capital available: ₹${totalCapital?.toFixed?.(0) ?? totalCapital}`);
 
   const ordersPlaced = [];
   for (const sel of selected) {
@@ -4907,9 +4928,11 @@ async function monitorDailyPickOrders(options = {}) {
                   const shouldMove = pick.direction === 'LONG' ? newStop > currentStop : newStop < currentStop;
                   if (shouldMove) {
                     try {
+                      // SL-M = trigger only (see 2026-05-25 incident). Passing
+                      // `price` converts to SL (limit) and the spread blows past
+                      // NSE's permissible-range rule → every modify rejects.
                       await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
                         trigger_price: newStop,
-                        price: snapToNSETick(pick.direction === 'LONG' ? newStop * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : newStop * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, pick.direction === 'LONG' ? 'floor' : 'ceil'),
                       });
                       if (!pick.trailing_history) pick.trailing_history = [];
                       pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: newStop, price_at_trail: currentPrice });
@@ -4944,9 +4967,9 @@ async function monitorDailyPickOrders(options = {}) {
           if (shouldMove) {
             const snappedBE = snapToNSETick(beStop, null, isBullish ? 'floor' : 'ceil');
             try {
+              // SL-M modify: trigger only (see 2026-05-25 incident).
               await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
                 trigger_price: snappedBE,
-                price: snapToNSETick(isBullish ? snappedBE * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : snappedBE * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, isBullish ? 'floor' : 'ceil'),
               });
               if (!pick.trailing_history) pick.trailing_history = [];
               pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: snappedBE, price_at_trail: currentPrice, reason: 'breakeven_1R' });
@@ -4994,9 +5017,9 @@ async function monitorDailyPickOrders(options = {}) {
         if (trail.shouldTrail) {
           const snappedTrail = snapToNSETick(trail.newStop, null, isBullish ? 'floor' : 'ceil');
           try {
+            // SL-M modify: trigger only (see 2026-05-25 incident).
             await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
               trigger_price: snappedTrail,
-              price: snapToNSETick(isBullish ? snappedTrail * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : snappedTrail * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, isBullish ? 'floor' : 'ceil'),
             });
             if (!pick.trailing_history) pick.trailing_history = [];
             pick.trailing_history.push({ timestamp: new Date(), old_stop: currentStop, new_stop: snappedTrail, price_at_trail: currentPrice, phase: trail.phase, method: trail.method });
@@ -5304,9 +5327,9 @@ async function monitorDailyPickOrders(options = {}) {
                 }
 
                 try {
+                  // SL-M modify: trigger only (see 2026-05-25 incident).
                   await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
                     trigger_price: snappedCandelStop,
-                    price: snapToNSETick(isBullish ? snappedCandelStop * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : snappedCandelStop * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, isBullish ? 'floor' : 'ceil'),
                   });
                   if (!pick.trailing_history) pick.trailing_history = [];
                   pick.trailing_history.push({
@@ -5552,9 +5575,9 @@ async function tightenStops(options = {}) {
 
       if (shouldTighten) {
         try {
+          // SL-M modify: trigger only (see 2026-05-25 incident).
           await kiteOrderService.modifyOrder(pick.kite.stop_order_id, {
             trigger_price: newStop,
-            price: snapToNSETick(pick.direction === 'LONG' ? newStop * (1 - kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100) : newStop * (1 + kiteConfig.DEFAULT_SLM_MARKET_PROTECTION / 100), null, pick.direction === 'LONG' ? 'floor' : 'ceil'),
           });
 
           const trailEntry = {

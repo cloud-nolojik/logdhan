@@ -217,6 +217,45 @@ describe('selectTopOrbEntries — ranking + slice', () => {
   });
 });
 
+// ─── regression guard: kiteOrderService API surface ─────────────────────────
+//
+// 2026-05-25 incident: executeShortlistOrbEntry called kiteOrderService.getFunds()
+// — a method that does not exist. The try-catch around it silently absorbed the
+// TypeError and returned early with picks_placed=0, never reaching the order
+// loop. SHORTLIST selected LICI/DIVISLAB/TORNTPHARM but placed zero orders.
+//
+// The dryRun=true unit-test path skips the Kite block, so the typo was invisible
+// to existing tests. This regression guard asserts the exact methods we depend
+// on actually exist on the service module — a one-call import check.
+
+describe('kiteOrderService API surface — regression guard for 2026-05-25 typo', () => {
+  it('getAvailableBalance is a function', async () => {
+    const mod = await import('../services/kiteOrder.service.js');
+    const svc = mod.default;
+    expect(typeof svc.getAvailableBalance).toBe('function');
+  });
+
+  it('placeOrder is a function', async () => {
+    const mod = await import('../services/kiteOrder.service.js');
+    const svc = mod.default;
+    expect(typeof svc.placeOrder).toBe('function');
+  });
+
+  it('cancelOrder, modifyOrder, getOrderDetails are functions', async () => {
+    const mod = await import('../services/kiteOrder.service.js');
+    const svc = mod.default;
+    expect(typeof svc.cancelOrder).toBe('function');
+    expect(typeof svc.modifyOrder).toBe('function');
+    expect(typeof svc.getOrderDetails).toBe('function');
+  });
+
+  it('getFunds() does NOT exist (legacy typo — must stay removed)', async () => {
+    const mod = await import('../services/kiteOrder.service.js');
+    const svc = mod.default;
+    expect(svc.getFunds).toBeUndefined();
+  });
+});
+
 // ─── integration: candidate → levels → ranking (end-to-end of pure path) ─────
 
 describe('end-to-end pure path: 3 candidates → top 2 selected', () => {

@@ -282,9 +282,24 @@ class OrbJob {
         timezone: 'Asia/Kolkata',
       });
 
-      // Every 1 min, 9:00–11:59 IST — breakout check
-      // Internal gate in checkBreakouts() skips calls before 9:30 or after 11:00.
-      await this.agenda.every('*/1 9-11 * * 1-5', 'orb-check-breakout', {}, {
+      // Every 1 min, 9:00–14:59 IST — breakout check
+      // Internal gate in checkBreakouts() skips calls before 9:30 or after 14:00.
+      //
+      // RE-ENABLED 2026-05-25 (evening): the ORB pre-open IEP gap-filter picks
+      // outperformed the scanner.py SHORTLIST on day 1.
+      //
+      // Window extended 2026-05-25 (evening) from 9:30-11:00 to 9:30-14:00:
+      // afternoon breakouts often happen on trend days after a lunch-time
+      // consolidation. Capped at 14:00 (not 15:00) so any entry has at least
+      // 75 minutes to work before the 15:15 force-exit. Push to 15:00 later
+      // if data shows we're missing clean late-day setups.
+      //
+      // All operational bugs from today are now fixed:
+      //   • market_protection 9 → 1 (kite.config.js)
+      //   • REJECTED entry no longer mis-read as filled (orbService.js)
+      //   • SL-M modify no longer passes `price` (orbService.js)
+      //   • 10:30 TIME EXIT disabled by default (orbService.js)
+      await this.agenda.every('*/1 9-14 * * 1-5', 'orb-check-breakout', {}, {
         timezone: 'Asia/Kolkata',
       });
 
@@ -300,12 +315,13 @@ class OrbJob {
       });
 
       console.log(`${LOG} ═══════════════════════════════════════`);
-      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — ORB PATH:`);
-      console.log(`${LOG}   09:08 — pre-open universe (NSE IEP, gap filter, top 15)`);
-      console.log(`${LOG}   09:30 — record 15-min opening range (OR high/low)`);
-      console.log(`${LOG}   09:00–11:59 — breakout check every 1 min (active 9:30–11:00)`);
-      console.log(`${LOG}   09:00–14:59 — position monitor every 5 min`);
-      console.log(`${LOG}   15:15 — force-exit (5 min before Zerodha auto-square)`);
+      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — ORB PATH (post 2026-05-25):`);
+      console.log(`${LOG}   09:08       — pre-open universe (NSE IEP, gap filter, top 15)`);
+      console.log(`${LOG}   09:30       — record 15-min opening range (OR high/low)`);
+      console.log(`${LOG}   09:00–14:59 — breakout check every 1 min (active 9:30–14:00)`);
+      console.log(`${LOG}   09:00–14:59 — position monitor every 5 min (BE trail at +1R, candle-structure tighten)`);
+      console.log(`${LOG}   15:15       — force-exit (5 min before Zerodha auto-square)`);
+      console.log(`${LOG}   [disabled]  — 10:30 TIME EXIT (set ORB_TIME_EXIT_ENABLED=true to re-enable)`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);

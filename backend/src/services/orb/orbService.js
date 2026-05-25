@@ -20,18 +20,40 @@ import { analyzeIntradayStructure, checkSidewaysExit } from '../dailyPicks/tradi
 const LOG = '[ORB]';
 
 // ── Strategy constants ──────────────────────────────────────────────────────
-const MAX_ENTRIES           = 3;      // max positions per day
-const MAX_CANDIDATES        = 15;     // top N from pre-open list
+const MAX_ENTRIES           = 3;      // max positions per day (LONG + SHORT combined)
+const MAX_CANDIDATES        = 15;     // total candidates across both directions
+const MAX_LONG_CANDIDATES   = 8;      // top gap-UP for LONG breakouts (≥+1.5%)
+const MAX_SHORT_CANDIDATES  = 7;      // top gap-DOWN for SHORT breakdowns (≤-1.5%)
 const MIN_PRE_OPEN_PCT      = 1.5;    // min gap % to watch
 const MAX_PRE_OPEN_PCT      = 8.0;    // max gap % (exhausted move)
 const ORB_CAPITAL_PCT       = 0.90;   // use at most 90% of whatever is available at entry time
 const MIN_CAPITAL_PER_TRADE = 5000;   // skip entry if budget too thin
 const TARGET_RANGE_MULT     = 1.5;    // target = OR High + 1.5 × OR Range
-const BREAKOUT_END_HOUR     = 11;
-const BREAKOUT_END_MIN      = 0;      // no new entries after 11:00 AM
+// Entry window extended 2026-05-25 (evening): was 9:30-11:00, now 9:30-14:00.
+// Rationale: today (May 25) CANBK only broke out cleanly past 10:30 — at the
+// OLD 11:00 cutoff we'd have missed it. With the candle-structure tighten +
+// 15:15 force-exit handling risk, a longer window catches afternoon breakouts
+// (often common on trend days post-lunch consolidation).
+//
+// Cap at 14:00 (not 15:00): a 14:00 entry has 75 min to work before the
+// 15:15 force-exit — enough time for a breakout to either run to target or
+// fail. Entries after 14:00 have too little runway (e.g., a 14:55 entry has
+// only 20 min). Move to 15:00 if a week of data shows clean late-day setups
+// we're missing.
+const BREAKOUT_END_HOUR     = 14;
+const BREAKOUT_END_MIN      = 0;      // no new entries after 14:00 (gives 75min runway before 15:15 force-exit)
 const MAX_OR_RANGE_PCT      = 2.5;    // reject candidates where OR range > 2.5% of IEP
+
+// ── 10:30 TIME EXIT — DISABLED 2026-05-25 (evening) ───────────────────────
+// Hardcoded 10:30 AM force-exit was killing winners. On 2026-05-25:
+//   CANBK time-exited at +0.82% (₹132.58); ran to +1.6% (₹134.09 high) later.
+//   INOXWIND time-exited at +0.65% (₹97.94); was still breaking out.
+// Winners now ride to either target hit, candle-structure tighten exit, or
+// the 15:15 force-exit. Losers still get caught by SL (which trail logic
+// tightens on bearish reversal candles via analyzeIntradayStructure).
+// To re-enable for testing, set ORB_TIME_EXIT_ENABLED=true in env.
 const TIME_EXIT_HOUR        = 10;
-const TIME_EXIT_MIN         = 30;     // exit stalled positions at 10:30 AM
+const TIME_EXIT_MIN         = 30;     // (kept as constants — gated by env at usage site)
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function snapToNSETick(price, tick = 0.05, mode = 'round') {
@@ -135,42 +157,70 @@ export async function fetchPreOpenUniverse() {
     };
   }).filter(c => c.symbol && c.iep > 0);
 
-  // Bucket for diagnostics
-  const belowFloor  = mapped.filter(c => c.preOpenPct > 0    && c.preOpenPct < MIN_PRE_OPEN_PCT);
-  const inWindow    = mapped.filter(c => c.preOpenPct >= MIN_PRE_OPEN_PCT && c.preOpenPct <= MAX_PRE_OPEN_PCT);
-  const aboveCap    = mapped.filter(c => c.preOpenPct > MAX_PRE_OPEN_PCT);
-  const negative    = mapped.filter(c => c.preOpenPct <= 0);
+  // Bucket for diagnostics — direction-aware (added 2026-05-25 evening)
+  const gapUpWindow    = mapped.filter(c => c.preOpenPct >= MIN_PRE_OPEN_PCT && c.preOpenPct <= MAX_PRE_OPEN_PCT);
+  const gapDownWindow  = mapped.filter(c => c.preOpenPct <= -MIN_PRE_OPEN_PCT && c.preOpenPct >= -MAX_PRE_OPEN_PCT);
+  const upBelowFloor   = mapped.filter(c => c.preOpenPct > 0  && c.preOpenPct < MIN_PRE_OPEN_PCT);
+  const downBelowFloor = mapped.filter(c => c.preOpenPct < 0  && c.preOpenPct > -MIN_PRE_OPEN_PCT);
+  const upAboveCap     = mapped.filter(c => c.preOpenPct > MAX_PRE_OPEN_PCT);
+  const downBelowCap   = mapped.filter(c => c.preOpenPct < -MAX_PRE_OPEN_PCT);
+  const flat           = mapped.filter(c => c.preOpenPct === 0);
 
   console.log(`${LOG} [PHASE1] Gap distribution:`);
-  console.log(`${LOG} [PHASE1]   gapping up (≥${MIN_PRE_OPEN_PCT}% to ≤${MAX_PRE_OPEN_PCT}%): ${inWindow.length}`);
-  console.log(`${LOG} [PHASE1]   near-miss  (>0% to <${MIN_PRE_OPEN_PCT}%):              ${belowFloor.length}`);
-  console.log(`${LOG} [PHASE1]   exhausted  (>${MAX_PRE_OPEN_PCT}%):                     ${aboveCap.length}`);
-  console.log(`${LOG} [PHASE1]   flat/down  (≤0%):                                       ${negative.length}`);
+  console.log(`${LOG} [PHASE1]   gap UP   (LONG candidates, ≥+${MIN_PRE_OPEN_PCT}% to ≤+${MAX_PRE_OPEN_PCT}%): ${gapUpWindow.length}`);
+  console.log(`${LOG} [PHASE1]   gap DOWN (SHORT candidates, ≤-${MIN_PRE_OPEN_PCT}% to ≥-${MAX_PRE_OPEN_PCT}%): ${gapDownWindow.length}`);
+  console.log(`${LOG} [PHASE1]   up near-miss   (>0% to <+${MIN_PRE_OPEN_PCT}%):  ${upBelowFloor.length}`);
+  console.log(`${LOG} [PHASE1]   down near-miss (<0% to >-${MIN_PRE_OPEN_PCT}%):  ${downBelowFloor.length}`);
+  console.log(`${LOG} [PHASE1]   up exhausted   (>+${MAX_PRE_OPEN_PCT}%):         ${upAboveCap.length}`);
+  console.log(`${LOG} [PHASE1]   down exhausted (<-${MAX_PRE_OPEN_PCT}%):         ${downBelowCap.length}`);
+  console.log(`${LOG} [PHASE1]   flat (0%):                                       ${flat.length}`);
 
-  // Log near-misses so we can see what just missed the cut
-  if (belowFloor.length) {
-    const top5NearMiss = belowFloor.sort((a, b) => b.preOpenPct - a.preOpenPct).slice(0, 5);
-    console.log(`${LOG} [PHASE1] Near-miss top-5 (just below ${MIN_PRE_OPEN_PCT}% floor):`);
-    top5NearMiss.forEach(c =>
-      console.log(`${LOG} [PHASE1]   ${c.symbol.padEnd(14)} gap=${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}  prev=₹${c.prevClose}`)
-    );
+  // Near-miss diagnostics for both sides
+  if (upBelowFloor.length) {
+    const top5 = upBelowFloor.sort((a, b) => b.preOpenPct - a.preOpenPct).slice(0, 5);
+    console.log(`${LOG} [PHASE1] UP near-miss top-5 (just below +${MIN_PRE_OPEN_PCT}% floor):`);
+    top5.forEach(c => console.log(`${LOG} [PHASE1]   ${c.symbol.padEnd(14)} gap=+${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}`));
+  }
+  if (downBelowFloor.length) {
+    const top5 = downBelowFloor.sort((a, b) => a.preOpenPct - b.preOpenPct).slice(0, 5);
+    console.log(`${LOG} [PHASE1] DOWN near-miss top-5 (just above -${MIN_PRE_OPEN_PCT}% floor):`);
+    top5.forEach(c => console.log(`${LOG} [PHASE1]   ${c.symbol.padEnd(14)} gap=${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}`));
+  }
+  if (upAboveCap.length) {
+    console.log(`${LOG} [PHASE1] UP exhausted (>+${MAX_PRE_OPEN_PCT}%): ${upAboveCap.map(c => `${c.symbol}(+${c.preOpenPct.toFixed(1)}%)`).join(', ')}`);
+  }
+  if (downBelowCap.length) {
+    console.log(`${LOG} [PHASE1] DOWN exhausted (<-${MAX_PRE_OPEN_PCT}%): ${downBelowCap.map(c => `${c.symbol}(${c.preOpenPct.toFixed(1)}%)`).join(', ')}`);
   }
 
-  if (aboveCap.length) {
-    console.log(`${LOG} [PHASE1] Exhausted/excluded (>${MAX_PRE_OPEN_PCT}%): ${aboveCap.map(c => `${c.symbol}(+${c.preOpenPct.toFixed(1)}%)`).join(', ')}`);
-  }
-
-  const candidates = inWindow
+  // Build final universe: top gap-UP tagged LONG + top gap-DOWN tagged SHORT
+  const longCands = gapUpWindow
     .sort((a, b) => b.preOpenPct - a.preOpenPct)
-    .slice(0, MAX_CANDIDATES);
+    .slice(0, MAX_LONG_CANDIDATES)
+    .map(c => ({ ...c, direction: 'LONG' }));
 
-  console.log(`${LOG} [PHASE1] Final candidate list (top ${MAX_CANDIDATES} by gap):`);
-  if (candidates.length) {
-    candidates.forEach((c, i) =>
-      console.log(`${LOG} [PHASE1]   #${String(i + 1).padStart(2)}  ${c.symbol.padEnd(14)} gap=+${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}  prev=₹${c.prevClose}`)
+  const shortCands = gapDownWindow
+    .sort((a, b) => a.preOpenPct - b.preOpenPct)   // most-negative first
+    .slice(0, MAX_SHORT_CANDIDATES)
+    .map(c => ({ ...c, direction: 'SHORT' }));
+
+  const candidates = [...longCands, ...shortCands];
+
+  console.log(`${LOG} [PHASE1] Final candidate list — ${longCands.length} LONG + ${shortCands.length} SHORT = ${candidates.length} total (cap ${MAX_CANDIDATES}):`);
+  if (longCands.length) {
+    console.log(`${LOG} [PHASE1]   LONG candidates (gap UP):`);
+    longCands.forEach((c, i) =>
+      console.log(`${LOG} [PHASE1]   #${String(i + 1).padStart(2)} L ${c.symbol.padEnd(14)} gap=+${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}  prev=₹${c.prevClose}`)
     );
-  } else {
-    console.warn(`${LOG} [PHASE1] ⚠️  No candidates passed the gap filter — ORB will be idle today`);
+  }
+  if (shortCands.length) {
+    console.log(`${LOG} [PHASE1]   SHORT candidates (gap DOWN):`);
+    shortCands.forEach((c, i) =>
+      console.log(`${LOG} [PHASE1]   #${String(i + 1).padStart(2)} S ${c.symbol.padEnd(14)} gap=${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}  prev=₹${c.prevClose}`)
+    );
+  }
+  if (!candidates.length) {
+    console.warn(`${LOG} [PHASE1] ⚠️  No candidates passed the gap filter (either direction) — ORB will be idle today`);
   }
 
   // Upsert today's ORB document
@@ -281,13 +331,21 @@ export async function recordOpeningRanges() {
     candidate.status  = 'RANGE_SET';
     rangesSet++;
 
-    const impliedTarget = snapToNSETick(bar.high + TARGET_RANGE_MULT * orRange, 0.05, 'ceil');
-    const impliedStop   = snapToNSETick(bar.low, 0.05, 'floor');
+    // Direction-aware implied levels:
+    //   LONG: entry trigger = break above OR_High, stop = OR_Low, target = OR_High + 1.5×Range
+    //   SHORT: entry trigger = break below OR_Low, stop = OR_High, target = OR_Low - 1.5×Range
+    const isLong = (candidate.direction || 'LONG') === 'LONG';
+    const impliedStop   = isLong
+      ? snapToNSETick(bar.low,  0.05, 'floor')
+      : snapToNSETick(bar.high, 0.05, 'ceil');
+    const impliedTarget = isLong
+      ? snapToNSETick(bar.high + TARGET_RANGE_MULT * orRange, 0.05, 'ceil')
+      : snapToNSETick(bar.low  - TARGET_RANGE_MULT * orRange, 0.05, 'floor');
     console.log(
-      `${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ✅ RANGE_SET — ` +
+      `${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ✅ RANGE_SET [${isLong ? 'LONG' : 'SHORT'}] — ` +
       `OR High=₹${bar.high}  Low=₹${bar.low}  Range=₹${orRange}  ` +
       `implied stop=₹${impliedStop}  implied target=₹${impliedTarget}  ` +
-      `gap was +${candidate.preOpenPct.toFixed(2)}%`
+      `gap was ${candidate.preOpenPct >= 0 ? '+' : ''}${candidate.preOpenPct.toFixed(2)}%`
     );
   }
 
@@ -379,19 +437,29 @@ export async function checkBreakouts() {
       continue;
     }
 
-    const aboveOR   = ltp > candidate.orHigh;
-    const gapToOR   = parseFloat((candidate.orHigh - ltp).toFixed(2));
-    const gapToPct  = parseFloat(((candidate.orHigh - ltp) / candidate.orHigh * 100).toFixed(2));
+    // Direction-aware breakout test:
+    //   LONG  → LTP > OR_High  (price broke ABOVE the opening range)
+    //   SHORT → LTP < OR_Low   (price broke BELOW the opening range)
+    const isLong       = (candidate.direction || 'LONG') === 'LONG';
+    const triggered    = isLong ? (ltp > candidate.orHigh) : (ltp < candidate.orLow);
+    const triggerLevel = isLong ? candidate.orHigh : candidate.orLow;
+    const distance     = parseFloat((ltp - triggerLevel).toFixed(2));
+    const distancePct  = parseFloat((Math.abs(ltp - triggerLevel) / triggerLevel * 100).toFixed(2));
+    const dirTag       = isLong ? 'L' : 'S';
 
     console.log(
-      `${LOG} [BREAKOUT]   ${candidate.symbol.padEnd(14)} ` +
+      `${LOG} [BREAKOUT]   ${dirTag} ${candidate.symbol.padEnd(14)} ` +
       `LTP=₹${ltp}  OR_High=₹${candidate.orHigh}  OR_Low=₹${candidate.orLow}  ` +
-      (aboveOR
-        ? `✅ BREAKOUT (above by ₹${Math.abs(gapToOR)})`
-        : `⬜ below OR (₹${gapToOR} = ${gapToPct}% away)`)
+      (triggered
+        ? (isLong
+            ? `✅ BREAKOUT ABOVE OR_High (by ₹${Math.abs(distance)})`
+            : `✅ BREAKDOWN BELOW OR_Low (by ₹${Math.abs(distance)})`)
+        : (isLong
+            ? `⬜ below OR_High (₹${Math.abs(distance)} = ${distancePct}% away)`
+            : `⬜ above OR_Low (₹${Math.abs(distance)} = ${distancePct}% away)`))
     );
 
-    if (aboveOR) {
+    if (triggered) {
       await enterTrade(doc, candidate, ltp, capitalPerTrade);
       entered++;
     }
@@ -404,13 +472,28 @@ export async function checkBreakouts() {
 
 // ── Enter a breakout trade ─────────────────────────────────────────────────
 async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
-  const qty    = Math.max(1, Math.floor(capitalPerTrade / ltp));
-  const target = snapToNSETick(candidate.orHigh + TARGET_RANGE_MULT * candidate.orRange, 0.05, 'ceil');
-  let   stop   = snapToNSETick(candidate.orLow, 0.05, 'floor');
+  // Direction-aware level computation:
+  //   LONG: entry MARKET BUY, stop = OR_Low (snap floor), target = OR_High + 1.5×Range (snap ceil)
+  //   SHORT: entry MARKET SELL, stop = OR_High (snap ceil), target = OR_Low - 1.5×Range (snap floor)
+  const isLong      = (candidate.direction || 'LONG') === 'LONG';
+  const entrySide   = isLong ? 'BUY'  : 'SELL';
+  const exitSide    = isLong ? 'SELL' : 'BUY';
+  const dirTag      = isLong ? 'LONG' : 'SHORT';
 
-  console.log(`${LOG} [ENTER] ─── ${candidate.symbol} ───────────────────────`);
+  const qty    = Math.max(1, Math.floor(capitalPerTrade / ltp));
+  const target = isLong
+    ? snapToNSETick(candidate.orHigh + TARGET_RANGE_MULT * candidate.orRange, 0.05, 'ceil')
+    : snapToNSETick(candidate.orLow  - TARGET_RANGE_MULT * candidate.orRange, 0.05, 'floor');
+  let   stop   = isLong
+    ? snapToNSETick(candidate.orLow,  0.05, 'floor')
+    : snapToNSETick(candidate.orHigh, 0.05, 'ceil');
+
+  // R:R sign is the same for both: |target - ltp| / |ltp - stop|
+  const rr = (Math.abs(target - ltp) / Math.abs(ltp - stop)).toFixed(2);
+
+  console.log(`${LOG} [ENTER] ─── ${candidate.symbol} [${dirTag}] ───────────────────────`);
   console.log(`${LOG} [ENTER] ${candidate.symbol}: capital=₹${capitalPerTrade}  LTP≈₹${ltp}  qty=${qty}`);
-  console.log(`${LOG} [ENTER] ${candidate.symbol}: stop=₹${stop} (OR Low)  target=₹${target} (OR High + ${TARGET_RANGE_MULT}×Range)  R:R=${((target - ltp) / (ltp - stop)).toFixed(2)}`);
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: stop=₹${stop} (OR ${isLong ? 'Low' : 'High'})  target=₹${target} (OR ${isLong ? 'High' : 'Low'} ${isLong ? '+' : '-'} ${TARGET_RANGE_MULT}×Range)  R:R=${rr}`);
 
   // ── Step 1: Market entry ──────────────────────────────────────────────────
   let entryOrderId, entryPrice;
@@ -418,7 +501,7 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
     const res = await kiteOrderService.placeOrder({
       tradingsymbol:    candidate.symbol,
       exchange:         'NSE',
-      transaction_type: 'BUY',
+      transaction_type: entrySide,
       order_type:       'MARKET',
       product:          'MIS',
       quantity:         qty,
@@ -428,7 +511,7 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
     });
     if (!res.success) throw new Error(`placeOrder returned success=false`);
     entryOrderId = res.orderId;
-    console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ entry order placed — orderId=${entryOrderId}`);
+    console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ ${entrySide} entry order placed — orderId=${entryOrderId}`);
   } catch (err) {
     console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ entry order FAILED:`, err.message);
     candidate.status     = 'SKIPPED';
@@ -439,13 +522,33 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
   // Wait for fill then read average price
   console.log(`${LOG} [ENTER] ${candidate.symbol}: waiting 2s for fill confirmation...`);
   await delay(2000);
+  let fillStatus = null;
+  let filledQty = 0;
   try {
     const ord  = await kiteOrderService.getOrderDetails(entryOrderId);
+    fillStatus = ord?.status;
+    filledQty  = Number(ord?.filled_quantity || 0);
     entryPrice = ord?.average_price || ltp;
-    console.log(`${LOG} [ENTER] ${candidate.symbol}: fill confirmed — avg_price=₹${entryPrice}  status=${ord?.status}  filled_qty=${ord?.filled_quantity}`);
+    console.log(`${LOG} [ENTER] ${candidate.symbol}: fill check — avg_price=₹${entryPrice}  status=${fillStatus}  filled_qty=${filledQty}`);
   } catch (err) {
     entryPrice = ltp;
     console.warn(`${LOG} [ENTER] ${candidate.symbol}: couldn't read fill details (${err.message}) — using LTP ₹${ltp} as entry price`);
+  }
+
+  // ── REJECTION GUARD (added 2026-05-25) ─────────────────────────────────────
+  // If Kite rejected the entry (or it didn't fill any quantity), DO NOT proceed
+  // to SL/target placement. Without this guard, on 2026-05-25 we placed phantom
+  // SL-M SELL + target LIMIT SELL orders against positions that never existed
+  // (entries had been REJECTED for circuit-limit breach), which then opened
+  // naked SHORTs when the SL trailed and triggered.
+  const isFilled = (fillStatus === 'COMPLETE' || fillStatus === 'OPEN') && filledQty >= qty;
+  const isRejected = fillStatus === 'REJECTED' || fillStatus === 'CANCELLED' || filledQty === 0;
+  if (isRejected || !isFilled) {
+    console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ ENTRY NOT FILLED — status=${fillStatus} filled=${filledQty}/${qty} — aborting SL/target placement to prevent phantom shorts`);
+    candidate.status       = 'SKIPPED';
+    candidate.skipReason   = `entry_${(fillStatus || 'unknown').toLowerCase()}_filled_${filledQty}_of_${qty}`;
+    candidate.entryOrderId = entryOrderId;  // keep for audit
+    return;
   }
 
   candidate.entryOrderId = entryOrderId;
@@ -457,15 +560,17 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
   candidate.status       = 'ENTERED';
   doc.entriesCount       = (doc.entriesCount || 0) + 1;
 
-  // ── Step 2: SL-M — retry with correct tick on rejection ──────────────────
+  // ── Step 2: SL-M — direction-aware exit-side, retry on tick rejection ────
+  // LONG  position → SL-M is a SELL (exit by selling when price drops to stop)
+  // SHORT position → SL-M is a BUY  (exit by buying-to-cover when price rises to stop)
   let slOrderId;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    console.log(`${LOG} [ENTER] ${candidate.symbol}: SL-M attempt ${attempt} — trigger=₹${stop}  qty=${qty}`);
+    console.log(`${LOG} [ENTER] ${candidate.symbol}: SL-M ${exitSide} attempt ${attempt} — trigger=₹${stop}  qty=${qty}`);
     try {
       const slRes = await kiteOrderService.placeOrder({
         tradingsymbol:    candidate.symbol,
         exchange:         'NSE',
-        transaction_type: 'SELL',
+        transaction_type: exitSide,
         order_type:       'SL-M',
         trigger_price:    stop,
         product:          'MIS',
@@ -476,13 +581,15 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
       });
       if (slRes.success) {
         slOrderId = slRes.orderId;
-        console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ SL-M placed — orderId=${slOrderId}  trigger=₹${stop}`);
+        console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ SL-M ${exitSide} placed — orderId=${slOrderId}  trigger=₹${stop}`);
         break;
       }
     } catch (err) {
       const tick = parseKiteTickError(err.message);
       if (tick && attempt === 1) {
-        stop = snapToNSETick(candidate.orLow, tick, 'floor');
+        stop = isLong
+          ? snapToNSETick(candidate.orLow,  tick, 'floor')
+          : snapToNSETick(candidate.orHigh, tick, 'ceil');
         candidate.stopPrice = stop;
         console.warn(`${LOG} [ENTER] ${candidate.symbol}: tick error (tick=${tick}) → re-snapped stop=₹${stop}  retrying...`);
       } else {
@@ -492,14 +599,14 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
   }
   candidate.stopOrderId = slOrderId;
 
-  // ── SL failure safety ────────────────────────────────────────────────────
+  // ── SL failure safety — emergency exit (also direction-aware) ────────────
   if (!slOrderId) {
-    console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌❌ SL-M FAILED after 2 attempts — EMERGENCY EXIT`);
+    console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌❌ SL-M FAILED after 2 attempts — EMERGENCY ${exitSide}`);
     try {
       const exitRes = await kiteOrderService.placeOrder({
         tradingsymbol:    candidate.symbol,
         exchange:         'NSE',
-        transaction_type: 'SELL',
+        transaction_type: exitSide,
         order_type:       'MARKET',
         product:          'MIS',
         quantity:         qty,
@@ -507,7 +614,7 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
         orderType:        'ORB_EMERGENCY_EXIT',
         source:           'ORB',
       });
-      console.log(`${LOG} [ENTER] ${candidate.symbol}: emergency exit order placed — orderId=${exitRes?.orderId}`);
+      console.log(`${LOG} [ENTER] ${candidate.symbol}: emergency ${exitSide} placed — orderId=${exitRes?.orderId}`);
     } catch (exitErr) {
       console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌❌❌ EMERGENCY EXIT ALSO FAILED — MANUAL ACTION REQUIRED:`, exitErr.message);
     }
@@ -518,14 +625,14 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
     return;
   }
 
-  // ── Step 3: LIMIT target ──────────────────────────────────────────────────
+  // ── Step 3: LIMIT target — direction-aware exit side + tick snap ─────────
   let tgtOrderId;
-  console.log(`${LOG} [ENTER] ${candidate.symbol}: placing target LIMIT — price=₹${target}  qty=${qty}`);
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: placing target LIMIT ${exitSide} — price=₹${target}  qty=${qty}`);
   try {
     const tgtRes = await kiteOrderService.placeOrder({
       tradingsymbol:    candidate.symbol,
       exchange:         'NSE',
-      transaction_type: 'SELL',
+      transaction_type: exitSide,
       order_type:       'LIMIT',
       price:            target,
       product:          'MIS',
@@ -536,17 +643,19 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
     });
     if (tgtRes.success) {
       tgtOrderId = tgtRes.orderId;
-      console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ target LIMIT placed — orderId=${tgtOrderId}  price=₹${target}`);
+      console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ target LIMIT ${exitSide} placed — orderId=${tgtOrderId}  price=₹${target}`);
     }
   } catch (err) {
     const tick = parseKiteTickError(err.message);
     if (tick) {
-      const snappedTgt = snapToNSETick(target, tick, 'ceil');
+      const snappedTgt = isLong
+        ? snapToNSETick(target, tick, 'ceil')
+        : snapToNSETick(target, tick, 'floor');
       console.warn(`${LOG} [ENTER] ${candidate.symbol}: target tick error (tick=${tick}) → re-snapped target=₹${snappedTgt}  retrying...`);
       try {
         const r2 = await kiteOrderService.placeOrder({
           tradingsymbol: candidate.symbol, exchange: 'NSE',
-          transaction_type: 'SELL', order_type: 'LIMIT',
+          transaction_type: exitSide, order_type: 'LIMIT',
           price: snappedTgt, product: 'MIS', quantity: qty,
           simulationId: `orb_tgt_${candidate.symbol}`,
           orderType: 'ORB_TARGET', source: 'ORB',
@@ -565,10 +674,11 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
   }
   candidate.targetOrderId = tgtOrderId;
 
-  console.log(`${LOG} [ENTER] ✅✅ ${candidate.symbol} LIVE`);
+  console.log(`${LOG} [ENTER] ✅✅ ${candidate.symbol} [${dirTag}] LIVE`);
   console.log(`${LOG} [ENTER]    entry=₹${entryPrice}  stop=₹${stop}  target=₹${candidate.targetPrice}`);
   console.log(`${LOG} [ENTER]    SL orderId=${slOrderId}  TGT orderId=${tgtOrderId || '⚠️ FAILED'}`);
-  console.log(`${LOG} [ENTER]    risk=₹${((entryPrice - stop) * qty).toFixed(2)}  reward=₹${((candidate.targetPrice - entryPrice) * qty).toFixed(2)}`);
+  // Risk/reward computed as absolute distance — direction is encoded in sign of (entry−stop) / (target−entry).
+  console.log(`${LOG} [ENTER]    risk=₹${(Math.abs(entryPrice - stop) * qty).toFixed(2)}  reward=₹${(Math.abs(candidate.targetPrice - entryPrice) * qty).toFixed(2)}`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -587,10 +697,14 @@ export async function monitorOrbPositions() {
 
   const ist          = MarketHoursUtil.toIST(new Date());
   const istMin       = ist.getHours() * 60 + ist.getMinutes();
-  const pastTimeExit = istMin >= TIME_EXIT_HOUR * 60 + TIME_EXIT_MIN;
+  // 10:30 TIME EXIT is DISABLED by default (2026-05-25 change). Re-enable via
+  // env if needed for testing. When disabled, the monitor falls through to BE
+  // trail + candle-structure tighten and lets winners ride until 15:15.
+  const timeExitEnabled = process.env.ORB_TIME_EXIT_ENABLED === 'true';
+  const pastTimeExit = timeExitEnabled && (istMin >= TIME_EXIT_HOUR * 60 + TIME_EXIT_MIN);
 
   console.log(`${LOG} [MONITOR] ════════════ [${istTimeStr()}] ════════════`);
-  console.log(`${LOG} [MONITOR] Open positions: ${entered.length}  ${pastTimeExit ? '⏰ PAST 10:30 — time-exit mode' : 'within window'}`);
+  console.log(`${LOG} [MONITOR] Open positions: ${entered.length}  ${pastTimeExit ? '⏰ PAST 10:30 — time-exit mode' : (timeExitEnabled ? 'within entry window' : 'monitoring (time-exit disabled, runs until 15:15)')}`);
 
   // Fetch LTP for all open positions in one call
   const ltpSymbols = entered.map(c => `NSE:${c.symbol}`);
@@ -612,9 +726,12 @@ export async function monitorOrbPositions() {
     console.log(`${LOG} [MONITOR]   SL orderId=${c.stopOrderId || 'none'}  TGT orderId=${c.targetOrderId || 'none'}  beTrailed=${c._beTrailed || false}`);
 
     if (ltp) {
-      const unrealised = parseFloat(((ltp - c.entryPrice) * c.qty).toFixed(2));
-      const pct        = parseFloat(((ltp - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-      console.log(`${LOG} [MONITOR]   unrealised PnL=₹${unrealised >= 0 ? '+' : ''}${unrealised} (${pct >= 0 ? '+' : ''}${pct}%)`);
+      // Direction-aware P&L: for SHORT, profit is when LTP < entryPrice.
+      const isLong = (c.direction || 'LONG') === 'LONG';
+      const priceDiff = isLong ? (ltp - c.entryPrice) : (c.entryPrice - ltp);
+      const unrealised = parseFloat((priceDiff * c.qty).toFixed(2));
+      const pct        = parseFloat((priceDiff / c.entryPrice * 100).toFixed(2));
+      console.log(`${LOG} [MONITOR]   [${isLong ? 'LONG' : 'SHORT'}] unrealised PnL=₹${unrealised >= 0 ? '+' : ''}${unrealised} (${pct >= 0 ? '+' : ''}${pct}%)`);
     }
 
     // ── 10:30 time-exit ─────────────────────────────────────────────────────
@@ -627,11 +744,14 @@ export async function monitorOrbPositions() {
         try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [MONITOR]   TGT cancel sent`); } catch (e) { console.warn(`${LOG} [MONITOR]   TGT cancel failed: ${e.message}`); }
       }
       await delay(500);
+      // Direction-aware exit side: LONG closes via SELL, SHORT closes via BUY.
+      const cIsLong  = (c.direction || 'LONG') === 'LONG';
+      const cExitSide = cIsLong ? 'SELL' : 'BUY';
       try {
         const res = await kiteOrderService.placeOrder({
           tradingsymbol:    c.symbol,
           exchange:         'NSE',
-          transaction_type: 'SELL',
+          transaction_type: cExitSide,
           order_type:       'MARKET',
           product:          'MIS',
           quantity:         c.qty,
@@ -640,7 +760,7 @@ export async function monitorOrbPositions() {
           source:           'ORB',
         });
         if (res.success) {
-          console.log(`${LOG} [MONITOR]   time-exit order placed — orderId=${res.orderId}`);
+          console.log(`${LOG} [MONITOR]   time-exit ${cExitSide} placed — orderId=${res.orderId}`);
           await delay(2000);
           let exitPrice = c.entryPrice;
           try {
@@ -652,9 +772,11 @@ export async function monitorOrbPositions() {
           c.exitPrice  = exitPrice;
           c.exitTime   = new Date();
           c.exitReason = 'time_exit_10:30am';
-          c.pnl        = parseFloat(((exitPrice - c.entryPrice) * c.qty).toFixed(2));
-          c.returnPct  = parseFloat(((exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} TIME EXIT @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl} (${c.returnPct >= 0 ? '+' : ''}${c.returnPct}%)`);
+          // Direction-aware P&L: for SHORT, profit when exitPrice < entryPrice.
+          const pnlDir = cIsLong ? (exitPrice - c.entryPrice) : (c.entryPrice - exitPrice);
+          c.pnl        = parseFloat((pnlDir * c.qty).toFixed(2));
+          c.returnPct  = parseFloat((pnlDir / c.entryPrice * 100).toFixed(2));
+          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] TIME EXIT @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl} (${c.returnPct >= 0 ? '+' : ''}${c.returnPct}%)`);
           exitedThisRun++;
           changed = true;
         }
@@ -663,6 +785,10 @@ export async function monitorOrbPositions() {
       }
       continue;
     }
+
+    // Direction-aware sign helper for P&L (used in SL/target/BE blocks below)
+    const cIsLong = (c.direction || 'LONG') === 'LONG';
+    const pnlSign = (exitPrice) => cIsLong ? (exitPrice - c.entryPrice) : (c.entryPrice - exitPrice);
 
     // ── Check stop order status ──────────────────────────────────────────────
     if (c.stopOrderId) {
@@ -674,10 +800,10 @@ export async function monitorOrbPositions() {
           c.exitPrice  = ord.average_price;
           c.exitTime   = new Date();
           c.exitReason = 'stop_hit';
-          c.pnl        = parseFloat(((c.exitPrice - c.entryPrice) * c.qty).toFixed(2));
-          c.returnPct  = parseFloat(((c.exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
+          c.pnl        = parseFloat((pnlSign(c.exitPrice) * c.qty).toFixed(2));
+          c.returnPct  = parseFloat((pnlSign(c.exitPrice) / c.entryPrice * 100).toFixed(2));
           if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [MONITOR]   TGT cancelled (stop hit)`); } catch (_) {} }
-          console.log(`${LOG} [MONITOR]   🔴 ${c.symbol} STOPPED OUT @ ₹${c.exitPrice}  PnL=₹${c.pnl}`);
+          console.log(`${LOG} [MONITOR]   🔴 ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] STOPPED OUT @ ₹${c.exitPrice}  PnL=₹${c.pnl}`);
           exitedThisRun++;
           changed = true;
           continue;
@@ -701,10 +827,10 @@ export async function monitorOrbPositions() {
           c.exitPrice  = ord.average_price;
           c.exitTime   = new Date();
           c.exitReason = 'target_hit';
-          c.pnl        = parseFloat(((c.exitPrice - c.entryPrice) * c.qty).toFixed(2));
-          c.returnPct  = parseFloat(((c.exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
+          c.pnl        = parseFloat((pnlSign(c.exitPrice) * c.qty).toFixed(2));
+          c.returnPct  = parseFloat((pnlSign(c.exitPrice) / c.entryPrice * 100).toFixed(2));
           if (c.stopOrderId) { try { await kiteOrderService.cancelOrder(c.stopOrderId); console.log(`${LOG} [MONITOR]   SL cancelled (target hit)`); } catch (_) {} }
-          console.log(`${LOG} [MONITOR]   🟢 ${c.symbol} TARGET HIT @ ₹${c.exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+          console.log(`${LOG} [MONITOR]   🟢 ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] TARGET HIT @ ₹${c.exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
           exitedThisRun++;
           changed = true;
           continue;
@@ -715,25 +841,27 @@ export async function monitorOrbPositions() {
     }
 
     // ── Breakeven trail — move stop to entry once 1R in profit ──────────────
+    // Direction-aware: for LONG, risk = entry−stop, gain = ltp−entry, BE moves stop UP.
+    //                  for SHORT, risk = stop−entry, gain = entry−ltp, BE moves stop DOWN.
     if (c.status === 'ENTERED' && c.stopOrderId && !c._beTrailed) {
-      const risk         = c.entryPrice - c.stopPrice;
-      const gainNeeded   = risk;
-      const currentGain  = ltp ? ltp - c.entryPrice : null;
+      const risk        = cIsLong ? (c.entryPrice - c.stopPrice) : (c.stopPrice - c.entryPrice);
+      const currentGain = ltp ? (cIsLong ? (ltp - c.entryPrice) : (c.entryPrice - ltp)) : null;
       if (ltp) {
-        console.log(`${LOG} [MONITOR]   BE trail check: risk=₹${risk.toFixed(2)}  current gain=₹${currentGain?.toFixed(2)}  need ₹${gainNeeded.toFixed(2)} for 1R`);
+        console.log(`${LOG} [MONITOR]   BE trail check [${cIsLong ? 'LONG' : 'SHORT'}]: risk=₹${risk.toFixed(2)}  current gain=₹${currentGain?.toFixed(2)}  need ₹${risk.toFixed(2)} for 1R`);
       }
-      if (ltp && risk > 0 && (ltp - c.entryPrice) >= risk) {
-        const beStop      = snapToNSETick(c.entryPrice, 0.05, 'floor');
-        const beStopLimit = snapToNSETick(c.entryPrice - 5, 0.05, 'ceil');
-        console.log(`${LOG} [MONITOR]   1R achieved → moving stop to breakeven=₹${beStop} (limit=₹${beStopLimit})`);
+      if (ltp && risk > 0 && currentGain != null && currentGain >= risk) {
+        // For LONG: snap floor (slightly below entry to avoid premature fill on noise)
+        // For SHORT: snap ceil (slightly above entry, same logic)
+        const beStop = snapToNSETick(c.entryPrice, 0.05, cIsLong ? 'floor' : 'ceil');
+        console.log(`${LOG} [MONITOR]   1R achieved → moving stop to breakeven=₹${beStop}`);
         try {
+          // SL-M = trigger only (see 2026-05-25 incident comment in dailyPicksService).
           await kiteOrderService.modifyOrder(c.stopOrderId, {
             trigger_price: beStop,
-            price:         beStopLimit,
           });
           c.stopPrice  = beStop;
           c._beTrailed = true;
-          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} breakeven trail done — stop=₹${beStop}`);
+          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] breakeven trail done — stop=₹${beStop}`);
           changed = true;
         } catch (err) {
           console.error(`${LOG} [MONITOR]   ❌ breakeven trail FAILED:`, err.message);
@@ -774,13 +902,20 @@ export async function monitorOrbPositions() {
       const sym5m  = candles5m[c.symbol]  || [];
       const sym15m = candles15m[c.symbol] || [];
       const ltp    = ltpData[`NSE:${c.symbol}`]?.last_price;
+      // Direction-aware helpers for this candidate's candle/exit logic
+      const cIsLong   = (c.direction || 'LONG') === 'LONG';
+      const cExitSide = cIsLong ? 'SELL' : 'BUY';
+      const cDirTag   = cIsLong ? 'LONG' : 'SHORT';
 
-      console.log(`${LOG} [CANDLE] ${c.symbol}: 5m_bars=${sym5m.length}  15m_bars=${sym15m.length}  stop=₹${c.stopPrice}  beTrailed=${!!c._beTrailed}`);
+      console.log(`${LOG} [CANDLE] ${c.symbol} [${cDirTag}]: 5m_bars=${sym5m.length}  15m_bars=${sym15m.length}  stop=₹${c.stopPrice}  beTrailed=${!!c._beTrailed}`);
 
-      // ── Sideways exit — position flat after 40 min ─────────────────────────
+      // ── Sideways exit — position flat after 40 min (direction-aware profitPct) ─
       if (c.entryTime && ltp) {
         const minutesSinceEntry = (Date.now() - new Date(c.entryTime).getTime()) / 60000;
-        const profitPct = ((ltp - c.entryPrice) / c.entryPrice) * 100;
+        // For SHORT: profit when ltp < entry, so flip the sign.
+        const profitPct = cIsLong
+          ? ((ltp - c.entryPrice) / c.entryPrice) * 100
+          : ((c.entryPrice - ltp) / c.entryPrice) * 100;
         const sideways  = checkSidewaysExit(minutesSinceEntry, profitPct);
         console.log(`${LOG} [CANDLE] ${c.symbol}: sideways check — ${Math.round(minutesSinceEntry)}min in  pnl=${profitPct.toFixed(2)}%  shouldExit=${sideways.shouldExit}`);
 
@@ -793,7 +928,7 @@ export async function monitorOrbPositions() {
             const res = await kiteOrderService.placeOrder({
               tradingsymbol:    c.symbol,
               exchange:         'NSE',
-              transaction_type: 'SELL',
+              transaction_type: cExitSide,
               order_type:       'MARKET',
               product:          'MIS',
               quantity:         c.qty,
@@ -812,9 +947,10 @@ export async function monitorOrbPositions() {
               c.exitPrice  = exitPrice;
               c.exitTime   = new Date();
               c.exitReason = `sideways_exit_${Math.round(minutesSinceEntry)}min`;
-              c.pnl        = parseFloat(((exitPrice - c.entryPrice) * c.qty).toFixed(2));
-              c.returnPct  = parseFloat(((exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-              console.log(`${LOG} [CANDLE] ✅ ${c.symbol} sideways exit @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+              const pnlDir = cIsLong ? (exitPrice - c.entryPrice) : (c.entryPrice - exitPrice);
+              c.pnl        = parseFloat((pnlDir * c.qty).toFixed(2));
+              c.returnPct  = parseFloat((pnlDir / c.entryPrice * 100).toFixed(2));
+              console.log(`${LOG} [CANDLE] ✅ ${c.symbol} [${cDirTag}] sideways exit @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
               changed = true;
             }
           } catch (err) {
@@ -824,23 +960,23 @@ export async function monitorOrbPositions() {
         }
       }
 
-      // ── Candle structure analysis ───────────────────────────────────────────
+      // ── Candle structure analysis — direction-aware via candidate.direction ─
       const decision = analyzeIntradayStructure({
         candles5m:   sym5m,
         candles15m:  sym15m,
-        direction:   'LONG',          // ORB only takes long breakouts
+        direction:   cDirTag,         // 'LONG' or 'SHORT' — symmetric patterns
         currentStop: c.stopPrice,
         // R-cushion context — see analyzeIntradayStructure docstring.
         entryPrice:  c.entryPrice,
         plannedStop: c.originalStop ?? c.stopPrice,
       });
 
-      console.log(`${LOG} [CANDLE] ${c.symbol}: action=${decision.action}${decision.newStop ? `  newStop=₹${decision.newStop}` : ''}`);
+      console.log(`${LOG} [CANDLE] ${c.symbol} [${cDirTag}]: action=${decision.action}${decision.newStop ? `  newStop=₹${decision.newStop}` : ''}`);
       console.log(`${LOG} [CANDLE] ${c.symbol}:   ${decision.reason}`);
 
       if (decision.action === 'exit') {
-        // ── Structure break — exit immediately ────────────────────────────────
-        console.log(`${LOG} [CANDLE] ${c.symbol}: STRUCTURE BREAK → market exit`);
+        // ── Structure break — exit immediately (direction-aware exit side) ────
+        console.log(`${LOG} [CANDLE] ${c.symbol}: STRUCTURE BREAK → ${cExitSide} MARKET`);
         if (c.stopOrderId)   { try { await kiteOrderService.cancelOrder(c.stopOrderId);   console.log(`${LOG} [CANDLE] ${c.symbol}: SL cancelled`);   } catch (_) {} }
         if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [CANDLE] ${c.symbol}: TGT cancelled`); } catch (_) {} }
         await delay(500);
@@ -848,7 +984,7 @@ export async function monitorOrbPositions() {
           const res = await kiteOrderService.placeOrder({
             tradingsymbol:    c.symbol,
             exchange:         'NSE',
-            transaction_type: 'SELL',
+            transaction_type: cExitSide,
             order_type:       'MARKET',
             product:          'MIS',
             quantity:         c.qty,
@@ -867,9 +1003,10 @@ export async function monitorOrbPositions() {
             c.exitPrice  = exitPrice;
             c.exitTime   = new Date();
             c.exitReason = `candle_structure_exit: ${decision.reason.split(' | ')[0]}`;
-            c.pnl        = parseFloat(((exitPrice - c.entryPrice) * c.qty).toFixed(2));
-            c.returnPct  = parseFloat(((exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-            console.log(`${LOG} [CANDLE] ✅ ${c.symbol} candle exit @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+            const pnlDir = cIsLong ? (exitPrice - c.entryPrice) : (c.entryPrice - exitPrice);
+            c.pnl        = parseFloat((pnlDir * c.qty).toFixed(2));
+            c.returnPct  = parseFloat((pnlDir / c.entryPrice * 100).toFixed(2));
+            console.log(`${LOG} [CANDLE] ✅ ${c.symbol} [${cDirTag}] candle exit @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
             changed = true;
           }
         } catch (err) {
@@ -877,10 +1014,15 @@ export async function monitorOrbPositions() {
         }
 
       } else if ((decision.action === 'trail' || decision.action === 'tighten') && decision.newStop) {
-        // ── Trail or tighten — modify SL on Kite ──────────────────────────────
-        const snappedStop  = snapToNSETick(decision.newStop, 0.05, 'floor');
-        const limitPrice   = snapToNSETick(snappedStop - 13, 0.05, 'ceil');  // NSE permissible range
-        const isImprovement = snappedStop > c.stopPrice;  // LONG — only move stop up
+        // ── Trail or tighten — modify SL on Kite (SL-M, trigger only) ─────────
+        // LONG: stop moves UP (snap floor); SHORT: stop moves DOWN (snap ceil).
+        const snappedStop  = cIsLong
+          ? snapToNSETick(decision.newStop, 0.05, 'floor')
+          : snapToNSETick(decision.newStop, 0.05, 'ceil');
+        // "Improvement" means stop moves in our favor: UP for LONG, DOWN for SHORT.
+        const isImprovement = cIsLong
+          ? snappedStop > c.stopPrice
+          : snappedStop < c.stopPrice;
 
         if (!isImprovement) {
           console.log(`${LOG} [CANDLE] ${c.symbol}: ${decision.action} ₹${snappedStop} would not improve current stop ₹${c.stopPrice} — skipping`);
@@ -888,14 +1030,18 @@ export async function monitorOrbPositions() {
           console.warn(`${LOG} [CANDLE] ${c.symbol}: ${decision.action} ₹${snappedStop} but no SL order to modify`);
         } else {
           try {
+            // SL-M = trigger only. See breakeven-trail comment above for why
+            // we must NOT pass `price` (otherwise NSE "permissible range" reject).
             await kiteOrderService.modifyOrder(c.stopOrderId, {
               trigger_price: snappedStop,
-              price:         limitPrice,
             });
-            console.log(`${LOG} [CANDLE] ✅ ${c.symbol}: ${decision.action} — stop ₹${c.stopPrice} → ₹${snappedStop} [${decision.reason.split(' | ')[0]}]`);
+            console.log(`${LOG} [CANDLE] ✅ ${c.symbol} [${cDirTag}]: ${decision.action} — stop ₹${c.stopPrice} → ₹${snappedStop} [${decision.reason.split(' | ')[0]}]`);
             c.stopPrice  = snappedStop;
-            // If candle trail moved stop above entry, mark BE trailed too
-            if (snappedStop >= c.entryPrice) c._beTrailed = true;
+            // Mark BE trailed when stop crosses entry "in our favor":
+            //   LONG  → stop ≥ entry
+            //   SHORT → stop ≤ entry
+            const crossedBE = cIsLong ? (snappedStop >= c.entryPrice) : (snappedStop <= c.entryPrice);
+            if (crossedBE) c._beTrailed = true;
             changed = true;
           } catch (err) {
             console.error(`${LOG} [CANDLE] ${c.symbol}: modifyOrder FAILED:`, err.message);
@@ -954,7 +1100,12 @@ export async function forceExitOrb() {
   let exited = 0;
 
   for (const c of entered) {
-    console.log(`${LOG} [FORCE-EXIT] ── ${c.symbol} ──`);
+    // Direction-aware exit side: LONG closes via SELL, SHORT closes via BUY.
+    const cIsLong   = (c.direction || 'LONG') === 'LONG';
+    const cExitSide = cIsLong ? 'SELL' : 'BUY';
+    const cDirTag   = cIsLong ? 'LONG' : 'SHORT';
+
+    console.log(`${LOG} [FORCE-EXIT] ── ${c.symbol} [${cDirTag}] ──`);
     console.log(`${LOG} [FORCE-EXIT]   entry=₹${c.entryPrice}  stop=₹${c.stopPrice}  target=₹${c.targetPrice}  qty=${c.qty}`);
 
     if (c.stopOrderId) {
@@ -971,7 +1122,7 @@ export async function forceExitOrb() {
       const res = await kiteOrderService.placeOrder({
         tradingsymbol:    c.symbol,
         exchange:         'NSE',
-        transaction_type: 'SELL',
+        transaction_type: cExitSide,
         order_type:       'MARKET',
         product:          'MIS',
         quantity:         c.qty,
@@ -981,7 +1132,7 @@ export async function forceExitOrb() {
       });
 
       if (res.success) {
-        console.log(`${LOG} [FORCE-EXIT]   exit order placed — orderId=${res.orderId}`);
+        console.log(`${LOG} [FORCE-EXIT]   ${cExitSide} order placed — orderId=${res.orderId}`);
         await delay(2000);
         let exitPrice = c.entryPrice;
         try {
@@ -994,9 +1145,11 @@ export async function forceExitOrb() {
         c.exitPrice  = exitPrice;
         c.exitTime   = new Date();
         c.exitReason = 'time_exit_3:15pm';
-        c.pnl        = parseFloat(((exitPrice - c.entryPrice) * c.qty).toFixed(2));
-        c.returnPct  = parseFloat(((exitPrice - c.entryPrice) / c.entryPrice * 100).toFixed(2));
-        console.log(`${LOG} [FORCE-EXIT]   ✅ ${c.symbol} exited @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+        // Direction-aware P&L
+        const pnlDir = cIsLong ? (exitPrice - c.entryPrice) : (c.entryPrice - exitPrice);
+        c.pnl        = parseFloat((pnlDir * c.qty).toFixed(2));
+        c.returnPct  = parseFloat((pnlDir / c.entryPrice * 100).toFixed(2));
+        console.log(`${LOG} [FORCE-EXIT]   ✅ ${c.symbol} [${cDirTag}] exited @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
         exited++;
       }
     } catch (err) {

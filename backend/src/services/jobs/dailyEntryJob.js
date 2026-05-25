@@ -499,22 +499,32 @@ class DailyEntryJob {
         timezone: 'Asia/Kolkata'
       });
 
-      // 9:32 AM IST — Shortlist ORB-breakout entry (Tier-1 intraday upgrade).
-      // The 9:30 candle closes at exactly 9:30; we fire at 9:32 so the broker's
-      // OHLC API has had two minutes to update. Scores the 8:30 shortlist of
-      // 15 candidates against the 9:15-9:30 opening range, selects top
-      // MAX_DAILY_PICKS, and places SL-M STOP entry orders that trigger only
-      // if price actually breaks the 9:30 close ± buffer in our direction.
-      await this.agenda.every('32 9 * * 1-5', 'daily-picks-shortlist-orb-entry', {}, {
-        timezone: 'Asia/Kolkata'
-      });
-
-      // 12:00 IST — Cancel any unfilled SL-M entry orders. If the breakout
-      // didn't trigger by lunch, the thesis has lost its edge — better to
-      // free the margin than to be filled during the 13:30 chop.
-      await this.agenda.every('0 12 * * 1-5', 'daily-picks-cancel-stale-orb', {}, {
-        timezone: 'Asia/Kolkata'
-      });
+      // ── DISABLED 2026-05-25 (evening) ───────────────────────────────────────
+      // The SHORTLIST-ORB-ENTRY path is suspended. Day-1 evidence (2026-05-25)
+      // showed the scanner.py shortlist underperformed the ORB pre-open IEP
+      // universe: SHORTLIST picked LICI/DIVISLAB/TORNTPHARM (all losers, net
+      // ~–₹73), while the OLD ORB cron picked CANBK/BPCL/INOXWIND
+      // (net +₹79 at time-exit, with CANBK leaving another +₹50 on the table
+      // due to premature 10:30 TIME EXIT).
+      //
+      // We're keeping the OLD orb-check-breakout cron and disabling this one
+      // to prevent dual-path race conditions. The 8:30 scanner still runs
+      // (for observability + future re-enabling), the 15-stock shortlist is
+      // still saved to the doc, but the 9:32 entry placement is OFF.
+      //
+      // Set DAILY_PICKS_SHORTLIST_ORB_ENABLED=true in env to re-enable for
+      // testing. The full code path stays intact.
+      if (process.env.DAILY_PICKS_SHORTLIST_ORB_ENABLED === 'true') {
+        console.warn(`${LOG} ⚠ SHORTLIST-ORB-ENTRY cron is ENABLED via env — will run at 9:32 IST`);
+        await this.agenda.every('32 9 * * 1-5', 'daily-picks-shortlist-orb-entry', {}, {
+          timezone: 'Asia/Kolkata'
+        });
+        await this.agenda.every('0 12 * * 1-5', 'daily-picks-cancel-stale-orb', {}, {
+          timezone: 'Asia/Kolkata'
+        });
+      } else {
+        console.log(`${LOG} SHORTLIST-ORB-ENTRY cron DISABLED — entries via OLD orb-check-breakout (orbJob)`);
+      }
 
       // Every 5 min, 9:30 AM – 2:59 PM IST — Monitor SL/target hits, trailing stops,
       // and candle-based structure analysis (5-min + 15-min TF decision matrix).
@@ -542,15 +552,15 @@ class DailyEntryJob {
       });
 
       console.log(`${LOG} ═══════════════════════════════════════`);
-      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — SHORTLIST + ORB-BREAKOUT PATH (May 2026):`);
-      console.log(`${LOG}   08:30       — scanner.py → 15-candidate shortlist saved (NO orders placed)`);
-      console.log(`${LOG}   09:32       — shortlist ORB entry → re-score against 9:15-9:30 candle, place SL-M STOPs for top 3`);
-      console.log(`${LOG}   09:00–10:59 — fill fallback every 2 min → SL + target legs placed on SL-M triggers`);
-      console.log(`${LOG}   09:30–14:59 — monitor every 5 min → SL/target detection, +1R BE, candle structure (5-min+15-min)`);
-      console.log(`${LOG}   12:00       — cancel any unfilled SL-M entries (breakout failed to trigger)`);
+      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — OLD ORB PATH (post 2026-05-25):`);
+      console.log(`${LOG}   [disabled]  — 08:30 scanner.py pipeline (set DAILY_PICKS_SCAN_ENABLED=true to re-enable)`);
+      console.log(`${LOG}   09:30–14:59 — monitor every 5 min → SL/target detection, +1R BE, candle structure`);
       console.log(`${LOG}   15:15       — force-exit (5 min before Zerodha auto-square)`);
       console.log(`${LOG}   15:30       — end-of-day summary log + daily_metrics persistence`);
+      console.log(`${LOG}   [disabled]  — 09:32 SHORTLIST-ORB-ENTRY (set DAILY_PICKS_SHORTLIST_ORB_ENABLED=true to re-enable)`);
+      console.log(`${LOG}   [disabled]  — 12:00 cancel-stale-orb (paired with SHORTLIST-ORB-ENTRY)`);
       console.log(`${LOG}   [disabled]  — 09:05 gap protection (no AMO to protect in new architecture)`);
+      console.log(`${LOG} ENTRIES come from OLD orb-check-breakout cron (orbJob.js) — 9:08 pre-open IEP + 9:30-11:00 breakout watch`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);

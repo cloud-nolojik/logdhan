@@ -317,11 +317,26 @@ class TradingDaySequenceJob {
   }
 
   async scheduleRecurringJobs() {
+    // Always cancel first — guards against duplicate runs after a restart,
+    // and also actively removes the job from Agenda when the cron is disabled.
     await this.agenda.cancel({ name: 'trading-day-sequence' });
-    await this.agenda.every('30 8 * * 1-5', 'trading-day-sequence', {}, {
-      timezone: 'Asia/Kolkata',
-    });
-    console.log(`${LOG} Scheduled: 08:30 IST, Mon–Fri`);
+
+    // ── DISABLED 2026-05-25 (evening) ─────────────────────────────────────────
+    // The 08:30 scanner.py pipeline is suspended. We're running the OLD ORB
+    // job exclusively (pre-open IEP gap-filter universe, not scanner.py
+    // shortlist), so the daily-pick-scan step is no longer needed for entry.
+    //
+    // Re-enable with DAILY_PICKS_SCAN_ENABLED=true if you want the scanner
+    // back for observability — but be aware it also runs the full Step 7+
+    // pipeline (DB writes, morning briefing, etc.), not just the scan itself.
+    if (process.env.DAILY_PICKS_SCAN_ENABLED === 'true') {
+      await this.agenda.every('30 8 * * 1-5', 'trading-day-sequence', {}, {
+        timezone: 'Asia/Kolkata',
+      });
+      console.warn(`${LOG} ⚠ 08:30 trading-day-sequence ENABLED via env — scanner.py will run`);
+    } else {
+      console.log(`${LOG} 08:30 trading-day-sequence DISABLED — entries via OLD ORB only (orbJob)`);
+    }
   }
 
   async triggerNow(opts = { skipWait: true }) {
