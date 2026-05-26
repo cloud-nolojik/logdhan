@@ -282,24 +282,23 @@ class OrbJob {
         timezone: 'Asia/Kolkata',
       });
 
-      // Every 1 min, 9:00–14:59 IST — breakout check
-      // Internal gate in checkBreakouts() skips calls before 9:30 or after 14:00.
+      // Breakout check at every 15-min boundary + 1 sec (10:01, 10:16, 10:31,
+      // 10:46, 11:01, ... 14:01). Two-bar 15-min confirmation: at each check,
+      // we look at the last two completed 15-min candles. Both must close past
+      // OR in same direction → enter.
       //
-      // RE-ENABLED 2026-05-25 (evening): the ORB pre-open IEP gap-filter picks
-      // outperformed the scanner.py SHORTLIST on day 1.
+      // Schedule: minutes 1, 16, 31, 46 of hours 10-14 (Mon-Fri IST).
+      // First possible entry: 10:01 (when 9:30-9:45 + 9:45-10:00 candles are both
+      // closed and can be confirmed together).
+      // Last possible entry: 14:01 (gives 74 minutes before 15:15 force-exit).
       //
-      // Window extended 2026-05-25 (evening) from 9:30-11:00 to 9:30-14:00:
-      // afternoon breakouts often happen on trend days after a lunch-time
-      // consolidation. Capped at 14:00 (not 15:00) so any entry has at least
-      // 75 minutes to work before the 15:15 force-exit. Push to 15:00 later
-      // if data shows we're missing clean late-day setups.
-      //
-      // All operational bugs from today are now fixed:
-      //   • market_protection 9 → 1 (kite.config.js)
-      //   • REJECTED entry no longer mis-read as filled (orbService.js)
-      //   • SL-M modify no longer passes `price` (orbService.js)
-      //   • 10:30 TIME EXIT disabled by default (orbService.js)
-      await this.agenda.every('*/1 9-14 * * 1-5', 'orb-check-breakout', {}, {
+      // Window changed from every-1-min to every-15-min (2026-05-26 evening)
+      // because 1-min polling catches too many "wick" fake breakouts that
+      // immediately revert. Indian intraday research and practitioner consensus:
+      // the 9:30-9:45 + 9:45-10:00 candle close approach (the "10 AM rule") gives
+      // 60-70% win rate vs 30-45% on instant LTP-cross polling. Trade-off: fewer
+      // entries per day, later entries (smaller R), but higher reliability.
+      await this.agenda.every('1,16,31,46 10-14 * * 1-5', 'orb-check-breakout', {}, {
         timezone: 'Asia/Kolkata',
       });
 
@@ -315,10 +314,14 @@ class OrbJob {
       });
 
       console.log(`${LOG} ═══════════════════════════════════════`);
-      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — ORB PATH (INTELLIGENT MODE, post 2026-05-26 evening):`);
-      console.log(`${LOG}   09:08       — pre-open universe (NSE IEP, gap ±1%, top 8 LONG + 7 SHORT)`);
-      console.log(`${LOG}   09:30       — record 15-min opening range (OR high/low)`);
-      console.log(`${LOG}   09:00–14:59 — breakout check every 1 min (active 9:30–14:00)`);
+      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — ORB PATH (TIER-1: no gap filter, post 2026-05-26 evening):`);
+      console.log(`${LOG}   09:08       — pre-open universe: ALL F&O stocks saved (no gap pre-filter)`);
+      console.log(`${LOG}   09:30       — record OR via /quote/ohlc for all (quality filter: 0.5% ≤ OR range ≤ 2.5%)`);
+      console.log(`${LOG}   :01/:16/:31/:46 hourly 10-14 — 2-bar 15-min candle close confirmation scan`);
+      console.log(`${LOG}                   BOTH last 15-min candles must close past OR in same direction`);
+      console.log(`${LOG}                   first entry possible at 10:01 (Indian "10 AM rule")`);
+      console.log(`${LOG}                   last entry at 14:01 (74min runway to 15:15 force-exit)`);
+      console.log(`${LOG}                   ranked by distance% past OR, stale-gap skipped, up to 3 slots`);
       console.log(`${LOG}   09:00–14:59 — position monitor every 5 min:`);
       console.log(`${LOG}                   • check SL fill status`);
       console.log(`${LOG}                   • BE trail to entry at +1R profit`);

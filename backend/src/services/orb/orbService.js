@@ -21,9 +21,13 @@ const LOG = '[ORB]';
 
 // ── Strategy constants ──────────────────────────────────────────────────────
 const MAX_ENTRIES           = 3;      // max positions per day (LONG + SHORT combined)
-const MAX_CANDIDATES        = 15;     // total candidates across both directions
-const MAX_LONG_CANDIDATES   = 8;      // top gap-UP for LONG breakouts (≥+1.5%)
-const MAX_SHORT_CANDIDATES  = 7;      // top gap-DOWN for SHORT breakdowns (≤-1.5%)
+// TIER-1 changes (2026-05-26 evening):
+// • No pre-open gap filter. ALL F&O stocks are candidates.
+// • Direction (LONG/SHORT) is decided at the OR-break moment, not at 9:08.
+// • MAX_CANDIDATES is now an upper bound for safety; in practice we save all
+//   ~215 F&O symbols that returned valid OHLC.
+const MAX_CANDIDATES        = 250;
+const MIN_OR_RANGE_PCT      = 0.5;    // skip stocks with OR < 0.5% of price (tight chop, fake breakouts)
 // Min gap % to watch — was 1.5%, dropped to 1.0% on 2026-05-26 IST midday.
 // Rationale: on 2026-05-25 the 1.5% filter qualified 4 names; on 2026-05-26
 // it qualified only 2 (and neither broke OR). With <1 trade/day average we
@@ -38,37 +42,34 @@ const TARGET_RANGE_MULT     = 1.5;    // (no longer used — see SIMPLE_MODE bel
 
 // ── SIMPLE MODE (2026-05-26 evening) ─────────────────────────────────────────
 // Switched to a clean SL-only strategy after two days of modify-bug-related
-// pain (market_protection circuit-reject on 05-25, SL-M modify permissible-
-// range reject on 05-26). The "intelligent" trail/target logic was good in
-// theory but kept hitting Kite-API edge cases.
+// pain. NOTE: the trail/intelligent monitor was re-enabled later that same
+// evening with proper cancel+replace SL handling.
 //
-// New flow per trade:
-//   1. Entry: MARKET BUY (LONG) / SELL (SHORT) on OR break
-//   2. SL: placed ONCE at the breakout level + buffer, NEVER modified
+// Flow per trade:
+//   1. Entry: MARKET BUY (LONG) / SELL (SHORT) on 2-bar 15-min OR confirmation
+//   2. SL: placed ONCE at the breakout level + buffer, modified via cancel+replace
 //        LONG  → OR_High − min(1% of OR_High, OR_range)
 //        SHORT → OR_Low  + min(1% of OR_Low,  OR_range)
-//        The OR-range cap prevents the buffer from landing outside the OR
-//        for very tight ranges (it then falls back to opposite-boundary stop).
 //   3. NO target order — let the winner run.
-//   4. Monitor: just check if SL fired. No BE trail, no candle tighten,
-//      no sideways exit (all disabled below).
+//   4. Monitor: SL fill check, BE trail at +1R, candle structure tighten.
 //   5. 15:15 force-exit anything still open.
 const SL_BUFFER_PCT         = 1.0;    // target SL buffer in % of breakout level
                                        // (capped at OR range for tight-range stocks)
 
-// Entry window extended 2026-05-25 (evening): was 9:30-11:00, now 9:30-14:00.
+// Entry window — TIER-1 2026-05-26 evening update:
+// First entry at 10:01 (when 2-bar 15-min confirmation is first possible).
+// Last entry at 14:01 (gives 74 min before 15:15 force-exit).
 // Rationale: today (May 25) CANBK only broke out cleanly past 10:30 — at the
 // OLD 11:00 cutoff we'd have missed it. With the candle-structure tighten +
 // 15:15 force-exit handling risk, a longer window catches afternoon breakouts
 // (often common on trend days post-lunch consolidation).
 //
-// Cap at 14:00 (not 15:00): a 14:00 entry has 75 min to work before the
-// 15:15 force-exit — enough time for a breakout to either run to target or
-// fail. Entries after 14:00 have too little runway (e.g., a 14:55 entry has
-// only 20 min). Move to 15:00 if a week of data shows clean late-day setups
-// we're missing.
+// Window now begins 10:01 (when 2-bar 15-min confirmation becomes possible)
+// and ends 14:01 (last 15-min boundary that gives ≥74 min runway to 15:15).
+const BREAKOUT_START_HOUR   = 10;
+const BREAKOUT_START_MIN    = 1;
 const BREAKOUT_END_HOUR     = 14;
-const BREAKOUT_END_MIN      = 0;      // no new entries after 14:00 (gives 75min runway before 15:15 force-exit)
+const BREAKOUT_END_MIN      = 1;
 const MAX_OR_RANGE_PCT      = 2.5;    // reject candidates where OR range > 2.5% of IEP
 
 // ── 10:30 TIME EXIT — DISABLED 2026-05-25 (evening) ───────────────────────
@@ -297,70 +298,40 @@ export async function fetchPreOpenUniverse() {
     };
   }).filter(c => c.symbol && c.iep > 0);
 
-  // Bucket for diagnostics — direction-aware (added 2026-05-25 evening)
-  const gapUpWindow    = mapped.filter(c => c.preOpenPct >= MIN_PRE_OPEN_PCT && c.preOpenPct <= MAX_PRE_OPEN_PCT);
-  const gapDownWindow  = mapped.filter(c => c.preOpenPct <= -MIN_PRE_OPEN_PCT && c.preOpenPct >= -MAX_PRE_OPEN_PCT);
-  const upBelowFloor   = mapped.filter(c => c.preOpenPct > 0  && c.preOpenPct < MIN_PRE_OPEN_PCT);
-  const downBelowFloor = mapped.filter(c => c.preOpenPct < 0  && c.preOpenPct > -MIN_PRE_OPEN_PCT);
-  const upAboveCap     = mapped.filter(c => c.preOpenPct > MAX_PRE_OPEN_PCT);
-  const downBelowCap   = mapped.filter(c => c.preOpenPct < -MAX_PRE_OPEN_PCT);
-  const flat           = mapped.filter(c => c.preOpenPct === 0);
+  // ── TIER-1 (2026-05-26 evening): NO GAP FILTER ────────────────────────────
+  // Every F&O symbol with valid OHLC becomes a candidate. Direction is decided
+  // at the OR-break moment in Phase 3 (whichever side of OR is crossed). The
+  // gap distribution is logged for observability only — it does NOT filter.
+  const gapUpStrong    = mapped.filter(c => c.preOpenPct >=  1.0);
+  const gapDownStrong  = mapped.filter(c => c.preOpenPct <= -1.0);
+  const flatish        = mapped.filter(c => Math.abs(c.preOpenPct) < 1.0);
 
-  console.log(`${LOG} [PHASE1] Gap distribution:`);
-  console.log(`${LOG} [PHASE1]   gap UP   (LONG candidates, ≥+${MIN_PRE_OPEN_PCT}% to ≤+${MAX_PRE_OPEN_PCT}%): ${gapUpWindow.length}`);
-  console.log(`${LOG} [PHASE1]   gap DOWN (SHORT candidates, ≤-${MIN_PRE_OPEN_PCT}% to ≥-${MAX_PRE_OPEN_PCT}%): ${gapDownWindow.length}`);
-  console.log(`${LOG} [PHASE1]   up near-miss   (>0% to <+${MIN_PRE_OPEN_PCT}%):  ${upBelowFloor.length}`);
-  console.log(`${LOG} [PHASE1]   down near-miss (<0% to >-${MIN_PRE_OPEN_PCT}%):  ${downBelowFloor.length}`);
-  console.log(`${LOG} [PHASE1]   up exhausted   (>+${MAX_PRE_OPEN_PCT}%):         ${upAboveCap.length}`);
-  console.log(`${LOG} [PHASE1]   down exhausted (<-${MAX_PRE_OPEN_PCT}%):         ${downBelowCap.length}`);
-  console.log(`${LOG} [PHASE1]   flat (0%):                                       ${flat.length}`);
+  console.log(`${LOG} [PHASE1] Gap distribution (observability only — all stocks pass to Phase 2):`);
+  console.log(`${LOG} [PHASE1]   strong gap UP   (≥+1%):  ${gapUpStrong.length}`);
+  console.log(`${LOG} [PHASE1]   strong gap DOWN (≤-1%):  ${gapDownStrong.length}`);
+  console.log(`${LOG} [PHASE1]   flat-ish        (|gap|<1%): ${flatish.length}`);
 
-  // Near-miss diagnostics for both sides
-  if (upBelowFloor.length) {
-    const top5 = upBelowFloor.sort((a, b) => b.preOpenPct - a.preOpenPct).slice(0, 5);
-    console.log(`${LOG} [PHASE1] UP near-miss top-5 (just below +${MIN_PRE_OPEN_PCT}% floor):`);
+  if (gapUpStrong.length) {
+    const top5 = gapUpStrong.sort((a, b) => b.preOpenPct - a.preOpenPct).slice(0, 5);
+    console.log(`${LOG} [PHASE1] Top-5 gap UP today:`);
     top5.forEach(c => console.log(`${LOG} [PHASE1]   ${c.symbol.padEnd(14)} gap=+${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}`));
   }
-  if (downBelowFloor.length) {
-    const top5 = downBelowFloor.sort((a, b) => a.preOpenPct - b.preOpenPct).slice(0, 5);
-    console.log(`${LOG} [PHASE1] DOWN near-miss top-5 (just above -${MIN_PRE_OPEN_PCT}% floor):`);
+  if (gapDownStrong.length) {
+    const top5 = gapDownStrong.sort((a, b) => a.preOpenPct - b.preOpenPct).slice(0, 5);
+    console.log(`${LOG} [PHASE1] Top-5 gap DOWN today:`);
     top5.forEach(c => console.log(`${LOG} [PHASE1]   ${c.symbol.padEnd(14)} gap=${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}`));
   }
-  if (upAboveCap.length) {
-    console.log(`${LOG} [PHASE1] UP exhausted (>+${MAX_PRE_OPEN_PCT}%): ${upAboveCap.map(c => `${c.symbol}(+${c.preOpenPct.toFixed(1)}%)`).join(', ')}`);
-  }
-  if (downBelowCap.length) {
-    console.log(`${LOG} [PHASE1] DOWN exhausted (<-${MAX_PRE_OPEN_PCT}%): ${downBelowCap.map(c => `${c.symbol}(${c.preOpenPct.toFixed(1)}%)`).join(', ')}`);
-  }
 
-  // Build final universe: top gap-UP tagged LONG + top gap-DOWN tagged SHORT
-  const longCands = gapUpWindow
-    .sort((a, b) => b.preOpenPct - a.preOpenPct)
-    .slice(0, MAX_LONG_CANDIDATES)
-    .map(c => ({ ...c, direction: 'LONG' }));
+  // Save ALL stocks (cap at MAX_CANDIDATES = 250 as safety bound). Direction
+  // is intentionally NOT set — Phase 3 sets it when price breaks OR.
+  // We keep preOpenPct on the candidate object for later scoring/observability.
+  const candidates = mapped
+    .filter(c => c.iep > 0 && c.prevClose > 0)
+    .slice(0, MAX_CANDIDATES);
 
-  const shortCands = gapDownWindow
-    .sort((a, b) => a.preOpenPct - b.preOpenPct)   // most-negative first
-    .slice(0, MAX_SHORT_CANDIDATES)
-    .map(c => ({ ...c, direction: 'SHORT' }));
-
-  const candidates = [...longCands, ...shortCands];
-
-  console.log(`${LOG} [PHASE1] Final candidate list — ${longCands.length} LONG + ${shortCands.length} SHORT = ${candidates.length} total (cap ${MAX_CANDIDATES}):`);
-  if (longCands.length) {
-    console.log(`${LOG} [PHASE1]   LONG candidates (gap UP):`);
-    longCands.forEach((c, i) =>
-      console.log(`${LOG} [PHASE1]   #${String(i + 1).padStart(2)} L ${c.symbol.padEnd(14)} gap=+${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}  prev=₹${c.prevClose}`)
-    );
-  }
-  if (shortCands.length) {
-    console.log(`${LOG} [PHASE1]   SHORT candidates (gap DOWN):`);
-    shortCands.forEach((c, i) =>
-      console.log(`${LOG} [PHASE1]   #${String(i + 1).padStart(2)} S ${c.symbol.padEnd(14)} gap=${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}  prev=₹${c.prevClose}`)
-    );
-  }
+  console.log(`${LOG} [PHASE1] Universe — ${candidates.length} F&O stocks saved (no gap filter, direction decided at break)`);
   if (!candidates.length) {
-    console.warn(`${LOG} [PHASE1] ⚠️  No candidates passed the gap filter (either direction) — ORB will be idle today`);
+    console.warn(`${LOG} [PHASE1] ⚠️  No candidates — Kite OHLC may be unavailable`);
   }
 
   // Upsert today's ORB document
@@ -411,82 +382,85 @@ export async function recordOpeningRanges() {
   }
 
   const symbols = watching.map(c => c.symbol);
-  console.log(`${LOG} [PHASE2] Fetching 15-min candle for: ${symbols.join(', ')}`);
+  console.log(`${LOG} [PHASE2] TIER-1 mode: fetching OR via /quote/ohlc for ${symbols.length} stocks (batched)`);
+  // TIER-1 change: instead of slow per-symbol historical candle calls (would
+  // rate-limit at 215 stocks), use /quote/ohlc which returns today's running
+  // H/L. Called at 9:30:00, those values equal the 9:15-9:30 OR candle.
 
-  let multiCandles;
-  try {
-    multiCandles = await kiteOrderService.getIntradayMultiCandles(symbols, [
-      { interval: '15minute', count: 1 },
-    ]);
-  } catch (err) {
-    console.error(`${LOG} [PHASE2] ❌ Kite candle fetch FAILED:`, err.message);
-    console.error(`${LOG} [PHASE2]    Stack:`, err.stack);
-    return { success: false, error: err.message };
+  const CHUNK = 100;
+  const ohlcMap = {};
+  for (let i = 0; i < symbols.length; i += CHUNK) {
+    const batch = symbols.slice(i, i + CHUNK);
+    const instruments = batch.map(s => `NSE:${s}`);
+    console.log(`${LOG} [PHASE2] OHLC batch ${Math.floor(i / CHUNK) + 1}/${Math.ceil(symbols.length / CHUNK)}: ${batch.length} symbols`);
+    try {
+      const data = await kiteOrderService.getOHLC(instruments);
+      Object.assign(ohlcMap, data);
+    } catch (err) {
+      console.error(`${LOG} [PHASE2] OHLC batch failed (${err.message}) — continuing with what we have`);
+    }
   }
-
-  const candles15m = multiCandles['15minute'] || {};
-  console.log(`${LOG} [PHASE2] Candle data received for: ${Object.keys(candles15m).join(', ') || '(none)'}`);
+  console.log(`${LOG} [PHASE2] OHLC complete: ${Object.keys(ohlcMap).length}/${symbols.length} symbols returned data`);
 
   let rangesSet = 0;
-  let rangesSkipped = 0;
-  let rangesNoBar   = 0;
+  let rangesSkippedWide = 0;
+  let rangesSkippedTight = 0;
+  let rangesNoData = 0;
 
   for (const candidate of doc.candidates) {
     if (candidate.status !== 'WATCHING') continue;
 
-    const bars = candles15m[candidate.symbol] || [];
-    console.log(`${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} bars received: ${bars.length}`);
-
-    if (!bars.length) {
-      console.warn(`${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ⚠️  No 15-min bar — candle not yet available, leaving as WATCHING`);
-      rangesNoBar++;
+    const q = ohlcMap[`NSE:${candidate.symbol}`];
+    if (!q || !q.ohlc) {
+      console.warn(`${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ⚠ no OHLC data — leaving WATCHING`);
+      rangesNoData++;
       continue;
     }
 
-    const bar     = bars[0];
-    const orRange = parseFloat((bar.high - bar.low).toFixed(2));
+    // At 9:30:00, ohlc.open = 9:15 open, ohlc.high/low = today's H/L so far
+    // (which = the 9:15-9:30 candle since market just opened 15 min ago).
+    const orHigh  = q.ohlc.high;
+    const orLow   = q.ohlc.low;
+    const orRange = parseFloat((orHigh - orLow).toFixed(2));
     const rangePct = candidate.iep > 0 ? (orRange / candidate.iep) * 100 : 99;
 
-    console.log(
-      `${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ` +
-      `candle → O=₹${bar.open}  H=₹${bar.high}  L=₹${bar.low}  C=₹${bar.close}` +
-      `${bar.volume != null ? `  Vol=${bar.volume}` : ''}` +
-      `  Range=₹${orRange} (${rangePct.toFixed(2)}% of IEP)`
-    );
-
+    // Quality filter 1: skip too-wide OR (existing — target would be unreachable)
     if (rangePct > MAX_OR_RANGE_PCT) {
       candidate.status = 'SKIPPED';
-      candidate.skipReason = `or_range_too_wide_${rangePct.toFixed(1)}pct`;
-      console.warn(
-        `${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ❌ SKIPPED — ` +
-        `OR range ${rangePct.toFixed(2)}% > max ${MAX_OR_RANGE_PCT}% → target would be unreachable`
-      );
-      rangesSkipped++;
+      candidate.skipReason = `or_too_wide_${rangePct.toFixed(2)}pct`;
+      rangesSkippedWide++;
+      continue;
+    }
+    // Quality filter 2 (TIER-1 new): skip too-tight OR (noise breakouts likely)
+    if (rangePct < MIN_OR_RANGE_PCT) {
+      candidate.status = 'SKIPPED';
+      candidate.skipReason = `or_too_tight_${rangePct.toFixed(2)}pct`;
+      rangesSkippedTight++;
       continue;
     }
 
-    candidate.orHigh  = bar.high;
-    candidate.orLow   = bar.low;
+    candidate.orHigh  = orHigh;
+    candidate.orLow   = orLow;
     candidate.orRange = orRange;
     candidate.status  = 'RANGE_SET';
+    // direction is intentionally left unset — will be set in Phase 3 at break time
     rangesSet++;
+  }
 
-    // Direction-aware implied levels:
-    //   LONG: entry trigger = break above OR_High, stop = OR_Low, target = OR_High + 1.5×Range
-    //   SHORT: entry trigger = break below OR_Low, stop = OR_High, target = OR_Low - 1.5×Range
-    const isLong = (candidate.direction || 'LONG') === 'LONG';
-    const impliedStop   = isLong
-      ? snapToNSETick(bar.low,  0.05, 'floor')
-      : snapToNSETick(bar.high, 0.05, 'ceil');
-    const impliedTarget = isLong
-      ? snapToNSETick(bar.high + TARGET_RANGE_MULT * orRange, 0.05, 'ceil')
-      : snapToNSETick(bar.low  - TARGET_RANGE_MULT * orRange, 0.05, 'floor');
-    console.log(
-      `${LOG} [PHASE2] ${candidate.symbol.padEnd(14)} ✅ RANGE_SET [${isLong ? 'LONG' : 'SHORT'}] — ` +
-      `OR High=₹${bar.high}  Low=₹${bar.low}  Range=₹${orRange}  ` +
-      `implied stop=₹${impliedStop}  implied target=₹${impliedTarget}  ` +
-      `gap was ${candidate.preOpenPct >= 0 ? '+' : ''}${candidate.preOpenPct.toFixed(2)}%`
-    );
+  // Summary log (instead of 200+ per-symbol lines that would blow up the log)
+  console.log(`${LOG} [PHASE2] Summary: RANGE_SET=${rangesSet}  SKIPPED tight=${rangesSkippedTight}  SKIPPED wide=${rangesSkippedWide}  NO_DATA=${rangesNoData}  of ${watching.length}`);
+
+  // Log a sample of accepted candidates for visibility
+  const accepted = doc.candidates.filter(c => c.status === 'RANGE_SET');
+  if (accepted.length) {
+    const sample = accepted
+      .sort((a, b) => (b.orRange / b.iep) - (a.orRange / a.iep))   // widest OR first
+      .slice(0, 10);
+    console.log(`${LOG} [PHASE2] Top-10 by OR range %:`);
+    sample.forEach(c => {
+      const pct = (c.orRange / c.iep * 100).toFixed(2);
+      console.log(`${LOG} [PHASE2]   ${c.symbol.padEnd(14)} OR=₹${c.orLow}–₹${c.orHigh} (₹${c.orRange.toFixed(2)} = ${pct}%)  IEP=₹${c.iep}`);
+    });
   }
 
   await doc.save();
@@ -502,11 +476,11 @@ export async function recordOpeningRanges() {
 export async function checkBreakouts() {
   const ist    = MarketHoursUtil.toIST(new Date());
   const istMin = ist.getHours() * 60 + ist.getMinutes();
-  const windowStart = 9 * 60 + 30;
-  const windowEnd   = BREAKOUT_END_HOUR * 60 + BREAKOUT_END_MIN;
+  const windowStart = BREAKOUT_START_HOUR * 60 + BREAKOUT_START_MIN;   // 10:01
+  const windowEnd   = BREAKOUT_END_HOUR   * 60 + BREAKOUT_END_MIN;     // 14:01
 
   if (istMin < windowStart || istMin > windowEnd) {
-    console.log(`${LOG} [BREAKOUT] Outside entry window (now=${istTimeStr()}  window=09:30–${String(BREAKOUT_END_HOUR).padStart(2,'0')}:${String(BREAKOUT_END_MIN).padStart(2,'0')}) — skipping`);
+    console.log(`${LOG} [BREAKOUT] Outside entry window (now=${istTimeStr()}  window=${String(BREAKOUT_START_HOUR).padStart(2,'0')}:${String(BREAKOUT_START_MIN).padStart(2,'0')}–${String(BREAKOUT_END_HOUR).padStart(2,'0')}:${String(BREAKOUT_END_MIN).padStart(2,'0')}) — skipping`);
     return { skipped: true, reason: 'outside_window' };
   }
 
@@ -531,78 +505,156 @@ export async function checkBreakouts() {
     return { skipped: true, reason: 'no_range_set' };
   }
 
-  // Fetch LTP for all candidates in one call
-  const symbols = rangeSet.map(c => `NSE:${c.symbol}`);
-  let ltpData;
-  try {
-    ltpData = await kiteOrderService.getLTP(symbols);
-    console.log(`${LOG} [BREAKOUT] LTP fetched for ${Object.keys(ltpData).length}/${symbols.length} symbols`);
-  } catch (err) {
-    console.error(`${LOG} [BREAKOUT] ❌ LTP fetch FAILED:`, err.message);
-    return { success: false, error: err.message };
+  // TIER-1 + 2-BAR CONFIRM (2026-05-26 evening):
+  // Fetch the last 2 completed 15-min candles for each RANGE_SET candidate.
+  // BOTH candles must close past OR in the SAME direction → confirmed breakout.
+  // This filters out:
+  //   • wick fake-outs (price touches past OR then reverts within the candle)
+  //   • whipsaws (one candle each side of OR)
+  //   • single-candle late stabs (less reliable than 2-bar trend)
+  //
+  // Chunk size 20 keeps Kite historical-data rate limit happy (3 req/sec).
+  // At ~130 RANGE_SET stocks: 130/20 = ~7 chunks × ~1.5s each = ~10s total.
+  console.log(`${LOG} [BREAKOUT] Fetching last 2×15-min candles for ${rangeSet.length} stocks (chunked)...`);
+  const allCandles = {};
+  const CANDLE_CHUNK = 20;
+  for (let i = 0; i < rangeSet.length; i += CANDLE_CHUNK) {
+    const chunkSymbols = rangeSet.slice(i, i + CANDLE_CHUNK).map(c => c.symbol);
+    try {
+      const result = await kiteOrderService.getIntradayMultiCandles(chunkSymbols, [
+        { interval: '15minute', count: 2 },
+      ]);
+      Object.assign(allCandles, result['15minute'] || {});
+    } catch (err) {
+      console.error(`${LOG} [BREAKOUT] Candle chunk ${i}-${i + CANDLE_CHUNK} failed: ${err.message}`);
+    }
+  }
+  console.log(`${LOG} [BREAKOUT] Candle data: ${Object.keys(allCandles).length}/${rangeSet.length} symbols returned`);
+
+  // ── Evaluate 2-bar confirmation for each candidate ──
+  // For LONG-confirm: bar1.close > OR_High AND bar2.close > OR_High
+  // For SHORT-confirm: bar1.close < OR_Low  AND bar2.close < OR_Low
+  // Whipsaw / mixed: skip
+  const confirmed = [];
+  let waitingBars = 0;
+  let stillInsideOR = 0;
+  let whipsaws = 0;
+
+  for (const candidate of rangeSet) {
+    const bars = allCandles[candidate.symbol] || [];
+    if (bars.length < 2) { waitingBars++; continue; }
+
+    const [b1, b2] = bars.slice(-2);
+    const c1 = b1.close;
+    const c2 = b2.close;
+
+    const c1AboveOR = c1 > candidate.orHigh;
+    const c1BelowOR = c1 < candidate.orLow;
+    const c2AboveOR = c2 > candidate.orHigh;
+    const c2BelowOR = c2 < candidate.orLow;
+
+    if (c1AboveOR && c2AboveOR) {
+      const distance    = c2 - candidate.orHigh;
+      const distancePct = distance / candidate.orHigh * 100;
+      const staleFlag   = distance > candidate.orRange * 2;
+      confirmed.push({
+        candidate, direction: 'LONG', bar1Close: c1, bar2Close: c2,
+        distance, distancePct, staleFlag,
+      });
+    } else if (c1BelowOR && c2BelowOR) {
+      const distance    = candidate.orLow - c2;
+      const distancePct = distance / candidate.orLow * 100;
+      const staleFlag   = distance > candidate.orRange * 2;
+      confirmed.push({
+        candidate, direction: 'SHORT', bar1Close: c1, bar2Close: c2,
+        distance, distancePct, staleFlag,
+      });
+    } else if ((c1AboveOR && c2BelowOR) || (c1BelowOR && c2AboveOR)) {
+      whipsaws++;
+    } else {
+      stillInsideOR++;
+    }
+  }
+
+  console.log(`${LOG} [BREAKOUT] Scan summary: ${confirmed.length} 2-bar confirmed, ${stillInsideOR} inside OR, ${whipsaws} whipsaws (bar mismatch), ${waitingBars} missing bars`);
+
+  if (!confirmed.length) {
+    return { success: true, entered: 0 };
+  }
+
+  // Rank confirmed signals by distance% past OR (biggest move first)
+  confirmed.sort((a, b) => b.distancePct - a.distancePct);
+
+  // Mark actions: ENTER / SLOT_FULL / SKIP_STALE
+  const slotsLeft = MAX_ENTRIES - enteredCount;
+  let slotsConsumed = 0;
+  confirmed.forEach(b => {
+    if (b.staleFlag) {
+      b._action = 'SKIP_STALE';
+    } else if (slotsConsumed < slotsLeft) {
+      b._action = 'ENTER';
+      slotsConsumed++;
+    } else {
+      b._action = 'SLOT_FULL';
+    }
+  });
+
+  console.log(`${LOG} [BREAKOUT] Ranked 2-bar confirmed breakouts:`);
+  confirmed.forEach((b, idx) => {
+    const dirTag     = b.direction === 'LONG' ? 'L' : 'S';
+    const orRangePct = (b.candidate.orRange / b.candidate.iep * 100).toFixed(2);
+    const actionTag  = {
+      ENTER:      '✅ ENTERING',
+      SLOT_FULL:  '⏸  slot full',
+      SKIP_STALE: '⚠ STALE — skipped',
+    }[b._action] || '?';
+    console.log(
+      `${LOG} [BREAKOUT]   #${String(idx + 1).padStart(2)} ${dirTag} ${b.candidate.symbol.padEnd(14)} ` +
+      `OR=₹${b.candidate.orLow}–₹${b.candidate.orHigh} (${orRangePct}%)  ` +
+      `bar1.close=₹${b.bar1Close} bar2.close=₹${b.bar2Close}  ` +
+      `distance=₹${b.distance.toFixed(2)} (${b.distancePct.toFixed(2)}%)  → ${actionTag}`
+    );
+  });
+
+  // We need CURRENT LTP for the entries (position sizing + entry price log).
+  // Candle close was from up-to-15-min ago; LTP is now.
+  const entryCandidates = confirmed.filter(b => b._action === 'ENTER');
+  let currentLtps = {};
+  if (entryCandidates.length) {
+    try {
+      const ltpQuery = entryCandidates.map(b => `NSE:${b.candidate.symbol}`);
+      currentLtps = await kiteOrderService.getLTP(ltpQuery);
+    } catch (err) {
+      console.error(`${LOG} [BREAKOUT] LTP fetch for entries failed: ${err.message}`);
+      return { success: false, error: err.message };
+    }
   }
 
   // Capital allocation
   let capitalPerTrade = MIN_CAPITAL_PER_TRADE;
   try {
-    const balance   = await kiteOrderService.getAvailableBalance();
+    const balance = await kiteOrderService.getAvailableBalance();
     const orbBudget = balance.available * ORB_CAPITAL_PCT;
-    const slotsLeft = MAX_ENTRIES - enteredCount;
-    capitalPerTrade = Math.floor(orbBudget / Math.max(slotsLeft, 1));
-    console.log(
-      `${LOG} [BREAKOUT] Capital — available=₹${balance.available}  ` +
-      `ORB budget (${ORB_CAPITAL_PCT * 100}%)=₹${Math.round(orbBudget)}  ` +
-      `slots left=${slotsLeft}  per-trade=₹${capitalPerTrade}`
-    );
+    const slotsForCap = MAX_ENTRIES - enteredCount;
+    capitalPerTrade = Math.floor(orbBudget / Math.max(slotsForCap, 1));
+    console.log(`${LOG} [BREAKOUT] Capital — available=₹${balance.available}  ORB budget (${ORB_CAPITAL_PCT*100}%)=₹${Math.round(orbBudget)}  per-trade=₹${capitalPerTrade}`);
     if (capitalPerTrade < MIN_CAPITAL_PER_TRADE) {
-      console.warn(`${LOG} [BREAKOUT] ⚠️  Per-trade capital ₹${capitalPerTrade} < floor ₹${MIN_CAPITAL_PER_TRADE} — skipping entries`);
+      console.warn(`${LOG} [BREAKOUT] ⚠ per-trade capital ₹${capitalPerTrade} < floor ₹${MIN_CAPITAL_PER_TRADE} — skipping entries`);
       return { skipped: true, reason: 'insufficient_capital', capitalPerTrade };
     }
   } catch (err) {
-    console.error(`${LOG} [BREAKOUT] Balance fetch FAILED — using floor ₹${capitalPerTrade}:`, err.message);
+    console.error(`${LOG} [BREAKOUT] Balance fetch failed — using floor ₹${capitalPerTrade}: ${err.message}`);
   }
 
-  // Check each candidate
-  console.log(`${LOG} [BREAKOUT] Checking ${rangeSet.length} candidate(s):`);
+  // Execute entries
   let entered = 0;
-
-  for (const candidate of rangeSet) {
+  for (const b of confirmed) {
+    if (b._action !== 'ENTER') continue;
     if (doc.candidates.filter(c => c.status === 'ENTERED').length >= MAX_ENTRIES) break;
-
-    const ltpEntry = ltpData[`NSE:${candidate.symbol}`];
-    const ltp      = ltpEntry?.last_price;
-
-    if (!ltp) {
-      console.warn(`${LOG} [BREAKOUT]   ${candidate.symbol.padEnd(14)} ⚠️  No LTP returned — skipping`);
-      continue;
-    }
-
-    // Direction-aware breakout test:
-    //   LONG  → LTP > OR_High  (price broke ABOVE the opening range)
-    //   SHORT → LTP < OR_Low   (price broke BELOW the opening range)
-    const isLong       = (candidate.direction || 'LONG') === 'LONG';
-    const triggered    = isLong ? (ltp > candidate.orHigh) : (ltp < candidate.orLow);
-    const triggerLevel = isLong ? candidate.orHigh : candidate.orLow;
-    const distance     = parseFloat((ltp - triggerLevel).toFixed(2));
-    const distancePct  = parseFloat((Math.abs(ltp - triggerLevel) / triggerLevel * 100).toFixed(2));
-    const dirTag       = isLong ? 'L' : 'S';
-
-    console.log(
-      `${LOG} [BREAKOUT]   ${dirTag} ${candidate.symbol.padEnd(14)} ` +
-      `LTP=₹${ltp}  OR_High=₹${candidate.orHigh}  OR_Low=₹${candidate.orLow}  ` +
-      (triggered
-        ? (isLong
-            ? `✅ BREAKOUT ABOVE OR_High (by ₹${Math.abs(distance)})`
-            : `✅ BREAKDOWN BELOW OR_Low (by ₹${Math.abs(distance)})`)
-        : (isLong
-            ? `⬜ below OR_High (₹${Math.abs(distance)} = ${distancePct}% away)`
-            : `⬜ above OR_Low (₹${Math.abs(distance)} = ${distancePct}% away)`))
-    );
-
-    if (triggered) {
-      await enterTrade(doc, candidate, ltp, capitalPerTrade);
-      entered++;
-    }
+    b.candidate.direction = b.direction;
+    const liveLtp = currentLtps[`NSE:${b.candidate.symbol}`]?.last_price || b.bar2Close;
+    await enterTrade(doc, b.candidate, liveLtp, capitalPerTrade);
+    entered++;
   }
 
   if (entered > 0 || doc.isModified()) await doc.save();
