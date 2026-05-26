@@ -24,11 +24,38 @@ const MAX_ENTRIES           = 3;      // max positions per day (LONG + SHORT com
 const MAX_CANDIDATES        = 15;     // total candidates across both directions
 const MAX_LONG_CANDIDATES   = 8;      // top gap-UP for LONG breakouts (≥+1.5%)
 const MAX_SHORT_CANDIDATES  = 7;      // top gap-DOWN for SHORT breakdowns (≤-1.5%)
-const MIN_PRE_OPEN_PCT      = 1.5;    // min gap % to watch
-const MAX_PRE_OPEN_PCT      = 8.0;    // max gap % (exhausted move)
+// Min gap % to watch — was 1.5%, dropped to 1.0% on 2026-05-26 IST midday.
+// Rationale: on 2026-05-25 the 1.5% filter qualified 4 names; on 2026-05-26
+// it qualified only 2 (and neither broke OR). With <1 trade/day average we
+// have too few data points to evaluate the strategy. Lowering to 1.0% should
+// roughly double the universe on quiet days while still filtering pure noise.
+// Re-evaluate after a week of data.
+const MIN_PRE_OPEN_PCT      = 1.0;
+const MAX_PRE_OPEN_PCT      = 8.0;    // max gap % (exhausted move) — unchanged
 const ORB_CAPITAL_PCT       = 0.90;   // use at most 90% of whatever is available at entry time
 const MIN_CAPITAL_PER_TRADE = 5000;   // skip entry if budget too thin
-const TARGET_RANGE_MULT     = 1.5;    // target = OR High + 1.5 × OR Range
+const TARGET_RANGE_MULT     = 1.5;    // (no longer used — see SIMPLE_MODE below)
+
+// ── SIMPLE MODE (2026-05-26 evening) ─────────────────────────────────────────
+// Switched to a clean SL-only strategy after two days of modify-bug-related
+// pain (market_protection circuit-reject on 05-25, SL-M modify permissible-
+// range reject on 05-26). The "intelligent" trail/target logic was good in
+// theory but kept hitting Kite-API edge cases.
+//
+// New flow per trade:
+//   1. Entry: MARKET BUY (LONG) / SELL (SHORT) on OR break
+//   2. SL: placed ONCE at the breakout level + buffer, NEVER modified
+//        LONG  → OR_High − min(1% of OR_High, OR_range)
+//        SHORT → OR_Low  + min(1% of OR_Low,  OR_range)
+//        The OR-range cap prevents the buffer from landing outside the OR
+//        for very tight ranges (it then falls back to opposite-boundary stop).
+//   3. NO target order — let the winner run.
+//   4. Monitor: just check if SL fired. No BE trail, no candle tighten,
+//      no sideways exit (all disabled below).
+//   5. 15:15 force-exit anything still open.
+const SL_BUFFER_PCT         = 1.0;    // target SL buffer in % of breakout level
+                                       // (capped at OR range for tight-range stocks)
+
 // Entry window extended 2026-05-25 (evening): was 9:30-11:00, now 9:30-14:00.
 // Rationale: today (May 25) CANBK only broke out cleanly past 10:30 — at the
 // OLD 11:00 cutoff we'd have missed it. With the candle-structure tighten +
@@ -72,6 +99,89 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 
 function istTimeStr() {
   return MarketHoursUtil.toIST(new Date()).toTimeString().slice(0, 8);
+}
+
+// ── SL trail via cancel + place (replaces modifyOrder) ────────────────────
+// Kite's modifyOrder on SL-M orders triggers the NSE "permissible range" check
+// against the stale implicit limit from the original placement's market_protection
+// — see Kite docs and 2026-05-26 incident notes. Modify is also not documented
+// to accept market_protection as a parameter.
+//
+// Safe workaround: cancel the old SL-M, then place a fresh SL-M with the new
+// trigger. ~1 second unprotected window between cancel and place. If place
+// fails, fire an emergency market exit to close the position.
+//
+// IMPORTANT: we cancel FIRST, then place, to avoid the risk of both SL orders
+// firing on a fast move (which would double the exit qty → naked position
+// in the opposite direction).
+//
+// Returns { success: true, newOrderId } or { success: false, reason }.
+async function replaceSlOrderWithNewTrigger({ candidate, newTrigger, exitSide, logTag = '[MONITOR]' }) {
+  const sym       = candidate.symbol;
+  const oldSlId   = candidate.stopOrderId;
+  const qty       = candidate.qty;
+  if (!oldSlId) {
+    console.warn(`${LOG} ${logTag}   ⚠ ${sym}: no existing SL orderId to replace`);
+    return { success: false, reason: 'no_existing_sl' };
+  }
+
+  // Step 1: cancel the old SL
+  try {
+    await kiteOrderService.cancelOrder(oldSlId);
+    console.log(`${LOG} ${logTag}   ${sym}: cancelled old SL ${oldSlId}`);
+  } catch (cancelErr) {
+    console.error(`${LOG} ${logTag}   ${sym}: ❌ cancel failed (${cancelErr.message}) — keeping old SL active, aborting trail`);
+    return { success: false, reason: 'cancel_failed' };
+  }
+
+  // Brief pause for cancel to register at exchange
+  await delay(300);
+
+  // Step 2: place new SL-M at the new trigger
+  try {
+    const placeRes = await kiteOrderService.placeOrder({
+      tradingsymbol:    sym,
+      exchange:         'NSE',
+      transaction_type: exitSide,
+      order_type:       'SL-M',
+      trigger_price:    newTrigger,
+      product:          'MIS',
+      quantity:         qty,
+      simulationId:     `orb_sl_trail_${sym}`,
+      orderType:        'ORB_STOP',
+      source:           'ORB',
+    });
+    if (placeRes?.success) {
+      console.log(`${LOG} ${logTag}   ${sym}: ✅ new SL placed @ trigger ₹${newTrigger}, orderId=${placeRes.orderId}`);
+      candidate.stopOrderId = placeRes.orderId;
+      candidate.stopPrice   = newTrigger;
+      return { success: true, newOrderId: placeRes.orderId };
+    }
+    throw new Error('placeOrder returned non-success');
+  } catch (placeErr) {
+    // CRITICAL: old SL is cancelled and new SL placement failed → position is UNPROTECTED.
+    // Fire an emergency market exit to close the position immediately.
+    console.error(`${LOG} ${logTag}   ${sym}: ⚠⚠ NEW SL PLACE FAILED (${placeErr.message}) — POSITION UNPROTECTED, firing emergency ${exitSide} MARKET`);
+    candidate.stopOrderId = null;   // null so future cycles don't try to check a dead orderId
+    try {
+      const emergency = await kiteOrderService.placeOrder({
+        tradingsymbol:    sym,
+        exchange:         'NSE',
+        transaction_type: exitSide,
+        order_type:       'MARKET',
+        product:          'MIS',
+        quantity:         qty,
+        simulationId:     `orb_emergency_after_trail_${sym}`,
+        orderType:        'ORB_EMERGENCY_EXIT',
+        source:           'ORB',
+      });
+      console.log(`${LOG} ${logTag}   ${sym}: emergency exit placed — orderId=${emergency?.orderId}`);
+      return { success: false, reason: 'place_failed_emergency_fired', emergencyOrderId: emergency?.orderId };
+    } catch (emergencyErr) {
+      console.error(`${LOG} ${logTag}   ${sym}: ❌❌❌ EMERGENCY EXIT ALSO FAILED — MANUAL ACTION REQUIRED (${emergencyErr.message})`);
+      return { success: false, reason: 'place_and_emergency_failed' };
+    }
+  }
 }
 
 // ── Pre-open universe via Kite OHLC ───────────────────────────────────────
@@ -481,19 +591,26 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
   const dirTag      = isLong ? 'LONG' : 'SHORT';
 
   const qty    = Math.max(1, Math.floor(capitalPerTrade / ltp));
-  const target = isLong
-    ? snapToNSETick(candidate.orHigh + TARGET_RANGE_MULT * candidate.orRange, 0.05, 'ceil')
-    : snapToNSETick(candidate.orLow  - TARGET_RANGE_MULT * candidate.orRange, 0.05, 'floor');
-  let   stop   = isLong
-    ? snapToNSETick(candidate.orLow,  0.05, 'floor')
-    : snapToNSETick(candidate.orHigh, 0.05, 'ceil');
 
-  // R:R sign is the same for both: |target - ltp| / |ltp - stop|
-  const rr = (Math.abs(target - ltp) / Math.abs(ltp - stop)).toFixed(2);
+  // SIMPLE MODE: tight SL just on the wrong side of the breakout level.
+  // Buffer = min(1% of breakout level, OR range). The OR-range cap prevents
+  // the SL from landing outside the OR on very tight ranges.
+  const breakoutLevel = isLong ? candidate.orHigh : candidate.orLow;
+  const targetBuffer  = breakoutLevel * (SL_BUFFER_PCT / 100);
+  const effectiveBuf  = Math.min(targetBuffer, candidate.orRange);
+  const usedSource    = effectiveBuf < targetBuffer ? 'OR cap' : `${SL_BUFFER_PCT}%`;
+
+  let stop = isLong
+    ? snapToNSETick(candidate.orHigh - effectiveBuf, 0.05, 'floor')
+    : snapToNSETick(candidate.orLow  + effectiveBuf, 0.05, 'ceil');
+
+  // NO target order in SIMPLE MODE — let winners ride to 15:15.
+  const target = null;
 
   console.log(`${LOG} [ENTER] ─── ${candidate.symbol} [${dirTag}] ───────────────────────`);
   console.log(`${LOG} [ENTER] ${candidate.symbol}: capital=₹${capitalPerTrade}  LTP≈₹${ltp}  qty=${qty}`);
-  console.log(`${LOG} [ENTER] ${candidate.symbol}: stop=₹${stop} (OR ${isLong ? 'Low' : 'High'})  target=₹${target} (OR ${isLong ? 'High' : 'Low'} ${isLong ? '+' : '-'} ${TARGET_RANGE_MULT}×Range)  R:R=${rr}`);
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: stop=₹${stop} (${isLong ? 'OR_High' : 'OR_Low'} ${isLong ? '−' : '+'} buffer ₹${effectiveBuf.toFixed(2)} [${usedSource}], OR range ₹${candidate.orRange.toFixed(2)})  target=NONE (ride to 15:15)`);
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: risk per share = ₹${Math.abs(ltp - stop).toFixed(2)} (${(Math.abs(ltp - stop) / ltp * 100).toFixed(2)}%)`);
 
   // ── Step 1: Market entry ──────────────────────────────────────────────────
   let entryOrderId, entryPrice;
@@ -625,60 +742,19 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
     return;
   }
 
-  // ── Step 3: LIMIT target — direction-aware exit side + tick snap ─────────
-  let tgtOrderId;
-  console.log(`${LOG} [ENTER] ${candidate.symbol}: placing target LIMIT ${exitSide} — price=₹${target}  qty=${qty}`);
-  try {
-    const tgtRes = await kiteOrderService.placeOrder({
-      tradingsymbol:    candidate.symbol,
-      exchange:         'NSE',
-      transaction_type: exitSide,
-      order_type:       'LIMIT',
-      price:            target,
-      product:          'MIS',
-      quantity:         qty,
-      simulationId:     `orb_tgt_${candidate.symbol}`,
-      orderType:        'ORB_TARGET',
-      source:           'ORB',
-    });
-    if (tgtRes.success) {
-      tgtOrderId = tgtRes.orderId;
-      console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ target LIMIT ${exitSide} placed — orderId=${tgtOrderId}  price=₹${target}`);
-    }
-  } catch (err) {
-    const tick = parseKiteTickError(err.message);
-    if (tick) {
-      const snappedTgt = isLong
-        ? snapToNSETick(target, tick, 'ceil')
-        : snapToNSETick(target, tick, 'floor');
-      console.warn(`${LOG} [ENTER] ${candidate.symbol}: target tick error (tick=${tick}) → re-snapped target=₹${snappedTgt}  retrying...`);
-      try {
-        const r2 = await kiteOrderService.placeOrder({
-          tradingsymbol: candidate.symbol, exchange: 'NSE',
-          transaction_type: exitSide, order_type: 'LIMIT',
-          price: snappedTgt, product: 'MIS', quantity: qty,
-          simulationId: `orb_tgt_${candidate.symbol}`,
-          orderType: 'ORB_TARGET', source: 'ORB',
-        });
-        if (r2.success) {
-          tgtOrderId = r2.orderId;
-          candidate.targetPrice = snappedTgt;
-          console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ target LIMIT placed (retry) — orderId=${tgtOrderId}  price=₹${snappedTgt}`);
-        }
-      } catch (retryErr) {
-        console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ target LIMIT retry FAILED:`, retryErr.message);
-      }
-    } else {
-      console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ target LIMIT FAILED:`, err.message);
-    }
-  }
-  candidate.targetOrderId = tgtOrderId;
+  // ── Step 3: NO TARGET (SIMPLE MODE — 2026-05-26) ─────────────────────────
+  // Target LIMIT order is intentionally NOT placed. The position rides until
+  // the SL fires OR the 15:15 force-exit closes it. This avoids the modify
+  // bugs we hit on 05-25/05-26 and lets winners run past any fixed cap.
+  // The original target LIMIT placement code is preserved in git history if
+  // we want to re-enable it later.
+  candidate.targetOrderId = null;
+  candidate.targetPrice   = null;
 
   console.log(`${LOG} [ENTER] ✅✅ ${candidate.symbol} [${dirTag}] LIVE`);
-  console.log(`${LOG} [ENTER]    entry=₹${entryPrice}  stop=₹${stop}  target=₹${candidate.targetPrice}`);
-  console.log(`${LOG} [ENTER]    SL orderId=${slOrderId}  TGT orderId=${tgtOrderId || '⚠️ FAILED'}`);
-  // Risk/reward computed as absolute distance — direction is encoded in sign of (entry−stop) / (target−entry).
-  console.log(`${LOG} [ENTER]    risk=₹${(Math.abs(entryPrice - stop) * qty).toFixed(2)}  reward=₹${(Math.abs(candidate.targetPrice - entryPrice) * qty).toFixed(2)}`);
+  console.log(`${LOG} [ENTER]    entry=₹${entryPrice}  stop=₹${stop}  target=NONE (ride to 15:15)`);
+  console.log(`${LOG} [ENTER]    SL orderId=${slOrderId}`);
+  console.log(`${LOG} [ENTER]    risk=₹${(Math.abs(entryPrice - stop) * qty).toFixed(2)} (${(Math.abs(entryPrice - stop) / entryPrice * 100).toFixed(2)}% per share)`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -841,8 +917,12 @@ export async function monitorOrbPositions() {
     }
 
     // ── Breakeven trail — move stop to entry once 1R in profit ──────────────
-    // Direction-aware: for LONG, risk = entry−stop, gain = ltp−entry, BE moves stop UP.
-    //                  for SHORT, risk = stop−entry, gain = entry−ltp, BE moves stop DOWN.
+    // Direction-aware: LONG → risk = entry−stop, gain = ltp−entry, BE stop moves UP.
+    //                  SHORT → risk = stop−entry, gain = entry−ltp, BE stop moves DOWN.
+    //
+    // 2026-05-26 evening: switched from modifyOrder to cancel-and-replace.
+    // Kite's modify on SL-M kept rejecting with "permissible range" because
+    // of the stale implicit limit. cancel+replace avoids the whole problem.
     if (c.status === 'ENTERED' && c.stopOrderId && !c._beTrailed) {
       const risk        = cIsLong ? (c.entryPrice - c.stopPrice) : (c.stopPrice - c.entryPrice);
       const currentGain = ltp ? (cIsLong ? (ltp - c.entryPrice) : (c.entryPrice - ltp)) : null;
@@ -850,28 +930,30 @@ export async function monitorOrbPositions() {
         console.log(`${LOG} [MONITOR]   BE trail check [${cIsLong ? 'LONG' : 'SHORT'}]: risk=₹${risk.toFixed(2)}  current gain=₹${currentGain?.toFixed(2)}  need ₹${risk.toFixed(2)} for 1R`);
       }
       if (ltp && risk > 0 && currentGain != null && currentGain >= risk) {
-        // For LONG: snap floor (slightly below entry to avoid premature fill on noise)
-        // For SHORT: snap ceil (slightly above entry, same logic)
-        const beStop = snapToNSETick(c.entryPrice, 0.05, cIsLong ? 'floor' : 'ceil');
-        console.log(`${LOG} [MONITOR]   1R achieved → moving stop to breakeven=₹${beStop}`);
-        try {
-          // SL-M = trigger only (see 2026-05-25 incident comment in dailyPicksService).
-          await kiteOrderService.modifyOrder(c.stopOrderId, {
-            trigger_price: beStop,
-          });
-          c.stopPrice  = beStop;
+        const beStop   = snapToNSETick(c.entryPrice, 0.05, cIsLong ? 'floor' : 'ceil');
+        const exitSide = cIsLong ? 'SELL' : 'BUY';
+        console.log(`${LOG} [MONITOR]   1R achieved → moving stop to breakeven=₹${beStop} via cancel+replace`);
+        const replaceRes = await replaceSlOrderWithNewTrigger({
+          candidate:  c,
+          newTrigger: beStop,
+          exitSide,
+          logTag:     '[MONITOR]',
+        });
+        if (replaceRes.success) {
           c._beTrailed = true;
-          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] breakeven trail done — stop=₹${beStop}`);
+          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] BE trail complete — new SL ${replaceRes.newOrderId} @ ₹${beStop}`);
           changed = true;
-        } catch (err) {
-          console.error(`${LOG} [MONITOR]   ❌ breakeven trail FAILED:`, err.message);
         }
+        // On failure, helper already logged details / fired emergency exit if applicable.
       }
     }
   }
 
   // ── Candle structure analysis — exit / trail / tighten ────────────────────
-  // Runs after fill checks so we skip already-exited positions.
+  // Re-enabled 2026-05-26 evening after fixing the modify bug (added
+  // market_protection: 1 to all SL-M modify calls so Kite recomputes the
+  // implicit limit when trigger changes).
+  //
   // Fetches 5-min (6 bars) + 15-min (4 bars) for all still-ENTERED positions.
   // Uses the same analyzeIntradayStructure() as dailyPicksService — two-timeframe
   // candle logic: 15-min for trend structure, 5-min for stop placement.
@@ -1029,23 +1111,25 @@ export async function monitorOrbPositions() {
         } else if (!c.stopOrderId) {
           console.warn(`${LOG} [CANDLE] ${c.symbol}: ${decision.action} ₹${snappedStop} but no SL order to modify`);
         } else {
-          try {
-            // SL-M = trigger only. See breakeven-trail comment above for why
-            // we must NOT pass `price` (otherwise NSE "permissible range" reject).
-            await kiteOrderService.modifyOrder(c.stopOrderId, {
-              trigger_price: snappedStop,
-            });
+          // 2026-05-26 evening: switched from modifyOrder to cancel+replace.
+          // Kite's modify kept rejecting with "permissible range" on SL-M.
+          // See replaceSlOrderWithNewTrigger() docstring.
+          const replaceRes = await replaceSlOrderWithNewTrigger({
+            candidate:  c,
+            newTrigger: snappedStop,
+            exitSide:   cExitSide,
+            logTag:     '[CANDLE]',
+          });
+          if (replaceRes.success) {
             console.log(`${LOG} [CANDLE] ✅ ${c.symbol} [${cDirTag}]: ${decision.action} — stop ₹${c.stopPrice} → ₹${snappedStop} [${decision.reason.split(' | ')[0]}]`);
-            c.stopPrice  = snappedStop;
             // Mark BE trailed when stop crosses entry "in our favor":
             //   LONG  → stop ≥ entry
             //   SHORT → stop ≤ entry
             const crossedBE = cIsLong ? (snappedStop >= c.entryPrice) : (snappedStop <= c.entryPrice);
             if (crossedBE) c._beTrailed = true;
             changed = true;
-          } catch (err) {
-            console.error(`${LOG} [CANDLE] ${c.symbol}: modifyOrder FAILED:`, err.message);
           }
+          // On failure, helper already logged details / fired emergency exit if applicable.
         }
       }
       // 'hold' — nothing to do

@@ -315,13 +315,25 @@ class OrbJob {
       });
 
       console.log(`${LOG} ═══════════════════════════════════════`);
-      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — ORB PATH (post 2026-05-25):`);
-      console.log(`${LOG}   09:08       — pre-open universe (NSE IEP, gap filter, top 15)`);
+      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — ORB PATH (INTELLIGENT MODE, post 2026-05-26 evening):`);
+      console.log(`${LOG}   09:08       — pre-open universe (NSE IEP, gap ±1%, top 8 LONG + 7 SHORT)`);
       console.log(`${LOG}   09:30       — record 15-min opening range (OR high/low)`);
       console.log(`${LOG}   09:00–14:59 — breakout check every 1 min (active 9:30–14:00)`);
-      console.log(`${LOG}   09:00–14:59 — position monitor every 5 min (BE trail at +1R, candle-structure tighten)`);
+      console.log(`${LOG}   09:00–14:59 — position monitor every 5 min:`);
+      console.log(`${LOG}                   • check SL fill status`);
+      console.log(`${LOG}                   • BE trail to entry at +1R profit`);
+      console.log(`${LOG}                   • candle structure analysis (5m + 15m bars):`);
+      console.log(`${LOG}                       - bullish/bearish engulfing, hammer, doji, inside`);
+      console.log(`${LOG}                       - direction-aware (reversal patterns against the trade)`);
+      console.log(`${LOG}                       - volume drying / expanding confirmation`);
+      console.log(`${LOG}                       - 15m structure break = market exit`);
+      console.log(`${LOG}                       - reversal candle + vol = tighten SL`);
+      console.log(`${LOG}                   • sideways exit (40 min flat at ≤0.3% pnl)`);
       console.log(`${LOG}   15:15       — force-exit (5 min before Zerodha auto-square)`);
-      console.log(`${LOG}   [disabled]  — 10:30 TIME EXIT (set ORB_TIME_EXIT_ENABLED=true to re-enable)`);
+      console.log(`${LOG} ENTRY:  MARKET BUY/SELL on OR break  |  SL: OR_(High|Low) ∓ min(1%, OR range)  |  NO target`);
+      console.log(`${LOG} SL TRAIL: cancel old SL-M + place new SL-M with updated trigger (avoids Kite "permissible range" reject on modify)`);
+      console.log(`${LOG}   [disabled]  — 10:30 TIME EXIT      (set ORB_TIME_EXIT_ENABLED=true to re-enable)`);
+      console.log(`${LOG}   [disabled]  — Fixed target LIMIT   (no target order — winners ride to 15:15)`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
