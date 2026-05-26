@@ -101,6 +101,36 @@ function istTimeStr() {
   return MarketHoursUtil.toIST(new Date()).toTimeString().slice(0, 8);
 }
 
+// ── Broker position check before placing exits ──────────────────────────
+// Critical safety: before firing any exit order (force-exit, time-exit,
+// candle-exit, sideways-exit), verify there's actually an open position at
+// the broker. Without this check, if you manually closed the position in
+// Kite during the day, the system's "exit" would OPEN a fresh trade in the
+// opposite direction.
+//
+// Concrete incident: 2026-05-26 CONCOR. System entered SHORT 27 @ 482.95
+// at 11:03. User manually BUY-covered at 13:58 (₹476). At 15:15 the force-
+// exit cron fired a BUY-MARKET to "close the short", which actually opened
+// a LONG 27 @ ₹476.60. Then Zerodha auto-squared at 15:25 SELL @ ₹475.10.
+// Net give-back: ~₹40 on top of the ~₹187 captured. This helper prevents
+// that.
+//
+// Returns the actual open qty for the symbol (signed: negative for SHORT,
+// positive for LONG, 0 for flat). Returns null on Kite API error so callers
+// can choose to fall through (existing behavior) rather than skip.
+async function getActualPositionQty(symbol) {
+  try {
+    const positions = await kiteOrderService.getPositions();
+    const dayList   = positions?.data?.day || [];
+    const found     = dayList.find(p => p.tradingsymbol === symbol);
+    if (!found) return 0;
+    return Number(found.quantity || 0);
+  } catch (err) {
+    console.error(`${LOG} [POS-CHECK] ${symbol}: getPositions failed (${err.message}) — falling through`);
+    return null;  // unknown — caller decides
+  }
+}
+
 // ── SL trail via cancel + place (replaces modifyOrder) ────────────────────
 // Kite's modifyOrder on SL-M orders triggers the NSE "permissible range" check
 // against the stale implicit limit from the original placement's market_protection
@@ -823,6 +853,26 @@ export async function monitorOrbPositions() {
       // Direction-aware exit side: LONG closes via SELL, SHORT closes via BUY.
       const cIsLong  = (c.direction || 'LONG') === 'LONG';
       const cExitSide = cIsLong ? 'SELL' : 'BUY';
+      // Verify broker position before placing exit (2026-05-26 safety fix).
+      const actualQty = await getActualPositionQty(c.symbol);
+      if (actualQty === 0) {
+        console.log(`${LOG} [MONITOR]   ⚠ ${c.symbol}: broker shows position=0 — skipping time-exit order (already closed externally)`);
+        c.status     = 'TIME_EXIT';
+        c.exitReason = 'already_closed_externally';
+        c.exitTime   = new Date();
+        exitedThisRun++;
+        changed = true;
+        continue;
+      }
+      if (actualQty !== null && (cIsLong ? actualQty <= 0 : actualQty >= 0)) {
+        console.error(`${LOG} [MONITOR]   ⚠⚠ ${c.symbol}: broker qty=${actualQty} but direction=${cIsLong ? 'LONG' : 'SHORT'} — mismatch, skipping`);
+        c.status     = 'TIME_EXIT';
+        c.exitReason = `direction_mismatch_broker_qty_${actualQty}`;
+        exitedThisRun++;
+        changed = true;
+        continue;
+      }
+      if (actualQty !== null) c.qty = Math.abs(actualQty);
       try {
         const res = await kiteOrderService.placeOrder({
           tradingsymbol:    c.symbol,
@@ -1006,6 +1056,24 @@ export async function monitorOrbPositions() {
           if (c.stopOrderId)   { try { await kiteOrderService.cancelOrder(c.stopOrderId);   } catch (_) {} }
           if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); } catch (_) {} }
           await delay(500);
+          // 2026-05-26 safety: verify broker has the position before placing exit.
+          const actualQty = await getActualPositionQty(c.symbol);
+          if (actualQty === 0) {
+            console.log(`${LOG} [CANDLE]   ⚠ ${c.symbol}: broker position=0 — skipping sideways exit (already closed externally)`);
+            c.status = 'TIME_EXIT';
+            c.exitReason = 'already_closed_externally';
+            c.exitTime = new Date();
+            changed = true;
+            continue;
+          }
+          if (actualQty !== null && (cIsLong ? actualQty <= 0 : actualQty >= 0)) {
+            console.error(`${LOG} [CANDLE]   ⚠⚠ ${c.symbol}: broker qty=${actualQty} but direction=${cDirTag} — mismatch, skipping`);
+            c.status = 'TIME_EXIT';
+            c.exitReason = `direction_mismatch_broker_qty_${actualQty}`;
+            changed = true;
+            continue;
+          }
+          if (actualQty !== null) c.qty = Math.abs(actualQty);
           try {
             const res = await kiteOrderService.placeOrder({
               tradingsymbol:    c.symbol,
@@ -1062,6 +1130,24 @@ export async function monitorOrbPositions() {
         if (c.stopOrderId)   { try { await kiteOrderService.cancelOrder(c.stopOrderId);   console.log(`${LOG} [CANDLE] ${c.symbol}: SL cancelled`);   } catch (_) {} }
         if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [CANDLE] ${c.symbol}: TGT cancelled`); } catch (_) {} }
         await delay(500);
+        // 2026-05-26 safety: verify broker has the position before placing exit.
+        const actualQty = await getActualPositionQty(c.symbol);
+        if (actualQty === 0) {
+          console.log(`${LOG} [CANDLE]   ⚠ ${c.symbol}: broker position=0 — skipping candle exit (already closed externally)`);
+          c.status = 'TIME_EXIT';
+          c.exitReason = 'already_closed_externally';
+          c.exitTime = new Date();
+          changed = true;
+          continue;
+        }
+        if (actualQty !== null && (cIsLong ? actualQty <= 0 : actualQty >= 0)) {
+          console.error(`${LOG} [CANDLE]   ⚠⚠ ${c.symbol}: broker qty=${actualQty} but direction=${cDirTag} — mismatch, skipping`);
+          c.status = 'TIME_EXIT';
+          c.exitReason = `direction_mismatch_broker_qty_${actualQty}`;
+          changed = true;
+          continue;
+        }
+        if (actualQty !== null) c.qty = Math.abs(actualQty);
         try {
           const res = await kiteOrderService.placeOrder({
             tradingsymbol:    c.symbol,
@@ -1201,6 +1287,47 @@ export async function forceExitOrb() {
       catch (e) { console.warn(`${LOG} [FORCE-EXIT]   TGT cancel failed: ${e.message}`); }
     }
     await delay(500);
+
+    // ── CRITICAL: verify broker position before firing exit (2026-05-26 fix) ──
+    // If user manually closed the position in Kite during the day, the system's
+    // exit MARKET order would OPEN a fresh position in the opposite direction.
+    // (Observed CONCOR on 05-26: user manual exit at 13:58, system force-exit
+    // at 15:15 opened accidental LONG that auto-square closed at 15:25.)
+    const actualQty = await getActualPositionQty(c.symbol);
+    if (actualQty === 0) {
+      console.log(`${LOG} [FORCE-EXIT]   ⚠ ${c.symbol}: broker shows position=0 — skipping exit order (already closed externally)`);
+      c.status     = 'TIME_EXIT';
+      c.exitPrice  = c.entryPrice;  // unknown actual exit — preserve entry, note in reason
+      c.exitTime   = new Date();
+      c.exitReason = 'already_closed_externally';
+      c.pnl        = 0;             // unknown — would need to fetch trade history
+      c.returnPct  = 0;
+      console.log(`${LOG} [FORCE-EXIT]   ${c.symbol}: marked TIME_EXIT (manual close detected, no system action)`);
+      exited++;
+      continue;
+    }
+    if (actualQty !== null) {
+      // Direction-aware sanity check: SHORT must have qty < 0, LONG must have qty > 0
+      const directionMatch = cIsLong ? (actualQty > 0) : (actualQty < 0);
+      if (!directionMatch) {
+        console.error(`${LOG} [FORCE-EXIT]   ⚠⚠ ${c.symbol}: broker qty=${actualQty} but direction=${cDirTag} — DIRECTION MISMATCH, skipping to avoid opening fresh position`);
+        c.status     = 'TIME_EXIT';
+        c.exitReason = `direction_mismatch_broker_qty_${actualQty}`;
+        exited++;
+        continue;
+      }
+      // Use the ACTUAL open qty, not the candidate's recorded qty (in case of partial close)
+      const exitQty = Math.abs(actualQty);
+      if (exitQty !== c.qty) {
+        console.warn(`${LOG} [FORCE-EXIT]   ${c.symbol}: candidate qty=${c.qty} but broker qty=${exitQty} — using broker qty`);
+      }
+      c.qty = exitQty;
+    }
+    // actualQty === null means getPositions failed; fall through to place exit
+    // anyway (preserving original behavior, but log a warning).
+    if (actualQty === null) {
+      console.warn(`${LOG} [FORCE-EXIT]   ⚠ ${c.symbol}: position check failed — proceeding with system-recorded qty=${c.qty}`);
+    }
 
     try {
       const res = await kiteOrderService.placeOrder({
