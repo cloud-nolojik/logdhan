@@ -91,9 +91,42 @@ function snapToNSETick(price, tick = 0.05, mode = 'round') {
   return Math.round(price * factor) / factor;
 }
 
-function parseKiteTickError(errMsg) {
-  const m = (errMsg || '').match(/Tick size for this script is ([\d.]+)/i);
-  return m ? parseFloat(m[1]) : null;
+function parseKiteTickError(err) {
+  // 2026-05-27: bug found via ABB SL placement. Kite's actual error message
+  // lives in error.response.data.message (the axios response body), NOT in
+  // error.message (which is just "Request failed with status code 400").
+  // Our previous parser was searching .message and never finding the tick.
+  //
+  // This function now accepts either a string OR an Error/axios-error object
+  // and digs into the right places. It also supports a few message formats
+  // because Kite/NSE can phrase it slightly differently:
+  //   "Tick size for this script is 0.50. Kindly enter trigger price..."
+  //   "tick size is 0.10"
+  //   "must be a multiple of 0.05"
+  // Returns the tick size as a positive float, or null if no match.
+  let str;
+  if (err && typeof err === 'object') {
+    str = err.response?.data?.message
+       || err.responseData?.message
+       || err.message
+       || String(err);
+  } else {
+    str = String(err || '');
+  }
+
+  const patterns = [
+    /[Tt]ick\s+size\s+for\s+this\s+script\s+is\s+([\d.]+)/,
+    /[Tt]ick\s+size\s+is\s+([\d.]+)/,
+    /multiple\s+of\s+([\d.]+)/,
+  ];
+  for (const p of patterns) {
+    const m = str.match(p);
+    if (m) {
+      const tick = parseFloat(m[1]);
+      if (tick > 0 && tick <= 10) return tick;   // sanity guard
+    }
+  }
+  return null;
 }
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -784,15 +817,22 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
         break;
       }
     } catch (err) {
-      const tick = parseKiteTickError(err.message);
+      // Pass the full err — parseKiteTickError digs into err.response.data.message
+      // (Kite's actual error) instead of err.message (axios generic).
+      const tick = parseKiteTickError(err);
       if (tick && attempt === 1) {
+        // Re-snap the CURRENT calculated stop (which has the 1% buffer applied),
+        // NOT the raw OR boundary. Old code re-snapped from orLow/orHigh which
+        // discarded the buffer and put the SL right at the boundary.
+        const oldStop = stop;
         stop = isLong
-          ? snapToNSETick(candidate.orLow,  tick, 'floor')
-          : snapToNSETick(candidate.orHigh, tick, 'ceil');
+          ? snapToNSETick(stop, tick, 'floor')
+          : snapToNSETick(stop, tick, 'ceil');
         candidate.stopPrice = stop;
-        console.warn(`${LOG} [ENTER] ${candidate.symbol}: tick error (tick=${tick}) → re-snapped stop=₹${stop}  retrying...`);
+        console.warn(`${LOG} [ENTER] ${candidate.symbol}: Kite tick error (broker tick=${tick}) → re-snapped stop ₹${oldStop} → ₹${stop}  retrying...`);
       } else {
-        console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ SL-M attempt ${attempt} FAILED:`, err.message);
+        const kiteMsg = err?.response?.data?.message || err.message;
+        console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ SL-M attempt ${attempt} FAILED: ${kiteMsg}`);
       }
     }
   }

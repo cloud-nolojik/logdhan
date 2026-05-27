@@ -156,9 +156,32 @@ function snapToNSETick(price, tick, mode = 'round') {
  *   "Tick size for this script is 0.10. Kindly enter trigger price..."
  * Returns null if not a tick-size error.
  */
-function parseKiteTickError(errMsg) {
-  const m = (errMsg || '').match(/Tick size for this script is ([\d.]+)/i);
-  return m ? parseFloat(m[1]) : null;
+function parseKiteTickError(err) {
+  // 2026-05-27: accepts either a string OR an Error/axios-error object and
+  // digs into err.response.data.message (Kite's actual error). See
+  // orbService.js for the full incident note (ABB ₹6840.9 SL placement).
+  let str;
+  if (err && typeof err === 'object') {
+    str = err.response?.data?.message
+       || err.responseData?.message
+       || err.message
+       || String(err);
+  } else {
+    str = String(err || '');
+  }
+  const patterns = [
+    /[Tt]ick\s+size\s+for\s+this\s+script\s+is\s+([\d.]+)/,
+    /[Tt]ick\s+size\s+is\s+([\d.]+)/,
+    /multiple\s+of\s+([\d.]+)/,
+  ];
+  for (const p of patterns) {
+    const m = str.match(p);
+    if (m) {
+      const tick = parseFloat(m[1]);
+      if (tick > 0 && tick <= 10) return tick;
+    }
+  }
+  return null;
 }
 
 // Note: MIN_SCORE / SHORTLIST_COMPOSITE_BONUS_MAX are gone.
@@ -1342,7 +1365,7 @@ export async function executeShortlistOrbEntry({ dryRun = false } = {}) {
           }
           console.log(`${LOG} ${tag} ${c.symbol}: ✅ SL-M placed orderId=${orderResult.orderId}${attempt > 1 ? ' (attempt 2)' : ''}`);
         } catch (err) {
-          const brokerTick = parseKiteTickError(err.message);
+          const brokerTick = parseKiteTickError(err);
           if (brokerTick && attempt === 1) {
             // Kite told us the real tick — re-snap and the retry loop will use it
             const newTrigger = snapToNSETick(levels.entry, brokerTick, isLong ? 'ceil' : 'floor');
@@ -4117,7 +4140,7 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
         console.log(`${LOG} ${pick.symbol}: SL-M placed @ ₹${slTrigger} — orderId=${slResult.orderId}${slAttempt > 1 ? ' (attempt 2)' : ''}`);
       }
     } catch (err) {
-      const tick = parseKiteTickError(err.message);
+      const tick = parseKiteTickError(err);
       if (tick && slAttempt === 1) {
         // Kite told us the real tick size — re-snap and the retry loop will use it
         slTrigger = snapToNSETick(pick.levels.stop, tick, isBullishSL ? 'floor' : 'ceil');
@@ -4154,7 +4177,7 @@ async function placeSLAndTarget(pick, doc, entryPrice) {
         console.log(`${LOG} ${pick.symbol}: Target LIMIT placed @ ₹${tgtPrice} — orderId=${tgtResult.orderId}${tgtAttempt > 1 ? ' (attempt 2)' : ''}`);
       }
     } catch (err) {
-      const brokerTick = parseKiteTickError(err.message);
+      const brokerTick = parseKiteTickError(err);
       if (brokerTick && tgtAttempt === 1) {
         const newTgt = snapToNSETick(target, brokerTick, isBullishSL ? 'ceil' : 'floor');
         console.log(`${LOG} ${pick.symbol}: Target tick mismatch — Kite says tick=${brokerTick} — re-snapping ₹${tgtPrice} → ₹${newTgt}`);
@@ -4816,7 +4839,7 @@ async function monitorDailyPickOrders(options = {}) {
                   );
                 }
               } catch (slErr) {
-                const tick = parseKiteTickError(slErr.message);
+                const tick = parseKiteTickError(slErr);
                 if (tick && attempt === 1) {
                   slTrigger = snapToNSETick(nudgedStop, tick, isBullishSL ? 'floor' : 'ceil');
                   console.log(`${LOG} ${pick.symbol}: SL re-place tick re-snap → ₹${slTrigger} (tick=${tick})`);

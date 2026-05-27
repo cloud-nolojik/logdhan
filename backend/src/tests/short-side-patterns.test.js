@@ -32,12 +32,13 @@ const longIntact15m = [
 ];
 
 describe('SHORT — bullish engulfing reversal candle → tighten', () => {
-  it('bullish engulfing of prior bar against an active SHORT → tighten to bar HIGH', () => {
+  it('bullish engulfing of prior bar against an active SHORT → tighten to last 15-min HIGH', () => {
     // Setup: SHORT position at entry=101, currentStop=103
-    // 5-min bars:
+    // 5-min bars (used only as the SIGNAL — pattern detection):
     //   c-1 (prev): small bearish body — open 100.2, close 99.8, range 99.5-100.4 → body 0.4
     //   c0  (last): strong BULLISH body engulfing prior — open 99.8, close 101.0
     //               body 1.2 > prev body 0.4, opens ≤ prev close (99.8 ≤ 99.8), closes ≥ prev open (101.0 ≥ 100.2) ✓
+    // SL LEVEL now comes from the last 15-min candle's HIGH (101.5), not the 5-min high (101.2).
     const candles5m = [
       { open: 100.2, high: 100.4, low: 99.5, close: 99.8,  volume: 1000 },
       { open: 99.8,  high: 101.2, low: 99.7, close: 101.0, volume: 1500 },
@@ -52,18 +53,19 @@ describe('SHORT — bullish engulfing reversal candle → tighten', () => {
     });
     expect(result.action).toBe('tighten');
     expect(result.reason).toMatch(/bullish engulfing/);
-    expect(result.newStop).toBe(101.2);   // tightened to the bar HIGH
+    expect(result.newStop).toBe(101.5);   // last 15-min candle HIGH (not the 5-min high)
   });
 });
 
 describe('SHORT — hammer reversal candle → tighten', () => {
-  it('hammer with long lower wick against an active SHORT → tighten to bar HIGH', () => {
+  it('hammer with long lower wick against an active SHORT → tighten to last 15-min HIGH', () => {
     // Hammer: long lower wick > 2× body, small body in upper third of range.
     // Body = |close - open| = small. Lower wick = min(open,close) - low = LARGE.
     //   open=100, close=100.2, high=100.3, low=99.0
     //   body = 0.2, range = 1.3, lower wick = min(100, 100.2) - 99 = 1.0
     //   lowerWick (1.0) > 2 × body (0.4)? YES
     //   body (0.2) < 0.30 × range (0.39)? YES
+    // SL LEVEL comes from last 15-min candle HIGH (101.5), not the 5-min hammer high (100.3).
     const candles5m = [
       { open: 99.5, high: 100, low: 99,   close: 99.8, volume: 1000 },
       { open: 100,  high: 100.3, low: 99, close: 100.2, volume: 1200 },
@@ -78,21 +80,22 @@ describe('SHORT — hammer reversal candle → tighten', () => {
     });
     expect(result.action).toBe('tighten');
     expect(result.reason).toMatch(/hammer/);
-    expect(result.newStop).toBe(100.3);   // tightened to bar HIGH (above the hammer)
+    expect(result.newStop).toBe(101.5);   // last 15-min candle HIGH
   });
 });
 
 describe('SHORT — bearish continuation bar trails stop DOWN', () => {
-  it('strong bearish 5-min bar with structure intact → trail SHORT stop DOWN to bar HIGH', () => {
+  it('strong bearish 5-min bar (signal) with structure intact → trail SHORT stop DOWN to last 15-min HIGH', () => {
     // Bearish bar: close < open, body > 50% of range.
     // open=100, close=98.5, high=100.1, low=98.4 → body=1.5, range=1.7, bodyRatio=0.88
     // Need volume not drying (last vol ~= avg of prior 3).
+    // SL LEVEL comes from last 15-min HIGH (101.5), not the 5-min high (100.1).
     const candles5m = [
       { open: 101, high: 101.2, low: 100.5, close: 100.8, volume: 1000 },
       { open: 100.8, high: 101, low: 100.4, close: 100.5, volume: 1100 },
       { open: 100.5, high: 100.7, low: 100.2, close: 100.3, volume: 950 },
       { open: 100.3, high: 100.5, low: 100,   close: 100.2, volume: 1050 },
-      { open: 100,   high: 100.1, low: 98.4,  close: 98.5,  volume: 1080 },  // last — strong bearish
+      { open: 100,   high: 100.1, low: 98.4,  close: 98.5,  volume: 1080 },  // last — strong bearish (signal)
     ];
     const result = analyzeIntradayStructure({
       candles5m,
@@ -103,8 +106,8 @@ describe('SHORT — bearish continuation bar trails stop DOWN', () => {
       plannedStop: 103,
     });
     expect(result.action).toBe('trail');
-    expect(result.reason).toMatch(/bearish.*continuation/);
-    expect(result.newStop).toBe(100.1);   // trail to bar HIGH (above the close)
+    expect(result.reason).toMatch(/bearish/);
+    expect(result.newStop).toBe(101.5);   // last 15-min HIGH (the LEVEL — 5-min is just the signal)
     expect(result.newStop).toBeLessThan(103);   // strictly below the prior stop = improvement
   });
 });
@@ -132,8 +135,9 @@ describe('SHORT — bearish bar but volume drying → exhaustion warning, no tra
   });
 });
 
-describe('Symmetry check — LONG patterns still fire as before (regression guard)', () => {
-  it('LONG + bearish engulfing → tighten (unchanged behavior)', () => {
+describe('Symmetry check — LONG patterns still fire (now use 15-min LOW)', () => {
+  it('LONG + bearish engulfing → tighten to last 15-min LOW', () => {
+    // 5-min last bar = bearish engulfing (signal). Last 15-min low = 99.5.
     const candles5m = [
       { open: 99.5, high: 99.8, low: 99.3, close: 99.7,  volume: 1000 },
       { open: 99.7, high: 99.8, low: 98.5, close: 98.7,  volume: 1500 },  // bearish, body bigger
@@ -148,11 +152,12 @@ describe('Symmetry check — LONG patterns still fire as before (regression guar
     });
     expect(result.action).toBe('tighten');
     expect(result.reason).toMatch(/bearish engulfing/);
-    expect(result.newStop).toBe(98.5);   // bar's LOW
+    expect(result.newStop).toBe(99.5);   // last 15-min candle LOW (not the 5-min low 98.5)
   });
 
-  it('LONG + shooting star → tighten (unchanged behavior)', () => {
+  it('LONG + shooting star → tighten to last 15-min LOW', () => {
     // Body 0.1, upper wick 0.8 — wick > 2× body, body < 30% of range
+    // 5-min low is 99.4, but SL LEVEL = last 15-min low = 99.5
     const candles5m = [
       { open: 99.5, high: 99.7, low: 99.3, close: 99.6, volume: 1000 },
       { open: 99.5, high: 100.5, low: 99.4, close: 99.6, volume: 1200 },
@@ -167,7 +172,46 @@ describe('Symmetry check — LONG patterns still fire as before (regression guar
     });
     expect(result.action).toBe('tighten');
     expect(result.reason).toMatch(/shooting star/);
-    expect(result.newStop).toBe(99.4);   // bar's LOW
+    expect(result.newStop).toBe(99.5);   // last 15-min candle LOW
+  });
+});
+
+describe('15-min SL source — regression for 2026-05-27 JSWENERGY/LODHA whipsaws', () => {
+  it('LONG: narrow 5-min low next to LTP is IGNORED; SL placed at 15-min low instead', () => {
+    // Reproduces JSWENERGY 2026-05-27 10:35:
+    //   entry @ 595.30 (LONG)
+    //   5-min last candle 10:30-10:35 had very narrow range — low at 595.15 (only 15p below LTP)
+    //   15-min candle 10:15-10:30 had a proper low of 593.50
+    // OLD behavior: SL would go to 595.15 → stopped out for -₹6 on the next paise dip.
+    // NEW behavior: SL goes to 593.50 → trade survives ordinary intra-bar noise.
+    const candles15m = [
+      { open: 593.0, high: 594.0, low: 592.5, close: 593.8 },  // c-1 (prior 15-min)
+      { open: 593.8, high: 595.3, low: 593.5, close: 595.0 },  // last 15-min — low 593.50
+    ];
+    // 5-min sequence with a small bearish-engulfing pattern just after entry
+    const candles5m = [
+      { open: 594.5, high: 594.7, low: 594.3, close: 594.5, volume: 8000 },
+      { open: 594.5, high: 595.3, low: 594.4, close: 595.2, volume: 8500 },
+      { open: 595.2, high: 595.25, low: 595.0, close: 595.15, volume: 9000 },
+      // Last bar: small bearish engulfing — tiny body but engulfs prior tiny body
+      { open: 595.15, high: 595.20, low: 595.10, close: 595.10, volume: 9500 },
+    ];
+    const result = analyzeIntradayStructure({
+      candles5m,
+      candles15m,
+      direction: 'LONG',
+      currentStop: 590,
+      entryPrice: 595.30,
+      plannedStop: 590,
+    });
+    // Whether the pattern triggers tighten or the bar triggers trail isn't the
+    // point — the point is the LEVEL: it must NOT be the 5-min low (595.10).
+    expect(result.newStop).not.toBe(595.10);
+    if (result.newStop !== null) {
+      // SL must be at or below the 15-min low (with our cancel+place logic
+      // round2() applied). 593.50 is the target level.
+      expect(result.newStop).toBeLessThanOrEqual(593.50);
+    }
   });
 });
 

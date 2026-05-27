@@ -284,14 +284,19 @@ export function computePositionSize({
  * analyzeIntradayStructure
  *
  * Candle-based trade management decision — runs every 5 min monitor cycle.
- * Two-timeframe approach: 15-min for trend structure, 5-min for stop placement.
+ * Two-timeframe approach: 15-min for BOTH trend structure AND stop placement.
+ * 5-min candles are used only as the SIGNAL (pattern detection) — the SL
+ * LEVEL always comes from the last completed 15-min candle's extreme. This
+ * matches the entry timeframe (we enter on 15-min confirmation, so we trail
+ * on 15-min lows / highs) and stops the 5-min-low whipsaws that killed
+ * JSWENERGY, LODHA, and TITAGARH on 2026-05-27.
  *
  * Decision matrix:
- *   15-min structure broken            → 'exit'   (close below prior 15-min low for LONG)
- *   5-min bearish engulfing / star     → 'tighten' (stop to reversal candle extreme)
- *   5-min doji / inside bar            → 'hold'   (indecision — don't move stop)
- *   5-min bullish + 15-min intact      → 'trail'  (trail stop to 5-min candle low)
- *   5-min bullish but volume drying    → 'hold'   (possible exhaustion)
+ *   15-min structure broken            → 'exit'    (close below prior 15-min low for LONG)
+ *   5-min bearish engulfing / star     → 'tighten' (stop to LAST 15-MIN candle low/high)
+ *   5-min doji / inside bar            → 'hold'    (indecision — don't move stop)
+ *   5-min bullish + 15-min intact      → 'trail'   (trail stop to LAST 15-MIN candle low/high)
+ *   5-min bullish but volume drying    → 'hold'    (possible exhaustion)
  *
  * @param {Object[]} candles5m   - last N completed 5-min candles [{open,high,low,close,volume}]
  * @param {Object[]} candles15m  - last N completed 15-min candles
@@ -498,12 +503,18 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
 
   // Reversal candle → tighten stop. Each pattern is direction-gated above so
   // only against-trade-direction reversals trigger here:
-  //   LONG  → bearish engulfing or shooting star at a top → tighten to last LOW
-  //   SHORT → bullish engulfing or hammer at a bottom    → tighten to last HIGH
+  //   LONG  → bearish engulfing or shooting star at a top → tighten to last 15-MIN LOW
+  //   SHORT → bullish engulfing or hammer at a bottom    → tighten to last 15-MIN HIGH
+  //
+  // Why 15-min, not 5-min: a 5-min candle right after entry has a tiny range,
+  // and using its low/high places the SL within paise of LTP — the next
+  // ordinary wiggle takes us out flat. The 15-min candle's low/high is a
+  // real, market-tested support/resistance level (see JSWENERGY/LODHA/
+  // TITAGARH on 2026-05-27 for the failure mode this replaces).
   const reversalLong  = is5mBearEngulf || is5mShootingStar;     // for LONG positions
   const reversalShort = is5mBullEngulf || is5mHammer;            // for SHORT positions
   if (reversalLong || reversalShort) {
-    const tightStop = isBullish ? round2(c5last.low) : round2(c5last.high);
+    const tightStop = isBullish ? round2(c15last.low) : round2(c15last.high);
     const patternName = is5mBearEngulf  ? '5-min bearish engulfing'
                       : is5mShootingStar ? '5-min shooting star'
                       : is5mBullEngulf  ? '5-min bullish engulfing'
@@ -511,7 +522,7 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
                       : 'reversal candle';
     return {
       action: 'tighten',
-      reason: `${patternName} (against ${direction} trade) | ${dbg}`,
+      reason: `${patternName} (against ${direction} trade) — SL to last 15-min ${isBullish ? 'low' : 'high'} ₹${tightStop} | ${dbg}`,
       newStop: tightStop,
     };
   }
@@ -522,16 +533,19 @@ export function analyzeIntradayStructure({ candles5m, candles15m, direction, cur
   }
 
   // Continuation candle (WITH the trade direction) + 15-min intact + volume not drying
-  //   LONG  → bullish 5-min bar → trail stop UP to bar's low
-  //   SHORT → bearish 5-min bar → trail stop DOWN to bar's high
+  //   LONG  → bullish 5-min bar (signal) → trail stop UP to last 15-MIN low
+  //   SHORT → bearish 5-min bar (signal) → trail stop DOWN to last 15-MIN high
+  //
+  // 5-min candle = the SIGNAL that the trend is continuing.
+  // 15-min candle low/high = the LEVEL where the stop goes.
   const continuationBar = isBullish ? is5mBullish : is5mBearish;
   if (continuationBar && struct15Intact && !volDrying) {
-    const trailStop = isBullish ? round2(c5last.low) : round2(c5last.high);
+    const trailStop = isBullish ? round2(c15last.low) : round2(c15last.high);
     const isImprovement = isBullish ? trailStop > currentStop : trailStop < currentStop;
-    if (!isImprovement) return NO_CHANGE(`5-min ${isBullish ? 'bullish' : 'bearish'} but trail ₹${trailStop} would not improve stop ₹${currentStop} | ${dbg}`);
+    if (!isImprovement) return NO_CHANGE(`5-min ${isBullish ? 'bullish' : 'bearish'} (signal) but trail ₹${trailStop} (last 15-min ${isBullish ? 'low' : 'high'}) would not improve stop ₹${currentStop} | ${dbg}`);
     return {
       action: 'trail',
-      reason: `5-min ${isBullish ? 'bullish' : 'bearish'}${volExpanding ? ' + expanding volume' : ''}, 15-min intact (continuation with ${direction}) | ${dbg}`,
+      reason: `5-min ${isBullish ? 'bullish' : 'bearish'} signal${volExpanding ? ' + expanding volume' : ''}, 15-min intact — trail to last 15-min ${isBullish ? 'low' : 'high'} ₹${trailStop} | ${dbg}`,
       newStop: trailStop,
     };
   }
