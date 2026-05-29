@@ -72,6 +72,23 @@ const BREAKOUT_END_HOUR     = 14;
 const BREAKOUT_END_MIN      = 1;
 const MAX_OR_RANGE_PCT      = 2.5;    // reject candidates where OR range > 2.5% of IEP
 
+// ── 2026-05-29 evening — quality-of-pick filters ───────────────────────────
+// Born from the day-4 analysis (2026-05-29). Two findings:
+//
+// 1. Distance% < 1.0% bucket had 0 winners out of 3 trades (-₹47 net):
+//    RBLBANK (0.97%, -₹23), PRESTIGE (0.97%, -₹10), PNBHOUSING (0.88%, -₹14).
+//    These were ranked #1, #2, #3 at 10:01 because slot order favors first-fired
+//    signals, but distance% was weak. Floor at 1.0% drops these systematically.
+//
+// 2. Direction-bias: at 10:01 first scan, 25/30 (83%) of ranked confirmed
+//    breakouts were SHORTS — clear bear-day signal. System took 6 LONGs anyway
+//    (LODHA, YESBANK, PRESTIGE, JUBLFOOD, CAMS, ABFRL) and lost -₹176 on CAMS
+//    and -₹81 on ABFRL fighting the tape. Locking direction to the dominant
+//    side once it crosses 70% saves ~₹250 on bias-discordant LONGs.
+const MIN_DISTANCE_PCT          = 1.0;   // skip breakouts with distance past OR < 1%
+const BIAS_GATE_MIN_CONFIRMED   = 10;    // need ≥ N confirmed signals to evaluate bias
+const BIAS_GATE_THRESHOLD_PCT   = 70;    // if one side ≥ 70% of confirmed, lock to that side
+
 // ── 10:30 TIME EXIT — DISABLED 2026-05-25 (evening) ───────────────────────
 // Hardcoded 10:30 AM force-exit was killing winners. On 2026-05-25:
 //   CANBK time-exited at +0.82% (₹132.58); ran to +1.6% (₹134.09 high) later.
@@ -130,6 +147,81 @@ function parseKiteTickError(err) {
 }
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Pure decision helper for checkBreakouts() — mutates each item in `confirmed`
+ * with a `_action` field and returns the (possibly new) daily direction bias.
+ *
+ * Two filters are applied, in this priority order:
+ *   1. SKIP_STALE   — staleFlag true (set in checkBreakouts when distance > 2× OR range)
+ *   2. BELOW_FLOOR  — distancePct < MIN_DISTANCE_PCT
+ *   3. WRONG_SIDE   — bias is LONG/SHORT and item's direction doesn't match
+ *   4. ENTER        — slot available
+ *   5. SLOT_FULL    — slots exhausted
+ *
+ * Bias computation:
+ *   - If existingBias is set, use it as-is. No biasReason returned.
+ *   - Else if confirmed.length < BIAS_GATE_MIN_CONFIRMED, bias stays null.
+ *     biasReason describes why we didn't decide.
+ *   - Else count LONG/SHORT; if one ≥ BIAS_GATE_THRESHOLD_PCT lock that side,
+ *     otherwise BOTH. biasReason returns a human log line for caller to print.
+ *
+ * @param {Object[]} confirmed      — sorted desc by distancePct, mutated in-place
+ * @param {number}   slotsLeft      — entries available this scan
+ * @param {string|null} existingBias — 'LONG' | 'SHORT' | 'BOTH' | null
+ * @returns {{ newBias: string|null, biasReason: string|null }}
+ */
+export function decideBreakoutActions({ confirmed, slotsLeft, existingBias }) {
+  // Bias computation
+  let newBias = existingBias;
+  let biasReason = null;
+  if (!newBias) {
+    if (confirmed.length >= BIAS_GATE_MIN_CONFIRMED) {
+      const longCount  = confirmed.filter(b => b.direction === 'LONG').length;
+      const shortCount = confirmed.length - longCount;
+      const longPct    = (longCount  / confirmed.length) * 100;
+      const shortPct   = (shortCount / confirmed.length) * 100;
+      if (shortPct >= BIAS_GATE_THRESHOLD_PCT) {
+        newBias = 'SHORT';
+        biasReason = `Bias LOCKED to SHORT for today — ${shortCount}/${confirmed.length} confirmed (${shortPct.toFixed(0)}%) ≥ ${BIAS_GATE_THRESHOLD_PCT}% threshold`;
+      } else if (longPct >= BIAS_GATE_THRESHOLD_PCT) {
+        newBias = 'LONG';
+        biasReason = `Bias LOCKED to LONG for today — ${longCount}/${confirmed.length} confirmed (${longPct.toFixed(0)}%) ≥ ${BIAS_GATE_THRESHOLD_PCT}% threshold`;
+      } else {
+        newBias = 'BOTH';
+        biasReason = `No clear bias — L=${longPct.toFixed(0)}% S=${shortPct.toFixed(0)}% — taking both directions today`;
+      }
+    }
+  } else {
+    biasReason = `Bias active: ${existingBias} (set earlier today)`;
+  }
+
+  // Mark actions
+  let slotsConsumed = 0;
+  for (const b of confirmed) {
+    if (b.staleFlag) {
+      b._action = 'SKIP_STALE';
+    } else if (b.distancePct < MIN_DISTANCE_PCT) {
+      b._action = 'BELOW_FLOOR';
+    } else if (newBias && newBias !== 'BOTH' && b.direction !== newBias) {
+      b._action = 'WRONG_SIDE';
+    } else if (slotsConsumed < slotsLeft) {
+      b._action = 'ENTER';
+      slotsConsumed++;
+    } else {
+      b._action = 'SLOT_FULL';
+    }
+  }
+
+  return { newBias, biasReason };
+}
+
+// Export constants for testing / introspection
+export const _testExports = {
+  MIN_DISTANCE_PCT,
+  BIAS_GATE_MIN_CONFIRMED,
+  BIAS_GATE_THRESHOLD_PCT,
+};
 
 function istTimeStr() {
   return MarketHoursUtil.toIST(new Date()).toTimeString().slice(0, 8);
@@ -618,28 +710,31 @@ export async function checkBreakouts() {
   // Rank confirmed signals by distance% past OR (biggest move first)
   confirmed.sort((a, b) => b.distancePct - a.distancePct);
 
-  // Mark actions: ENTER / SLOT_FULL / SKIP_STALE
-  const slotsLeft = MAX_ENTRIES - enteredCount;
-  let slotsConsumed = 0;
-  confirmed.forEach(b => {
-    if (b.staleFlag) {
-      b._action = 'SKIP_STALE';
-    } else if (slotsConsumed < slotsLeft) {
-      b._action = 'ENTER';
-      slotsConsumed++;
-    } else {
-      b._action = 'SLOT_FULL';
-    }
+  // ── 2026-05-29: Apply distance% floor + direction-bias gate ─────────────
+  // Both filters live in a pure helper (decideBreakoutActions) for testability.
+  const { newBias: dailyBias, biasReason } = decideBreakoutActions({
+    confirmed,
+    slotsLeft: MAX_ENTRIES - enteredCount,
+    existingBias: doc.dailyDirectionBias || null,
   });
+
+  if (biasReason) {
+    console.log(`${LOG} [BREAKOUT] 📊 ${biasReason}`);
+  }
+  if (dailyBias && dailyBias !== doc.dailyDirectionBias) {
+    doc.dailyDirectionBias = dailyBias;
+  }
 
   console.log(`${LOG} [BREAKOUT] Ranked 2-bar confirmed breakouts:`);
   confirmed.forEach((b, idx) => {
     const dirTag     = b.direction === 'LONG' ? 'L' : 'S';
     const orRangePct = (b.candidate.orRange / b.candidate.iep * 100).toFixed(2);
     const actionTag  = {
-      ENTER:      '✅ ENTERING',
-      SLOT_FULL:  '⏸  slot full',
-      SKIP_STALE: '⚠ STALE — skipped',
+      ENTER:       '✅ ENTERING',
+      SLOT_FULL:   '⏸  slot full',
+      SKIP_STALE:  '⚠ STALE — skipped',
+      BELOW_FLOOR: `⏭  dist<${MIN_DISTANCE_PCT}% — below floor`,
+      WRONG_SIDE:  `⏭  bias=${dailyBias} — wrong side`,
     }[b._action] || '?';
     console.log(
       `${LOG} [BREAKOUT]   #${String(idx + 1).padStart(2)} ${dirTag} ${b.candidate.symbol.padEnd(14)} ` +

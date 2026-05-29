@@ -59,6 +59,17 @@ const orbTradeSchema = new mongoose.Schema({
   // Day summary (updated on exits)
   entriesCount: { type: Number, default: 0 },
   totalPnl:     { type: Number, default: 0 },
+
+  // 2026-05-29: Direction-bias gate. Locked at first scan with ≥10 confirmed
+  // signals if one side is ≥70% of the ranked candidates. Once set, subsequent
+  // checkBreakouts() calls only enter trades matching this side. Values:
+  //   'LONG'  → only LONG entries allowed today
+  //   'SHORT' → only SHORT entries allowed today
+  //   'BOTH'  → no clear bias detected, both directions allowed
+  //   null    → not yet evaluated (first scan hasn't met threshold)
+  // Reasoning: on 2026-05-29 the day was 80% bearish at first scan but the
+  // system took 6 LONGs anyway, losing -₹176 (CAMS) and -₹81 (ABFRL).
+  dailyDirectionBias: { type: String, enum: ['LONG', 'SHORT', 'BOTH'], default: null },
 }, { timestamps: true });
 
 /**

@@ -241,20 +241,34 @@ class KiteOrderService {
     } catch (error) {
       const durationMs = Date.now() - startTime;
 
-      // Log failed order
-      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_PLACED, {
-        symbol: orderParams.tradingsymbol,
-        orderType: orderParams.orderType,
-        transactionType: orderParams.transaction_type,
-        quantity: orderParams.quantity,
-        price: orderParams.price,
-        status: 'FAILED',
-        error: error.message,
-        request: orderParams,
-        simulationId: orderParams.simulationId,
-        durationMs,
-        source: orderParams.source || 'AUTO'
-      });
+      // Log failed order — MUST be guarded. If logAction throws (DB error,
+      // schema mismatch, validation, etc.) it would replace the original
+      // axios error with the audit error, destroying error.response.data.message
+      // which contains Kite's "Tick size for this script is 0.10" message that
+      // parseKiteTickError in orbService relies on for the SL-M retry path.
+      //
+      // Bug observed 2026-05-29 on PRESTIGE/OFSS/BLUESTARCO: attempt 1 failed
+      // with tick error, audit log threw, audit error propagated up, tick
+      // parser saw the wrong error, returned null, attempt 2 used SAME trigger,
+      // emergency exit fired. Mirror of the success-path guard at lines 211-232.
+      try {
+        await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_PLACED, {
+          symbol: orderParams.tradingsymbol,
+          orderType: orderParams.orderType,
+          transactionType: orderParams.transaction_type,
+          quantity: orderParams.quantity,
+          price: orderParams.price,
+          status: 'FAILED',
+          error: error.message,
+          request: orderParams,
+          simulationId: orderParams.simulationId,
+          durationMs,
+          source: orderParams.source || 'AUTO'
+        });
+      } catch (auditErr) {
+        // Audit log failure must NOT swallow the original Kite error.
+        console.error('[KITE ORDER] Failure-path audit log save failed:', auditErr.message);
+      }
 
       console.error('[KITE ORDER] Order placement failed:', error.message);
       throw error;
@@ -373,20 +387,27 @@ class KiteOrderService {
     } catch (error) {
       const durationMs = Date.now() - startTime;
 
-      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_PLACED, {
-        symbol: orderParams.tradingsymbol,
-        orderType: orderParams.orderType,
-        transactionType: orderParams.transaction_type,
-        quantity: orderParams.quantity,
-        price: orderParams.price,
-        status: 'FAILED',
-        error: error.message,
-        request: orderParams,
-        simulationId: orderParams.simulationId,
-        durationMs,
-        source: orderParams.source || 'AUTO',
-        variety: 'amo'
-      });
+      // Same audit-log guard as placeOrder() failure path — don't let a
+      // logAction throw corrupt the original axios error which downstream
+      // callers (parseKiteTickError etc.) rely on.
+      try {
+        await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_PLACED, {
+          symbol: orderParams.tradingsymbol,
+          orderType: orderParams.orderType,
+          transactionType: orderParams.transaction_type,
+          quantity: orderParams.quantity,
+          price: orderParams.price,
+          status: 'FAILED',
+          error: error.message,
+          request: orderParams,
+          simulationId: orderParams.simulationId,
+          durationMs,
+          source: orderParams.source || 'AUTO',
+          variety: 'amo'
+        });
+      } catch (auditErr) {
+        console.error('[KITE AMO] Failure-path audit log save failed:', auditErr.message);
+      }
 
       console.error('[KITE AMO] AMO order placement failed:', error.message);
       throw error;
@@ -625,13 +646,18 @@ class KiteOrderService {
     } catch (error) {
       const durationMs = Date.now() - startTime;
 
-      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_CANCELLED, {
-        orderId,
-        status: 'FAILED',
-        error: error.message,
-        durationMs,
-        source: options.source || 'AUTO'
-      });
+      // Audit-log guard — same reason as placeOrder() failure path.
+      try {
+        await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_CANCELLED, {
+          orderId,
+          status: 'FAILED',
+          error: error.message,
+          durationMs,
+          source: options.source || 'AUTO'
+        });
+      } catch (auditErr) {
+        console.error('[KITE ORDER] Failure-path audit log save failed (cancelOrder):', auditErr.message);
+      }
 
       console.error('[KITE ORDER] Order cancellation failed:', error.message);
       throw error;
@@ -687,14 +713,19 @@ class KiteOrderService {
     } catch (error) {
       const durationMs = Date.now() - startTime;
 
-      await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_MODIFIED, {
-        orderId,
-        modifications: params,
-        status: 'FAILED',
-        error: error.message,
-        durationMs,
-        source: params.source || 'AUTO'
-      });
+      // Audit-log guard — same reason as placeOrder() failure path.
+      try {
+        await KiteAuditLog.logAction(kiteConfig.AUDIT_ACTIONS.ORDER_MODIFIED, {
+          orderId,
+          modifications: params,
+          status: 'FAILED',
+          error: error.message,
+          durationMs,
+          source: params.source || 'AUTO'
+        });
+      } catch (auditErr) {
+        console.error('[KITE ORDER] Failure-path audit log save failed (modifyOrder):', auditErr.message);
+      }
 
       console.error(`[KITE ORDER] Order modification failed for ${orderId}:`, error.message);
       throw error;
