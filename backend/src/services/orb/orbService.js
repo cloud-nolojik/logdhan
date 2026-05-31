@@ -20,7 +20,10 @@ import { analyzeIntradayStructure, checkSidewaysExit } from '../dailyPicks/tradi
 const LOG = '[ORB]';
 
 // ── Strategy constants ──────────────────────────────────────────────────────
-const MAX_ENTRIES           = 3;      // max positions per day (LONG + SHORT combined)
+const MAX_ENTRIES           = 5;      // max TRADES per day (cumulative, LONG + SHORT
+                                      // combined). Enforced on doc.entriesCount, not the
+                                      // live ENTERED count — a stopped-out slot is NOT
+                                      // reused, so a choppy day cannot exceed this.
 // TIER-1 changes (2026-05-26 evening):
 // • No pre-open gap filter. ALL F&O stocks are candidates.
 // • Direction (LONG/SHORT) is decided at the OR-break moment, not at 9:08.
@@ -56,20 +59,24 @@ const TARGET_RANGE_MULT     = 1.5;    // (no longer used — see SIMPLE_MODE bel
 const SL_BUFFER_PCT         = 1.0;    // target SL buffer in % of breakout level
                                        // (capped at OR range for tight-range stocks)
 
-// Entry window — TIER-1 2026-05-26 evening update:
-// First entry at 10:01 (when 2-bar 15-min confirmation is first possible).
-// Last entry at 14:01 (gives 74 min before 15:15 force-exit).
-// Rationale: today (May 25) CANBK only broke out cleanly past 10:30 — at the
-// OLD 11:00 cutoff we'd have missed it. With the candle-structure tighten +
-// 15:15 force-exit handling risk, a longer window catches afternoon breakouts
-// (often common on trend days post-lunch consolidation).
-//
-// Window now begins 10:01 (when 2-bar 15-min confirmation becomes possible)
-// and ends 14:01 (last 15-min boundary that gives ≥74 min runway to 15:15).
+// Entry window + confirmation — CONFIRM_BARS = how many completed 15-min candles
+// must close past the OR (same direction) to confirm a breakout. Kept as a
+// constant so a backtest can sweep 1 vs 2 (vs 0 = raw LTP-cross) without surgery.
+//   • CONFIRM_BARS = 2 → breakout candle + 1 confirmation candle. First entry 10:01.
+//   • CONFIRM_BARS = 1 → breakout candle alone (no confirm). First entry 09:46.
+// Set to 2 (2026-05-31, per design discussion): the model is "candle closes past
+// OR (breakout), the NEXT candle also closes past OR (confirmation) → enter."
+// Worked example: OR = 09:15–09:30; the 09:30–09:45 candle breaks out; if the
+// 09:45–10:00 candle is still past OR, order at ~10:01. A name that falls back
+// inside OR on the 2nd candle is dropped (failed confirmation = the fakeout filter).
+// NOT yet backtested — reversible via CONFIRM_BARS + BREAKOUT_START.
+// NOTE: BREAKOUT_START must track CONFIRM_BARS — earliest a confirm is possible is
+// 09:30 + CONFIRM_BARS×15min, checked on the next :01/:16/:31/:46 boundary.
+const CONFIRM_BARS          = 2;
 const BREAKOUT_START_HOUR   = 10;
-const BREAKOUT_START_MIN    = 1;
+const BREAKOUT_START_MIN    = 1;      // breakout 09:30–09:45 + confirm 09:45–10:00, checked 10:01
 const BREAKOUT_END_HOUR     = 14;
-const BREAKOUT_END_MIN      = 1;
+const BREAKOUT_END_MIN      = 1;      // last entry 14:01 (≥74 min runway to 15:15)
 const MAX_OR_RANGE_PCT      = 2.5;    // reject candidates where OR range > 2.5% of IEP
 
 // ── 2026-05-29 evening — quality-of-pick filters ───────────────────────────
@@ -589,9 +596,10 @@ export async function recordOpeningRanges() {
   }
 
   await doc.save();
+  const rangesSkipped = rangesSkippedWide + rangesSkippedTight;
   console.log(`${LOG} [PHASE2] ─────────────────────────────────`);
-  console.log(`${LOG} [PHASE2] Summary: RANGE_SET=${rangesSet}  SKIPPED=${rangesSkipped}  NO_BAR=${rangesNoBar}  of ${watching.length} WATCHING`);
-  return { success: true, rangesSet, rangesSkipped, rangesNoBar };
+  console.log(`${LOG} [PHASE2] Summary: RANGE_SET=${rangesSet}  SKIPPED=${rangesSkipped} (wide=${rangesSkippedWide} tight=${rangesSkippedTight})  NO_DATA=${rangesNoData}  of ${watching.length} WATCHING`);
+  return { success: true, rangesSet, rangesSkipped, rangesSkippedWide, rangesSkippedTight, rangesNoData };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -615,13 +623,14 @@ export async function checkBreakouts() {
     return { skipped: true, reason: 'no_doc' };
   }
 
-  const enteredCount = doc.candidates.filter(c => c.status === 'ENTERED').length;
+  const enteredCount = doc.candidates.filter(c => c.status === 'ENTERED').length;  // open now
+  const dayEntries   = doc.entriesCount || 0;   // cumulative entries today — the day cap
   const rangeSet     = doc.candidates.filter(c => c.status === 'RANGE_SET');
 
-  console.log(`${LOG} [BREAKOUT] [${istTimeStr()}] entries=${enteredCount}/${MAX_ENTRIES}  RANGE_SET=${rangeSet.length}`);
+  console.log(`${LOG} [BREAKOUT] [${istTimeStr()}] day-entries=${dayEntries}/${MAX_ENTRIES}  open=${enteredCount}  RANGE_SET=${rangeSet.length}`);
 
-  if (enteredCount >= MAX_ENTRIES) {
-    console.log(`${LOG} [BREAKOUT] Max ${MAX_ENTRIES} entries reached — skipping`);
+  if (dayEntries >= MAX_ENTRIES) {
+    console.log(`${LOG} [BREAKOUT] Max ${MAX_ENTRIES} trades for the day reached — skipping`);
     return { skipped: true, reason: 'max_entries' };
   }
 
@@ -630,24 +639,24 @@ export async function checkBreakouts() {
     return { skipped: true, reason: 'no_range_set' };
   }
 
-  // TIER-1 + 2-BAR CONFIRM (2026-05-26 evening):
-  // Fetch the last 2 completed 15-min candles for each RANGE_SET candidate.
-  // BOTH candles must close past OR in the SAME direction → confirmed breakout.
+  // TIER-1 + N-BAR CONFIRM (CONFIRM_BARS, 2026-05-31 → 1):
+  // Fetch the last CONFIRM_BARS completed 15-min candles for each RANGE_SET
+  // candidate. ALL of them must close past OR in the SAME direction → confirmed.
   // This filters out:
   //   • wick fake-outs (price touches past OR then reverts within the candle)
-  //   • whipsaws (one candle each side of OR)
-  //   • single-candle late stabs (less reliable than 2-bar trend)
+  //   • whipsaws (candles on both sides of OR within the confirm window)
+  // With CONFIRM_BARS=1 we still require a *close* past OR (not a mere touch),
+  // so wick fakeouts are still rejected; we just no longer demand a 2nd bar.
   //
   // Chunk size 20 keeps Kite historical-data rate limit happy (3 req/sec).
-  // At ~130 RANGE_SET stocks: 130/20 = ~7 chunks × ~1.5s each = ~10s total.
-  console.log(`${LOG} [BREAKOUT] Fetching last 2×15-min candles for ${rangeSet.length} stocks (chunked)...`);
+  console.log(`${LOG} [BREAKOUT] Fetching last ${CONFIRM_BARS}×15-min candle(s) for ${rangeSet.length} stocks (chunked)...`);
   const allCandles = {};
   const CANDLE_CHUNK = 20;
   for (let i = 0; i < rangeSet.length; i += CANDLE_CHUNK) {
     const chunkSymbols = rangeSet.slice(i, i + CANDLE_CHUNK).map(c => c.symbol);
     try {
       const result = await kiteOrderService.getIntradayMultiCandles(chunkSymbols, [
-        { interval: '15minute', count: 2 },
+        { interval: '15minute', count: CONFIRM_BARS },
       ]);
       Object.assign(allCandles, result['15minute'] || {});
     } catch (err) {
@@ -656,10 +665,11 @@ export async function checkBreakouts() {
   }
   console.log(`${LOG} [BREAKOUT] Candle data: ${Object.keys(allCandles).length}/${rangeSet.length} symbols returned`);
 
-  // ── Evaluate 2-bar confirmation for each candidate ──
-  // For LONG-confirm: bar1.close > OR_High AND bar2.close > OR_High
-  // For SHORT-confirm: bar1.close < OR_Low  AND bar2.close < OR_Low
-  // Whipsaw / mixed: skip
+  // ── Evaluate N-bar confirmation for each candidate ──
+  // LONG-confirm:  every one of the last CONFIRM_BARS closes > OR_High
+  // SHORT-confirm: every one of the last CONFIRM_BARS closes < OR_Low
+  // Mixed (some past high, some past low) → whipsaw; otherwise still inside OR.
+  // distance/staleFlag are measured off the LAST (most recent) confirming close.
   const confirmed = [];
   let waitingBars = 0;
   let stillInsideOR = 0;
@@ -667,37 +677,36 @@ export async function checkBreakouts() {
 
   for (const candidate of rangeSet) {
     const bars = allCandles[candidate.symbol] || [];
-    if (bars.length < 2) { waitingBars++; continue; }
+    if (bars.length < CONFIRM_BARS) { waitingBars++; continue; }
 
-    const [b1, b2] = bars.slice(-2);
-    const c1 = b1.close;
-    const c2 = b2.close;
+    const confirmBars = bars.slice(-CONFIRM_BARS);
+    const firstClose  = confirmBars[0].close;
+    const lastClose   = confirmBars[confirmBars.length - 1].close;
 
-    const c1AboveOR = c1 > candidate.orHigh;
-    const c1BelowOR = c1 < candidate.orLow;
-    const c2AboveOR = c2 > candidate.orHigh;
-    const c2BelowOR = c2 < candidate.orLow;
+    const allAbove = confirmBars.every(b => b.close > candidate.orHigh);
+    const allBelow = confirmBars.every(b => b.close < candidate.orLow);
 
-    if (c1AboveOR && c2AboveOR) {
-      const distance    = c2 - candidate.orHigh;
+    if (allAbove) {
+      const distance    = lastClose - candidate.orHigh;
       const distancePct = distance / candidate.orHigh * 100;
       const staleFlag   = distance > candidate.orRange * 2;
       confirmed.push({
-        candidate, direction: 'LONG', bar1Close: c1, bar2Close: c2,
+        candidate, direction: 'LONG', bar1Close: firstClose, bar2Close: lastClose,
         distance, distancePct, staleFlag,
       });
-    } else if (c1BelowOR && c2BelowOR) {
-      const distance    = candidate.orLow - c2;
+    } else if (allBelow) {
+      const distance    = candidate.orLow - lastClose;
       const distancePct = distance / candidate.orLow * 100;
       const staleFlag   = distance > candidate.orRange * 2;
       confirmed.push({
-        candidate, direction: 'SHORT', bar1Close: c1, bar2Close: c2,
+        candidate, direction: 'SHORT', bar1Close: firstClose, bar2Close: lastClose,
         distance, distancePct, staleFlag,
       });
-    } else if ((c1AboveOR && c2BelowOR) || (c1BelowOR && c2AboveOR)) {
-      whipsaws++;
     } else {
-      stillInsideOR++;
+      const anyAbove = confirmBars.some(b => b.close > candidate.orHigh);
+      const anyBelow = confirmBars.some(b => b.close < candidate.orLow);
+      if (anyAbove && anyBelow) whipsaws++;
+      else stillInsideOR++;
     }
   }
 
@@ -714,7 +723,7 @@ export async function checkBreakouts() {
   // Both filters live in a pure helper (decideBreakoutActions) for testability.
   const { newBias: dailyBias, biasReason } = decideBreakoutActions({
     confirmed,
-    slotsLeft: MAX_ENTRIES - enteredCount,
+    slotsLeft: MAX_ENTRIES - dayEntries,
     existingBias: doc.dailyDirectionBias || null,
   });
 
@@ -763,7 +772,7 @@ export async function checkBreakouts() {
   try {
     const balance = await kiteOrderService.getAvailableBalance();
     const orbBudget = balance.available * ORB_CAPITAL_PCT;
-    const slotsForCap = MAX_ENTRIES - enteredCount;
+    const slotsForCap = MAX_ENTRIES - dayEntries;
     capitalPerTrade = Math.floor(orbBudget / Math.max(slotsForCap, 1));
     console.log(`${LOG} [BREAKOUT] Capital — available=₹${balance.available}  ORB budget (${ORB_CAPITAL_PCT*100}%)=₹${Math.round(orbBudget)}  per-trade=₹${capitalPerTrade}`);
     if (capitalPerTrade < MIN_CAPITAL_PER_TRADE) {
@@ -778,7 +787,9 @@ export async function checkBreakouts() {
   let entered = 0;
   for (const b of confirmed) {
     if (b._action !== 'ENTER') continue;
-    if (doc.candidates.filter(c => c.status === 'ENTERED').length >= MAX_ENTRIES) break;
+    // enterTrade increments doc.entriesCount on a successful fill, so this guard
+    // tracks the cumulative day count as we place entries within this scan.
+    if ((doc.entriesCount || 0) >= MAX_ENTRIES) break;
     b.candidate.direction = b.direction;
     const liveLtp = currentLtps[`NSE:${b.candidate.symbol}`]?.last_price || b.bar2Close;
     await enterTrade(doc, b.candidate, liveLtp, capitalPerTrade);

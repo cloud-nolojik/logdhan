@@ -282,22 +282,19 @@ class OrbJob {
         timezone: 'Asia/Kolkata',
       });
 
-      // Breakout check at every 15-min boundary + 1 sec (10:01, 10:16, 10:31,
-      // 10:46, 11:01, ... 14:01). Two-bar 15-min confirmation: at each check,
-      // we look at the last two completed 15-min candles. Both must close past
-      // OR in same direction → enter.
+      // Breakout check at every 15-min boundary + 1 sec (10:01, 10:16, ... 14:01).
+      // N-bar 15-min confirmation (CONFIRM_BARS in orbService, =2): at each check
+      // we look at the last CONFIRM_BARS completed 15-min candles; all must close
+      // past OR in the same direction → enter.
       //
-      // Schedule: minutes 1, 16, 31, 46 of hours 10-14 (Mon-Fri IST).
-      // First possible entry: 10:01 (when 9:30-9:45 + 9:45-10:00 candles are both
-      // closed and can be confirmed together).
-      // Last possible entry: 14:01 (gives 74 minutes before 15:15 force-exit).
+      // Model: OR = 09:15-09:30; the 09:30-09:45 candle breaks out; if the
+      // 09:45-10:00 candle also closes past OR it confirms → order at ~10:01.
+      // A name that falls back inside OR on the 2nd candle is dropped.
       //
-      // Window changed from every-1-min to every-15-min (2026-05-26 evening)
-      // because 1-min polling catches too many "wick" fake breakouts that
-      // immediately revert. Indian intraday research and practitioner consensus:
-      // the 9:30-9:45 + 9:45-10:00 candle close approach (the "10 AM rule") gives
-      // 60-70% win rate vs 30-45% on instant LTP-cross polling. Trade-off: fewer
-      // entries per day, later entries (smaller R), but higher reliability.
+      // Schedule: minutes 1, 16, 31, 46 of hours 10-14 (Mon-Fri IST). First
+      // possible entry 10:01 (breakout + confirm candles both closed); last entry
+      // 14:01 (74 min before 15:15 force-exit). Reversible via CONFIRM_BARS +
+      // BREAKOUT_START in orbService.js (1-bar would need the window opened to 9-14).
       await this.agenda.every('1,16,31,46 10-14 * * 1-5', 'orb-check-breakout', {}, {
         timezone: 'Asia/Kolkata',
       });
