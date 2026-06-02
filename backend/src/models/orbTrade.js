@@ -76,6 +76,7 @@ const orbTradeSchema = new mongoose.Schema({
   // Day summary (updated on exits)
   entriesCount: { type: Number, default: 0 },
   totalPnl:     { type: Number, default: 0 },
+  volBaselineRetried: { type: Boolean, default: false },  // lazy RVOL-baseline re-fetch attempted
 
   // 2026-05-29: Direction-bias gate. Locked at first scan with ≥10 confirmed
   // signals if one side is ≥70% of the ranked candidates. Once set, subsequent

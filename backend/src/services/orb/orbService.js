@@ -264,6 +264,36 @@ export function computeADRPct(bars, refPrice) {
 }
 
 /**
+ * Fetch ≈20 days of 15-min candles for the given candidates and attach the RVOL
+ * volume profile + avgDailyVolume + ADR%. Best-effort (throws are caught by the
+ * caller). Returns the count that got a profile. Used at pre-open AND as a one-time
+ * lazy retry in checkBreakouts so a single 09:08 fetch hiccup doesn't forfeit the day.
+ */
+async function attachVolumeBaselines(candidates, logTag = '[PHASE1]') {
+  if (!candidates?.length) return 0;
+  const istNowD = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const toD     = new Date(istNowD); toD.setDate(toD.getDate() - 1);   // through yesterday
+  const fromD   = new Date(istNowD); fromD.setDate(fromD.getDate() - 30); // ~20 trading days
+  const fmt     = d => d.toISOString().slice(0, 10);
+  const symbols = candidates.map(c => c.symbol);
+  const hist    = await kiteOrderService.getHistoricalCandles(symbols, '15minute', `${fmt(fromD)} 09:15:00`, `${fmt(toD)} 15:30:00`);
+  let withProfile = 0;
+  for (const c of candidates) {
+    const bars    = hist[c.symbol] || [];
+    const profile = buildVolumeProfile(bars);
+    const slots   = Object.values(profile);
+    if (slots.length) {
+      c.volumeProfile  = profile;
+      c.avgDailyVolume = slots.reduce((a, v) => a + v, 0);   // ≈ avg full-day volume
+      withProfile++;
+    }
+    c.adrPct = computeADRPct(bars, c.iep);   // ADR% — denominator for the OR-width filter
+  }
+  console.log(`${LOG} ${logTag} RVOL baseline: time-matched volume profile set for ${withProfile}/${candidates.length} symbols`);
+  return withProfile;
+}
+
+/**
  * Quality score for RANKING confirmed breakouts (higher = better pick). Combines:
  *   • VOLATILITY-ADJUSTED relative strength vs Nifty — relStrength (%) divided by the
  *     stock's OR width % (a same-day volatility proxy). Raw relative strength alone
@@ -277,7 +307,9 @@ export function computeADRPct(bars, refPrice) {
  */
 export function scoreCandidateQuality({ relStrength = 0, distancePct = 0, orWidthPct = null }, weights = {}) {
   const { wRs = 1.0, wDist = 0.4 } = weights;
-  const volAdjRs = (orWidthPct && orWidthPct > 0) ? (relStrength / orWidthPct) : relStrength;
+  // Floor the denominator so a microscopic OR can't blow up the ratio and let one
+  // tight-OR outlier dominate the ranking (orWidthPct 0.1 would 10× the relStrength).
+  const volAdjRs = (orWidthPct && orWidthPct > 0) ? (relStrength / Math.max(orWidthPct, 0.5)) : relStrength;
   return (wRs * volAdjRs) - (wDist * Math.max(0, distancePct));
 }
 
@@ -391,7 +423,7 @@ async function bookAlreadyClosedPnl(c, logTag = '[MONITOR]') {
 // current index level:
 //   • Nifty > OR high → BULL   (gate to LONG breakouts only)
 //   • Nifty < OR low  → BEAR   (gate to SHORT breakouts only)
-//   • inside the OR    → NEUTRAL (fall back to breakout-breadth bias)
+//   • inside the OR    → NEUTRAL (both directions allowed; breadth lock was removed)
 // VWAP note: a true volume-weighted VWAP on the index is impossible (Kite returns
 // volume=0 for indices), so the index direction here is OR-based (ORB-on-Nifty).
 // Per-position VWAP reversal exits use each STOCK's own VWAP (which has volume) —
@@ -654,35 +686,13 @@ export async function fetchPreOpenUniverse() {
     console.warn(`${LOG} [PHASE1] ⚠️  No candidates — Kite OHLC may be unavailable`);
   }
 
-  // ── RVOL baseline (2026-06-02, time-matched): 20 days of 15-min candles per
-  // symbol → a per-slot volume profile ({ '09:45': avgVol, … }). The breakout
-  // candle is later judged against a NORMAL candle for that same time of day, not
-  // a flat daily average (intraday volume is U-shaped). avgDailyVolume = sum of the
-  // slot averages, kept as a fallback denominator + the "have data" gate.
-  // Best-effort: failure leaves both null → those names get discarded at the scan.
+  // ── RVOL + ADR baseline (time-matched): see attachVolumeBaselines. Best-effort —
+  // if this 09:08 fetch fails, checkBreakouts retries it once (lazy recovery) so a
+  // single pre-open hiccup doesn't forfeit the day.
   try {
-    const istNowD = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-    const toD     = new Date(istNowD); toD.setDate(toD.getDate() - 1);   // through yesterday
-    const fromD   = new Date(istNowD); fromD.setDate(fromD.getDate() - 30); // ~20 trading days
-    const fmt     = d => d.toISOString().slice(0, 10);
-    const symbols = candidates.map(c => c.symbol);
-    const hist    = await kiteOrderService.getHistoricalCandles(symbols, '15minute', `${fmt(fromD)} 09:15:00`, `${fmt(toD)} 15:30:00`);
-    let withProfile = 0;
-    for (const c of candidates) {
-      const bars    = hist[c.symbol] || [];
-      const profile = buildVolumeProfile(bars);
-      const slots   = Object.values(profile);
-      if (slots.length) {
-        c.volumeProfile  = profile;
-        c.avgDailyVolume = slots.reduce((a, v) => a + v, 0);   // ≈ avg full-day volume
-        withProfile++;
-      }
-      // ADR% (avg daily range as % of price) — denominator for the OR-width filter.
-      c.adrPct = computeADRPct(bars, c.iep);
-    }
-    console.log(`${LOG} [PHASE1] RVOL baseline: time-matched volume profile set for ${withProfile}/${candidates.length} symbols`);
+    await attachVolumeBaselines(candidates, '[PHASE1]');
   } catch (err) {
-    console.warn(`${LOG} [PHASE1] ⚠ volume-profile fetch failed (${err.message}) — RVOL unavailable (names will be discarded at scan)`);
+    console.warn(`${LOG} [PHASE1] ⚠ volume-profile fetch failed (${err.message}) — will retry lazily at first scan`);
   }
 
   // Upsert today's ORB document
@@ -874,6 +884,18 @@ export async function checkBreakouts() {
   if (!rangeSet.length) {
     console.log(`${LOG} [BREAKOUT] No RANGE_SET candidates — skipping`);
     return { skipped: true, reason: 'no_range_set' };
+  }
+
+  // Lazy recovery: if the 09:08 volume-baseline fetch failed for everything (no
+  // RANGE_SET name has avgDailyVolume), retry it ONCE here. RVOL is a hard gate, so
+  // without this a single pre-open hiccup would discard every name and forfeit the
+  // whole day. Guarded by a persisted flag so we don't re-fetch every scan.
+  if (!doc.volBaselineRetried && rangeSet.every(c => !(c.avgDailyVolume > 0))) {
+    console.warn(`${LOG} [BREAKOUT] ⚠ No RVOL baseline on any RANGE_SET name — retrying volume-baseline fetch once`);
+    try { await attachVolumeBaselines(rangeSet, '[BREAKOUT]'); }
+    catch (e) { console.error(`${LOG} [BREAKOUT] lazy baseline retry failed: ${e.message}`); }
+    doc.volBaselineRetried = true;
+    await doc.save();
   }
 
   // TIER-1 + N-BAR CONFIRM (CONFIRM_BARS = 2):
