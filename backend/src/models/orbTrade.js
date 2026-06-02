@@ -78,15 +78,10 @@ const orbTradeSchema = new mongoose.Schema({
   totalPnl:     { type: Number, default: 0 },
   volBaselineRetried: { type: Boolean, default: false },  // lazy RVOL-baseline re-fetch attempted
 
-  // 2026-05-29: Direction-bias gate. Locked at first scan with ≥10 confirmed
-  // signals if one side is ≥70% of the ranked candidates. Once set, subsequent
-  // checkBreakouts() calls only enter trades matching this side. Values:
-  //   'LONG'  → only LONG entries allowed today
-  //   'SHORT' → only SHORT entries allowed today
-  //   'BOTH'  → no clear bias detected, both directions allowed
-  //   null    → not yet evaluated (first scan hasn't met threshold)
-  // Reasoning: on 2026-05-29 the day was 80% bearish at first scan but the
-  // system took 6 LONGs anyway, losing -₹176 (CAMS) and -₹81 (ABFRL).
+  // DEPRECATED 2026-06-02: the breakout-breadth 70% direction lock was removed —
+  // the live Nifty regime (marketRegime, below) is now the sole direction authority.
+  // This field is no longer written or read by decideBreakoutActions; kept only so
+  // historical docs don't error. Safe to drop in a future migration.
   dailyDirectionBias: { type: String, enum: ['LONG', 'SHORT', 'BOTH'], default: null },
 
   // 2026-06-02: Live Nifty market regime. Computed each breakout scan from the

@@ -269,6 +269,17 @@ export function computeADRPct(bars, refPrice) {
  * caller). Returns the count that got a profile. Used at pre-open AND as a one-time
  * lazy retry in checkBreakouts so a single 09:08 fetch hiccup doesn't forfeit the day.
  */
+/**
+ * Guard for the lazy RVOL-baseline retry: true only when we haven't retried yet AND
+ * *every* candidate is missing avgDailyVolume (i.e. the whole 09:08 fetch failed — a
+ * partial result means Kite is reachable, so no retry). Pure + exported for testing.
+ */
+export function needsVolumeBaselineRetry(candidates, alreadyRetried) {
+  if (alreadyRetried) return false;
+  if (!candidates?.length) return false;
+  return candidates.every(c => !(c.avgDailyVolume > 0));
+}
+
 async function attachVolumeBaselines(candidates, logTag = '[PHASE1]') {
   if (!candidates?.length) return 0;
   const istNowD = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
@@ -890,11 +901,15 @@ export async function checkBreakouts() {
   // RANGE_SET name has avgDailyVolume), retry it ONCE here. RVOL is a hard gate, so
   // without this a single pre-open hiccup would discard every name and forfeit the
   // whole day. Guarded by a persisted flag so we don't re-fetch every scan.
-  if (!doc.volBaselineRetried && rangeSet.every(c => !(c.avgDailyVolume > 0))) {
+  // NOTE: this recovers the RVOL baseline only — NOT the OR-width gate. ADR is also
+  // recomputed but the OR-width filter already ran in recordOpeningRanges (09:30),
+  // so it can't un-skip names here. ADR failure was already soft (fixed-band fallback).
+  if (needsVolumeBaselineRetry(rangeSet, doc.volBaselineRetried)) {
     console.warn(`${LOG} [BREAKOUT] ⚠ No RVOL baseline on any RANGE_SET name — retrying volume-baseline fetch once`);
     try { await attachVolumeBaselines(rangeSet, '[BREAKOUT]'); }
     catch (e) { console.error(`${LOG} [BREAKOUT] lazy baseline retry failed: ${e.message}`); }
     doc.volBaselineRetried = true;
+    doc.markModified('candidates');   // volumeProfile is Mixed — ensure the re-fetch persists
     await doc.save();
   }
 

@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, _testExports } from '../services/orb/orbService.js';
+import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, needsVolumeBaselineRetry, _testExports } from '../services/orb/orbService.js';
 
 const { MIN_DISTANCE_PCT } = _testExports;
 
@@ -261,5 +261,26 @@ describe('ADR for volatility-normalised OR filter — computeADRPct (2026-06-02)
   it('returns null with no usable bars or no ref price', () => {
     expect(computeADRPct([], 100)).toBeNull();
     expect(computeADRPct([{ date: '2026-05-30T09:15:00+0530', high: 105, low: 100 }], 0)).toBeNull();
+  });
+});
+
+describe('Lazy RVOL-baseline retry guard — needsVolumeBaselineRetry (2026-06-02)', () => {
+  it('all candidates missing avgDailyVolume → retry', () => {
+    const rangeSet = [{ avgDailyVolume: null }, { avgDailyVolume: 0 }, {}];
+    expect(needsVolumeBaselineRetry(rangeSet, false)).toBe(true);
+  });
+
+  it('partial data (at least one has volume) → no retry (Kite is reachable)', () => {
+    const rangeSet = [{ avgDailyVolume: null }, { avgDailyVolume: 12345 }];
+    expect(needsVolumeBaselineRetry(rangeSet, false)).toBe(false);
+  });
+
+  it('already retried → never retry again', () => {
+    const rangeSet = [{ avgDailyVolume: null }];
+    expect(needsVolumeBaselineRetry(rangeSet, true)).toBe(false);
+  });
+
+  it('empty set → no retry', () => {
+    expect(needsVolumeBaselineRetry([], false)).toBe(false);
   });
 });
