@@ -1,34 +1,30 @@
 /**
- * Unit tests for the 2026-05-29 ORB pick-quality filters:
- *   1. Min distance% floor — drops breakouts with distance past OR < MIN_DISTANCE_PCT
- *   2. Direction-bias gate — when ≥ BIAS_GATE_MIN_CONFIRMED confirmed signals
- *      and one side is ≥ BIAS_GATE_THRESHOLD_PCT, lock to that side for the day.
+ * Unit tests for the ORB pick-quality decision logic in decideBreakoutActions()
+ * and the pure helpers it composes with (computeOrbStop, scoreCandidateQuality,
+ * slotKey, buildVolumeProfile).
  *
- * These tests cover the pure decision helper decideBreakoutActions() which is
- * called from checkBreakouts(). The helper is pure (no DB, no Kite) — it just
- * mutates the input array with _action and returns the new bias.
+ * 2026-06-02: the breakout-breadth direction lock was removed — the live Nifty
+ * regime gate is now the sole direction authority (BULL→LONG, BEAR→SHORT,
+ * NEUTRAL→both). The >2×-OR-range "stale" hard cut was also removed (redundant
+ * with the ranking's distance penalty). So direction tests are now regime-driven.
  *
- * Real-world regression scenario: 2026-05-29.
- *   At 10:01 first scan, 30 confirmed signals: ~25 SHORT, ~5 LONG (83% bear bias).
- *   Three picks were below the 1.0% distance floor (RBLBANK 0.97%, PRESTIGE
- *   0.97%, PNBHOUSING 0.88%) — all lost money. Six LONGs were taken against
- *   the bear tape — CAMS (-176) and ABFRL (-81) dominated the LONG losses.
+ * The helper is pure (no DB, no Kite) — it mutates the input array with _action
+ * and returns the regime gate side.
  */
 
 import { describe, it, expect } from 'vitest';
-import { decideBreakoutActions, _testExports } from '../services/orb/orbService.js';
+import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, _testExports } from '../services/orb/orbService.js';
 
-const { MIN_DISTANCE_PCT, BIAS_GATE_MIN_CONFIRMED, BIAS_GATE_THRESHOLD_PCT } = _testExports;
+const { MIN_DISTANCE_PCT } = _testExports;
 
 // Helper to construct test breakout objects with the shape checkBreakouts produces.
-function mkBreakout({ symbol, direction = 'LONG', distancePct = 1.5, staleFlag = false }) {
+function mkBreakout({ symbol, direction = 'LONG', distancePct = 1.5 }) {
   return {
     candidate: { symbol, orHigh: 100, orLow: 95, orRange: 5, iep: 100 },
     direction,
     bar1Close: 0, bar2Close: 0,
     distance: 0,
     distancePct,
-    staleFlag,
   };
 }
 
@@ -36,24 +32,18 @@ describe('Constants are sane', () => {
   it('MIN_DISTANCE_PCT is 1.0 (per 2026-05-29 analysis)', () => {
     expect(MIN_DISTANCE_PCT).toBe(1.0);
   });
-  it('BIAS_GATE_MIN_CONFIRMED is 10', () => {
-    expect(BIAS_GATE_MIN_CONFIRMED).toBe(10);
-  });
-  it('BIAS_GATE_THRESHOLD_PCT is 70', () => {
-    expect(BIAS_GATE_THRESHOLD_PCT).toBe(70);
-  });
 });
 
 describe('Distance floor filter', () => {
   it('drops a single below-floor pick to BELOW_FLOOR', () => {
     const confirmed = [mkBreakout({ symbol: 'WEAK', distancePct: 0.5 })];
-    decideBreakoutActions({ confirmed, slotsLeft: 3, existingBias: 'BOTH' });
+    decideBreakoutActions({ confirmed, slotsLeft: 3 });
     expect(confirmed[0]._action).toBe('BELOW_FLOOR');
   });
 
   it('keeps a pick at exactly the floor (>= comparison)', () => {
     const confirmed = [mkBreakout({ symbol: 'EDGE', distancePct: 1.0 })];
-    decideBreakoutActions({ confirmed, slotsLeft: 3, existingBias: 'BOTH' });
+    decideBreakoutActions({ confirmed, slotsLeft: 3 });
     expect(confirmed[0]._action).toBe('ENTER');
   });
 
@@ -64,180 +54,212 @@ describe('Distance floor filter', () => {
       mkBreakout({ symbol: 'PNBHOUSING', direction: 'SHORT', distancePct: 0.88 }),
       mkBreakout({ symbol: 'PRESTIGE',   direction: 'LONG',  distancePct: 0.97 }),
     ];
-    decideBreakoutActions({ confirmed, slotsLeft: 3, existingBias: 'BOTH' });
+    decideBreakoutActions({ confirmed, slotsLeft: 3 });   // no regime → both sides allowed
     const byName = Object.fromEntries(confirmed.map(b => [b.candidate.symbol, b._action]));
     expect(byName.LODHA).toBe('ENTER');
     expect(byName.RBLBANK).toBe('BELOW_FLOOR');
     expect(byName.PNBHOUSING).toBe('BELOW_FLOOR');
     expect(byName.PRESTIGE).toBe('BELOW_FLOOR');
   });
-
-  it('stale-flag takes precedence over below-floor', () => {
-    const confirmed = [mkBreakout({ symbol: 'BOTH', distancePct: 0.5, staleFlag: true })];
-    decideBreakoutActions({ confirmed, slotsLeft: 3, existingBias: 'BOTH' });
-    expect(confirmed[0]._action).toBe('SKIP_STALE');
-  });
 });
 
-describe('Direction-bias gate', () => {
-  it('does NOT lock bias when confirmed.length < BIAS_GATE_MIN_CONFIRMED', () => {
-    const confirmed = Array.from({ length: 9 }, (_, i) =>
-      mkBreakout({ symbol: `S${i}`, direction: 'SHORT', distancePct: 1.5 })
-    );
-    const { newBias, biasReason } = decideBreakoutActions({
-      confirmed, slotsLeft: 3, existingBias: null,
-    });
-    expect(newBias).toBeNull();
-    expect(biasReason).toBeNull();
-  });
-
-  it('locks SHORT when 80% are SHORT — replay 2026-05-29 morning scan', () => {
-    // 25 SHORTs + 5 LONGs = 83% SHORT, well over 70% threshold
-    const confirmed = [
-      ...Array.from({ length: 25 }, (_, i) => mkBreakout({ symbol: `S${i}`, direction: 'SHORT', distancePct: 1.5 })),
-      ...Array.from({ length: 5 },  (_, i) => mkBreakout({ symbol: `L${i}`, direction: 'LONG',  distancePct: 1.5 })),
-    ];
-    const { newBias, biasReason } = decideBreakoutActions({
-      confirmed, slotsLeft: 3, existingBias: null,
-    });
-    expect(newBias).toBe('SHORT');
-    expect(biasReason).toMatch(/Bias LOCKED to SHORT/);
-    expect(biasReason).toMatch(/83%/);
-  });
-
-  it('locks LONG when 80% are LONG', () => {
-    const confirmed = [
-      ...Array.from({ length: 25 }, (_, i) => mkBreakout({ symbol: `L${i}`, direction: 'LONG',  distancePct: 1.5 })),
-      ...Array.from({ length: 5 },  (_, i) => mkBreakout({ symbol: `S${i}`, direction: 'SHORT', distancePct: 1.5 })),
-    ];
-    const { newBias, biasReason } = decideBreakoutActions({
-      confirmed, slotsLeft: 3, existingBias: null,
-    });
-    expect(newBias).toBe('LONG');
-    expect(biasReason).toMatch(/Bias LOCKED to LONG/);
-  });
-
-  it('returns BOTH when neither side hits threshold (60/40 split)', () => {
-    const confirmed = [
-      ...Array.from({ length: 6 }, (_, i) => mkBreakout({ symbol: `S${i}`, direction: 'SHORT', distancePct: 1.5 })),
-      ...Array.from({ length: 4 }, (_, i) => mkBreakout({ symbol: `L${i}`, direction: 'LONG',  distancePct: 1.5 })),
-    ];
-    const { newBias, biasReason } = decideBreakoutActions({
-      confirmed, slotsLeft: 3, existingBias: null,
-    });
-    expect(newBias).toBe('BOTH');
-    expect(biasReason).toMatch(/No clear bias/);
-  });
-
-  it('locks at exactly 70% threshold (>= comparison)', () => {
-    // 7 SHORT + 3 LONG = 70% SHORT, exactly at threshold
-    const confirmed = [
-      ...Array.from({ length: 7 }, (_, i) => mkBreakout({ symbol: `S${i}`, direction: 'SHORT', distancePct: 1.5 })),
-      ...Array.from({ length: 3 }, (_, i) => mkBreakout({ symbol: `L${i}`, direction: 'LONG',  distancePct: 1.5 })),
-    ];
-    const { newBias } = decideBreakoutActions({
-      confirmed, slotsLeft: 3, existingBias: null,
-    });
-    expect(newBias).toBe('SHORT');
-  });
-
-  it('persists existing SHORT bias on subsequent scan even if current candidates split evenly', () => {
+describe('Direction gate — Nifty regime is the sole authority', () => {
+  it('BULL regime → SHORT breakouts are WRONG_SIDE, LONGs enter', () => {
     const confirmed = [
       mkBreakout({ symbol: 'L1', direction: 'LONG',  distancePct: 1.5 }),
-      mkBreakout({ symbol: 'S1', direction: 'SHORT', distancePct: 1.5 }),
+      mkBreakout({ symbol: 'S1', direction: 'SHORT', distancePct: 2.0 }),
     ];
-    const { newBias } = decideBreakoutActions({
-      confirmed, slotsLeft: 3, existingBias: 'SHORT',
-    });
-    expect(newBias).toBe('SHORT');
-    // Only the SHORT one enters; LONG is marked WRONG_SIDE
-    expect(confirmed.find(b => b.candidate.symbol === 'S1')._action).toBe('ENTER');
-    expect(confirmed.find(b => b.candidate.symbol === 'L1')._action).toBe('WRONG_SIDE');
-  });
-
-  it('with SHORT bias locked, all LONGs get WRONG_SIDE', () => {
-    const confirmed = [
-      mkBreakout({ symbol: 'LODHA',      direction: 'LONG',  distancePct: 1.22 }),
-      mkBreakout({ symbol: 'YESBANK',    direction: 'LONG',  distancePct: 1.26 }),
-      mkBreakout({ symbol: 'CAMS',       direction: 'LONG',  distancePct: 1.91 }),
-      mkBreakout({ symbol: 'ABFRL',      direction: 'LONG',  distancePct: 1.90 }),
-      mkBreakout({ symbol: 'POWERGRID',  direction: 'SHORT', distancePct: 1.59 }),
-      mkBreakout({ symbol: 'POLICYBZR',  direction: 'SHORT', distancePct: 1.78 }),
-      mkBreakout({ symbol: 'JSL',        direction: 'SHORT', distancePct: 2.22 }),
-    ];
-    decideBreakoutActions({ confirmed, slotsLeft: 3, existingBias: 'SHORT' });
+    decideBreakoutActions({ confirmed, slotsLeft: 3, marketRegime: 'BULL' });
     const byName = Object.fromEntries(confirmed.map(b => [b.candidate.symbol, b._action]));
-    // The 4 LONGs are all WRONG_SIDE
-    expect(byName.LODHA).toBe('WRONG_SIDE');
-    expect(byName.YESBANK).toBe('WRONG_SIDE');
-    expect(byName.CAMS).toBe('WRONG_SIDE');
-    expect(byName.ABFRL).toBe('WRONG_SIDE');
-    // The 3 SHORTs fill the 3 slots
-    expect(byName.POWERGRID).toBe('ENTER');
-    expect(byName.POLICYBZR).toBe('ENTER');
-    expect(byName.JSL).toBe('ENTER');
+    expect(byName.S1).toBe('WRONG_SIDE');
+    expect(byName.L1).toBe('ENTER');
   });
 
-  it('BOTH bias allows both LONG and SHORT entries', () => {
+  it('BEAR regime → LONG breakouts are WRONG_SIDE, SHORTs enter', () => {
     const confirmed = [
       mkBreakout({ symbol: 'L1', direction: 'LONG',  distancePct: 2.0 }),
-      mkBreakout({ symbol: 'S1', direction: 'SHORT', distancePct: 1.8 }),
-      mkBreakout({ symbol: 'L2', direction: 'LONG',  distancePct: 1.6 }),
+      mkBreakout({ symbol: 'S1', direction: 'SHORT', distancePct: 1.5 }),
     ];
-    decideBreakoutActions({ confirmed, slotsLeft: 3, existingBias: 'BOTH' });
+    decideBreakoutActions({ confirmed, slotsLeft: 3, marketRegime: 'BEAR' });
+    const byName = Object.fromEntries(confirmed.map(b => [b.candidate.symbol, b._action]));
+    expect(byName.L1).toBe('WRONG_SIDE');
+    expect(byName.S1).toBe('ENTER');
+  });
+
+  it('NEUTRAL regime → both directions allowed (no breadth fallback)', () => {
+    const confirmed = [
+      mkBreakout({ symbol: 'L1', direction: 'LONG',  distancePct: 1.5 }),
+      mkBreakout({ symbol: 'S1', direction: 'SHORT', distancePct: 2.0 }),
+    ];
+    decideBreakoutActions({ confirmed, slotsLeft: 3, marketRegime: 'NEUTRAL' });
     expect(confirmed.every(b => b._action === 'ENTER')).toBe(true);
   });
-});
 
-describe('Combined: floor + bias + slot logic together', () => {
-  it('2026-05-29 morning replay with both fixes active — only top SHORTs enter', () => {
-    // Real first-scan candidates from the day's log, sorted desc by distance%
+  it('no regime passed → both directions allowed', () => {
     const confirmed = [
-      mkBreakout({ symbol: 'LODHA',      direction: 'LONG',  distancePct: 1.22 }),
-      mkBreakout({ symbol: 'RBLBANK',    direction: 'SHORT', distancePct: 0.97 }),
-      mkBreakout({ symbol: 'PNBHOUSING', direction: 'SHORT', distancePct: 0.88 }),
-      // + 22 more SHORTs below the floor or above (mocked at 1.5% so they pass)
-      ...Array.from({ length: 22 }, (_, i) => mkBreakout({ symbol: `EXTRA_S${i}`, direction: 'SHORT', distancePct: 1.5 })),
-      ...Array.from({ length: 2 },  (_, i) => mkBreakout({ symbol: `EXTRA_L${i}`, direction: 'LONG',  distancePct: 1.5 })),
+      mkBreakout({ symbol: 'L1', direction: 'LONG',  distancePct: 1.5 }),
+      mkBreakout({ symbol: 'S1', direction: 'SHORT', distancePct: 1.8 }),
     ];
-    const { newBias } = decideBreakoutActions({
-      confirmed, slotsLeft: 3, existingBias: null,
-    });
-    expect(newBias).toBe('SHORT');
+    decideBreakoutActions({ confirmed, slotsLeft: 3 });
+    expect(confirmed.every(b => b._action === 'ENTER')).toBe(true);
+  });
 
-    const byName = Object.fromEntries(confirmed.map(b => [b.candidate.symbol, b._action]));
-    // LODHA is LONG → WRONG_SIDE under new SHORT bias
-    expect(byName.LODHA).toBe('WRONG_SIDE');
-    // RBLBANK and PNBHOUSING dropped by floor
-    expect(byName.RBLBANK).toBe('BELOW_FLOOR');
-    expect(byName.PNBHOUSING).toBe('BELOW_FLOOR');
-    // 3 of the EXTRA_S take the slots
-    const slotsFilled = confirmed.filter(b => b._action === 'ENTER').length;
-    expect(slotsFilled).toBe(3);
-    expect(confirmed.filter(b => b._action === 'ENTER').every(b => b.direction === 'SHORT')).toBe(true);
+  it('returns gateSide matching the regime', () => {
+    expect(decideBreakoutActions({ confirmed: [], slotsLeft: 3, marketRegime: 'BEAR' }).gateSide).toBe('SHORT');
+    expect(decideBreakoutActions({ confirmed: [], slotsLeft: 3, marketRegime: 'BULL' }).gateSide).toBe('LONG');
+    expect(decideBreakoutActions({ confirmed: [], slotsLeft: 3, marketRegime: 'NEUTRAL' }).gateSide).toBeNull();
   });
 });
 
-describe('Action precedence ordering', () => {
-  it('STALE > BELOW_FLOOR > WRONG_SIDE > ENTER > SLOT_FULL', () => {
+describe('Action precedence + slots', () => {
+  it('BELOW_FLOOR > WRONG_SIDE > ENTER > SLOT_FULL', () => {
     const confirmed = [
-      // stale + below-floor + wrong-side → STALE wins
-      mkBreakout({ symbol: 'A', direction: 'LONG', distancePct: 0.5, staleFlag: true }),
-      // below-floor + wrong-side → BELOW_FLOOR wins
-      mkBreakout({ symbol: 'B', direction: 'LONG', distancePct: 0.5 }),
-      // wrong-side only → WRONG_SIDE
-      mkBreakout({ symbol: 'C', direction: 'LONG', distancePct: 1.5 }),
-      // valid → ENTER (with slots=1)
-      mkBreakout({ symbol: 'D', direction: 'SHORT', distancePct: 1.5 }),
-      // valid but no slots → SLOT_FULL
-      mkBreakout({ symbol: 'E', direction: 'SHORT', distancePct: 1.5 }),
+      mkBreakout({ symbol: 'B', direction: 'LONG',  distancePct: 0.5 }),  // below-floor + wrong-side → BELOW_FLOOR
+      mkBreakout({ symbol: 'C', direction: 'LONG',  distancePct: 1.5 }),  // wrong-side only → WRONG_SIDE
+      mkBreakout({ symbol: 'D', direction: 'SHORT', distancePct: 1.5 }),  // valid → ENTER (slots=1)
+      mkBreakout({ symbol: 'E', direction: 'SHORT', distancePct: 1.5 }),  // valid but no slots → SLOT_FULL
     ];
-    decideBreakoutActions({ confirmed, slotsLeft: 1, existingBias: 'SHORT' });
+    decideBreakoutActions({ confirmed, slotsLeft: 1, marketRegime: 'BEAR' });
     const byName = Object.fromEntries(confirmed.map(b => [b.candidate.symbol, b._action]));
-    expect(byName.A).toBe('SKIP_STALE');
     expect(byName.B).toBe('BELOW_FLOOR');
     expect(byName.C).toBe('WRONG_SIDE');
     expect(byName.D).toBe('ENTER');
     expect(byName.E).toBe('SLOT_FULL');
+  });
+});
+
+describe('Stop-loss risk cap — computeOrbStop (2026-06-02)', () => {
+  const OR = { orHigh: 100, orLow: 95, orRange: 5 };
+
+  it('LONG extended fill → risk-cap applies, 1R bounded to MAX_SL_PCT', () => {
+    // Filled 10% above the OR — OR-edge stop would risk ~11%; cap must kick in.
+    const { stop, source } = computeOrbStop({ isLong: true, ...OR, entry: 110 });
+    expect(source).toMatch(/risk-cap/);
+    const riskPct = (110 - stop) / 110 * 100;
+    expect(riskPct).toBeLessThanOrEqual(1.55);   // ~MAX_SL_PCT (1.5%) + tick tolerance
+    expect(stop).toBeLessThan(110);
+  });
+
+  it('LONG tight fill just above OR → OR-edge stop is used', () => {
+    const { stop, source } = computeOrbStop({ isLong: true, ...OR, entry: 100.2 });
+    expect(source).toBe('OR-edge');
+    expect(stop).toBeLessThan(100.2);
+  });
+
+  it('SHORT extended fill → risk-cap applies, 1R bounded', () => {
+    const { stop, source } = computeOrbStop({ isLong: false, ...OR, entry: 85 });
+    expect(source).toMatch(/risk-cap/);
+    const riskPct = (stop - 85) / 85 * 100;
+    expect(riskPct).toBeLessThanOrEqual(1.55);
+    expect(stop).toBeGreaterThan(85);
+  });
+
+  it('always returns the stop nearer to entry than the looser of the two', () => {
+    const r = computeOrbStop({ isLong: true, ...OR, entry: 108 });
+    expect(r.stop).toBe(Math.max(r.orStop, r.capStop));  // LONG: nearer = higher
+  });
+});
+
+describe('Quality ranking — scoreCandidateQuality (RVOL removed, now a gate)', () => {
+  it('higher relative strength scores higher, all else equal', () => {
+    const lo = scoreCandidateQuality({ relStrength: 0.0, distancePct: 1 });
+    const hi = scoreCandidateQuality({ relStrength: 1.5, distancePct: 1 });
+    expect(hi).toBeGreaterThan(lo);
+  });
+
+  it('more extended (higher distance%) is PENALISED, all else equal', () => {
+    const near = scoreCandidateQuality({ relStrength: 0.5, distancePct: 1 });
+    const far  = scoreCandidateQuality({ relStrength: 0.5, distancePct: 4 });
+    expect(near).toBeGreaterThan(far);
+  });
+
+  it('score = wRs·relStrength − wDist·distance (no RVOL term)', () => {
+    const s = scoreCandidateQuality({ relStrength: 0.5, distancePct: 1 });
+    expect(s).toBeCloseTo((1.0 * 0.5) - (0.4 * 1), 6);
+  });
+
+  it('a market-aligned near breakout beats a discordant extended one', () => {
+    const alignedNear  = scoreCandidateQuality({ relStrength: 1.2, distancePct: 1.1 });
+    const discordantFar = scoreCandidateQuality({ relStrength: -0.3, distancePct: 3.5 });
+    expect(alignedNear).toBeGreaterThan(discordantFar);
+  });
+
+  it('volatility-adjusts relStrength — tight-OR name beats wide-OR name at equal raw relStrength', () => {
+    const tightOR = scoreCandidateQuality({ relStrength: 1.0, distancePct: 1, orWidthPct: 0.8 });
+    const wideOR  = scoreCandidateQuality({ relStrength: 1.0, distancePct: 1, orWidthPct: 2.4 });
+    expect(tightOR).toBeGreaterThan(wideOR);
+  });
+
+  it('falls back to raw relStrength when orWidthPct is missing', () => {
+    const s = scoreCandidateQuality({ relStrength: 0.5, distancePct: 1 });
+    expect(s).toBeCloseTo((1.0 * 0.5) - (0.4 * 1), 6);
+  });
+});
+
+describe('RVOL entry gate (2026-06-02)', () => {
+  it('rvol below 1.1× → LOW_RVOL, not entered (even with good distance/regime)', () => {
+    const confirmed = [{ ...mkBreakout({ symbol: 'THIN', direction: 'SHORT', distancePct: 2.0 }), rvol: 0.9 }];
+    decideBreakoutActions({ confirmed, slotsLeft: 3, marketRegime: 'BEAR' });
+    expect(confirmed[0]._action).toBe('LOW_RVOL');
+  });
+
+  it('rvol at/above 1.1× → passes the gate and enters', () => {
+    const confirmed = [{ ...mkBreakout({ symbol: 'THICK', direction: 'SHORT', distancePct: 2.0 }), rvol: 1.3 }];
+    decideBreakoutActions({ confirmed, slotsLeft: 3, marketRegime: 'BEAR' });
+    expect(confirmed[0]._action).toBe('ENTER');
+  });
+
+  it('missing rvol (undefined) does NOT gate — handled upstream by the discard filter', () => {
+    const confirmed = [mkBreakout({ symbol: 'NORV', direction: 'SHORT', distancePct: 2.0 })];
+    decideBreakoutActions({ confirmed, slotsLeft: 3, marketRegime: 'BEAR' });
+    expect(confirmed[0]._action).toBe('ENTER');
+  });
+});
+
+describe('Time-matched RVOL baseline — slotKey / buildVolumeProfile (2026-06-02)', () => {
+  it('slotKey reads HH:MM off the IST string (no UTC shift)', () => {
+    expect(slotKey('2026-06-01T09:45:00+0530')).toBe('09:45');
+    expect(slotKey('2026-06-01T13:15:00+0530')).toBe('13:15');
+    expect(slotKey('garbage')).toBe(null);
+  });
+
+  it('buildVolumeProfile averages volume per slot across days', () => {
+    const bars = [
+      { date: '2026-05-30T09:45:00+0530', volume: 1000 },
+      { date: '2026-05-31T09:45:00+0530', volume: 2000 },   // 09:45 avg = 1500
+      { date: '2026-05-30T10:00:00+0530', volume: 400 },
+      { date: '2026-05-31T10:00:00+0530', volume: 600 },    // 10:00 avg = 500
+      { date: '2026-05-31T10:15:00+0530', volume: 0 },      // skipped (vol<=0)
+    ];
+    const profile = buildVolumeProfile(bars);
+    expect(profile['09:45']).toBe(1500);
+    expect(profile['10:00']).toBe(500);
+    expect(profile['10:15']).toBeUndefined();
+  });
+
+  it('time-matched RVOL flags a heavy breakout in a normally-quiet slot', () => {
+    // Midday slot normally trades 500; breakout candle does 1500 → 3x conviction.
+    const profile = { '13:00': 500 };
+    const rvol = 1500 / profile['13:00'];
+    expect(rvol).toBe(3);
+  });
+});
+
+describe('ADR for volatility-normalised OR filter — computeADRPct (2026-06-02)', () => {
+  it('averages daily (high−low) across days as % of price', () => {
+    const bars = [
+      // day 1 range = 110-100 = 10
+      { date: '2026-05-30T09:15:00+0530', high: 105, low: 100 },
+      { date: '2026-05-30T09:30:00+0530', high: 110, low: 104 },
+      // day 2 range = 106-100 = 6   → avg range = 8, on ref price 100 → 8%
+      { date: '2026-05-31T09:15:00+0530', high: 103, low: 100 },
+      { date: '2026-05-31T09:30:00+0530', high: 106, low: 102 },
+    ];
+    expect(computeADRPct(bars, 100)).toBeCloseTo(8.0, 3);
+  });
+
+  it('returns null with no usable bars or no ref price', () => {
+    expect(computeADRPct([], 100)).toBeNull();
+    expect(computeADRPct([{ date: '2026-05-30T09:15:00+0530', high: 105, low: 100 }], 0)).toBeNull();
   });
 });

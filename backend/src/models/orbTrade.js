@@ -24,6 +24,16 @@ const orbCandidateSchema = new mongoose.Schema({
   orLow:   Number,
   orRange: Number,        // orHigh - orLow
 
+  // Quality-ranking inputs/outputs (2026-06-02). avgDailyVolume is the 20-day
+  // baseline fetched at pre-open (RVOL denominator); rvol/relStrength/rankScore
+  // are computed at the breakout scan and stored for observability/backtest.
+  avgDailyVolume: Number,
+  adrPct:         Number,   // 20-day avg daily range as % of price — denominator for the OR-width filter
+  volumeProfile:  { type: mongoose.Schema.Types.Mixed, default: undefined },  // { 'HH:MM': avgVol } time-matched RVOL baseline
+  rvol:           Number,
+  relStrength:    Number,
+  rankScore:      Number,
+
   // Status
   status: {
     type: String,
@@ -50,6 +60,13 @@ const orbCandidateSchema = new mongoose.Schema({
   exitReason: String,
   pnl:        Number,
   returnPct:  Number,
+
+  // VWAP reversal-exit state (2026-06-02) — per-stock cumulative VWAP, refreshed
+  // each 5-min monitor cycle. vwapConsecutiveOpp counts consecutive closes on the
+  // wrong side of VWAP; 2 in a row triggers an exit (institutional flow flipped).
+  vwapLast:            { type: Number, default: null },
+  vwapConsecutiveOpp:  { type: Number, default: 0 },
+  vwapLastBarTime:     { type: String, default: null },  // dedup: last 5-min bar counted
 }, { _id: false });
 
 const orbTradeSchema = new mongoose.Schema({
@@ -70,6 +87,31 @@ const orbTradeSchema = new mongoose.Schema({
   // Reasoning: on 2026-05-29 the day was 80% bearish at first scan but the
   // system took 6 LONGs anyway, losing -₹176 (CAMS) and -₹81 (ABFRL).
   dailyDirectionBias: { type: String, enum: ['LONG', 'SHORT', 'BOTH'], default: null },
+
+  // 2026-06-02: Live Nifty market regime. Computed each breakout scan from the
+  // NIFTY 50 index opening range (09:15–09:30) + current level. BULL gates to
+  // LONG entries only, BEAR to SHORT only, NEUTRAL falls back to breakout breadth.
+  // Unlike dailyDirectionBias this is recomputed live each scan so it adapts when
+  // the index reverses intraday.
+  marketRegime: { type: String, enum: ['BULL', 'BEAR', 'NEUTRAL', 'UNKNOWN'], default: 'UNKNOWN' },
+  niftyOrHigh:  { type: Number, default: null },
+  niftyOrLow:   { type: Number, default: null },
+
+  // 2026-06-02: Live regime trail — one entry per scan/monitor cycle, so the
+  // production direction decisions (and intraday flips) are queryable from the DB
+  // instead of only living in logs. `src` = 'scan' (breakout check) | 'monitor'.
+  // (Backtesting a *changed* strategy doesn't need this — it recomputes regime
+  // from the raw Nifty candles in backtest_candles — this is for auditing what the
+  // LIVE system actually decided.)
+  regimeHistory: {
+    type: [new mongoose.Schema({
+      t:        { type: Date,   required: true },
+      regime:   { type: String, default: 'UNKNOWN' },
+      niftyLtp: { type: Number, default: null },
+      src:      { type: String, default: 'scan' },
+    }, { _id: false })],
+    default: [],
+  },
 }, { timestamps: true });
 
 /**

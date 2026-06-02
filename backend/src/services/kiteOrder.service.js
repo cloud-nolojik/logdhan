@@ -942,6 +942,63 @@ class KiteOrderService {
   }
 
   /**
+   * Fetch historical candles for arbitrary date ranges (for backtest archival).
+   *
+   * Unlike getIntradayMultiCandles (which is hard-wired to today 09:15→now), this
+   * accepts explicit `from`/`to` so it can backfill past days. Resolves instrument
+   * tokens via getLTP (chunked), then calls kiteService.getHistoricalData per symbol.
+   *
+   * Kite historical limits: 1-min data is available ~3 years back but only 60 days
+   * per request — the caller (candleArchive) backfills one day at a time, so we're
+   * always well within that. Historical API is rate-limited (~3 req/s), so symbols
+   * are fetched in small batches with a pause between.
+   *
+   * @param {string[]} symbols  - e.g. ['SBIN','NIFTY 50']
+   * @param {string}   interval - 'minute' | '5minute' | '15minute' | 'day'
+   * @param {string}   from     - 'YYYY-MM-DD HH:MM:SS' (IST)
+   * @param {string}   to       - 'YYYY-MM-DD HH:MM:SS' (IST)
+   * @returns {Object} { SBIN: [{date,open,high,low,close,volume}, ...], ... }
+   */
+  async getHistoricalCandles(symbols, interval, from, to, { batch = 3, delayMs = 400 } = {}) {
+    const result = {};
+
+    // ── Resolve instrument tokens via LTP (chunked at 100) ──
+    const tokenMap = {};
+    for (let i = 0; i < symbols.length; i += 100) {
+      const slice = symbols.slice(i, i + 100).map(s => `NSE:${s}`);
+      try {
+        const ltp = await this.getLTP(slice);
+        for (const [k, v] of Object.entries(ltp || {})) {
+          const sym = k.replace(/^NSE:/, '');
+          if (v?.instrument_token) tokenMap[sym] = v.instrument_token;
+        }
+      } catch (err) {
+        console.error(`[KITE ORDER] getHistoricalCandles token batch ${i} failed: ${err.message}`);
+      }
+    }
+
+    const resolvable = symbols.filter(s => tokenMap[s]);
+    const missing    = symbols.filter(s => !tokenMap[s]);
+    if (missing.length) console.warn(`[KITE ORDER] getHistoricalCandles: no token for ${missing.length} symbols: ${missing.slice(0, 10).join(', ')}${missing.length > 10 ? '…' : ''}`);
+
+    // ── Fetch candles in small rate-limit-friendly batches ──
+    for (let i = 0; i < resolvable.length; i += batch) {
+      const group = resolvable.slice(i, i + batch);
+      await Promise.all(group.map(async (sym) => {
+        try {
+          const candles = await this.kiteService.getHistoricalData(tokenMap[sym], interval, from, to);
+          result[sym] = candles || [];
+        } catch (err) {
+          console.error(`[KITE ORDER] getHistoricalCandles ${sym} (${interval} ${from}→${to}): ${err.message}`);
+          result[sym] = [];
+        }
+      }));
+      if (i + batch < resolvable.length) await new Promise(r => setTimeout(r, delayMs));
+    }
+    return result;
+  }
+
+  /**
    * Get open positions from Kite (for reconciliation on startup)
    */
   async getPositions() {

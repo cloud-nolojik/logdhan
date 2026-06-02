@@ -16,6 +16,7 @@ import OrbTrade from '../../models/orbTrade.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import { getFnoSymbols } from '../../constants/fnoUniverse.js';
 import { analyzeIntradayStructure, checkSidewaysExit } from '../dailyPicks/tradingDecisions.js';
+import { computeVwap, evaluateVwapExit } from '../dailyPicks/dailyPicksService.js';
 
 const LOG = '[ORB]';
 
@@ -58,6 +59,22 @@ const TARGET_RANGE_MULT     = 1.5;    // (no longer used — see SIMPLE_MODE bel
 //   5. 15:15 force-exit anything still open.
 const SL_BUFFER_PCT         = 1.0;    // target SL buffer in % of breakout level
                                        // (capped at OR range for tight-range stocks)
+// 2026-06-02: decouple 1R from the OR boundary. The OR-edge stop can create an
+// oversized risk when we fill extended past the OR (entry is ≥MIN_DISTANCE_PCT past
+// it), which blunts the +1R breakeven trail and the 40-min cut. MAX_SL_PCT caps the
+// stop distance to a fixed % of entry, so 1R is bounded regardless of extension.
+// Tunable — value should be confirmed in the backtest harness.
+const MAX_SL_PCT            = 1.5;
+// 15-min bars in a 09:15–15:30 session (375 min / 15). Used to derive a per-bar
+// volume baseline for RVOL = breakout-candle volume ÷ (avg daily volume / this).
+const BARS_PER_DAY         = 25;
+// Volume-confirmation entry gate (2026-06-02): the breakout candle must trade at
+// least this multiple of its time-matched slot-average volume to be eligible. Set
+// MILD (1.1× = "at least a normal-volume candle for that slot") so it filters only
+// thin, no-participation breakouts without starving the (already heavily-gated)
+// funnel. Tunable — the exact value is a backtest question. RVOL is the gate now;
+// it is NOT also in the ranking score (no double-count).
+const RVOL_ENTRY_MIN       = 1.1;
 
 // Entry window + confirmation — CONFIRM_BARS = how many completed 15-min candles
 // must close past the OR (same direction) to confirm a breakout. Kept as a
@@ -77,7 +94,15 @@ const BREAKOUT_START_HOUR   = 10;
 const BREAKOUT_START_MIN    = 1;      // breakout 09:30–09:45 + confirm 09:45–10:00, checked 10:01
 const BREAKOUT_END_HOUR     = 14;
 const BREAKOUT_END_MIN      = 1;      // last entry 14:01 (≥74 min runway to 15:15)
-const MAX_OR_RANGE_PCT      = 2.5;    // reject candidates where OR range > 2.5% of IEP
+const MAX_OR_RANGE_PCT      = 2.5;    // FALLBACK fixed band (used only when ADR unavailable)
+// 2026-06-02: volatility-normalised OR-width filter. Instead of a fixed price-%
+// band (which wrongly excludes high-beta names and mis-handles sleepy ones), gate
+// the OR width as a fraction of the stock's own ADR (avg daily range, computed at
+// pre-open from the 20-day 15-min candles). Too small relative to ADR = dead/noise;
+// too large = the day's typical range is already spent (little room to run). First-
+// cut bounds — tune in the backtest.
+const OR_ADR_MIN            = 0.10;   // OR must be ≥ 10% of ADR
+const OR_ADR_MAX            = 0.60;   // OR must be ≤ 60% of ADR
 
 // ── 2026-05-29 evening — quality-of-pick filters ───────────────────────────
 // Born from the day-4 analysis (2026-05-29). Two findings:
@@ -93,8 +118,8 @@ const MAX_OR_RANGE_PCT      = 2.5;    // reject candidates where OR range > 2.5%
 //    and -₹81 on ABFRL fighting the tape. Locking direction to the dominant
 //    side once it crosses 70% saves ~₹250 on bias-discordant LONGs.
 const MIN_DISTANCE_PCT          = 1.0;   // skip breakouts with distance past OR < 1%
-const BIAS_GATE_MIN_CONFIRMED   = 10;    // need ≥ N confirmed signals to evaluate bias
-const BIAS_GATE_THRESHOLD_PCT   = 70;    // if one side ≥ 70% of confirmed, lock to that side
+// (BIAS_GATE_* removed 2026-06-02 — breakout-breadth direction lock superseded by
+//  the live Nifty regime gate.)
 
 // ── 10:30 TIME EXIT — DISABLED 2026-05-25 (evening) ───────────────────────
 // Hardcoded 10:30 AM force-exit was killing winners. On 2026-05-25:
@@ -156,61 +181,127 @@ function parseKiteTickError(err) {
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 /**
- * Pure decision helper for checkBreakouts() — mutates each item in `confirmed`
- * with a `_action` field and returns the (possibly new) daily direction bias.
- *
- * Two filters are applied, in this priority order:
- *   1. SKIP_STALE   — staleFlag true (set in checkBreakouts when distance > 2× OR range)
- *   2. BELOW_FLOOR  — distancePct < MIN_DISTANCE_PCT
- *   3. WRONG_SIDE   — bias is LONG/SHORT and item's direction doesn't match
- *   4. ENTER        — slot available
- *   5. SLOT_FULL    — slots exhausted
- *
- * Bias computation:
- *   - If existingBias is set, use it as-is. No biasReason returned.
- *   - Else if confirmed.length < BIAS_GATE_MIN_CONFIRMED, bias stays null.
- *     biasReason describes why we didn't decide.
- *   - Else count LONG/SHORT; if one ≥ BIAS_GATE_THRESHOLD_PCT lock that side,
- *     otherwise BOTH. biasReason returns a human log line for caller to print.
- *
- * @param {Object[]} confirmed      — sorted desc by distancePct, mutated in-place
- * @param {number}   slotsLeft      — entries available this scan
- * @param {string|null} existingBias — 'LONG' | 'SHORT' | 'BOTH' | null
- * @returns {{ newBias: string|null, biasReason: string|null }}
+ * Pure stop-loss computation for an ORB entry. Returns the TIGHTER of:
+ *   • OR-edge stop: breakout level ∓ min(SL_BUFFER_PCT% , OR range)
+ *   • risk-cap stop: entry ∓ MAX_SL_PCT% (bounds 1R no matter how extended the fill)
+ * "Tighter" = closer to entry (higher for LONG, lower for SHORT). This keeps 1R
+ * bounded so the BE-trail and 40-min sideways cut engage at predictable points.
+ * Pure + exported for unit testing.
  */
-export function decideBreakoutActions({ confirmed, slotsLeft, existingBias }) {
-  // Bias computation
-  let newBias = existingBias;
-  let biasReason = null;
-  if (!newBias) {
-    if (confirmed.length >= BIAS_GATE_MIN_CONFIRMED) {
-      const longCount  = confirmed.filter(b => b.direction === 'LONG').length;
-      const shortCount = confirmed.length - longCount;
-      const longPct    = (longCount  / confirmed.length) * 100;
-      const shortPct   = (shortCount / confirmed.length) * 100;
-      if (shortPct >= BIAS_GATE_THRESHOLD_PCT) {
-        newBias = 'SHORT';
-        biasReason = `Bias LOCKED to SHORT for today — ${shortCount}/${confirmed.length} confirmed (${shortPct.toFixed(0)}%) ≥ ${BIAS_GATE_THRESHOLD_PCT}% threshold`;
-      } else if (longPct >= BIAS_GATE_THRESHOLD_PCT) {
-        newBias = 'LONG';
-        biasReason = `Bias LOCKED to LONG for today — ${longCount}/${confirmed.length} confirmed (${longPct.toFixed(0)}%) ≥ ${BIAS_GATE_THRESHOLD_PCT}% threshold`;
-      } else {
-        newBias = 'BOTH';
-        biasReason = `No clear bias — L=${longPct.toFixed(0)}% S=${shortPct.toFixed(0)}% — taking both directions today`;
-      }
-    }
-  } else {
-    biasReason = `Bias active: ${existingBias} (set earlier today)`;
-  }
+export function computeOrbStop({ isLong, orHigh, orLow, orRange, entry }) {
+  const breakoutLevel = isLong ? orHigh : orLow;
+  const targetBuffer  = breakoutLevel * (SL_BUFFER_PCT / 100);
+  const effectiveBuf  = Math.min(targetBuffer, orRange);
+  const orStop  = isLong
+    ? snapToNSETick(orHigh - effectiveBuf, 0.05, 'floor')
+    : snapToNSETick(orLow  + effectiveBuf, 0.05, 'ceil');
+  const capStop = isLong
+    ? snapToNSETick(entry * (1 - MAX_SL_PCT / 100), 0.05, 'floor')
+    : snapToNSETick(entry * (1 + MAX_SL_PCT / 100), 0.05, 'ceil');
+  // Pick the stop closer to entry: LONG → higher (max); SHORT → lower (min).
+  const stop = isLong ? Math.max(orStop, capStop) : Math.min(orStop, capStop);
+  const cappedByRisk = isLong ? (capStop > orStop) : (capStop < orStop);
+  return { stop, orStop, capStop, effectiveBuf, source: cappedByRisk ? `risk-cap ${MAX_SL_PCT}%` : 'OR-edge' };
+}
 
-  // Mark actions
+/**
+ * Time-of-day slot key for a 15-min candle: 'HH:MM' of the bar's start, in IST.
+ * Kite returns candle timestamps as ISO strings with the +0530 offset, so we read
+ * HH:MM directly off the string (NOT via Date(), which would convert to UTC and
+ * shift the slot by 5h30m). Returns null if no time can be parsed.
+ */
+export function slotKey(dateLike) {
+  const s = typeof dateLike === 'string' ? dateLike : String(dateLike ?? '');
+  const m = s.match(/(\d{2}:\d{2}):\d{2}/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Build a per-slot average-volume profile from historical 15-min bars (≈20 days):
+ *   { '09:15': avgVol, '09:30': avgVol, … } — the average volume for each 15-min
+ * slot-of-day. This is the time-matched RVOL baseline: a breakout candle is judged
+ * against a *normal* candle for that same time of day, not a flat daily average
+ * (intraday volume is U-shaped, so a flat baseline over/under-states by time).
+ * Pure + exported for testing.
+ */
+export function buildVolumeProfile(bars) {
+  const acc = {};
+  for (const b of bars || []) {
+    if (!Number.isFinite(b?.volume) || b.volume <= 0) continue;
+    const slot = slotKey(b.date);
+    if (!slot) continue;
+    if (!acc[slot]) acc[slot] = { sum: 0, n: 0 };
+    acc[slot].sum += b.volume;
+    acc[slot].n   += 1;
+  }
+  const profile = {};
+  for (const [slot, { sum, n }] of Object.entries(acc)) profile[slot] = Math.round(sum / n);
+  return profile;
+}
+
+/**
+ * Average Daily Range as a % of price, from historical intraday bars (≈20 days).
+ * Groups bars by calendar day, takes each day's (high − low), averages them, and
+ * expresses it as a % of refPrice. Used to volatility-normalise the OR-width filter
+ * (OR width ÷ ADR) so the gate adapts to each stock instead of a fixed % band.
+ * Returns null if there's no usable data. Pure + exported for testing.
+ */
+export function computeADRPct(bars, refPrice) {
+  if (!refPrice || refPrice <= 0) return null;
+  const byDay = {};
+  for (const b of bars || []) {
+    if (!Number.isFinite(b?.high) || !Number.isFinite(b?.low)) continue;
+    const day = typeof b.date === 'string' ? b.date.slice(0, 10) : null;
+    if (!day) continue;
+    if (!byDay[day]) byDay[day] = { hi: -Infinity, lo: Infinity };
+    byDay[day].hi = Math.max(byDay[day].hi, b.high);
+    byDay[day].lo = Math.min(byDay[day].lo, b.low);
+  }
+  const ranges = Object.values(byDay).map(d => d.hi - d.lo).filter(r => Number.isFinite(r) && r > 0);
+  if (!ranges.length) return null;
+  const adr = ranges.reduce((a, r) => a + r, 0) / ranges.length;
+  return parseFloat((adr / refPrice * 100).toFixed(3));
+}
+
+/**
+ * Quality score for RANKING confirmed breakouts (higher = better pick). Combines:
+ *   • VOLATILITY-ADJUSTED relative strength vs Nifty — relStrength (%) divided by the
+ *     stock's OR width % (a same-day volatility proxy). Raw relative strength alone
+ *     systematically picks the wildest movers, which reverse hardest ("momentum
+ *     crash"); dividing by OR width ranks by risk-adjusted outperformance instead.
+ *     Falls back to raw relStrength when orWidthPct is unavailable.
+ *   • distance% past OR — PENALISED (extension ≈ closer to exhaustion).
+ * NOTE (2026-06-02): RVOL is NOT in the score — it's a hard entry GATE
+ * (RVOL_ENTRY_MIN, in decideBreakoutActions); having it in both would double-count.
+ * Pure + exported for unit testing and reuse by the backtest harness.
+ */
+export function scoreCandidateQuality({ relStrength = 0, distancePct = 0, orWidthPct = null }, weights = {}) {
+  const { wRs = 1.0, wDist = 0.4 } = weights;
+  const volAdjRs = (orWidthPct && orWidthPct > 0) ? (relStrength / orWidthPct) : relStrength;
+  return (wRs * volAdjRs) - (wDist * Math.max(0, distancePct));
+}
+
+export function decideBreakoutActions({ confirmed, slotsLeft, marketRegime = null }) {
+  // Direction gate: the live Nifty regime is the SOLE authority (the breakout-breadth
+  // 70% lock was removed 2026-06-02 — it duplicated the regime, computed less reliably
+  // from our own breakout sample, and the regime already overrode it). BULL→LONG only,
+  // BEAR→SHORT only, NEUTRAL→both sides allowed. (UNKNOWN never reaches here — the
+  // caller blocks all entries when the regime can't be read.)
+  let gateSide = null;  // 'LONG' | 'SHORT' | null (both allowed)
+  if (marketRegime === 'BULL')      gateSide = 'LONG';
+  else if (marketRegime === 'BEAR') gateSide = 'SHORT';
+
+  // Mark actions. Distance is now governed by ONE rule per end: a hard MIN floor
+  // here, and a soft extension penalty in the quality score. The old >2×-OR-range
+  // "stale" hard cut was removed 2026-06-02 — redundant with the ranking penalty and
+  // it mixed units (OR-range multiples vs price-%).
   let slotsConsumed = 0;
   for (const b of confirmed) {
-    if (b.staleFlag) {
-      b._action = 'SKIP_STALE';
+    if (Number.isFinite(b.rvol) && b.rvol < RVOL_ENTRY_MIN) {
+      b._action = 'LOW_RVOL';                 // volume-confirmation gate (thin breakout)
     } else if (b.distancePct < MIN_DISTANCE_PCT) {
       b._action = 'BELOW_FLOOR';
-    } else if (newBias && newBias !== 'BOTH' && b.direction !== newBias) {
+    } else if (gateSide && b.direction !== gateSide) {
       b._action = 'WRONG_SIDE';
     } else if (slotsConsumed < slotsLeft) {
       b._action = 'ENTER';
@@ -220,14 +311,12 @@ export function decideBreakoutActions({ confirmed, slotsLeft, existingBias }) {
     }
   }
 
-  return { newBias, biasReason };
+  return { gateSide };
 }
 
 // Export constants for testing / introspection
 export const _testExports = {
   MIN_DISTANCE_PCT,
-  BIAS_GATE_MIN_CONFIRMED,
-  BIAS_GATE_THRESHOLD_PCT,
 };
 
 function istTimeStr() {
@@ -294,6 +383,54 @@ async function bookAlreadyClosedPnl(c, logTag = '[MONITOR]') {
   c.pnl       = 0;
   c.exitPrice = c.entryPrice;
   c.returnPct = 0;
+}
+
+// ── Nifty market regime — live direction read (2026-06-02) ────────────────
+// So the system adapts when the index reverses intraday instead of staying on a
+// morning bias lock. Uses the NIFTY 50 INDEX opening range (09:15–09:30) + the
+// current index level:
+//   • Nifty > OR high → BULL   (gate to LONG breakouts only)
+//   • Nifty < OR low  → BEAR   (gate to SHORT breakouts only)
+//   • inside the OR    → NEUTRAL (fall back to breakout-breadth bias)
+// VWAP note: a true volume-weighted VWAP on the index is impossible (Kite returns
+// volume=0 for indices), so the index direction here is OR-based (ORB-on-Nifty).
+// Per-position VWAP reversal exits use each STOCK's own VWAP (which has volume) —
+// see monitorOrbPositions(). On any data error this returns regime=null; the caller
+// (checkBreakouts) treats unknown regime as a HARD BLOCK — no entries that scan
+// (no-trade is safer than trading blind on direction). It does NOT force-exit open
+// positions on null regime (those are governed by per-stock VWAP, not the index).
+const NIFTY_INDEX_SYMBOL = 'NIFTY 50';
+let _niftyOrCache = { date: null, orHigh: null, orLow: null };
+
+async function getMarketRegime() {
+  try {
+    const istDateStr = MarketHoursUtil.toIST(new Date()).toISOString().slice(0, 10);
+    // OR (09:15–09:30) = the FIRST 15-min index candle of the day; cache per day.
+    if (_niftyOrCache.date !== istDateStr || _niftyOrCache.orHigh == null) {
+      const multi = await kiteOrderService.getIntradayMultiCandles([NIFTY_INDEX_SYMBOL], [{ interval: '15minute', count: 40 }]);
+      const bars  = multi['15minute']?.[NIFTY_INDEX_SYMBOL] || [];
+      if (bars.length) {
+        const first = bars[0];   // earliest bar = 09:15–09:30 opening range
+        _niftyOrCache = { date: istDateStr, orHigh: first.high, orLow: first.low };
+        console.log(`${LOG} [REGIME] Nifty OR set — high=${first.high} low=${first.low}`);
+      }
+    }
+    const { orHigh, orLow } = _niftyOrCache;
+    if (orHigh == null || orLow == null) return { regime: null, reason: 'no_nifty_or' };
+
+    const ltpData  = await kiteOrderService.getLTP([`NSE:${NIFTY_INDEX_SYMBOL}`]);
+    const niftyLtp = ltpData[`NSE:${NIFTY_INDEX_SYMBOL}`]?.last_price;
+    if (!niftyLtp) return { regime: null, reason: 'no_nifty_ltp', orHigh, orLow };
+
+    let regime = 'NEUTRAL';
+    if (niftyLtp > orHigh)      regime = 'BULL';
+    else if (niftyLtp < orLow)  regime = 'BEAR';
+    console.log(`${LOG} [REGIME] Nifty=${niftyLtp}  OR=${orLow}–${orHigh}  → ${regime}`);
+    return { regime, niftyLtp, orHigh, orLow };
+  } catch (err) {
+    console.error(`${LOG} [REGIME] getMarketRegime failed (${err.message}) — regime=null (no gate)`);
+    return { regime: null, reason: 'error' };
+  }
 }
 
 // ── SL trail via cancel + place (replaces modifyOrder) ────────────────────
@@ -517,6 +654,37 @@ export async function fetchPreOpenUniverse() {
     console.warn(`${LOG} [PHASE1] ⚠️  No candidates — Kite OHLC may be unavailable`);
   }
 
+  // ── RVOL baseline (2026-06-02, time-matched): 20 days of 15-min candles per
+  // symbol → a per-slot volume profile ({ '09:45': avgVol, … }). The breakout
+  // candle is later judged against a NORMAL candle for that same time of day, not
+  // a flat daily average (intraday volume is U-shaped). avgDailyVolume = sum of the
+  // slot averages, kept as a fallback denominator + the "have data" gate.
+  // Best-effort: failure leaves both null → those names get discarded at the scan.
+  try {
+    const istNowD = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const toD     = new Date(istNowD); toD.setDate(toD.getDate() - 1);   // through yesterday
+    const fromD   = new Date(istNowD); fromD.setDate(fromD.getDate() - 30); // ~20 trading days
+    const fmt     = d => d.toISOString().slice(0, 10);
+    const symbols = candidates.map(c => c.symbol);
+    const hist    = await kiteOrderService.getHistoricalCandles(symbols, '15minute', `${fmt(fromD)} 09:15:00`, `${fmt(toD)} 15:30:00`);
+    let withProfile = 0;
+    for (const c of candidates) {
+      const bars    = hist[c.symbol] || [];
+      const profile = buildVolumeProfile(bars);
+      const slots   = Object.values(profile);
+      if (slots.length) {
+        c.volumeProfile  = profile;
+        c.avgDailyVolume = slots.reduce((a, v) => a + v, 0);   // ≈ avg full-day volume
+        withProfile++;
+      }
+      // ADR% (avg daily range as % of price) — denominator for the OR-width filter.
+      c.adrPct = computeADRPct(bars, c.iep);
+    }
+    console.log(`${LOG} [PHASE1] RVOL baseline: time-matched volume profile set for ${withProfile}/${candidates.length} symbols`);
+  } catch (err) {
+    console.warn(`${LOG} [PHASE1] ⚠ volume-profile fetch failed (${err.message}) — RVOL unavailable (names will be discarded at scan)`);
+  }
+
   // Upsert today's ORB document
   const now      = new Date();
   const istOff   = 5.5 * 60 * 60 * 1000;
@@ -607,19 +775,37 @@ export async function recordOpeningRanges() {
     const orRange = parseFloat((orHigh - orLow).toFixed(2));
     const rangePct = candidate.iep > 0 ? (orRange / candidate.iep) * 100 : 99;
 
-    // Quality filter 1: skip too-wide OR (existing — target would be unreachable)
-    if (rangePct > MAX_OR_RANGE_PCT) {
-      candidate.status = 'SKIPPED';
-      candidate.skipReason = `or_too_wide_${rangePct.toFixed(2)}pct`;
-      rangesSkippedWide++;
-      continue;
-    }
-    // Quality filter 2 (TIER-1 new): skip too-tight OR (noise breakouts likely)
-    if (rangePct < MIN_OR_RANGE_PCT) {
-      candidate.status = 'SKIPPED';
-      candidate.skipReason = `or_too_tight_${rangePct.toFixed(2)}pct`;
-      rangesSkippedTight++;
-      continue;
+    // OR-width filter, volatility-normalised: gate the OR as a fraction of the
+    // stock's own ADR when we have it (adapts to each stock); fall back to the fixed
+    // price-% band when ADR is unavailable (pre-open fetch failed for this symbol).
+    if (candidate.adrPct > 0) {
+      const orRatio = rangePct / candidate.adrPct;          // OR width ÷ ADR
+      if (orRatio > OR_ADR_MAX) {
+        candidate.status = 'SKIPPED';
+        candidate.skipReason = `or_wide_${orRatio.toFixed(2)}xADR`;
+        rangesSkippedWide++;
+        continue;
+      }
+      if (orRatio < OR_ADR_MIN) {
+        candidate.status = 'SKIPPED';
+        candidate.skipReason = `or_tight_${orRatio.toFixed(2)}xADR`;
+        rangesSkippedTight++;
+        continue;
+      }
+    } else {
+      // Fallback: fixed price-% band (ADR baseline missing for this symbol).
+      if (rangePct > MAX_OR_RANGE_PCT) {
+        candidate.status = 'SKIPPED';
+        candidate.skipReason = `or_too_wide_${rangePct.toFixed(2)}pct`;
+        rangesSkippedWide++;
+        continue;
+      }
+      if (rangePct < MIN_OR_RANGE_PCT) {
+        candidate.status = 'SKIPPED';
+        candidate.skipReason = `or_too_tight_${rangePct.toFixed(2)}pct`;
+        rangesSkippedTight++;
+        continue;
+      }
     }
 
     candidate.orHigh  = orHigh;
@@ -690,14 +876,14 @@ export async function checkBreakouts() {
     return { skipped: true, reason: 'no_range_set' };
   }
 
-  // TIER-1 + N-BAR CONFIRM (CONFIRM_BARS, 2026-05-31 → 1):
+  // TIER-1 + N-BAR CONFIRM (CONFIRM_BARS = 2):
   // Fetch the last CONFIRM_BARS completed 15-min candles for each RANGE_SET
-  // candidate. ALL of them must close past OR in the SAME direction → confirmed.
-  // This filters out:
-  //   • wick fake-outs (price touches past OR then reverts within the candle)
-  //   • whipsaws (candles on both sides of OR within the confirm window)
-  // With CONFIRM_BARS=1 we still require a *close* past OR (not a mere touch),
-  // so wick fakeouts are still rejected; we just no longer demand a 2nd bar.
+  // candidate. ALL of them must CLOSE past OR in the SAME direction → confirmed.
+  // With =2: the breakout candle closes past OR AND the next consecutive candle
+  // also closes past OR (above OR_High → LONG, below OR_Low → SHORT). Earliest
+  // possible confirm is 10:01 (the 09:30–09:45 + 09:45–10:00 candles). Filters:
+  //   • wick fake-outs (a candle that spikes past OR but closes back inside ≠ break)
+  //   • whipsaws (the two candles on opposite sides of OR)
   //
   // Chunk size 20 keeps Kite historical-data rate limit happy (3 req/sec).
   console.log(`${LOG} [BREAKOUT] Fetching last ${CONFIRM_BARS}×15-min candle(s) for ${rangeSet.length} stocks (chunked)...`);
@@ -720,8 +906,8 @@ export async function checkBreakouts() {
   // LONG-confirm:  every one of the last CONFIRM_BARS closes > OR_High
   // SHORT-confirm: every one of the last CONFIRM_BARS closes < OR_Low
   // Mixed (some past high, some past low) → whipsaw; otherwise still inside OR.
-  // distance/staleFlag are measured off the LAST (most recent) confirming close.
-  const confirmed = [];
+  // distance is measured off the LAST (most recent) confirming close.
+  let confirmed = [];
   let waitingBars = 0;
   let stillInsideOR = 0;
   let whipsaws = 0;
@@ -737,21 +923,22 @@ export async function checkBreakouts() {
     const allAbove = confirmBars.every(b => b.close > candidate.orHigh);
     const allBelow = confirmBars.every(b => b.close < candidate.orLow);
 
+    const breakoutBar    = confirmBars[confirmBars.length - 1];
+    const breakoutVolume = breakoutBar.volume || 0;
+    const breakoutSlot   = slotKey(breakoutBar.date);   // 'HH:MM' for time-matched RVOL
     if (allAbove) {
       const distance    = lastClose - candidate.orHigh;
       const distancePct = distance / candidate.orHigh * 100;
-      const staleFlag   = distance > candidate.orRange * 2;
       confirmed.push({
         candidate, direction: 'LONG', bar1Close: firstClose, bar2Close: lastClose,
-        distance, distancePct, staleFlag,
+        distance, distancePct, breakoutVolume, breakoutSlot,
       });
     } else if (allBelow) {
       const distance    = candidate.orLow - lastClose;
       const distancePct = distance / candidate.orLow * 100;
-      const staleFlag   = distance > candidate.orRange * 2;
       confirmed.push({
         candidate, direction: 'SHORT', bar1Close: firstClose, bar2Close: lastClose,
-        distance, distancePct, staleFlag,
+        distance, distancePct, breakoutVolume, breakoutSlot,
       });
     } else {
       const anyAbove = confirmBars.some(b => b.close > candidate.orHigh);
@@ -767,23 +954,85 @@ export async function checkBreakouts() {
     return { success: true, entered: 0 };
   }
 
-  // Rank confirmed signals by distance% past OR (biggest move first)
-  confirmed.sort((a, b) => b.distancePct - a.distancePct);
+  // ── Live Nifty regime (2026-06-02): gates entry direction and adapts to
+  // intraday reversals. BULL→LONG only, BEAR→SHORT only, NEUTRAL→breadth.
+  // Fetched BEFORE ranking because relative-strength scoring needs the Nifty level.
+  const regimeInfo = await getMarketRegime();
+  doc.marketRegime = regimeInfo.regime || 'UNKNOWN';
+  doc.niftyOrHigh  = regimeInfo.orHigh ?? doc.niftyOrHigh;
+  doc.niftyOrLow   = regimeInfo.orLow  ?? doc.niftyOrLow;
+  // Live regime trail (queryable audit of production direction decisions).
+  doc.regimeHistory = doc.regimeHistory || [];
+  doc.regimeHistory.push({ t: new Date(), regime: regimeInfo.regime || 'UNKNOWN', niftyLtp: regimeInfo.niftyLtp ?? null, src: 'scan' });
 
-  // ── 2026-05-29: Apply distance% floor + direction-bias gate ─────────────
-  // Both filters live in a pure helper (decideBreakoutActions) for testability.
-  const { newBias: dailyBias, biasReason } = decideBreakoutActions({
+  // BLOCK entries when the market regime can't be read (Nifty fetch failed).
+  // Per design decision 2026-06-02: if we don't know which way the market is
+  // heading, we take NO trades this scan rather than falling back to breakout
+  // breadth. Safer failure mode (no trade > wrong-direction trade) and it makes
+  // a broken Nifty fetch loud — zero entries instead of silently mis-trading.
+  if (!regimeInfo.regime) {
+    console.warn(`${LOG} [BREAKOUT] ⛔ Market regime unknown (${regimeInfo.reason || 'no_data'}) — BLOCKING all entries this scan`);
+    if (doc.isModified()) await doc.save();
+    return { skipped: true, reason: 'no_market_regime' };
+  }
+
+  // ── Rank confirmed breakouts by QUALITY (2026-06-02) — RVOL (volume conviction)
+  // + relative strength vs Nifty (alignment), minus an extension penalty — instead
+  // of raw distance%. Research: distance-ranking systematically picks the most-
+  // extended names (closest to exhaustion); RVOL + relative strength pick conviction
+  // + market-aligned leaders. Both inputs degrade safely: relStrength is always
+  // computable here (regime gate guarantees Nifty data, else we'd have blocked);
+  // RVOL falls back to neutral (1) when avgDailyVolume wasn't fetched at pre-open.
+  const niftyMid = (regimeInfo.orHigh != null && regimeInfo.orLow != null)
+    ? (regimeInfo.orHigh + regimeInfo.orLow) / 2 : null;
+  const niftyRet = (niftyMid && regimeInfo.niftyLtp) ? (regimeInfo.niftyLtp - niftyMid) / niftyMid * 100 : 0;
+  for (const b of confirmed) {
+    const stockMid = (b.candidate.orHigh + b.candidate.orLow) / 2;
+    const stockRet = stockMid ? (b.bar2Close - stockMid) / stockMid * 100 : 0;
+    const rawRel   = stockRet - niftyRet;                          // stock outperformance vs Nifty
+    b.relStrength  = b.direction === 'LONG' ? rawRel : -rawRel;    // aligned to the trade side
+    // RVOL: prefer the time-matched slot baseline (breakout vs a normal candle for
+    // that same time of day); fall back to the flat daily average; else neutral.
+    const profile  = b.candidate.volumeProfile;
+    const slotAvg  = (profile && b.breakoutSlot) ? profile[b.breakoutSlot] : null;
+    const avgVol   = b.candidate.avgDailyVolume;
+    if (slotAvg > 0 && b.breakoutVolume > 0) {
+      b.rvol = b.breakoutVolume / slotAvg;            b.rvolBasis = 'slot';
+    } else if (avgVol > 0 && b.breakoutVolume > 0) {
+      b.rvol = b.breakoutVolume / (avgVol / BARS_PER_DAY); b.rvolBasis = 'flat';
+    } else {
+      b.rvol = 1;                                     b.rvolBasis = 'none';
+    }
+    const orWidthPct = b.candidate.iep > 0 ? (b.candidate.orRange / b.candidate.iep * 100) : null;
+    b.score        = scoreCandidateQuality({ relStrength: b.relStrength, distancePct: b.distancePct, orWidthPct });
+  }
+
+  // Discard confirmed breakouts we can't fully score — names missing the RVOL
+  // baseline (no avg-volume data, or no breakout-candle volume). Per 2026-06-02
+  // decision: don't trade a name without volume-conviction data rather than rank
+  // it neutral. NOTE: if the whole pre-open avg-volume fetch failed, this drops
+  // EVERYTHING → no entries this scan (consistent with the regime block — missing
+  // data means no trade).
+  const preFilter = confirmed.length;
+  confirmed = confirmed.filter(b => b.candidate.avgDailyVolume > 0 && b.breakoutVolume > 0);
+  if (confirmed.length < preFilter) {
+    console.log(`${LOG} [BREAKOUT] Dropped ${preFilter - confirmed.length}/${preFilter} confirmed — missing RVOL baseline (no avg/breakout volume)`);
+  }
+  if (!confirmed.length) {
+    console.warn(`${LOG} [BREAKOUT] No confirmed breakouts with RVOL data — no entries this scan`);
+    if (doc.isModified()) await doc.save();
+    return { skipped: true, reason: 'no_rvol_data' };
+  }
+
+  confirmed.sort((a, b) => b.score - a.score);
+
+  // ── Apply the distance floor + regime direction gate + slots (pure helper) ──
+  const { gateSide } = decideBreakoutActions({
     confirmed,
     slotsLeft: MAX_ENTRIES - dayEntries,
-    existingBias: doc.dailyDirectionBias || null,
+    marketRegime: regimeInfo.regime,
   });
-
-  if (biasReason) {
-    console.log(`${LOG} [BREAKOUT] 📊 ${biasReason}`);
-  }
-  if (dailyBias && dailyBias !== doc.dailyDirectionBias) {
-    doc.dailyDirectionBias = dailyBias;
-  }
+  console.log(`${LOG} [BREAKOUT] 📊 Regime ${regimeInfo.regime} → direction gate: ${gateSide || 'BOTH (neutral)'}`);
 
   console.log(`${LOG} [BREAKOUT] Ranked 2-bar confirmed breakouts:`);
   confirmed.forEach((b, idx) => {
@@ -792,15 +1041,16 @@ export async function checkBreakouts() {
     const actionTag  = {
       ENTER:       '✅ ENTERING',
       SLOT_FULL:   '⏸  slot full',
-      SKIP_STALE:  '⚠ STALE — skipped',
+      LOW_RVOL:    `⏭  rvol<${RVOL_ENTRY_MIN}× — thin volume`,
       BELOW_FLOOR: `⏭  dist<${MIN_DISTANCE_PCT}% — below floor`,
-      WRONG_SIDE:  `⏭  bias=${dailyBias} — wrong side`,
+      WRONG_SIDE:  `⏭  regime=${regimeInfo.regime} — wrong side`,
     }[b._action] || '?';
     console.log(
       `${LOG} [BREAKOUT]   #${String(idx + 1).padStart(2)} ${dirTag} ${b.candidate.symbol.padEnd(14)} ` +
       `OR=₹${b.candidate.orLow}–₹${b.candidate.orHigh} (${orRangePct}%)  ` +
-      `bar1.close=₹${b.bar1Close} bar2.close=₹${b.bar2Close}  ` +
-      `distance=₹${b.distance.toFixed(2)} (${b.distancePct.toFixed(2)}%)  → ${actionTag}`
+      `dist=${b.distancePct.toFixed(2)}%  rvol=${(b.rvol ?? 1).toFixed(2)}x[${b.rvolBasis || 'none'}]  ` +
+      `relStr=${(b.relStrength ?? 0) >= 0 ? '+' : ''}${(b.relStrength ?? 0).toFixed(2)}%  ` +
+      `score=${(b.score ?? 0).toFixed(3)}  → ${actionTag}`
     );
   });
 
@@ -841,7 +1091,10 @@ export async function checkBreakouts() {
     // enterTrade increments doc.entriesCount on a successful fill, so this guard
     // tracks the cumulative day count as we place entries within this scan.
     if ((doc.entriesCount || 0) >= MAX_ENTRIES) break;
-    b.candidate.direction = b.direction;
+    b.candidate.direction   = b.direction;
+    b.candidate.rvol        = b.rvol;
+    b.candidate.relStrength = b.relStrength;
+    b.candidate.rankScore   = b.score;
     const liveLtp = currentLtps[`NSE:${b.candidate.symbol}`]?.last_price || b.bar2Close;
     await enterTrade(doc, b.candidate, liveLtp, capitalPerTrade);
     entered++;
@@ -864,24 +1117,19 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
 
   const qty    = Math.max(1, Math.floor(capitalPerTrade / ltp));
 
-  // SIMPLE MODE: tight SL just on the wrong side of the breakout level.
-  // Buffer = min(1% of breakout level, OR range). The OR-range cap prevents
-  // the SL from landing outside the OR on very tight ranges.
-  const breakoutLevel = isLong ? candidate.orHigh : candidate.orLow;
-  const targetBuffer  = breakoutLevel * (SL_BUFFER_PCT / 100);
-  const effectiveBuf  = Math.min(targetBuffer, candidate.orRange);
-  const usedSource    = effectiveBuf < targetBuffer ? 'OR cap' : `${SL_BUFFER_PCT}%`;
-
-  let stop = isLong
-    ? snapToNSETick(candidate.orHigh - effectiveBuf, 0.05, 'floor')
-    : snapToNSETick(candidate.orLow  + effectiveBuf, 0.05, 'ceil');
+  // SL: tighter of the OR-edge stop and a MAX_SL_PCT risk cap (see computeOrbStop).
+  // Decouples 1R from the OR boundary so an extended fill can't create oversized risk.
+  const { stop: computedStop, effectiveBuf, source: stopSource } = computeOrbStop({
+    isLong, orHigh: candidate.orHigh, orLow: candidate.orLow, orRange: candidate.orRange, entry: ltp,
+  });
+  let stop = computedStop;
 
   // NO target order in SIMPLE MODE — let winners ride to 15:15.
   const target = null;
 
   console.log(`${LOG} [ENTER] ─── ${candidate.symbol} [${dirTag}] ───────────────────────`);
   console.log(`${LOG} [ENTER] ${candidate.symbol}: capital=₹${capitalPerTrade}  LTP≈₹${ltp}  qty=${qty}`);
-  console.log(`${LOG} [ENTER] ${candidate.symbol}: stop=₹${stop} (${isLong ? 'OR_High' : 'OR_Low'} ${isLong ? '−' : '+'} buffer ₹${effectiveBuf.toFixed(2)} [${usedSource}], OR range ₹${candidate.orRange.toFixed(2)})  target=NONE (ride to 15:15)`);
+  console.log(`${LOG} [ENTER] ${candidate.symbol}: stop=₹${stop} [${stopSource}]  (buffer ₹${effectiveBuf.toFixed(2)}, OR range ₹${candidate.orRange.toFixed(2)})  target=NONE (ride to 15:15)`);
   console.log(`${LOG} [ENTER] ${candidate.symbol}: risk per share = ₹${Math.abs(ltp - stop).toFixed(2)} (${(Math.abs(ltp - stop) / ltp * 100).toFixed(2)}%)`);
 
   // ── Step 1: Market entry ──────────────────────────────────────────────────
@@ -1270,12 +1518,15 @@ export async function monitorOrbPositions() {
   if (stillEntered.length) {
     const candleSymbols = stillEntered.map(c => c.symbol);
     console.log(`${LOG} [CANDLE] ── Candle analysis [${istTimeStr()}] ──────────────────`);
-    console.log(`${LOG} [CANDLE] Fetching 5-min (6 bars) + 15-min (4 bars) for: ${candleSymbols.join(', ')}`);
+    console.log(`${LOG} [CANDLE] Fetching 5-min (full session, for VWAP) + 15-min (4 bars) for: ${candleSymbols.join(', ')}`);
 
     let candles5m = {}, candles15m = {};
     try {
+      // 5-min count 90 = the whole session, so per-stock cumulative VWAP is correct
+      // (computeVwap needs every bar since 09:15). analyzeIntradayStructure only
+      // looks at the last few bars, so we hand it sym5m.slice(-6) below.
       const multi = await kiteOrderService.getIntradayMultiCandles(candleSymbols, [
-        { interval: '5minute',  count: 6 },
+        { interval: '5minute',  count: 90 },
         { interval: '15minute', count: 4 },
       ]);
       candles5m  = multi['5minute']  || {};
@@ -1283,6 +1534,13 @@ export async function monitorOrbPositions() {
     } catch (err) {
       console.error(`${LOG} [CANDLE] ❌ Candle fetch FAILED:`, err.message);
     }
+
+    // Live Nifty regime, computed once for this monitor run (used for regime-flip exit).
+    const monitorRegime = await getMarketRegime();
+    // Append to the queryable regime trail and force a save this cycle so it persists.
+    doc.regimeHistory = doc.regimeHistory || [];
+    doc.regimeHistory.push({ t: new Date(), regime: monitorRegime.regime || 'UNKNOWN', niftyLtp: monitorRegime.niftyLtp ?? null, src: 'monitor' });
+    changed = true;
 
     for (const c of stillEntered) {
       const sym5m  = candles5m[c.symbol]  || [];
@@ -1366,7 +1624,7 @@ export async function monitorOrbPositions() {
 
       // ── Candle structure analysis — direction-aware via candidate.direction ─
       const decision = analyzeIntradayStructure({
-        candles5m:   sym5m,
+        candles5m:   sym5m.slice(-6),  // structure logic only needs the recent bars
         candles15m:  sym15m,
         direction:   cDirTag,         // 'LONG' or 'SHORT' — symmetric patterns
         currentStop: c.stopPrice,
@@ -1377,6 +1635,51 @@ export async function monitorOrbPositions() {
 
       console.log(`${LOG} [CANDLE] ${c.symbol} [${cDirTag}]: action=${decision.action}${decision.newStop ? `  newStop=₹${decision.newStop}` : ''}`);
       console.log(`${LOG} [CANDLE] ${c.symbol}:   ${decision.reason}`);
+
+      // ── VWAP reversal exit + Nifty regime-flip exit (2026-06-02) ──────────────
+      // (a) Per-stock VWAP: the stock has real volume, so compute its own cumulative
+      //     VWAP from the full session bars; 2 consecutive 5-min closes on the wrong
+      //     side (below for LONG, above for SHORT) = flow flipped → exit. This is the
+      //     "it ran then reversed" protection, using the live-proven daily-picks logic.
+      // (b) Nifty regime flip: if the index has crossed to the opposite regime, the
+      //     market turned against the position → exit.
+      // Either one overrides the structure decision into an immediate exit, reusing
+      // the safe broker-checked exit block below.
+      if (sym5m.length >= 2) {
+        const latestBar     = sym5m[sym5m.length - 1];
+        const latestBarTime = latestBar.date ? String(latestBar.date) : null;
+        const vwapState     = computeVwap(sym5m);
+        c.vwapLast = vwapState.vwap;
+        // Per-bar dedup: only advance the consecutive-wrong-side counter once per
+        // NEW 5-min bar. The monitor can fire more than once within a bar (manual
+        // trigger / retry / overlap); without this the same close would be counted
+        // twice and could fire a spurious "2 consecutive" exit.
+        const isNewBar = latestBarTime && latestBarTime !== c.vwapLastBarTime;
+        if (isNewBar) {
+          const vwapRes = evaluateVwapExit({
+            direction:      cDirTag,
+            latestClose:    latestBar.close,
+            vwap:           vwapState.vwap,
+            consecutiveOpp: c.vwapConsecutiveOpp || 0,
+          });
+          c.vwapConsecutiveOpp = vwapRes.consecutiveOpp;
+          c.vwapLastBarTime    = latestBarTime;
+          console.log(`${LOG} [CANDLE] ${c.symbol}: VWAP=${vwapState.vwap != null ? '₹' + vwapState.vwap.toFixed(2) : 'n/a'}  close=₹${latestBar.close}  side=${vwapRes.side}  consecOpp=${vwapRes.consecutiveOpp}  vwapExit=${vwapRes.exit}`);
+          if (vwapRes.exit && decision.action !== 'exit') {
+            decision.action = 'exit';
+            decision.reason = `vwap_reversal: ${vwapRes.reason}`;
+          }
+        } else {
+          console.log(`${LOG} [CANDLE] ${c.symbol}: VWAP=${vwapState.vwap != null ? '₹' + vwapState.vwap.toFixed(2) : 'n/a'}  (same bar — counter held at ${c.vwapConsecutiveOpp || 0})`);
+        }
+      }
+      const regimeAgainst = (monitorRegime.regime === 'BULL' && !cIsLong) ||
+                            (monitorRegime.regime === 'BEAR' &&  cIsLong);
+      if (regimeAgainst && decision.action !== 'exit') {
+        console.log(`${LOG} [CANDLE] ${c.symbol}: ⚠ Nifty regime ${monitorRegime.regime} flipped against ${cDirTag} → exit`);
+        decision.action = 'exit';
+        decision.reason = `regime_flip_exit: nifty_${monitorRegime.regime}`;
+      }
 
       if (decision.action === 'exit') {
         // ── Structure break — exit immediately (direction-aware exit side) ────

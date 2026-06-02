@@ -23,6 +23,7 @@ import {
   monitorOrbPositions,
   forceExitOrb,
 } from '../orb/orbService.js';
+import { archiveToday, backfillRange } from '../backtest/candleArchive.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 
 const LOG = '[ORB-JOB]';
@@ -234,12 +235,49 @@ class OrbJob {
       }
     });
 
+    // ── 6. Backtest candle archive (3:45 PM) — store the day's raw 1-min candles ──
+    // Persists OHLCV for the F&O universe + Nifty so the trading system can be
+    // backtested against real data. Runs in-process so it reuses the already-authed
+    // Kite session. No-op outside trading days.
+    this.agenda.define('orb-archive-candles', async (job) => {
+      if (this.runningJobs.has('archive')) {
+        console.log(`${LOG} archive already running, skipping`);
+        return;
+      }
+      this.runningJobs.add('archive');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) {
+          console.log(`${LOG} Not a trading day — skipping candle archive`);
+          return { skipped: true, reason: 'not_trading_day' };
+        }
+        console.log(`${LOG} [ARCHIVE] ▶ Archiving today's 1-min candles for backtest`);
+        const result = await archiveToday({ interval: 'minute' });
+        console.log(`${LOG} [ARCHIVE] ✅ ${result.date}: saved=${result.saved}/${result.total}`);
+        return result;
+      } catch (err) {
+        console.error(`${LOG} [ARCHIVE] Failed:`, err);
+        this.stats.errors++;
+        throw err;
+      } finally {
+        this.runningJobs.delete('archive');
+      }
+    });
+
     // ── Manual triggers (one-shot, no concurrency guard needed) ─────────────────
     this.agenda.define('manual-orb-pre-open',    async (job) => fetchPreOpenUniverse(job.attrs.data || {}));
     this.agenda.define('manual-orb-record-range', async (job) => recordOpeningRanges(job.attrs.data || {}));
     this.agenda.define('manual-orb-check-breakout', async (job) => checkBreakouts(job.attrs.data || {}));
     this.agenda.define('manual-orb-monitor',     async (job) => monitorOrbPositions(job.attrs.data || {}));
     this.agenda.define('manual-orb-force-exit',  async (job) => forceExitOrb(job.attrs.data || {}));
+    // Backfill any historical range in-process (reuses live Kite auth):
+    //   agenda.now('manual-archive-backfill', { from: '2026-03-01', to: '2026-05-31' })
+    this.agenda.define('manual-archive-candles', async (job) => archiveToday(job.attrs.data || {}));
+    this.agenda.define('manual-archive-backfill', async (job) => {
+      const { from, to, interval = 'minute' } = job.attrs.data || {};
+      if (!from || !to) { console.error(`${LOG} [BACKFILL] needs { from, to }`); return; }
+      return backfillRange(from, to, { interval });
+    });
   }
 
   // ─── Event Handlers ───────────────────────────────────────────────────────────
@@ -307,6 +345,12 @@ class OrbJob {
 
       // 3:15 PM IST — force-exit (5 min before Zerodha auto-square at 3:20)
       await this.agenda.every('15 15 * * 1-5', 'orb-force-exit', {}, {
+        timezone: 'Asia/Kolkata',
+      });
+
+      // 3:45 PM IST — archive the day's raw 1-min candles for backtesting
+      // (after the session has fully settled and historical data has propagated).
+      await this.agenda.every('45 15 * * 1-5', 'orb-archive-candles', {}, {
         timezone: 'Asia/Kolkata',
       });
 
