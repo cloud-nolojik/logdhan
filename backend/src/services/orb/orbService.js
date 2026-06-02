@@ -264,6 +264,38 @@ async function getActualPositionQty(symbol) {
   }
 }
 
+// ── Book P&L for a position found already closed (2026-06-02) ──────────────
+// When a candidate is detected flat at the broker (manual close, or an exit the
+// system fired but didn't record), these branches used to mark TIME_EXIT with no
+// exitPrice/pnl — so the trade dropped out of the day total entirely (BSE,
+// 2026-06-01). This recovers the broker's realised P&L for the day position and
+// writes it onto the candidate. Falls back to pnl=0 (never undefined) so the
+// trade always appears in the total. Mutates `c`; safe to await in exit branches.
+async function bookAlreadyClosedPnl(c, logTag = '[MONITOR]') {
+  c.exitTime = c.exitTime || new Date();
+  try {
+    const positions = await kiteOrderService.getPositions();
+    const dayList   = positions?.data?.day || [];
+    const pos       = dayList.find(p => p.tradingsymbol === c.symbol);
+    if (pos && (pos.realised != null || pos.pnl != null)) {
+      const realised = (pos.realised != null) ? Number(pos.realised) : Number(pos.pnl);
+      c.pnl       = parseFloat(realised.toFixed(2));
+      c.exitPrice = pos.last_price || pos.average_price || c.entryPrice;
+      c.returnPct = (c.entryPrice && c.qty)
+        ? parseFloat((c.pnl / (c.entryPrice * c.qty) * 100).toFixed(2))
+        : 0;
+      console.log(`${LOG} ${logTag}   ${c.symbol}: 📕 recovered broker realised P&L=₹${c.pnl >= 0 ? '+' : ''}${c.pnl}`);
+      return;
+    }
+  } catch (err) {
+    console.error(`${LOG} ${logTag}   ${c.symbol}: realised-P&L recovery failed (${err.message}) — booking 0`);
+  }
+  // Unknown — book 0 (not undefined) so the trade still counts in the day total.
+  c.pnl       = 0;
+  c.exitPrice = c.entryPrice;
+  c.returnPct = 0;
+}
+
 // ── SL trail via cancel + place (replaces modifyOrder) ────────────────────
 // Kite's modifyOrder on SL-M orders triggers the NSE "permissible range" check
 // against the stale implicit limit from the original placement's market_protection
@@ -339,7 +371,26 @@ async function replaceSlOrderWithNewTrigger({ candidate, newTrigger, exitSide, l
         source:           'ORB',
       });
       console.log(`${LOG} ${logTag}   ${sym}: emergency exit placed — orderId=${emergency?.orderId}`);
-      return { success: false, reason: 'place_failed_emergency_fired', emergencyOrderId: emergency?.orderId };
+      // CRITICAL (2026-06-02 fix): the emergency exit actually CLOSES the position,
+      // so we must record it. Without this the candidate stays status='ENTERED'
+      // while flat at the broker — the position silently vanishes and its P&L is
+      // dropped from the day total (BSE, 2026-06-01). Read the fill and book it.
+      const cIsLong = (candidate.direction || 'LONG') === 'LONG';
+      let exitPrice = candidate.entryPrice;
+      try {
+        await delay(1500);
+        const ord = await kiteOrderService.getOrderDetails(emergency?.orderId);
+        if (ord?.average_price) exitPrice = ord.average_price;
+      } catch (_) {}
+      candidate.status     = 'TIME_EXIT';
+      candidate.exitPrice  = exitPrice;
+      candidate.exitTime   = new Date();
+      candidate.exitReason = 'emergency_exit_sl_trail_failed';
+      const pnlDir = cIsLong ? (exitPrice - candidate.entryPrice) : (candidate.entryPrice - exitPrice);
+      candidate.pnl       = parseFloat((pnlDir * qty).toFixed(2));
+      candidate.returnPct = parseFloat((pnlDir / candidate.entryPrice * 100).toFixed(2));
+      console.log(`${LOG} ${logTag}   ${sym}: 📕 booked emergency exit @ ₹${exitPrice}  PnL=₹${candidate.pnl >= 0 ? '+' : ''}${candidate.pnl}`);
+      return { success: false, reason: 'place_failed_emergency_fired', emergencyOrderId: emergency?.orderId, exited: true };
     } catch (emergencyErr) {
       console.error(`${LOG} ${logTag}   ${sym}: ❌❌❌ EMERGENCY EXIT ALSO FAILED — MANUAL ACTION REQUIRED (${emergencyErr.message})`);
       return { success: false, reason: 'place_and_emergency_failed' };
@@ -1057,7 +1108,7 @@ export async function monitorOrbPositions() {
         console.log(`${LOG} [MONITOR]   ⚠ ${c.symbol}: broker shows position=0 — skipping time-exit order (already closed externally)`);
         c.status     = 'TIME_EXIT';
         c.exitReason = 'already_closed_externally';
-        c.exitTime   = new Date();
+        await bookAlreadyClosedPnl(c, '[MONITOR]');
         exitedThisRun++;
         changed = true;
         continue;
@@ -1191,6 +1242,11 @@ export async function monitorOrbPositions() {
           c._beTrailed = true;
           console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] BE trail complete — new SL ${replaceRes.newOrderId} @ ₹${beStop}`);
           changed = true;
+        } else if (replaceRes.exited) {
+          // SL re-place failed → helper fired an emergency exit AND booked the
+          // close on the candidate. Persist it this run.
+          exitedThisRun++;
+          changed = true;
         }
         // On failure, helper already logged details / fired emergency exit if applicable.
       }
@@ -1260,7 +1316,7 @@ export async function monitorOrbPositions() {
             console.log(`${LOG} [CANDLE]   ⚠ ${c.symbol}: broker position=0 — skipping sideways exit (already closed externally)`);
             c.status = 'TIME_EXIT';
             c.exitReason = 'already_closed_externally';
-            c.exitTime = new Date();
+            await bookAlreadyClosedPnl(c, '[CANDLE]');
             changed = true;
             continue;
           }
@@ -1334,7 +1390,7 @@ export async function monitorOrbPositions() {
           console.log(`${LOG} [CANDLE]   ⚠ ${c.symbol}: broker position=0 — skipping candle exit (already closed externally)`);
           c.status = 'TIME_EXIT';
           c.exitReason = 'already_closed_externally';
-          c.exitTime = new Date();
+          await bookAlreadyClosedPnl(c, '[CANDLE]');
           changed = true;
           continue;
         }
@@ -1411,6 +1467,9 @@ export async function monitorOrbPositions() {
             //   SHORT → stop ≤ entry
             const crossedBE = cIsLong ? (snappedStop >= c.entryPrice) : (snappedStop <= c.entryPrice);
             if (crossedBE) c._beTrailed = true;
+            changed = true;
+          } else if (replaceRes.exited) {
+            // SL re-place failed → emergency exit fired and was booked on c. Persist.
             changed = true;
           }
           // On failure, helper already logged details / fired emergency exit if applicable.
@@ -1495,12 +1554,9 @@ export async function forceExitOrb() {
     if (actualQty === 0) {
       console.log(`${LOG} [FORCE-EXIT]   ⚠ ${c.symbol}: broker shows position=0 — skipping exit order (already closed externally)`);
       c.status     = 'TIME_EXIT';
-      c.exitPrice  = c.entryPrice;  // unknown actual exit — preserve entry, note in reason
-      c.exitTime   = new Date();
       c.exitReason = 'already_closed_externally';
-      c.pnl        = 0;             // unknown — would need to fetch trade history
-      c.returnPct  = 0;
-      console.log(`${LOG} [FORCE-EXIT]   ${c.symbol}: marked TIME_EXIT (manual close detected, no system action)`);
+      await bookAlreadyClosedPnl(c, '[FORCE-EXIT]');   // recover realised P&L instead of booking 0
+      console.log(`${LOG} [FORCE-EXIT]   ${c.symbol}: marked TIME_EXIT (already closed; P&L=₹${c.pnl})`);
       exited++;
       continue;
     }
