@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, needsVolumeBaselineRetry, _testExports } from '../services/orb/orbService.js';
+import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, needsVolumeBaselineRetry, isBarComplete, _testExports } from '../services/orb/orbService.js';
 
 const { MIN_DISTANCE_PCT } = _testExports;
 
@@ -282,5 +282,27 @@ describe('Lazy RVOL-baseline retry guard — needsVolumeBaselineRetry (2026-06-0
 
   it('empty set → no retry', () => {
     expect(needsVolumeBaselineRetry([], false)).toBe(false);
+  });
+});
+
+describe('Forming-candle filter — isBarComplete (2026-06-03 bug fix)', () => {
+  // At 10:01 (nowMin = 601): the 09:45–10:00 candle (start 585) is closed; the
+  // 10:00–10:15 candle (start 600) is still forming and must be dropped.
+  it('a candle whose 15-min window has closed is complete', () => {
+    expect(isBarComplete('2026-06-03T09:45:00+0530', 601)).toBe(true);  // 585+15=600 ≤ 601
+    expect(isBarComplete('2026-06-03T09:30:00+0530', 601)).toBe(true);
+  });
+
+  it('the just-started (forming) candle is NOT complete — this was the bug', () => {
+    expect(isBarComplete('2026-06-03T10:00:00+0530', 601)).toBe(false); // 600+15=615 > 601
+  });
+
+  it('a candle is complete exactly when nowMin reaches its close', () => {
+    expect(isBarComplete('2026-06-03T10:00:00+0530', 615)).toBe(true);  // closes at 615
+    expect(isBarComplete('2026-06-03T10:00:00+0530', 614)).toBe(false);
+  });
+
+  it('unparseable date → not complete (safe default)', () => {
+    expect(isBarComplete('garbage', 601)).toBe(false);
   });
 });

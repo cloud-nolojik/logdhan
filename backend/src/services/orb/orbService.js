@@ -217,6 +217,19 @@ export function slotKey(dateLike) {
 }
 
 /**
+ * Is an N-min candle (start = dateLike's HH:MM in IST) fully closed at nowMin
+ * (current IST minute-of-day)? Used to drop the still-FORMING 15-min candle from
+ * the breakout fetch — Kite's intraday endpoint can return the just-started candle
+ * (1 min of volume), which closes past OR fine but wrecks the RVOL ratio. Pure.
+ */
+export function isBarComplete(dateLike, nowMin, intervalMin = 15) {
+  const sk = slotKey(dateLike);
+  if (!sk) return false;
+  const [h, m] = sk.split(':').map(Number);
+  return (h * 60 + m + intervalMin) <= nowMin;
+}
+
+/**
  * Build a per-slot average-volume profile from historical 15-min bars (≈20 days):
  *   { '09:15': avgVol, '09:30': avgVol, … } — the average volume for each 15-min
  * slot-of-day. This is the time-matched RVOL baseline: a breakout candle is judged
@@ -929,8 +942,10 @@ export async function checkBreakouts() {
   for (let i = 0; i < rangeSet.length; i += CANDLE_CHUNK) {
     const chunkSymbols = rangeSet.slice(i, i + CANDLE_CHUNK).map(c => c.symbol);
     try {
+      // Fetch CONFIRM_BARS + 1: Kite can return the just-started (forming) 15-min
+      // candle as the most recent bar; we drop it below and keep the completed ones.
       const result = await kiteOrderService.getIntradayMultiCandles(chunkSymbols, [
-        { interval: '15minute', count: CONFIRM_BARS },
+        { interval: '15minute', count: CONFIRM_BARS + 1 },
       ]);
       Object.assign(allCandles, result['15minute'] || {});
     } catch (err) {
@@ -950,7 +965,9 @@ export async function checkBreakouts() {
   let whipsaws = 0;
 
   for (const candidate of rangeSet) {
-    const bars = allCandles[candidate.symbol] || [];
+    // Keep only FULLY-CLOSED 15-min candles — drop the forming one (its 1-min volume
+    // would make RVOL read ~0 and the gate reject a perfectly good breakout).
+    const bars = (allCandles[candidate.symbol] || []).filter(b => isBarComplete(b.date, istMin, 15));
     if (bars.length < CONFIRM_BARS) { waitingBars++; continue; }
 
     const confirmBars = bars.slice(-CONFIRM_BARS);
