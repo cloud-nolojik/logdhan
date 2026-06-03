@@ -31,7 +31,7 @@ const MAX_ENTRIES           = 5;      // max TRADES per day (cumulative, LONG + 
 // • MAX_CANDIDATES is now an upper bound for safety; in practice we save all
 //   ~215 F&O symbols that returned valid OHLC.
 const MAX_CANDIDATES        = 250;
-const MIN_OR_RANGE_PCT      = 0.5;    // skip stocks with OR < 0.5% of price (tight chop, fake breakouts)
+// (MIN_OR_RANGE_PCT removed 2026-06-03 — OR-width filter dropped entirely.)
 // Min gap % to watch — was 1.5%, dropped to 1.0% on 2026-05-26 IST midday.
 // Rationale: on 2026-05-25 the 1.5% filter qualified 4 names; on 2026-05-26
 // it qualified only 2 (and neither broke OR). With <1 trade/day average we
@@ -94,15 +94,11 @@ const BREAKOUT_START_HOUR   = 10;
 const BREAKOUT_START_MIN    = 1;      // breakout 09:30–09:45 + confirm 09:45–10:00, checked 10:01
 const BREAKOUT_END_HOUR     = 14;
 const BREAKOUT_END_MIN      = 1;      // last entry 14:01 (≥74 min runway to 15:15)
-const MAX_OR_RANGE_PCT      = 2.5;    // FALLBACK fixed band (used only when ADR unavailable)
-// 2026-06-02: volatility-normalised OR-width filter. Instead of a fixed price-%
-// band (which wrongly excludes high-beta names and mis-handles sleepy ones), gate
-// the OR width as a fraction of the stock's own ADR (avg daily range, computed at
-// pre-open from the 20-day 15-min candles). Too small relative to ADR = dead/noise;
-// too large = the day's typical range is already spent (little room to run). First-
-// cut bounds — tune in the backtest.
-const OR_ADR_MIN            = 0.10;   // OR must be ≥ 10% of ADR
-const OR_ADR_MAX            = 0.60;   // OR must be ≤ 60% of ADR
+// OR-width filter REMOVED 2026-06-03 (MAX_OR_RANGE_PCT / OR_ADR_MIN / OR_ADR_MAX
+// deleted). Too-wide was excluding the strongest gap-down momentum shorts (TCS −8%
+// got skipped) and is covered by the 1.5% SL cap + VARS; too-tight is covered by the
+// 1% distance floor + RVOL gate + VARS denominator clamp. adrPct is still computed at
+// pre-open for observability/backtest, just no longer used to gate.
 
 // ── 2026-05-29 evening — quality-of-pick filters ───────────────────────────
 // Born from the day-4 analysis (2026-05-29). Two findings:
@@ -807,41 +803,14 @@ export async function recordOpeningRanges() {
     const orHigh  = q.ohlc.high;
     const orLow   = q.ohlc.low;
     const orRange = parseFloat((orHigh - orLow).toFixed(2));
-    const rangePct = candidate.iep > 0 ? (orRange / candidate.iep) * 100 : 99;
 
-    // OR-width filter, volatility-normalised: gate the OR as a fraction of the
-    // stock's own ADR when we have it (adapts to each stock); fall back to the fixed
-    // price-% band when ADR is unavailable (pre-open fetch failed for this symbol).
-    if (candidate.adrPct > 0) {
-      const orRatio = rangePct / candidate.adrPct;          // OR width ÷ ADR
-      if (orRatio > OR_ADR_MAX) {
-        candidate.status = 'SKIPPED';
-        candidate.skipReason = `or_wide_${orRatio.toFixed(2)}xADR`;
-        rangesSkippedWide++;
-        continue;
-      }
-      if (orRatio < OR_ADR_MIN) {
-        candidate.status = 'SKIPPED';
-        candidate.skipReason = `or_tight_${orRatio.toFixed(2)}xADR`;
-        rangesSkippedTight++;
-        continue;
-      }
-    } else {
-      // Fallback: fixed price-% band (ADR baseline missing for this symbol).
-      if (rangePct > MAX_OR_RANGE_PCT) {
-        candidate.status = 'SKIPPED';
-        candidate.skipReason = `or_too_wide_${rangePct.toFixed(2)}pct`;
-        rangesSkippedWide++;
-        continue;
-      }
-      if (rangePct < MIN_OR_RANGE_PCT) {
-        candidate.status = 'SKIPPED';
-        candidate.skipReason = `or_too_tight_${rangePct.toFixed(2)}pct`;
-        rangesSkippedTight++;
-        continue;
-      }
-    }
-
+    // OR-width filter REMOVED (2026-06-03): both the too-wide and too-tight bounds
+    // were dropped. Too-wide was excluding the strongest gap-down momentum shorts
+    // (e.g. TCS −8% was skipped or_wide) and is now covered by the 1.5% SL cap +
+    // VARS down-ranking of wide-OR names. Too-tight is covered by the 1% distance
+    // floor (a tiny-OR breakout still needs a real 1% move), the RVOL gate, and the
+    // VARS denominator clamp. ADR (adrPct) is still computed for observability.
+    // Every name with valid OHLC now becomes RANGE_SET.
     candidate.orHigh  = orHigh;
     candidate.orLow   = orLow;
     candidate.orRange = orRange;
@@ -851,7 +820,7 @@ export async function recordOpeningRanges() {
   }
 
   // Summary log (instead of 200+ per-symbol lines that would blow up the log)
-  console.log(`${LOG} [PHASE2] Summary: RANGE_SET=${rangesSet}  SKIPPED tight=${rangesSkippedTight}  SKIPPED wide=${rangesSkippedWide}  NO_DATA=${rangesNoData}  of ${watching.length}`);
+  console.log(`${LOG} [PHASE2] Summary: RANGE_SET=${rangesSet}  (OR-width filter removed)  NO_DATA=${rangesNoData}  of ${watching.length}`);
 
   // Log a sample of accepted candidates for visibility
   const accepted = doc.candidates.filter(c => c.status === 'RANGE_SET');
