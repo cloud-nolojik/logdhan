@@ -126,6 +126,18 @@ describe('Action precedence + slots', () => {
     expect(byName.D).toBe('ENTER');
     expect(byName.E).toBe('SLOT_FULL');
   });
+
+  it('per-scan cap: slotsLeft=2 → only the top 2 enter, rest SLOT_FULL', () => {
+    const confirmed = [
+      mkBreakout({ symbol: 'A', direction: 'SHORT', distancePct: 1.5 }),
+      mkBreakout({ symbol: 'B', direction: 'SHORT', distancePct: 1.5 }),
+      mkBreakout({ symbol: 'C', direction: 'SHORT', distancePct: 1.5 }),
+      mkBreakout({ symbol: 'D', direction: 'SHORT', distancePct: 1.5 }),
+    ];
+    decideBreakoutActions({ confirmed, slotsLeft: 2, marketRegime: 'BEAR' });
+    expect(confirmed.filter(b => b._action === 'ENTER').length).toBe(2);
+    expect(confirmed.filter(b => b._action === 'SLOT_FULL').length).toBe(2);
+  });
 });
 
 describe('Stop-loss risk cap — computeOrbStop (2026-06-02)', () => {

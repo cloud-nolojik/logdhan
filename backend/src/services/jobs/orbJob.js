@@ -329,11 +329,14 @@ class OrbJob {
       // 09:45-10:00 candle also closes past OR it confirms → order at ~10:01.
       // A name that falls back inside OR on the 2nd candle is dropped.
       //
-      // Schedule: minutes 1, 16, 31, 46 of hours 10-14 (Mon-Fri IST). First
-      // possible entry 10:01 (breakout + confirm candles both closed); last entry
-      // 14:01 (74 min before 15:15 force-exit). Reversible via CONFIRM_BARS +
-      // BREAKOUT_START in orbService.js (1-bar would need the window opened to 9-14).
-      await this.agenda.every('1,16,31,46 10-14 * * 1-5', 'orb-check-breakout', {}, {
+      // Schedule: minutes 1, 16, 31, 46 of hours 9-11 (Mon-Fri IST). With CONFIRM_BARS=1
+      // first entry is 09:46 (the 09:30-09:45 candle has closed); last entry 11:46 —
+      // entries stay in the morning high-edge window (ORB edge is front-loaded;
+      // 11:30-14:00 is midday chop). The 09:01/09:16/09:31 fires are no-ops (the
+      // window guard in checkBreakouts rejects anything before 09:46). Per-scan cap
+      // (MAX_ENTRIES_PER_SCAN) spreads the daily budget across scans. The window guard
+      // (BREAKOUT_START/END) is the source of truth; this cron just bounds the firing.
+      await this.agenda.every('1,16,31,46 9-11 * * 1-5', 'orb-check-breakout', {}, {
         timezone: 'Asia/Kolkata',
       });
 

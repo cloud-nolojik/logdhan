@@ -21,10 +21,16 @@ import { computeVwap, evaluateVwapExit } from '../dailyPicks/dailyPicksService.j
 const LOG = '[ORB]';
 
 // ── Strategy constants ──────────────────────────────────────────────────────
-const MAX_ENTRIES           = 5;      // max TRADES per day (cumulative, LONG + SHORT
+const MAX_ENTRIES           = 16;     // max TRADES per day (cumulative, LONG + SHORT
                                       // combined). Enforced on doc.entriesCount, not the
                                       // live ENTERED count — a stopped-out slot is NOT
                                       // reused, so a choppy day cannot exceed this.
+// 2026-06-04: pace entries instead of dumping all 5 in the first scan. Cap how many
+// can be entered in any single scan, so the daily budget spreads across the morning
+// (10:01 → ~11:46) — the high-edge window — instead of front-loading at 10:01 and
+// then going dark. Research: ORB edge is concentrated in the first ~90 min; midday
+// is chop. Tunable.
+const MAX_ENTRIES_PER_SCAN  = 2;
 // TIER-1 changes (2026-05-26 evening):
 // • No pre-open gap filter. ALL F&O stocks are candidates.
 // • Direction (LONG/SHORT) is decided at the OR-break moment, not at 9:08.
@@ -80,20 +86,23 @@ const RVOL_ENTRY_MIN       = 1.1;
 // must close past the OR (same direction) to confirm a breakout. Kept as a
 // constant so a backtest can sweep 1 vs 2 (vs 0 = raw LTP-cross) without surgery.
 //   • CONFIRM_BARS = 2 → breakout candle + 1 confirmation candle. First entry 10:01.
-//   • CONFIRM_BARS = 1 → breakout candle alone (no confirm). First entry 09:46.
-// Set to 2 (2026-05-31, per design discussion): the model is "candle closes past
-// OR (breakout), the NEXT candle also closes past OR (confirmation) → enter."
-// Worked example: OR = 09:15–09:30; the 09:30–09:45 candle breaks out; if the
-// 09:45–10:00 candle is still past OR, order at ~10:01. A name that falls back
-// inside OR on the 2nd candle is dropped (failed confirmation = the fakeout filter).
-// NOT yet backtested — reversible via CONFIRM_BARS + BREAKOUT_START.
+//   • CONFIRM_BARS = 1 → breakout candle alone (no 2nd-candle confirm). First entry 09:46.
+// Set to 1 (2026-06-04, per design discussion): enter earlier and LESS EXTENDED — on
+// the first 15-min candle that CLOSES past the OR (09:30–09:45 → checked 09:46),
+// instead of waiting for a 2nd confirming candle (10:01). Rationale: June-4 losses
+// were from buying the extended thrust; earlier entry catches the morning edge at a
+// better price. A *close* past OR is still required (rejects wicks), and the RVOL
+// gate + per-scan cap absorb the extra fakeout risk. NOT backtested — reversible.
 // NOTE: BREAKOUT_START must track CONFIRM_BARS — earliest a confirm is possible is
 // 09:30 + CONFIRM_BARS×15min, checked on the next :01/:16/:31/:46 boundary.
-const CONFIRM_BARS          = 2;
-const BREAKOUT_START_HOUR   = 10;
-const BREAKOUT_START_MIN    = 1;      // breakout 09:30–09:45 + confirm 09:45–10:00, checked 10:01
-const BREAKOUT_END_HOUR     = 14;
-const BREAKOUT_END_MIN      = 1;      // last entry 14:01 (≥74 min runway to 15:15)
+const CONFIRM_BARS          = 1;
+const BREAKOUT_START_HOUR   = 9;
+const BREAKOUT_START_MIN    = 46;     // breakout 09:30–09:45 closes 09:45 → first check 09:46
+const BREAKOUT_END_HOUR     = 11;
+const BREAKOUT_END_MIN      = 46;     // last entry 11:46 (2026-06-04: pulled in from 14:01 —
+                                      // ORB edge is morning-concentrated; 11:30–14:00 is chop
+                                      // with deteriorating win rate, so we stop taking new
+                                      // entries before the dead zone). Tunable.
 // OR-width filter REMOVED 2026-06-03 (MAX_OR_RANGE_PCT / OR_ADR_MIN / OR_ADR_MAX
 // deleted). Too-wide was excluding the strongest gap-down momentum shorts (TCS −8%
 // got skipped) and is covered by the 1.5% SL cap + VARS; too-tight is covered by the
@@ -849,8 +858,8 @@ export async function recordOpeningRanges() {
 export async function checkBreakouts() {
   const ist    = MarketHoursUtil.toIST(new Date());
   const istMin = ist.getHours() * 60 + ist.getMinutes();
-  const windowStart = BREAKOUT_START_HOUR * 60 + BREAKOUT_START_MIN;   // 10:01
-  const windowEnd   = BREAKOUT_END_HOUR   * 60 + BREAKOUT_END_MIN;     // 14:01
+  const windowStart = BREAKOUT_START_HOUR * 60 + BREAKOUT_START_MIN;   // 09:46
+  const windowEnd   = BREAKOUT_END_HOUR   * 60 + BREAKOUT_END_MIN;     // 11:46
 
   if (istMin < windowStart || istMin > windowEnd) {
     console.log(`${LOG} [BREAKOUT] Outside entry window (now=${istTimeStr()}  window=${String(BREAKOUT_START_HOUR).padStart(2,'0')}:${String(BREAKOUT_START_MIN).padStart(2,'0')}–${String(BREAKOUT_END_HOUR).padStart(2,'0')}:${String(BREAKOUT_END_MIN).padStart(2,'0')}) — skipping`);
@@ -1050,12 +1059,15 @@ export async function checkBreakouts() {
   confirmed.sort((a, b) => b.score - a.score);
 
   // ── Apply the distance floor + regime direction gate + slots (pure helper) ──
+  // slotsLeft is the SMALLER of the day's remaining budget and the per-scan cap, so
+  // entries spread across the morning instead of all filling at the 10:01 scan.
+  const slotsLeft = Math.min(MAX_ENTRIES - dayEntries, MAX_ENTRIES_PER_SCAN);
   const { gateSide } = decideBreakoutActions({
     confirmed,
-    slotsLeft: MAX_ENTRIES - dayEntries,
+    slotsLeft,
     marketRegime: regimeInfo.regime,
   });
-  console.log(`${LOG} [BREAKOUT] 📊 Regime ${regimeInfo.regime} → direction gate: ${gateSide || 'BOTH (neutral)'}`);
+  console.log(`${LOG} [BREAKOUT] 📊 Regime ${regimeInfo.regime} → direction gate: ${gateSide || 'BOTH (neutral)'}  slots this scan=${slotsLeft} (day ${dayEntries}/${MAX_ENTRIES})`);
 
   console.log(`${LOG} [BREAKOUT] Ranked 2-bar confirmed breakouts:`);
   confirmed.forEach((b, idx) => {
