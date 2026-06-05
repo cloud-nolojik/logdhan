@@ -21,7 +21,12 @@ import { computeVwap, evaluateVwapExit } from '../dailyPicks/dailyPicksService.j
 const LOG = '[ORB]';
 
 // ── Strategy constants ──────────────────────────────────────────────────────
-const MAX_ENTRIES           = 16;     // max TRADES per day (cumulative, LONG + SHORT
+// 2026-06-05: Dropped from 16 → 8. With ₹45k cash × 5x MIS leverage = ₹225k
+// buying power × 90% allocation = ₹202k, divided by 16 slots = ₹12.6k/trade.
+// Dropping to 8 gives ₹25k/trade → meaningful position sizing, less brokerage
+// drag from forcing borderline picks just to fill 16 slots. ORB-style days
+// rarely produce 8 high-quality A+ setups, let alone 16.
+const MAX_ENTRIES           = 8;      // max TRADES per day (cumulative, LONG + SHORT
                                       // combined). Enforced on doc.entriesCount, not the
                                       // live ENTERED count — a stopped-out slot is NOT
                                       // reused, so a choppy day cannot exceed this.
@@ -743,6 +748,31 @@ export async function fetchPreOpenUniverse() {
     return { success: false, error: err.message };
   }
 
+  // ── Capital preflight check ─────────────────────────────────────────────
+  // 2026-06-05: Once per day at Phase 1 (09:08), verify the account has
+  // enough intraday buying power to actually take MAX_ENTRIES trades at
+  // MIN_CAPITAL_PER_TRADE each. If not, log loudly to BOTH stdout and stderr
+  // so the user sees the problem early instead of debugging silent skips
+  // mid-session (as on 2026-06-05 — ₹45k cash, 16 slots → all entries
+  // silently skipped because per-trade ₹2,534 < floor ₹5,000).
+  try {
+    const balance = await kiteOrderService.getAvailableBalance();
+    const buyingPower = balance.usableIntraday ?? balance.available;
+    const orbBudget = buyingPower * ORB_CAPITAL_PCT;
+    const perTradeIfFullDay = Math.floor(orbBudget / MAX_ENTRIES);
+    const minBuyingPowerNeeded = Math.ceil(MAX_ENTRIES * MIN_CAPITAL_PER_TRADE / ORB_CAPITAL_PCT);
+    console.log(`${LOG} [PHASE1] 💰 Capital preflight — intraday(5x)=₹${balance.usableIntraday}  ORB budget=₹${Math.round(orbBudget)}  per-trade (full day, ${MAX_ENTRIES} slots)=₹${perTradeIfFullDay}  floor=₹${MIN_CAPITAL_PER_TRADE}`);
+    if (perTradeIfFullDay < MIN_CAPITAL_PER_TRADE) {
+      const msg = `❌ INSUFFICIENT CAPITAL: intraday buying power ₹${balance.usableIntraday} is too low to take ${MAX_ENTRIES} trades at floor ₹${MIN_CAPITAL_PER_TRADE} each (per-trade would be ₹${perTradeIfFullDay}). Need ≥ ₹${minBuyingPowerNeeded}, or reduce MAX_ENTRIES, or lower MIN_CAPITAL_PER_TRADE. NO ENTRIES WILL FIRE UNTIL THIS IS FIXED.`;
+      console.warn(`${LOG} [PHASE1] ${msg}`);
+      console.log(`${LOG} [PHASE1] ${msg}`);   // mirror to stdout
+    } else {
+      console.log(`${LOG} [PHASE1] ✅ Capital preflight passed — can take up to ${MAX_ENTRIES} trades today`);
+    }
+  } catch (preflightErr) {
+    console.error(`${LOG} [PHASE1] ⚠ Capital preflight skipped — balance fetch failed: ${preflightErr.message}`);
+  }
+
   return { success: true, count: candidates.length };
 }
 
@@ -1103,16 +1133,31 @@ export async function checkBreakouts() {
     }
   }
 
-  // Capital allocation
+  // ── Capital allocation ──────────────────────────────────────────────────
+  // 2026-06-05: Two fixes here:
+  //   1. Use balance.usableIntraday (MIS 5x leverage applied) instead of
+  //      balance.available (cash only). For an MIS strategy, the real buying
+  //      power is the leveraged figure — using cash starves every trade.
+  //      Today: ₹45k cash → ₹2.5k/trade (silent skip).
+  //              ₹90k intraday × 8 slots → ₹10k/trade (entry fires cleanly).
+  //   2. Mirror the skip warning to stdout (console.log) as well as stderr
+  //      (console.warn). The user's -out.log only captures stdout, so the
+  //      original warn-only message went unseen for the entire trading day.
   let capitalPerTrade = MIN_CAPITAL_PER_TRADE;
   try {
     const balance = await kiteOrderService.getAvailableBalance();
-    const orbBudget = balance.available * ORB_CAPITAL_PCT;
+    // usableIntraday already has 5x leverage applied (rawIntraday - pending).
+    // Fall back to .available if the field is missing (older balance shape).
+    const buyingPower = balance.usableIntraday ?? balance.available;
+    const orbBudget   = buyingPower * ORB_CAPITAL_PCT;
     const slotsForCap = MAX_ENTRIES - dayEntries;
-    capitalPerTrade = Math.floor(orbBudget / Math.max(slotsForCap, 1));
-    console.log(`${LOG} [BREAKOUT] Capital — available=₹${balance.available}  ORB budget (${ORB_CAPITAL_PCT*100}%)=₹${Math.round(orbBudget)}  per-trade=₹${capitalPerTrade}`);
+    capitalPerTrade   = Math.floor(orbBudget / Math.max(slotsForCap, 1));
+    console.log(`${LOG} [BREAKOUT] Capital — cash=₹${balance.available} intraday(5x)=₹${balance.usableIntraday}  ORB budget (${ORB_CAPITAL_PCT*100}%)=₹${Math.round(orbBudget)}  per-trade=₹${capitalPerTrade} (${slotsForCap} slots left of ${MAX_ENTRIES})`);
     if (capitalPerTrade < MIN_CAPITAL_PER_TRADE) {
-      console.warn(`${LOG} [BREAKOUT] ⚠ per-trade capital ₹${capitalPerTrade} < floor ₹${MIN_CAPITAL_PER_TRADE} — skipping entries`);
+      const needed = MAX_ENTRIES * MIN_CAPITAL_PER_TRADE / ORB_CAPITAL_PCT;
+      const msg = `⚠ per-trade capital ₹${capitalPerTrade} < floor ₹${MIN_CAPITAL_PER_TRADE} — skipping entries. Need intraday buying power ≥ ₹${Math.ceil(needed)} (MAX_ENTRIES=${MAX_ENTRIES} × MIN_CAPITAL=${MIN_CAPITAL_PER_TRADE} / ORB_CAPITAL_PCT=${ORB_CAPITAL_PCT}), currently ₹${balance.usableIntraday}.`;
+      console.warn(`${LOG} [BREAKOUT] ${msg}`);
+      console.log(`${LOG} [BREAKOUT] ${msg}`);   // mirror to stdout
       return { skipped: true, reason: 'insufficient_capital', capitalPerTrade };
     }
   } catch (err) {
