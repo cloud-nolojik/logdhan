@@ -131,6 +131,52 @@ const MIN_DISTANCE_PCT          = 1.0;   // skip breakouts with distance past OR
 // (BIAS_GATE_* removed 2026-06-02 — breakout-breadth direction lock superseded by
 //  the live Nifty regime gate.)
 
+// ── 2026-06-05 evening — BE-only mode (Douglas, Bandy) ─────────────────────
+// After 8 trades on 2026-06-05 (-₹417 net), data confirmed the candle-tighten
+// engine was the dominant loss driver: 6/8 trades exited via candle-based
+// trail/tighten within 5-20 minutes of entry, all at < 0.5R profit or losses.
+// One winner (BAJFINANCE +₹40) gave up +₹42 of unrealised gain to a tighten.
+//
+// New rule (pure BE-only):
+//   Phase 1 (entry → +1R):       original SL holds, no tightening
+//   Phase 2 (at +1R, one-time):  SL moves to entry ± max(0.3% × entry, 0.5 × ATR_5min)
+//                                — small cushion prevents "₹0 PnL" stops on noise
+//   Phase 3 (after +1R):         DO NOTHING. SL holds at cushioned-BE.
+//   Phase 4 (15:15):             force exit anything still open
+//
+// The candle-analysis 'exit' branch (confirmed 2-bar 15-min structure break)
+// STAYS active — that's a legitimate structural exit, not a "tighten."
+// Trail/tighten decisions from analyzeIntradayStructure are now ignored.
+const BE_CUSHION_PCT      = 0.3;   // floor: SL stays ≥ 0.3% from entry
+const BE_CUSHION_ATR_MULT = 0.5;   // ATR-adaptive: SL stays ≥ 0.5 × ATR(5m,14) from entry
+
+// ── 2026-06-05 evening (later) — RSI-exhaustion exit + SL freeze ──────────
+// User feedback after the BE-only ship: "LTF still booked ₹0. RSI on the 5-min
+// chart closed ≥80 right at the top — couldn't we exit there?"
+//
+// New rule:
+//   1. ORIGINAL OR-BASED SL HOLDS FOR THE ENTIRE TRADE. No BE move, no
+//      tightening, no candle-based trail. The SL placed at entry stays
+//      untouched until either the RSI-exhaustion exit fires OR the 15:15
+//      force-exit runs.
+//   2. Each monitor cycle, compute 5-min RSI(14) + 14-period SMA on the RSI.
+//      If RSI has EVER closed ≥80 in available history (armed) AND the latest
+//      RSI is BOTH below 70 AND below its MA → fire a MARKET EXIT (not a SL
+//      modify). Mirror for SHORT (RSI ≤20 arm, RSI >30 and >MA → exit).
+//   3. The candle-analysis 'exit' branch (confirmed 2-bar 15-min structure
+//      break) STAYS active as a separate exit path.
+//
+// The dual-condition gate prevents whipsaw: a bare RSI<MA cross fires only
+// after the move has been stretched (RSI peaked past the extreme). This
+// preserves the BAJFINANCE/POWERGRID-style runner case while catching the
+// LTF-style "spike + rollover" case.
+const RSI_PERIOD          = 14;
+const RSI_MA_PERIOD       = 14;
+const RSI_OVERBOUGHT      = 80;    // LONG arm threshold
+const RSI_OVERSOLD        = 20;    // SHORT arm threshold
+const RSI_NEUTRAL_HIGH    = 70;    // LONG exit condA: lastRSI < this
+const RSI_NEUTRAL_LOW     = 30;    // SHORT exit condA: lastRSI > this
+
 // ── 10:30 TIME EXIT — DISABLED 2026-05-25 (evening) ───────────────────────
 // Hardcoded 10:30 AM force-exit was killing winners. On 2026-05-25:
 //   CANBK time-exited at +0.82% (₹132.58); ran to +1.6% (₹134.09 high) later.
@@ -269,6 +315,194 @@ export function buildVolumeProfile(bars) {
  * (OR width ÷ ADR) so the gate adapts to each stock instead of a fixed % band.
  * Returns null if there's no usable data. Pure + exported for testing.
  */
+/**
+ * computeATR(bars, period=14)
+ * True-range average over the last `period` bars. Used by computeBeStop() to
+ * size the BE cushion adaptively for high-vol stocks where a flat 0.3% is too
+ * tight. Standard Wilder TR: max(high-low, |high-prevClose|, |low-prevClose|).
+ * Returns 0 if insufficient data (caller should fall back to pct cushion only).
+ */
+export function computeATR(bars, period = 14) {
+  if (!bars || bars.length < 2) return 0;
+  const trs = [];
+  for (let i = 1; i < bars.length; i++) {
+    const b = bars[i], p = bars[i - 1];
+    if (!Number.isFinite(b?.high) || !Number.isFinite(b?.low) || !Number.isFinite(p?.close)) continue;
+    const tr = Math.max(b.high - b.low, Math.abs(b.high - p.close), Math.abs(b.low - p.close));
+    trs.push(tr);
+  }
+  const window = trs.slice(-period);
+  if (!window.length) return 0;
+  return window.reduce((s, x) => s + x, 0) / window.length;
+}
+
+/**
+ * computeBeStop({ entry, isLong, atr5m })
+ * Pure helper for the breakeven trail.
+ *
+ * Background (2026-06-05): the prior "BE = entry exactly" rule was killing
+ * trades on normal intra-bar noise. Example: LTF entered ₹275.80, BE moved
+ * SL to ₹275.80, hit at ₹275.80 for ₹0 — gave up 30+ paise of upside the
+ * trade was already showing. The cushion gives the trade breathing room
+ * while still locking in essentially-zero risk.
+ *
+ * Cushion size: max(BE_CUSHION_PCT × entry, BE_CUSHION_ATR_MULT × atr5m)
+ *   - pct floor (0.3%) covers tight-ranged stocks where ATR is misleading
+ *   - ATR multiplier (0.5×) gives more room on volatile stocks
+ *
+ * LONG  → returns entry − cushion (SL below entry)
+ * SHORT → returns entry + cushion (SL above entry)
+ *
+ * @param {Object} p
+ * @param {number} p.entry  — actual fill price
+ * @param {boolean} p.isLong
+ * @param {number} [p.atr5m=0] — ATR of last 14 × 5-min bars. 0 → pct-only fallback.
+ */
+export function computeBeStop({ entry, isLong, atr5m = 0 }) {
+  const pctCushion = entry * (BE_CUSHION_PCT / 100);
+  const atrCushion = (atr5m || 0) * BE_CUSHION_ATR_MULT;
+  const cushion    = Math.max(pctCushion, atrCushion);
+  return isLong ? entry - cushion : entry + cushion;
+}
+
+/**
+ * computeRSI(closes, period=14)
+ *
+ * Wilder's smoothed RSI. Returns an array same length as `closes` with NaN for
+ * positions before the period is satisfied. Used for the RSI-exhaustion exit
+ * (2026-06-05 evening — LTF chart analysis showed clear RSI≥80 + cross-below-MA
+ * top signal that the BE-only freeze could not capture).
+ *
+ *   RS  = avgGain / avgLoss   (Wilder smoothing: new = ((n-1)*prev + curr) / n)
+ *   RSI = 100 - 100 / (1 + RS)
+ *
+ * Edge cases:
+ *   - closes.length < period+1 → returns []
+ *   - avgLoss === 0 (pure uptrend) → RSI = 100
+ *   - non-finite diff → contributes 0
+ */
+export function computeRSI(closes, period = 14) {
+  if (!Array.isArray(closes) || closes.length < period + 1) return [];
+  const result = new Array(closes.length).fill(NaN);
+  let gainSum = 0, lossSum = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (!Number.isFinite(diff)) continue;
+    if (diff > 0) gainSum += diff;
+    else lossSum -= diff;
+  }
+  let avgGain = gainSum / period;
+  let avgLoss = lossSum / period;
+  result[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    const gain = Number.isFinite(diff) && diff > 0 ?  diff : 0;
+    const loss = Number.isFinite(diff) && diff < 0 ? -diff : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    result[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return result;
+}
+
+/**
+ * computeSMA(values, period)
+ * Simple moving average. Returns array same length as input with NaN before
+ * period is satisfied. Skips non-finite values gracefully.
+ */
+export function computeSMA(values, period) {
+  if (!Array.isArray(values) || values.length < period || period <= 0) return [];
+  const result = new Array(values.length).fill(NaN);
+  for (let i = period - 1; i < values.length; i++) {
+    let sum = 0, n = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (Number.isFinite(values[j])) {
+        sum += values[j];
+        n++;
+      }
+    }
+    if (n === period) result[i] = sum / period;
+  }
+  return result;
+}
+
+/**
+ * decideRsiExhaustionExit({ closes, isLong })
+ *
+ * Pure dual-condition exhaustion-exit decision for an open ORB position.
+ *
+ * 2026-06-05 evening: born from LTF chart analysis. LTF entered ₹275.80,
+ * 5-min RSI(14) peaked ≥80 at the ₹277 top, then drifted back to ₹270 over
+ * the next hour while the BE-only stop sat at the original OR-based level.
+ * Closing the trade on the RSI rollover would have captured most of the
+ * profit instead of zero.
+ *
+ * Logic:
+ *   ARM:  has RSI ever closed ≥OVERBOUGHT (LONG) / ≤OVERSOLD (SHORT) in the
+ *         available history? (We use the available bars since entry won't
+ *         appear in 5-min history at the bar level; ok, the typical session
+ *         starts at 09:15 so this covers all relevant context.)
+ *   FIRE: latest RSI is BOTH below NEUTRAL_HIGH (70) AND below RSI MA (LONG).
+ *         (Mirror for SHORT.)
+ *
+ * Both conditions must be true. This filters the bulk of "RSI crosses MA back
+ * and forth in chop" false signals — we only act on a cross AFTER we know the
+ * move stretched.
+ *
+ * @returns {{ armed: boolean, exit: boolean, lastRsi?: number, lastMA?: number, reason: string }}
+ */
+export function decideRsiExhaustionExit({
+  closes,
+  isLong,
+  period       = RSI_PERIOD,
+  maPeriod     = RSI_MA_PERIOD,
+  overbought   = RSI_OVERBOUGHT,
+  oversold     = RSI_OVERSOLD,
+  neutralHigh  = RSI_NEUTRAL_HIGH,
+  neutralLow   = RSI_NEUTRAL_LOW,
+}) {
+  const rsiSeries = computeRSI(closes, period);
+  if (!rsiSeries.length) {
+    return { armed: false, exit: false, reason: 'insufficient closes for RSI' };
+  }
+  const finiteRsis = rsiSeries.filter(Number.isFinite);
+  if (finiteRsis.length < maPeriod) {
+    return { armed: false, exit: false, reason: `only ${finiteRsis.length} finite RSI values, need ≥${maPeriod} for MA` };
+  }
+  const rsiMA = computeSMA(rsiSeries, maPeriod);
+
+  const armed = isLong
+    ? rsiSeries.some(r => Number.isFinite(r) && r >= overbought)
+    : rsiSeries.some(r => Number.isFinite(r) && r <= oversold);
+  if (!armed) {
+    return {
+      armed: false,
+      exit:  false,
+      reason: `not armed — RSI never reached ${isLong ? '≥' + overbought : '≤' + oversold}`,
+    };
+  }
+
+  const lastRsi = rsiSeries[rsiSeries.length - 1];
+  const lastMA  = rsiMA[rsiMA.length - 1];
+  if (!Number.isFinite(lastRsi) || !Number.isFinite(lastMA)) {
+    return { armed: true, exit: false, reason: 'armed but last RSI/MA non-finite' };
+  }
+
+  const condA  = isLong ? lastRsi < neutralHigh : lastRsi > neutralLow;
+  const condB  = isLong ? lastRsi < lastMA      : lastRsi > lastMA;
+  const exit   = condA && condB;
+
+  return {
+    armed: true,
+    exit,
+    lastRsi,
+    lastMA,
+    reason: exit
+      ? `armed (RSI peaked past extreme) + RSI ${lastRsi.toFixed(1)} ${isLong ? 'below' : 'above'} ${isLong ? neutralHigh : neutralLow} AND ${isLong ? 'below' : 'above'} MA ${lastMA.toFixed(1)} → EXIT`
+      : `armed but ${!condA ? `RSI ${lastRsi.toFixed(1)} still ${isLong ? '≥' + neutralHigh : '≤' + neutralLow}` : `RSI ${lastRsi.toFixed(1)} still on right side of MA ${lastMA.toFixed(1)}`} — hold`,
+  };
+}
+
 export function computeADRPct(bars, refPrice) {
   if (!refPrice || refPrice <= 0) return null;
   const byDay = {};
@@ -383,6 +617,14 @@ export function decideBreakoutActions({ confirmed, slotsLeft, marketRegime = nul
 // Export constants for testing / introspection
 export const _testExports = {
   MIN_DISTANCE_PCT,
+  BE_CUSHION_PCT,
+  BE_CUSHION_ATR_MULT,
+  RSI_PERIOD,
+  RSI_MA_PERIOD,
+  RSI_OVERBOUGHT,
+  RSI_OVERSOLD,
+  RSI_NEUTRAL_HIGH,
+  RSI_NEUTRAL_LOW,
 };
 
 function istTimeStr() {
@@ -1402,6 +1644,30 @@ export async function monitorOrbPositions() {
   let changed = false;
   let exitedThisRun = 0;
 
+  // ── Pre-fetch 5-min + 15-min bars for ALL entered positions ────────────────
+  // 2026-06-05 evening: BE-trail now uses ATR-cushioned BE move (computeBeStop)
+  // so it needs 5-min ATR. Doing the fetch once upfront lets both the BE-trail
+  // block (below) and the candle-analysis block (further down) reuse the same
+  // data — no duplicate Kite calls. If the fetch fails, BE-trail falls back to
+  // pct-only cushion (atr=0) and candle-analysis skips structure check.
+  let preCandles5m  = {};
+  let preCandles15m = {};
+  if (entered.length) {
+    try {
+      const multi = await kiteOrderService.getIntradayMultiCandles(
+        entered.map(c => c.symbol),
+        [
+          { interval: '5minute',  count: 90 },   // 90 × 5m = full session for VWAP / ATR(14)
+          { interval: '15minute', count: 4 },    // 4 × 15m for structure-exit check
+        ]
+      );
+      preCandles5m  = multi['5minute']  || {};
+      preCandles15m = multi['15minute'] || {};
+    } catch (err) {
+      console.error(`${LOG} [MONITOR] ⚠ pre-fetch candles failed (${err.message}) — BE-trail will use pct-only cushion, candle-analysis will skip`);
+    }
+  }
+
   for (const c of entered) {
     const ltp = ltpData[`NSE:${c.symbol}`]?.last_price;
     console.log(`${LOG} [MONITOR] ── ${c.symbol} ──────────────────────────`);
@@ -1543,13 +1809,25 @@ export async function monitorOrbPositions() {
       }
     }
 
-    // ── Breakeven trail — move stop to entry once 1R in profit ──────────────
-    // Direction-aware: LONG → risk = entry−stop, gain = ltp−entry, BE stop moves UP.
-    //                  SHORT → risk = stop−entry, gain = entry−ltp, BE stop moves DOWN.
+    // ── Breakeven trail — DISABLED 2026-06-05 (evening) ─────────────────────
+    // Per user request: "let it be the original stoploss". The original SL placed
+    // at entry holds untouched for the entire trade. No BE move, no cushioning.
+    // Trade closes via one of:
+    //   1. Original SL hits (PnL = −1R, max loss)
+    //   2. RSI-exhaustion exit fires (in the candle-analysis block below)
+    //   3. Confirmed 2-bar 15-min structure break (also in candle-analysis)
+    //   4. 15:15 force-exit cron
     //
-    // 2026-05-26 evening: switched from modifyOrder to cancel-and-replace.
-    // Kite's modify on SL-M kept rejecting with "permissible range" because
-    // of the stale implicit limit. cancel+replace avoids the whole problem.
+    // Why removed: the cushioned-BE was already an improvement over "BE = entry"
+    // but a single exit signal (RSI exhaustion) does the same job more cleanly
+    // without modifying the SL mid-trade. Keeping the SL static eliminates the
+    // whole class of "Kite rejects modify because trigger too close to LTP" bugs
+    // and the silent emergency-exit fallbacks they caused (AMBUJACEM, PATANJALI
+    // on 2026-06-05).
+    //
+    // To re-enable (for testing), un-comment the block below and the matching
+    // computeBeStop / replaceSlOrderWithNewTrigger calls.
+    /*
     if (c.status === 'ENTERED' && c.stopOrderId && !c._beTrailed) {
       const risk        = cIsLong ? (c.entryPrice - c.stopPrice) : (c.stopPrice - c.entryPrice);
       const currentGain = ltp ? (cIsLong ? (ltp - c.entryPrice) : (c.entryPrice - ltp)) : null;
@@ -1557,9 +1835,13 @@ export async function monitorOrbPositions() {
         console.log(`${LOG} [MONITOR]   BE trail check [${cIsLong ? 'LONG' : 'SHORT'}]: risk=₹${risk.toFixed(2)}  current gain=₹${currentGain?.toFixed(2)}  need ₹${risk.toFixed(2)} for 1R`);
       }
       if (ltp && risk > 0 && currentGain != null && currentGain >= risk) {
-        const beStop   = snapToNSETick(c.entryPrice, 0.05, cIsLong ? 'floor' : 'ceil');
-        const exitSide = cIsLong ? 'SELL' : 'BUY';
-        console.log(`${LOG} [MONITOR]   1R achieved → moving stop to breakeven=₹${beStop} via cancel+replace`);
+        const sym5mBars = preCandles5m[c.symbol] || [];
+        const atr5m     = computeATR(sym5mBars, 14);
+        const beStopRaw = computeBeStop({ entry: c.entryPrice, isLong: cIsLong, atr5m });
+        const beStop    = snapToNSETick(beStopRaw, 0.05, cIsLong ? 'floor' : 'ceil');
+        const exitSide  = cIsLong ? 'SELL' : 'BUY';
+        const cushionPct = Math.abs((c.entryPrice - beStop) / c.entryPrice * 100);
+        console.log(`${LOG} [MONITOR]   1R achieved → moving stop to BE cushioned=₹${beStop} (atr5m=₹${atr5m.toFixed(2)}, cushion=${cushionPct.toFixed(2)}% from entry ₹${c.entryPrice}) via cancel+replace`);
         const replaceRes = await replaceSlOrderWithNewTrigger({
           candidate:  c,
           newTrigger: beStop,
@@ -1571,14 +1853,12 @@ export async function monitorOrbPositions() {
           console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] BE trail complete — new SL ${replaceRes.newOrderId} @ ₹${beStop}`);
           changed = true;
         } else if (replaceRes.exited) {
-          // SL re-place failed → helper fired an emergency exit AND booked the
-          // close on the candidate. Persist it this run.
           exitedThisRun++;
           changed = true;
         }
-        // On failure, helper already logged details / fired emergency exit if applicable.
       }
     }
+    */
   }
 
   // ── Candle structure analysis — exit / trail / tighten ────────────────────
@@ -1598,21 +1878,30 @@ export async function monitorOrbPositions() {
   if (stillEntered.length) {
     const candleSymbols = stillEntered.map(c => c.symbol);
     console.log(`${LOG} [CANDLE] ── Candle analysis [${istTimeStr()}] ──────────────────`);
-    console.log(`${LOG} [CANDLE] Fetching 5-min (full session, for VWAP) + 15-min (4 bars) for: ${candleSymbols.join(', ')}`);
-
-    let candles5m = {}, candles15m = {};
+    // 2026-06-05: reuse pre-fetched 5m/15m bars from the BE-trail block above
+    // (saves a duplicate batched Kite call). Only re-fetch for symbols missing
+    // from the pre-fetch (e.g. a position was added in the BE block? unlikely
+    // but safe).
+    let candles5m  = preCandles5m  || {};
+    let candles15m = preCandles15m || {};
+    const missing  = candleSymbols.filter(s => !candles5m[s] || !candles15m[s]);
+    if (missing.length) {
+      console.log(`${LOG} [CANDLE] Re-fetching candles for ${missing.length} missing symbols: ${missing.join(', ')}`);
     try {
       // 5-min count 90 = the whole session, so per-stock cumulative VWAP is correct
       // (computeVwap needs every bar since 09:15). analyzeIntradayStructure only
       // looks at the last few bars, so we hand it sym5m.slice(-6) below.
-      const multi = await kiteOrderService.getIntradayMultiCandles(candleSymbols, [
+      const multi = await kiteOrderService.getIntradayMultiCandles(missing, [
         { interval: '5minute',  count: 90 },
         { interval: '15minute', count: 4 },
       ]);
-      candles5m  = multi['5minute']  || {};
-      candles15m = multi['15minute'] || {};
-    } catch (err) {
-      console.error(`${LOG} [CANDLE] ❌ Candle fetch FAILED:`, err.message);
+      Object.assign(candles5m,  multi['5minute']  || {});
+      Object.assign(candles15m, multi['15minute'] || {});
+    } catch (e) {
+      console.error(`${LOG} [CANDLE] missing-symbol candle fetch failed: ${e.message}`);
+    }
+    } else {
+      console.log(`${LOG} [CANDLE] Using pre-fetched bars for ${candleSymbols.length} symbols (no extra Kite call)`);
     }
 
     // Live Nifty regime, computed once for this monitor run (used for regime-flip exit).
@@ -1632,6 +1921,76 @@ export async function monitorOrbPositions() {
       const cDirTag   = cIsLong ? 'LONG' : 'SHORT';
 
       console.log(`${LOG} [CANDLE] ${c.symbol} [${cDirTag}]: 5m_bars=${sym5m.length}  15m_bars=${sym15m.length}  stop=₹${c.stopPrice}  beTrailed=${!!c._beTrailed}`);
+
+      // ── RSI-exhaustion exit (2026-06-05 evening) ─────────────────────────────
+      // Dual-condition gate on 5-min RSI(14) + its 14-period SMA:
+      //   ARM:  RSI has closed ≥80 (LONG) / ≤20 (SHORT) at any point in session history
+      //   FIRE: latest RSI is < 70 AND < its SMA (LONG; mirror for SHORT)
+      // When fired → cancel SL + market exit. The original SL is NOT modified.
+      // Born from LTF 2026-06-05: entered ₹275.80, 5-min RSI peaked ≥80 at the
+      // ₹277 top, drifted back to ₹270 — would have captured +₹4-7/share vs ₹0.
+      if (sym5m.length >= RSI_PERIOD + RSI_MA_PERIOD) {
+        const closes = sym5m.map(b => b.close).filter(Number.isFinite);
+        const rsiDecision = decideRsiExhaustionExit({ closes, isLong: cIsLong });
+        console.log(`${LOG} [CANDLE] ${c.symbol}: RSI exit check — ${rsiDecision.reason}`);
+        if (rsiDecision.exit) {
+          console.log(`${LOG} [CANDLE] ${c.symbol}: 🛎 RSI EXHAUSTION EXIT — cancel SL + market ${cExitSide}`);
+          if (c.stopOrderId)   { try { await kiteOrderService.cancelOrder(c.stopOrderId);   } catch (_) {} }
+          if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); } catch (_) {} }
+          await delay(500);
+          // 2026-05-26 safety: verify broker has the position before placing exit.
+          const actualQty = await getActualPositionQty(c.symbol);
+          if (actualQty === 0) {
+            console.log(`${LOG} [CANDLE]   ⚠ ${c.symbol}: broker position=0 — skipping RSI exit (already closed externally)`);
+            c.status     = 'TIME_EXIT';
+            c.exitReason = 'already_closed_externally';
+            await bookAlreadyClosedPnl(c, '[CANDLE]');
+            changed = true;
+            continue;
+          }
+          if (actualQty !== null && (cIsLong ? actualQty <= 0 : actualQty >= 0)) {
+            console.error(`${LOG} [CANDLE]   ⚠⚠ ${c.symbol}: broker qty=${actualQty} but direction=${cDirTag} — mismatch, skipping`);
+            c.status     = 'TIME_EXIT';
+            c.exitReason = `direction_mismatch_broker_qty_${actualQty}`;
+            changed = true;
+            continue;
+          }
+          if (actualQty !== null) c.qty = Math.abs(actualQty);
+          try {
+            const res = await kiteOrderService.placeOrder({
+              tradingsymbol:    c.symbol,
+              exchange:         'NSE',
+              transaction_type: cExitSide,
+              order_type:       'MARKET',
+              product:          'MIS',
+              quantity:         c.qty,
+              simulationId:     `orb_rsi_exit_${c.symbol}`,
+              orderType:        'ORB_RSI_EXHAUSTION_EXIT',
+              source:           'ORB',
+            });
+            if (res.success) {
+              await delay(1500);
+              let exitPrice = ltp;
+              try {
+                const ord = await kiteOrderService.getOrderDetails(res.orderId);
+                if (ord?.average_price) exitPrice = ord.average_price;
+              } catch (_) {}
+              c.status     = 'TIME_EXIT';
+              c.exitPrice  = exitPrice;
+              c.exitTime   = new Date();
+              c.exitReason = `rsi_exhaustion: lastRsi=${rsiDecision.lastRsi?.toFixed(1)} lastMA=${rsiDecision.lastMA?.toFixed(1)}`;
+              const pnlDir = cIsLong ? (exitPrice - c.entryPrice) : (c.entryPrice - exitPrice);
+              c.pnl        = parseFloat((pnlDir * c.qty).toFixed(2));
+              c.returnPct  = parseFloat((pnlDir / c.entryPrice * 100).toFixed(2));
+              console.log(`${LOG} [CANDLE] ✅ ${c.symbol} [${cDirTag}] RSI exhaustion exit @ ₹${exitPrice}  PnL=₹${c.pnl >= 0 ? '+' : ''}${c.pnl} (${c.returnPct >= 0 ? '+' : ''}${c.returnPct}%)`);
+              changed = true;
+            }
+          } catch (err) {
+            console.error(`${LOG} [CANDLE] ${c.symbol}: RSI exit order FAILED:`, err.message);
+          }
+          continue;
+        }
+      }
 
       // ── Sideways exit — position flat after 40 min (direction-aware profitPct) ─
       if (c.entryTime && ltp) {
@@ -1819,44 +2178,21 @@ export async function monitorOrbPositions() {
         }
 
       } else if ((decision.action === 'trail' || decision.action === 'tighten') && decision.newStop) {
-        // ── Trail or tighten — modify SL on Kite (SL-M, trigger only) ─────────
-        // LONG: stop moves UP (snap floor); SHORT: stop moves DOWN (snap ceil).
-        const snappedStop  = cIsLong
-          ? snapToNSETick(decision.newStop, 0.05, 'floor')
-          : snapToNSETick(decision.newStop, 0.05, 'ceil');
-        // "Improvement" means stop moves in our favor: UP for LONG, DOWN for SHORT.
-        const isImprovement = cIsLong
-          ? snappedStop > c.stopPrice
-          : snappedStop < c.stopPrice;
-
-        if (!isImprovement) {
-          console.log(`${LOG} [CANDLE] ${c.symbol}: ${decision.action} ₹${snappedStop} would not improve current stop ₹${c.stopPrice} — skipping`);
-        } else if (!c.stopOrderId) {
-          console.warn(`${LOG} [CANDLE] ${c.symbol}: ${decision.action} ₹${snappedStop} but no SL order to modify`);
-        } else {
-          // 2026-05-26 evening: switched from modifyOrder to cancel+replace.
-          // Kite's modify kept rejecting with "permissible range" on SL-M.
-          // See replaceSlOrderWithNewTrigger() docstring.
-          const replaceRes = await replaceSlOrderWithNewTrigger({
-            candidate:  c,
-            newTrigger: snappedStop,
-            exitSide:   cExitSide,
-            logTag:     '[CANDLE]',
-          });
-          if (replaceRes.success) {
-            console.log(`${LOG} [CANDLE] ✅ ${c.symbol} [${cDirTag}]: ${decision.action} — stop ₹${c.stopPrice} → ₹${snappedStop} [${decision.reason.split(' | ')[0]}]`);
-            // Mark BE trailed when stop crosses entry "in our favor":
-            //   LONG  → stop ≥ entry
-            //   SHORT → stop ≤ entry
-            const crossedBE = cIsLong ? (snappedStop >= c.entryPrice) : (snappedStop <= c.entryPrice);
-            if (crossedBE) c._beTrailed = true;
-            changed = true;
-          } else if (replaceRes.exited) {
-            // SL re-place failed → emergency exit fired and was booked on c. Persist.
-            changed = true;
-          }
-          // On failure, helper already logged details / fired emergency exit if applicable.
-        }
+        // ── Trail/tighten DISABLED 2026-06-05 evening — BE-only mode ──────────
+        // After 2026-06-05 (8 trades, -₹417), data showed candle-based trail/
+        // tighten was the dominant loss driver: 6 trades killed within 5-20 min
+        // of entry by trail-placing-SL-too-close-to-LTP. BAJFINANCE: tightened
+        // to ₹906 at +₹82 unrealised, hit at ₹905.60 for +₹40.
+        //
+        // Per Bandy ("Quantitative Technical Analysis") and Douglas ("Trading
+        // in the Zone"): the simplest rule — BE-cushioned at +1R then hold —
+        // outperformed every adaptive trail in their backtests.
+        //
+        // We now ignore trail/tighten decisions. The cushioned BE move at +1R
+        // (computeBeStop, in the MONITOR loop above) handles risk-removal.
+        // The 'exit' branch above (confirmed 2-bar structure break) STAYS
+        // active for genuine structural exits.
+        console.log(`${LOG} [CANDLE] ${c.symbol}: [BE-only] ignoring ${decision.action} → newStop=₹${decision.newStop} (mode disabled — SL holds at ₹${c.stopPrice} until structure exit / 15:15)`);
       }
       // 'hold' — nothing to do
     }
