@@ -488,12 +488,12 @@ class KiteAutoLoginService {
    * each retry was triggering a full login, and concurrent logins clobber
    * each other on Kite (new access_token kills the old one).
    */
-  async makeRequest(method, endpoint, data = null, isRetry = false) {
+  async makeRequest(method, endpoint, data = null, isRetry = false, throttleAttempt = 0) {
     const headers = await this.getAuthHeaders();
     const usedToken = headers['Authorization']?.split(':')[1];
     const tokenSnippet = usedToken ? `...${usedToken.slice(-6)}` : 'none';
 
-    console.log(`[KITE] makeRequest: ${method} ${endpoint} (token=${tokenSnippet}, isRetry=${isRetry})`);
+    console.log(`[KITE] makeRequest: ${method} ${endpoint} (token=${tokenSnippet}, isRetry=${isRetry}${throttleAttempt > 0 ? `, throttleAttempt=${throttleAttempt}` : ''})`);
 
     try {
       const config = {
@@ -512,7 +512,7 @@ class KiteAutoLoginService {
       }
 
       const response = await axios(config);
-      console.log(`[KITE] makeRequest: ${method} ${endpoint} → ${response.status} OK`);
+      console.log(`[KITE] makeRequest: ${method} ${endpoint} → ${response.status} OK${throttleAttempt > 0 ? ` (after ${throttleAttempt} 429-retry)` : ''}`);
       return response.data;
 
     } catch (error) {
@@ -520,6 +520,22 @@ class KiteAutoLoginService {
       const errorType = error.response?.data?.error_type;
       const errorMessage = error.response?.data?.message || error.message;
       console.log(`[KITE] makeRequest: ${method} ${endpoint} → FAILED status=${status} error_type=${errorType} msg=${errorMessage}`);
+
+      // ── 2026-06-05: 429 retry-with-backoff safety net ─────────────────────
+      // The getIntradayMultiCandles concurrency cap (3 req/sec) prevents most
+      // 429s up-front, but Kite occasionally bursts on its end — a singleton
+      // request can still get throttled if it lands while another caller is
+      // mid-burst. Retry up to 3 times with exponential backoff 500ms, 1s, 2s.
+      // The token-expiry retry above is independent — both can fire (but each
+      // independently caps at one retry, so total ≤ 4 attempts).
+      const isRateLimited = status === 429 ||
+                            errorType === 'NetworkException' && /too many requests/i.test(errorMessage);
+      if (isRateLimited && throttleAttempt < 3) {
+        const backoffMs = 500 * Math.pow(2, throttleAttempt);   // 500, 1000, 2000
+        console.warn(`[KITE] 429/too-many-requests on ${endpoint} — backing off ${backoffMs}ms (attempt ${throttleAttempt + 1}/3)`);
+        await new Promise(r => setTimeout(r, backoffMs));
+        return this.makeRequest(method, endpoint, data, isRetry, throttleAttempt + 1);
+      }
 
       // Only retry on actual token expiry — NOT on PermissionException (which is permanent)
       const isTokenExpired = errorType === 'TokenException' ||
@@ -537,7 +553,7 @@ class KiteAutoLoginService {
 
         // Auto-login once (dedup-guarded), then retry the request exactly once
         await this._doAutoLogin();
-        return this.makeRequest(method, endpoint, data, true);
+        return this.makeRequest(method, endpoint, data, true, throttleAttempt);
       }
 
       throw error;

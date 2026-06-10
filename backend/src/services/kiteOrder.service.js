@@ -4,6 +4,46 @@ import KiteAuditLog from '../models/kiteAuditLog.js';
 import kiteConfig from '../config/kite.config.js';
 
 /**
+ * runWithConcurrency(tasks, limit)
+ *
+ * Run `tasks` (an array of async-thunks) with at most `limit` running at any
+ * time. Resolves to an array of results in the same order as `tasks`. Errors
+ * in individual tasks are caught and stored as `{ _error: Error }` so a single
+ * failure doesn't reject the whole pool — callers can inspect per-result.
+ *
+ * 2026-06-05: Born from the historical-data 429 storm — getIntradayMultiCandles
+ * was firing all 20 symbol requests in parallel against Kite's 3 req/sec
+ * historical-data limit. 98 of 215 stocks silently got 0 bars (45% of the
+ * scan universe). Capping at 3 keeps us at the rate limit ceiling.
+ *
+ * Why not a library: zero dependencies in this file, and the implementation
+ * is 15 lines. p-limit / @hapi/cron would be overkill.
+ */
+// Concurrency cap for Kite historical-data calls. Kite's documented rate is
+// 3 req/sec on /instruments/historical/*. Anything higher gets 429 NetworkException.
+export const KITE_HISTORICAL_CONCURRENCY = 3;
+
+export async function runWithConcurrency(tasks, limit) {
+  if (!Array.isArray(tasks) || tasks.length === 0) return [];
+  const results = new Array(tasks.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const idx = next++;
+      if (idx >= tasks.length) return;
+      try {
+        results[idx] = await tasks[idx]();
+      } catch (err) {
+        results[idx] = { _error: err };
+      }
+    }
+  }
+  const poolSize = Math.max(1, Math.min(limit | 0, tasks.length));
+  await Promise.all(Array.from({ length: poolSize }, () => worker()));
+  return results;
+}
+
+/**
  * KiteOrderService
  * Handles order placement, modification, and GTT operations via Kite Connect API.
  */
@@ -904,7 +944,7 @@ class KiteOrderService {
 
       console.log(`[KITE ORDER] getIntradayMultiCandles: from=${from} to=${to} symbols=${symbols.join(',')} intervals=${intervalsConfig.map(c => `${c.interval}(${c.count})`).join(',')}`);
 
-      // ── All symbol × interval combinations in parallel (no extra LTP calls) ──
+      // ── Build tasks for every symbol × interval combo ──────────────────
       const tasks = [];
       for (const symbol of symbols) {
         const token = ltpData[`NSE:${symbol}`]?.instrument_token;
@@ -932,7 +972,14 @@ class KiteOrderService {
           });
         }
       }
-      await Promise.all(tasks.map(t => t()));
+
+      // ── Rate-limited execution (2026-06-05) ─────────────────────────────
+      // Kite's historical-data endpoint allows 3 req/sec. Prior code did
+      // Promise.all(tasks) which burst 40+ requests in parallel, producing
+      // 98 × 429 "Too many requests" errors on 2026-06-05 — silently dropping
+      // 45% of the breakout-scan universe to zero bars. Cap concurrency at 3.
+      console.log(`[KITE ORDER] getIntradayMultiCandles: dispatching ${tasks.length} tasks with concurrency=${KITE_HISTORICAL_CONCURRENCY}`);
+      await runWithConcurrency(tasks, KITE_HISTORICAL_CONCURRENCY);
       return result;
 
     } catch (err) {

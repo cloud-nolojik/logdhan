@@ -1419,7 +1419,11 @@ export async function checkBreakouts() {
     b.candidate.rankScore   = b.score;
     const liveLtp = currentLtps[`NSE:${b.candidate.symbol}`]?.last_price || b.bar2Close;
     await enterTrade(doc, b.candidate, liveLtp, capitalPerTrade);
-    entered++;
+    // 2026-06-09: only count actually-filled entries. SKIPPED candidates (MIS-blocked,
+    // entry rejected, etc.) shouldn't appear in the "entered=N this run" tally —
+    // the old behaviour misleadingly reported entered=1 for HFCL on 2026-06-09
+    // when the broker had no position.
+    if (b.candidate.status === 'ENTERED') entered++;
   }
 
   if (entered > 0 || doc.isModified()) await doc.save();
@@ -1472,9 +1476,19 @@ async function enterTrade(doc, candidate, ltp, capitalPerTrade) {
     entryOrderId = res.orderId;
     console.log(`${LOG} [ENTER] ${candidate.symbol}: ✅ ${entrySide} entry order placed — orderId=${entryOrderId}`);
   } catch (err) {
-    console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ entry order FAILED:`, err.message);
+    const errMsg = err?.response?.data?.message || err?.message || String(err);
+    // 2026-06-09 — HFCL was rejected with "MIS orders are currently blocked for HFCL.
+    // Place a CNC order instead." Zerodha temporarily blocks MIS on certain stocks
+    // (corporate action, F&O ban list, etc.). Log it grep-ably so it's not buried.
+    if (/MIS orders are currently blocked/i.test(errMsg)) {
+      console.warn(`${LOG} [ENTER] ${candidate.symbol}: ⏭ MIS-BLOCKED by broker — skipping symbol (slot NOT consumed). Msg: ${errMsg}`);
+      candidate.status     = 'SKIPPED';
+      candidate.skipReason = 'mis_blocked_by_broker';
+      return;
+    }
+    console.error(`${LOG} [ENTER] ${candidate.symbol}: ❌ entry order FAILED:`, errMsg);
     candidate.status     = 'SKIPPED';
-    candidate.skipReason = `entry_failed: ${err.message}`;
+    candidate.skipReason = `entry_failed: ${errMsg}`;
     return;
   }
 
