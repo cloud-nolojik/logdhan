@@ -65,17 +65,45 @@ async function main() {
   console.log(`\n══════ DRY-RUN paper-spec replay for ${D} (NO ORDERS) ══════\n`);
   await mongoose.connect(process.env.MONGODB_URI);
 
-  // 0) Kite session preflight — fail FAST with a useful message instead of
-  // burning 440 doomed calls (each one triggering a failed auto-login attempt).
+  // 0) Token resolution — USE THE EXISTING TOKEN, NEVER AUTO-LOGIN.
+  // Two reasons: (a) getValidSession's is_valid/expiry gate can reject a doc
+  // whose raw access_token still works (observed 2026-06-11: live backend
+  // trading fine while the doc read is_valid=false); (b) a successful
+  // auto-login from this script would mint a NEW token, and Kite invalidates
+  // the old one — i.e. a dry-run would KILL the live backend's session.
+  // So: take KITE_ACCESS_TOKEN env if given, else the freshest access_token in
+  // kitesessions regardless of validity flags, patch it in, and hard-disable
+  // auto-login for this process.
+  const kiteSvc = kiteOrderService.kiteService;
+  let tokenDoc = null;
+  if (process.env.KITE_ACCESS_TOKEN) {
+    tokenDoc = { access_token: process.env.KITE_ACCESS_TOKEN };
+    console.log('[0] Using KITE_ACCESS_TOKEN from env');
+  } else {
+    tokenDoc = await mongoose.connection.collection('kitesessions')
+      .find({ access_token: { $exists: true, $nin: [null, ''] } })
+      .sort({ updatedAt: -1 }).limit(1).next();
+    if (tokenDoc) {
+      console.log(`[0] Using existing token …${tokenDoc.access_token.slice(-6)} from kitesessions (updated ${tokenDoc.updatedAt?.toISOString?.() ?? '?'}, validity flags bypassed — dry-run only)`);
+    }
+  }
+  if (!tokenDoc?.access_token) {
+    console.error('\n❌ No access_token found anywhere in the kitesessions collection.');
+    console.error('   Run this where the live backend runs (its 06:00 token job populates it),');
+    console.error('   or pass one explicitly:  KITE_ACCESS_TOKEN=xxxx node scripts/dryrun-paper-day.js\n');
+    await mongoose.disconnect();
+    process.exit(1);
+  }
+  kiteSvc.getValidSession = async () => tokenDoc;          // bypass validity gate
+  kiteSvc._doAutoLogin    = async () => { throw new Error('auto-login disabled in dry-run (would clobber the live token)'); };
+
   try {
     await kiteOrderService.getLTP(['NSE:RELIANCE']);
-    console.log('[0] Kite session OK');
+    console.log('[0] Kite session OK — token works');
   } catch (err) {
-    console.error(`\n❌ No valid Kite session in this database (${err.message}).`);
-    console.error('   This script must run where the live backend runs — same .env, same Mongo,');
-    console.error('   same access token from the 06:00 token-refresh job. Either:');
-    console.error('     • SSH to the server and run:  node scripts/dryrun-paper-day.js');
-    console.error('     • or point MONGODB_URI in backend/.env at the production database.\n');
+    console.error(`\n❌ The existing token was rejected by Kite (${err.message}).`);
+    console.error('   It has likely expired (tokens die ~6 AM next day). Wait for the 06:00');
+    console.error('   token-refresh job, or trigger a fresh login from the live backend, then rerun.\n');
     await mongoose.disconnect();
     process.exit(1);
   }

@@ -1,0 +1,10 @@
+
+══════ DRY-RUN paper-spec replay for 2026-06-11 (NO ORDERS) ══════
+
+[KITE ORDER] Fetching LTP for 1 instruments: NSE:RELIANCE
+[KITE ORDER] LTP query string: i=NSE:RELIANCE
+[KITE] getValidSession: found=true, is_valid=false, has_token=false, expiry=none
+[KITE] getValidSession: No valid token in DB, triggering auto-login
+[KITE] _doAutoLogin: starting new auto login...
+[KITE AUTO-LOGIN] Starting automated login...
+[KITE AUTO-LOGIN] Step 1: Fetching login page...
