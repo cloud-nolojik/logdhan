@@ -13,6 +13,8 @@
 
 import kiteOrderService from '../kiteOrder.service.js';
 import OrbTrade from '../../models/orbTrade.js';
+import OrbBaseline from '../../models/orbBaseline.js';
+import OrbPipelineLog from '../../models/orbPipelineLog.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import { getFnoSymbols } from '../../constants/fnoUniverse.js';
 import { analyzeIntradayStructure, checkSidewaysExit } from '../dailyPicks/tradingDecisions.js';
@@ -87,6 +89,53 @@ const BARS_PER_DAY         = 25;
 // it is NOT also in the ranking score (no double-count).
 const RVOL_ENTRY_MIN       = 1.1;
 
+// ── 2026-06-11 — 09:21 in-play RVOL snapshot ("stocks in play") ─────────────
+// Zarattini/Barbon/Aziz (SSRN 4729284): ORB on ALL stocks ≈ 3.2%/yr; ORB on the
+// top-20 by OPENING relative volume ≈ 41.6%/yr — the edge is in selection, not
+// the pattern. This snapshot ranks the whole F&O universe by first-minutes RVOL
+// at 09:21 and marks only the top names inPlay; Phase 2 then sets ranges ONLY
+// for those (side effect: per-scan candle fetches drop ~215 → ~20, easing 429s).
+//
+// Measurement: ONE batched /quote call at 09:21 → day-cumulative volume (≈ first
+// 6 min of trading) ÷ (volumeProfile['09:15'] × RVOL5_BASELINE_FRACTION). The
+// window is identical for every symbol, so the RANKING is exact even though the
+// absolute scale leans on the fraction estimate. FRACTION=0.55: opening volume
+// is front-loaded, so the first ~6 min of the 09:15–09:30 slot normally carries
+// ~55% of that slot's volume (estimate — calibrate from archived 1-min candles).
+const RVOL5_TOP_N             = 20;    // max names marked in-play
+const RVOL5_MIN               = 1.0;   // floor — paper spec exactly: RVOL ≥ 100% (was 1.5 pre-paper-mode)
+const RVOL5_BASELINE_FRACTION = 0.55;  // share of the 09:15 slot traded by ~09:21
+const RVOL5_MIN_QUALIFIED     = 5;     // if fewer clear the floor → fallback selection
+const RVOL5_FALLBACK_N        = 10;    // fallback: top-10 by rvol5 regardless of floor
+
+// ── 2026-06-11 — PAPER MODE (Zarattini/Barbon/Aziz, SSRN 4729284) ───────────
+// Live cutover to the paper's exact entry/stop/exit spec, per design discussion:
+//   • OR = first 5-min candle (09:15–09:20), per stock
+//   • Direction = that candle's close vs open (bullish→LONG only, bearish→SHORT
+//     only, doji→skip). NO index/regime gate — the paper has none.
+//   • Entry = resting SL-M order AT the OR edge (distance ≈ 0, no close-confirm,
+//     no 1% floor), placed ~09:24, live until the 15:00 unfilled-cancel cutoff.
+//   • Stop = 0.10 × daily ATR(14) from the actual fill price.
+//   • Exits = stop hit or 15:15 force-exit ONLY. No target, no BE move, no RSI/
+//     VWAP/structure/sideways exits (paper has none of these; with a 0.1×ATR
+//     stop the BE cushion would sit WIDER than the stop itself).
+//   • Sizing = min(risk-based: 1% of cash ÷ stopDistance, leverage cap: slot
+//     capital ÷ price). Paper trades top-20; current capital funds 8 slots.
+const PAPER_STOP_ATR_MULT    = 0.10;   // stop distance = 10% of daily ATR(14)
+const PAPER_MIN_ATR14D       = 0.50;   // ₹ — paper FILTER 3 (ATR floor); stop must be ≥ 1 tick
+const PAPER_RISK_PCT         = 1.0;    // % of cash risked per trade (paper: 1% of account)
+const PAPER_MAX_ENTRIES      = 8;      // paper: top-20; leverage-capped to 8 slots at current capital
+const PAPER_ENTRY_CUTOFF_MIN = 15 * 60; // 15:00 IST — cancel still-unfilled ARMED entries
+
+// ── LEGACY ENGINE — RETIRED 2026-06-11 (full paper-spec cutover, no flags) ──
+// The 15-min OR path (recordOpeningRanges), the 2-bar confirmation scan
+// (checkBreakouts), the Nifty regime gate, BE-at-+1R, the 10:30 time-exit, and
+// the entire candle/RSI/VWAP/sideways exit engine are PERMANENTLY dead-gated
+// below by this constant. Per design decision: no runtime flags — the paper
+// system is THE system. The legacy code bodies are kept (unreachable) purely
+// for reference; the last live version is in git history.
+const LEGACY_ENGINE = false;
+
 // Entry window + confirmation — CONFIRM_BARS = how many completed 15-min candles
 // must close past the OR (same direction) to confirm a breakout. Kept as a
 // constant so a backtest can sweep 1 vs 2 (vs 0 = raw LTP-cross) without surgery.
@@ -155,10 +204,11 @@ const BE_CUSHION_ATR_MULT = 0.5;   // ATR-adaptive: SL stays ≥ 0.5 × ATR(5m,1
 // chart closed ≥80 right at the top — couldn't we exit there?"
 //
 // New rule:
-//   1. ORIGINAL OR-BASED SL HOLDS FOR THE ENTIRE TRADE. No BE move, no
-//      tightening, no candle-based trail. The SL placed at entry stays
-//      untouched until either the RSI-exhaustion exit fires OR the 15:15
-//      force-exit runs.
+//   1. [RETIRED 2026-06-11 with the paper-spec cutover — this whole RSI engine
+//      is dead-gated by LEGACY_ENGINE. Paper exits: stop-hit or 15:15 only.]
+//      Original 2026-06-05 rule: OR-based SL holds for the entire trade. No BE
+//      move, no tightening, no candle-based trail; SL untouched until either
+//      the RSI-exhaustion exit fires OR the 15:15 force-exit runs.
 //   2. Each monitor cycle, compute 5-min RSI(14) + 14-period SMA on the RSI.
 //      If RSI has EVER closed ≥80 in available history (armed) AND the latest
 //      RSI is BOTH below 70 AND below its MA → fire a MARKET EXIT (not a SL
@@ -184,11 +234,31 @@ const RSI_NEUTRAL_LOW     = 30;    // SHORT exit condA: lastRSI > this
 // Winners now ride to either target hit, candle-structure tighten exit, or
 // the 15:15 force-exit. Losers still get caught by SL (which trail logic
 // tightens on bearish reversal candles via analyzeIntradayStructure).
-// To re-enable for testing, set ORB_TIME_EXIT_ENABLED=true in env.
+// (2026-06-11: env toggle removed — dead-gated by LEGACY_ENGINE, see monitor.)
 const TIME_EXIT_HOUR        = 10;
 const TIME_EXIT_MIN         = 30;     // (kept as constants — gated by env at usage site)
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Pipeline stage trail (2026-06-11): one row per stage event in
+ * orb_pipeline_log, so "what ran / what failed / why" for any day is a single
+ * query: db.orb_pipeline_log.find({dateKey:'YYYY-MM-DD'}).sort({t:1}).
+ * Mirrors to console with a grep-able [STAGE] tag. BEST-EFFORT — a logging
+ * failure must never take a trading stage down with it.
+ */
+async function logStage(stage, ok, detail = undefined) {
+  const tag = ok ? '✅' : '❌';
+  console.log(`${LOG} [STAGE] ${tag} ${stage}${detail !== undefined ? ` — ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : ''}`);
+  try {
+    const istNow  = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const dateKey = istNow.toISOString().slice(0, 10);
+    await OrbPipelineLog.create({ t: new Date(), dateKey, stage, ok, detail });
+  } catch (err) {
+    console.warn(`${LOG} [STAGE] trail write failed (${err.message}) — console log above is the record`);
+  }
+}
+
 function snapToNSETick(price, tick = 0.05, mode = 'round') {
   const factor = Math.round(1 / tick);
   if (mode === 'floor') return Math.floor(price * factor) / factor;
@@ -537,27 +607,170 @@ export function needsVolumeBaselineRetry(candidates, alreadyRetried) {
   return candidates.every(c => !(c.avgDailyVolume > 0));
 }
 
-async function attachVolumeBaselines(candidates, logTag = '[PHASE1]') {
-  if (!candidates?.length) return 0;
-  const istNowD = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-  const toD     = new Date(istNowD); toD.setDate(toD.getDate() - 1);   // through yesterday
-  const fromD   = new Date(istNowD); fromD.setDate(fromD.getDate() - 30); // ~20 trading days
-  const fmt     = d => d.toISOString().slice(0, 10);
-  const symbols = candidates.map(c => c.symbol);
-  const hist    = await kiteOrderService.getHistoricalCandles(symbols, '15minute', `${fmt(fromD)} 09:15:00`, `${fmt(toD)} 15:30:00`);
-  let withProfile = 0;
-  for (const c of candidates) {
-    const bars    = hist[c.symbol] || [];
+// Cache validity window — covers weekends/long holidays (Friday-evening compute
+// must still be valid on Monday/Tuesday morning).
+const BASELINE_MAX_AGE_DAYS = 5;
+
+/**
+ * Fetch ≈20 trading days of 15-min bars for `symbols` (through `toD`) and build
+ * per-symbol { volumeProfile, avgDailyVolume, adrRefBars }. Shared by the
+ * evening prefetch (toD = today, session complete) and the morning live
+ * fallback (toD = yesterday). Best-effort: missing symbols simply absent.
+ */
+async function fetchBaselineData(symbols, toD, logTag, paceOpts = undefined) {
+  const fromD = new Date(toD); fromD.setDate(fromD.getDate() - 30);   // ~20 trading days
+  const fmt   = d => d.toISOString().slice(0, 10);
+  const hist  = await kiteOrderService.getHistoricalCandles(symbols, '15minute', `${fmt(fromD)} 09:15:00`, `${fmt(toD)} 15:30:00`, paceOpts);
+  const out = {};
+  for (const sym of symbols) {
+    const bars    = hist[sym] || [];
     const profile = buildVolumeProfile(bars);
     const slots   = Object.values(profile);
-    if (slots.length) {
-      c.volumeProfile  = profile;
-      c.avgDailyVolume = slots.reduce((a, v) => a + v, 0);   // ≈ avg full-day volume
-      withProfile++;
-    }
-    c.adrPct = computeADRPct(bars, c.iep);   // ADR% — denominator for the OR-width filter
+    if (!slots.length) continue;
+    out[sym] = {
+      volumeProfile:  profile,
+      avgDailyVolume: slots.reduce((a, v) => a + v, 0),
+      bars,                                                   // for ADR%
+      lastClose: bars.length ? bars[bars.length - 1].close : null,
+    };
   }
-  console.log(`${LOG} ${logTag} RVOL baseline: time-matched volume profile set for ${withProfile}/${candidates.length} symbols`);
+  console.log(`${LOG} ${logTag} baseline build: profiles for ${Object.keys(out).length}/${symbols.length} symbols`);
+  return out;
+}
+
+/**
+ * BASELINE PREFETCH (08:30 IST) — compute baselines for the FULL F&O universe and
+ * upsert into orb_baselines. Runs in the pre-market idle window (45 min before
+ * the 09:08 pre-open job), so the ~215 historical calls that used to burst at
+ * 09:08 (the known 429 hotspot, now load-bearing for the whole paper pipeline)
+ * happen with zero rate contention — and with no dependency on the server having
+ * been up the previous evening.
+ *
+ * Window is TIME-AWARE: "through the last COMPLETED session" — before 15:30 IST
+ * that's yesterday (today is in progress / not started); after close it's today.
+ * So the job produces correct data whenever it is run, including manual triggers.
+ */
+export async function prefetchVolumeBaselines() {
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} ═══ BASELINE PREFETCH [${istTimeStr()}] ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+
+  const symbols = await getFnoSymbols();   // async! (caught in dry-run review — without await this was always "empty")
+  if (!symbols?.length) {
+    console.warn(`${LOG} [BASELINE] ⚠️  empty F&O universe — nothing to prefetch`);
+    await logStage('prefetch', false, 'empty_universe');
+    return { success: false, reason: 'empty_universe' };
+  }
+
+  // Last completed session: before today's 15:30 close → yesterday; after → today.
+  const istNowD = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const toD     = new Date(istNowD);
+  if (istNowD.getHours() * 60 + istNowD.getMinutes() < 15 * 60 + 30) {
+    toD.setDate(toD.getDate() - 1);
+  }
+  console.log(`${LOG} [BASELINE] window through last completed session: ${toD.toISOString().slice(0, 10)}`);
+  let data;
+  try {
+    // Deliberately UNDER Kite's documented 3 req/s historical limit: 2 concurrent
+    // + 600ms gap ≈ 2.2–2.5 req/s → ~90s for the full universe, ZERO 429 churn.
+    // (The default batch=3/400ms pacing overshoots to ~4-5 req/s and leans on the
+    // makeRequest backoff to mop up — fine intraday where speed matters, wasteful
+    // at 08:30 where time is free.) Reactive 3× exponential backoff in makeRequest
+    // remains underneath as the safety net either way.
+    data = await fetchBaselineData(symbols, toD, '[BASELINE]', { batch: 2, delayMs: 600 });
+  } catch (err) {
+    console.error(`${LOG} [BASELINE] ❌ fetch failed (${err.message}) — cache not updated (morning falls back to live fetch)`);
+    await logStage('prefetch', false, { reason: 'fetch_failed', error: err.message });
+    return { success: false, reason: 'fetch_failed' };
+  }
+
+  const now = new Date();
+  const ops = Object.entries(data).map(([symbol, d]) => ({
+    updateOne: {
+      filter: { symbol },
+      update: { $set: {
+        symbol,
+        volumeProfile:  d.volumeProfile,
+        avgDailyVolume: d.avgDailyVolume,
+        adrPct:         computeADRPct(d.bars, d.lastClose),
+        lastClose:      d.lastClose,
+        computedAt:     now,
+      } },
+      upsert: true,
+    },
+  }));
+  if (ops.length) await OrbBaseline.bulkWrite(ops, { ordered: false });
+  console.log(`${LOG} [BASELINE] ✅ upserted ${ops.length}/${symbols.length} baselines (computedAt=${now.toISOString()})`);
+  await logStage('prefetch', ops.length >= symbols.length * 0.9, { upserted: ops.length, total: symbols.length });
+  return { success: true, upserted: ops.length, total: symbols.length };
+}
+
+/**
+ * Attach RVOL baselines to candidates — CACHE-FIRST (2026-06-11):
+ *   1. Read orb_baselines (computedAt within BASELINE_MAX_AGE_DAYS) → instant,
+ *      zero Kite calls for every cache hit.
+ *   2. Live-fetch ONLY the misses (new F&O entrants / failed prefetch) through
+ *      yesterday, and upsert those back into the cache.
+ * If the evening prefetch ran, the 09:08 burst is ~0 historical calls instead
+ * of ~215. If it didn't, behaviour degrades to exactly the old live fetch.
+ */
+async function attachVolumeBaselines(candidates, logTag = '[PHASE1]') {
+  if (!candidates?.length) return 0;
+
+  // 1) cache read
+  const cached = {};
+  try {
+    const cutoff = new Date(Date.now() - BASELINE_MAX_AGE_DAYS * 86400000);
+    const rows = await OrbBaseline.find({ computedAt: { $gte: cutoff } }).lean();
+    for (const r of rows) cached[r.symbol] = r;
+  } catch (err) {
+    console.warn(`${LOG} ${logTag} baseline cache read failed (${err.message}) — falling back to live fetch for all`);
+  }
+
+  let fromCache = 0;
+  const misses = [];
+  for (const c of candidates) {
+    const b = cached[c.symbol];
+    if (b?.volumeProfile && b.avgDailyVolume > 0) {
+      c.volumeProfile  = b.volumeProfile;
+      c.avgDailyVolume = b.avgDailyVolume;
+      c.adrPct         = b.adrPct;
+      fromCache++;
+    } else {
+      misses.push(c);
+    }
+  }
+
+  // 2) live fallback for misses only (through yesterday — today is in progress)
+  let fromLive = 0;
+  if (misses.length) {
+    console.log(`${LOG} ${logTag} baseline cache: ${fromCache} hits, ${misses.length} misses — live-fetching misses`);
+    try {
+      const toD  = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+      toD.setDate(toD.getDate() - 1);
+      const data = await fetchBaselineData(misses.map(c => c.symbol), toD, logTag);
+      const now  = new Date();
+      const ops  = [];
+      for (const c of misses) {
+        const d = data[c.symbol];
+        if (!d) continue;
+        c.volumeProfile  = d.volumeProfile;
+        c.avgDailyVolume = d.avgDailyVolume;
+        c.adrPct         = computeADRPct(d.bars, c.iep ?? d.lastClose);
+        fromLive++;
+        ops.push({ updateOne: { filter: { symbol: c.symbol }, update: { $set: {
+          symbol: c.symbol, volumeProfile: d.volumeProfile, avgDailyVolume: d.avgDailyVolume,
+          adrPct: c.adrPct, lastClose: d.lastClose, computedAt: now,
+        } }, upsert: true } });
+      }
+      if (ops.length) { try { await OrbBaseline.bulkWrite(ops, { ordered: false }); } catch (_) {} }
+    } catch (err) {
+      console.error(`${LOG} ${logTag} live baseline fallback failed: ${err.message}`);
+    }
+  }
+
+  const withProfile = fromCache + fromLive;
+  console.log(`${LOG} ${logTag} RVOL baseline: ${withProfile}/${candidates.length} symbols (cache=${fromCache}, live=${fromLive})`);
   return withProfile;
 }
 
@@ -894,8 +1107,18 @@ async function fetchPreOpenViaKite() {
 
 export async function fetchPreOpenUniverse() {
   console.log(`${LOG} ════════════════════════════════════════`);
-  console.log(`${LOG} ═══ PHASE 1: Pre-open universe [${istTimeStr()}] ═══`);
+  console.log(`${LOG} ═══ PHASE 1: Day bootstrap [${istTimeStr()}] ═══`);
   console.log(`${LOG} ════════════════════════════════════════`);
+
+  // 2026-06-11: runs at 08:35 (was 09:08). Before the 09:00–09:08 auction,
+  // last_price = yesterday's last trade, so iep ≈ prevClose and gap ≈ 0 — the
+  // IEP/gap fields are placeholders at this hour (nothing downstream uses them;
+  // the paper pipeline keys entirely off rvol5 + the first 5-min candle).
+  const istBootMin = (() => { const d = MarketHoursUtil.toIST(new Date()); return d.getHours() * 60 + d.getMinutes(); })();
+  const preAuction = istBootMin < 9 * 60;   // before 09:00 → auction hasn't run
+  if (preAuction) {
+    console.log(`${LOG} [PHASE1] pre-auction run — IEP/gap fields will read ≈0 (observability only, not used by the pipeline)`);
+  }
 
   let raw;
   try {
@@ -903,6 +1126,7 @@ export async function fetchPreOpenUniverse() {
   } catch (err) {
     console.error(`${LOG} [PHASE1] ❌ Kite pre-open fetch FAILED:`, err.message);
     console.error(`${LOG} [PHASE1]    Stack:`, err.stack);
+    await logStage('bootstrap', false, { reason: 'kite_fetch_failed', error: err.message });
     return { success: false, error: err.message };
   }
 
@@ -934,17 +1158,19 @@ export async function fetchPreOpenUniverse() {
   const gapDownStrong  = mapped.filter(c => c.preOpenPct <= -1.0);
   const flatish        = mapped.filter(c => Math.abs(c.preOpenPct) < 1.0);
 
+  if (!preAuction) {
   console.log(`${LOG} [PHASE1] Gap distribution (observability only — all stocks pass to Phase 2):`);
   console.log(`${LOG} [PHASE1]   strong gap UP   (≥+1%):  ${gapUpStrong.length}`);
   console.log(`${LOG} [PHASE1]   strong gap DOWN (≤-1%):  ${gapDownStrong.length}`);
   console.log(`${LOG} [PHASE1]   flat-ish        (|gap|<1%): ${flatish.length}`);
+  }
 
-  if (gapUpStrong.length) {
+  if (!preAuction && gapUpStrong.length) {
     const top5 = gapUpStrong.sort((a, b) => b.preOpenPct - a.preOpenPct).slice(0, 5);
     console.log(`${LOG} [PHASE1] Top-5 gap UP today:`);
     top5.forEach(c => console.log(`${LOG} [PHASE1]   ${c.symbol.padEnd(14)} gap=+${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}`));
   }
-  if (gapDownStrong.length) {
+  if (!preAuction && gapDownStrong.length) {
     const top5 = gapDownStrong.sort((a, b) => a.preOpenPct - b.preOpenPct).slice(0, 5);
     console.log(`${LOG} [PHASE1] Top-5 gap DOWN today:`);
     top5.forEach(c => console.log(`${LOG} [PHASE1]   ${c.symbol.padEnd(14)} gap=${c.preOpenPct.toFixed(2)}%  IEP=₹${c.iep}`));
@@ -987,6 +1213,7 @@ export async function fetchPreOpenUniverse() {
     console.log(`${LOG} [PHASE1] ✅ orb_trades upserted — docId=${doc._id}  candidates=${candidates.length}`);
   } catch (err) {
     console.error(`${LOG} [PHASE1] ❌ DB upsert FAILED:`, err.message);
+    await logStage('bootstrap', false, { reason: 'db_upsert_failed', error: err.message });
     return { success: false, error: err.message };
   }
 
@@ -1015,6 +1242,10 @@ export async function fetchPreOpenUniverse() {
     console.error(`${LOG} [PHASE1] ⚠ Capital preflight skipped — balance fetch failed: ${preflightErr.message}`);
   }
 
+  // Stage trail: baselines-attached count is the load-bearing fact for the day
+  const withBaseline = candidates.filter(c => c.avgDailyVolume > 0).length;
+  await logStage('bootstrap', candidates.length > 0 && withBaseline >= candidates.length * 0.5,
+    { candidates: candidates.length, withBaseline });
   return { success: true, count: candidates.length };
 }
 
@@ -1022,7 +1253,458 @@ export async function fetchPreOpenUniverse() {
 // PHASE 2 — Record opening range (9:30 AM)
 // ══════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════
+// PHASE 1.5 — 09:21 in-play RVOL snapshot (between pre-open and record-range)
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * rvol5 for one candidate: day-cumulative volume at ~09:21 vs the scaled
+ * 09:15-slot baseline. Returns null when either side is missing (no baseline
+ * from the 09:08 fetch, or no quote volume). Pure + exported for testing.
+ */
+export function computeRvol5(volumeSoFar, volumeProfile) {
+  const base = volumeProfile?.['09:15'];
+  if (!(base > 0) || !(volumeSoFar > 0)) return null;
+  return volumeSoFar / (base * RVOL5_BASELINE_FRACTION);
+}
+
+/**
+ * Select the in-play set from [{ symbol, rvol5 }] rows.
+ *   normal:   top RVOL5_TOP_N of those with rvol5 ≥ RVOL5_MIN
+ *   fallback: if fewer than RVOL5_MIN_QUALIFIED clear the floor, take the top
+ *             RVOL5_FALLBACK_N by rvol5 regardless (guards against a mis-set
+ *             BASELINE_FRACTION silently producing zero-trade days while the
+ *             constant is still uncalibrated).
+ * Returns { selected: Set<symbol>, fallback: boolean, ranked: rows sorted desc }.
+ * Pure + exported for testing.
+ */
+export function selectInPlay(rows, {
+  topN = RVOL5_TOP_N,
+  minRvol = RVOL5_MIN,
+  minQualified = RVOL5_MIN_QUALIFIED,
+  fallbackN = RVOL5_FALLBACK_N,
+} = {}) {
+  const ranked = (rows || [])
+    .filter(r => Number.isFinite(r.rvol5))
+    .sort((a, b) => b.rvol5 - a.rvol5);
+  const qualified = ranked.filter(r => r.rvol5 >= minRvol).slice(0, topN);
+  if (qualified.length >= minQualified) {
+    return { selected: new Set(qualified.map(r => r.symbol)), fallback: false, ranked };
+  }
+  return { selected: new Set(ranked.slice(0, fallbackN).map(r => r.symbol)), fallback: true, ranked };
+}
+
+/**
+ * 09:21 — rank the WATCHING universe by first-minutes RVOL and mark the top
+ * names inPlay. Phase 2 (recordOpeningRanges) then only sets ranges for
+ * inPlay !== false candidates.
+ *
+ * Failure semantics (post paper-cutover 2026-06-11): on any of (no doc / quote
+ * fetch dead / baselines missing on >50% of names) this job leaves inPlay flags
+ * and rvolSnapshotAt UNSET. The consumer — placeOrbEntryOrders — then retries
+ * the snapshot once inline and otherwise refuses to arm, so the SYSTEM fails
+ * CLOSED: a broken snapshot = a no-trade day (selection is mandatory per the
+ * paper; the unranked universe is the 3.2%/yr mode). A selection that
+ * legitimately finds nothing in play is NOT a failure — that is a thin day and
+ * trading less is the correct outcome (floor + fallback above still apply).
+ */
+export async function takeRvolSnapshot() {
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} ═══ PHASE 1.5: In-play RVOL snapshot [${istTimeStr()}] ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+
+  const doc = await OrbTrade.findToday();
+  if (!doc) {
+    console.warn(`${LOG} [RVOL5] ⚠️  No ORB doc for today — bootstrap may not have run.`);
+    await logStage('snapshot', false, 'no_doc — bootstrap missing');
+    return { success: false, reason: 'no_doc' };
+  }
+  if (doc.rvolSnapshotAt) {
+    console.log(`${LOG} [RVOL5] Snapshot already taken at ${doc.rvolSnapshotAt.toISOString()} — skipping`);
+    return { success: true, skipped: true, reason: 'already_done' };
+  }
+
+  const watching = doc.candidates.filter(c => c.status === 'WATCHING');
+  if (!watching.length) {
+    console.warn(`${LOG} [RVOL5] ⚠️  No WATCHING candidates — nothing to snapshot`);
+    return { success: false, reason: 'no_watching' };
+  }
+
+  // ONE batched full-quote sweep (chunked 100/call like Phase 2) — /quote (not
+  // /quote/ohlc) because only the full quote carries day-cumulative `volume`.
+  const symbols  = watching.map(c => c.symbol);
+  const CHUNK    = 100;
+  const quoteMap = {};
+  for (let i = 0; i < symbols.length; i += CHUNK) {
+    const batch = symbols.slice(i, i + CHUNK);
+    try {
+      const data = await kiteOrderService.getQuote(batch.map(s => `NSE:${s}`));
+      Object.assign(quoteMap, data);
+    } catch (err) {
+      console.error(`${LOG} [RVOL5] quote batch failed (${err.message}) — continuing with what we have`);
+    }
+  }
+
+  const got = Object.keys(quoteMap).length;
+  if (got < symbols.length * 0.5) {
+    console.warn(`${LOG} [RVOL5] ⚠️  Quotes for only ${got}/${symbols.length} symbols — aborting (flags unset; arming will retry once then fail closed)`);
+    await logStage('snapshot', false, { reason: 'quote_coverage', got, total: symbols.length });
+    return { success: false, reason: 'quote_coverage', got, total: symbols.length };
+  }
+
+  // Compute rvol5 per candidate
+  const rows = [];
+  let noBaseline = 0;
+  for (const c of watching) {
+    const q   = quoteMap[`NSE:${c.symbol}`];
+    const vol = q ? (q.volume ?? q.volume_traded ?? null) : null;
+    const r5  = computeRvol5(vol, c.volumeProfile);
+    c.rvol5   = Number.isFinite(r5) ? parseFloat(r5.toFixed(2)) : undefined;
+    if (!Number.isFinite(r5)) noBaseline++;
+    else rows.push({ symbol: c.symbol, rvol5: c.rvol5 });
+  }
+
+  if (rows.length < watching.length * 0.5) {
+    console.warn(`${LOG} [RVOL5] ⚠️  rvol5 computable for only ${rows.length}/${watching.length} (no baseline/volume on ${noBaseline}) — aborting`);
+    await logStage('snapshot', false, { reason: 'baseline_coverage', computable: rows.length, total: watching.length });
+    return { success: false, reason: 'baseline_coverage', computable: rows.length, total: watching.length };
+  }
+
+  // Select + mark. Names without a computable rvol5 cannot prove they are in
+  // play → inPlay=false (we only trade what the data positively qualifies).
+  const { selected, fallback, ranked } = selectInPlay(rows);
+  for (const c of watching) c.inPlay = selected.has(c.symbol);
+
+  doc.rvolSnapshotAt = new Date();
+  doc.rvol5Fallback  = fallback;
+  await doc.save();
+
+  if (fallback) {
+    console.warn(`${LOG} [RVOL5] ⚠️  FALLBACK: <${RVOL5_MIN_QUALIFIED} names cleared rvol5≥${RVOL5_MIN} — took top ${selected.size} by rvol5 regardless. Check RVOL5_BASELINE_FRACTION calibration.`);
+  }
+  console.log(`${LOG} [RVOL5] In-play: ${selected.size}/${watching.length} (floor=${RVOL5_MIN}× topN=${RVOL5_TOP_N} fraction=${RVOL5_BASELINE_FRACTION})`);
+  ranked.slice(0, RVOL5_TOP_N).forEach((r, i) => {
+    const mark = selected.has(r.symbol) ? '✅ IN-PLAY ' : '   spectator';
+    console.log(`${LOG} [RVOL5]   #${String(i + 1).padStart(2)} ${r.symbol.padEnd(14)} rvol5=${r.rvol5.toFixed(2)}x ${mark}`);
+  });
+
+  await logStage('snapshot', true, {
+    inPlay: selected.size, total: watching.length, fallback,
+    top5: ranked.slice(0, 5).map(r => `${r.symbol}:${r.rvol5}x`),
+  });
+  return { success: true, inPlay: selected.size, total: watching.length, fallback };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// PAPER MODE — Phase 2P: place resting entry orders at the 5-min OR edge (09:24)
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Protective SL-M for a just-filled paper entry: fill price ∓ stopDistance
+ * (0.10 × daily ATR14, computed at arm time). 2-attempt tick-retry like
+ * enterTrade; if both fail the position is UNPROTECTED → emergency MARKET exit.
+ */
+async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
+  const isLong   = (c.direction || 'LONG') === 'LONG';
+  const exitSide = isLong ? 'SELL' : 'BUY';
+  let stop = snapToNSETick(
+    isLong ? c.entryPrice - c.stopDistance : c.entryPrice + c.stopDistance,
+    0.05, isLong ? 'floor' : 'ceil'
+  );
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const slRes = await kiteOrderService.placeOrder({
+        tradingsymbol:    c.symbol,
+        exchange:         'NSE',
+        transaction_type: exitSide,
+        order_type:       'SL-M',
+        trigger_price:    stop,
+        product:          'MIS',
+        quantity:         c.qty,
+        simulationId:     `orb_sl_${c.symbol}`,
+        orderType:        'ORB_STOP',
+        source:           'ORB',
+      });
+      if (slRes.success) {
+        c.stopOrderId = slRes.orderId;
+        c.stopPrice   = stop;
+        console.log(`${LOG} ${logTag} ${c.symbol}: ✅ protective SL-M ${exitSide} @ ₹${stop} (0.1×ATR14d=₹${c.stopDistance}, ${(c.stopDistance / c.entryPrice * 100).toFixed(2)}% from fill ₹${c.entryPrice}) — orderId=${slRes.orderId}`);
+        return true;
+      }
+    } catch (err) {
+      const tick = parseKiteTickError(err);
+      if (tick && attempt === 1) {
+        stop = snapToNSETick(tick, 0.05, isLong ? 'floor' : 'ceil');
+        console.warn(`${LOG} ${logTag} ${c.symbol}: SL tick-reject — retrying @ ₹${stop}`);
+        continue;
+      }
+      console.error(`${LOG} ${logTag} ${c.symbol}: ❌ SL placement failed (attempt ${attempt}): ${err.message}`);
+    }
+  }
+
+  // Both attempts failed → position UNPROTECTED → emergency flat NOW.
+  console.error(`${LOG} ${logTag} ${c.symbol}: ⚠⚠ NO PROTECTIVE SL — firing emergency ${exitSide} MARKET`);
+  await logStage('protective-sl', false, { symbol: c.symbol, action: 'emergency_exit', entry: c.entryPrice });
+  try {
+    await kiteOrderService.placeOrder({
+      tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: exitSide,
+      order_type: 'MARKET', product: 'MIS', quantity: c.qty,
+      simulationId: `orb_emergency_no_sl_${c.symbol}`, orderType: 'ORB_EMERGENCY_EXIT', source: 'ORB',
+    });
+    c.status     = 'TIME_EXIT';
+    c.exitTime   = new Date();
+    c.exitReason = 'emergency_exit_no_protective_sl';
+  } catch (emErr) {
+    console.error(`${LOG} ${logTag} ${c.symbol}: ❌❌ EMERGENCY EXIT ALSO FAILED — MANUAL INTERVENTION NEEDED: ${emErr.message}`);
+  }
+  return false;
+}
+
+/**
+ * 09:24 — PAPER-SPEC ENTRY ARMING. For the top in-play names (by rvol5):
+ *   1. Read the 09:15–09:20 5-min candle → OR high/low + direction (close vs open)
+ *   2. Daily ATR(14) → stopDistance = 0.10 × ATR (skip if ATR < ₹0.50, paper FILTER 3)
+ *   3. Size: min(1% cash risk ÷ stopDistance, slot capital ÷ trigger)
+ *   4. Place a resting SL-M entry AT the OR edge → status ARMED.
+ *      If price already broke the edge before 09:24 the stop would have triggered —
+ *      enter MARKET immediately instead (Kite rejects an SL-M already past trigger).
+ * Fills are picked up by orb-monitor (ARMED → ENTERED + protective SL).
+ * Idempotent via doc.paperEntriesPlacedAt. No regime gate — paper spec.
+ */
+export async function placeOrbEntryOrders() {
+  console.log(`${LOG} ════════════════════════════════════════`);
+  console.log(`${LOG} ═══ PHASE 2P: Paper-spec entry arming [${istTimeStr()}] ═══`);
+  console.log(`${LOG} ════════════════════════════════════════`);
+
+  const doc = await OrbTrade.findToday();
+  if (!doc) {
+    console.warn(`${LOG} [PAPER] ⚠️  No ORB doc — Phase 1 may not have run`);
+    return { success: false, reason: 'no_doc' };
+  }
+  if (doc.paperEntriesPlacedAt) {
+    console.log(`${LOG} [PAPER] Entries already armed at ${doc.paperEntriesPlacedAt.toISOString()} — skipping`);
+    return { success: true, skipped: true, reason: 'already_armed' };
+  }
+  // Paper spec REQUIRES the RVOL selection — without the snapshot there is no
+  // in-play set, and arming the whole universe is exactly the 3.2%/yr failure
+  // mode. The snapshot at 09:21 is therefore a single point of failure for the
+  // whole trading day, so (2026-06-11 audit) RETRY it inline once here before
+  // giving up. Still fail-closed if the retry also fails: no selection, no trades.
+  if (!doc.rvolSnapshotAt) {
+    console.warn(`${LOG} [PAPER] ⚠️  No RVOL snapshot from 09:21 — retrying inline before arming`);
+    try {
+      const retry = await takeRvolSnapshot();
+      console.log(`${LOG} [PAPER] inline snapshot retry: ${JSON.stringify(retry)}`);
+    } catch (err) {
+      console.error(`${LOG} [PAPER] inline snapshot retry threw: ${err.message}`);
+    }
+    // Re-read the doc — takeRvolSnapshot loads and saves its own copy, so this
+    // stale `doc` would not see the flags it just wrote.
+    const fresh = await OrbTrade.findToday();
+    if (!fresh?.rvolSnapshotAt) {
+      console.warn(`${LOG} [PAPER] ⚠️  Snapshot still unavailable after retry — refusing to arm (fail-closed, no trades today)`);
+      await logStage('arming', false, 'no_rvol_snapshot after inline retry — NO TRADES TODAY');
+      return { success: false, reason: 'no_rvol_snapshot' };
+    }
+    return placeOrbEntryOrdersOn(fresh);
+  }
+  return placeOrbEntryOrdersOn(doc);
+}
+
+// Inner worker — arming logic operating on a known-fresh doc.
+async function placeOrbEntryOrdersOn(doc) {
+
+  const inPlay = doc.candidates
+    .filter(c => c.status === 'WATCHING' && c.inPlay === true && Number.isFinite(c.rvol5))
+    .sort((a, b) => b.rvol5 - a.rvol5)
+    .slice(0, PAPER_MAX_ENTRIES);
+  if (!inPlay.length) {
+    console.log(`${LOG} [PAPER] No in-play candidates — thin day, no entries (correct outcome)`);
+    return { success: true, armed: 0 };
+  }
+  const symbols = inPlay.map(c => c.symbol);
+  console.log(`${LOG} [PAPER] Arming top ${symbols.length} by rvol5: ${symbols.join(', ')}`);
+
+  // Data: first 5-min candle, ~30 trading days of daily bars (ATR14), LTP
+  const istNowD = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const toD     = new Date(istNowD); toD.setDate(toD.getDate() - 1);
+  const fromD   = new Date(istNowD); fromD.setDate(fromD.getDate() - 45);
+  const fmt     = d => d.toISOString().slice(0, 10);
+  let candles5, dailyBars, ltps;
+  try {
+    [candles5, dailyBars, ltps] = await Promise.all([
+      kiteOrderService.getIntradayCandles(symbols, '5minute', 3),
+      kiteOrderService.getHistoricalCandles(symbols, 'day', fmt(fromD), fmt(toD)),
+      kiteOrderService.getLTP(symbols.map(s => `NSE:${s}`)),
+    ]);
+  } catch (err) {
+    console.error(`${LOG} [PAPER] ❌ data fetch failed (${err.message}) — no entries armed`);
+    await logStage('arming', false, { reason: 'data_fetch_failed', error: err.message });
+    return { success: false, reason: 'data_fetch_failed' };
+  }
+
+  // Capital: slot cap (leverage constraint) + risk budget (1% of cash)
+  let slotCap = MIN_CAPITAL_PER_TRADE, riskBudget = null;
+  try {
+    const balance     = await kiteOrderService.getAvailableBalance();
+    const buyingPower = balance.usableIntraday ?? balance.available;
+    slotCap     = Math.floor((buyingPower * ORB_CAPITAL_PCT) / PAPER_MAX_ENTRIES);
+    riskBudget  = Math.floor((balance.available ?? buyingPower / 5) * (PAPER_RISK_PCT / 100));
+    console.log(`${LOG} [PAPER] Capital — cash=₹${balance.available}  intraday(5x)=₹${balance.usableIntraday}  slotCap=₹${slotCap}  riskBudget(1%)=₹${riskBudget}`);
+  } catch (err) {
+    console.error(`${LOG} [PAPER] Balance fetch failed (${err.message}) — using floor slotCap=₹${slotCap}, risk cap disabled`);
+  }
+
+  // 2026-06-11 review fix (idempotency): stamp + persist INTENT before placing a
+  // single order. Previously the stamp was only saved after the whole loop — a
+  // crash (or Agenda retry on a thrown error) after some resting orders were live
+  // at the broker but before that save would re-run with paperEntriesPlacedAt
+  // still null and re-arm everything = double entries. Now a crash mid-loop means
+  // the re-run sees the stamp and refuses: some names may go UNARMED (under-trade),
+  // which is the safe failure direction. Each placement is also saved incrementally
+  // below so the doc tracks broker state as closely as possible.
+  doc.paperEntriesPlacedAt = new Date();
+  await doc.save();
+
+  let armed = 0, immediate = 0, skipped = 0;
+  for (const c of inPlay) {
+    const bars5 = candles5[c.symbol] || [];
+    const bar   = bars5.find(b => slotKey(b.date) === '09:15');
+    if (!bar || !(bar.high > bar.low)) {
+      c.status = 'SKIPPED'; c.skipReason = 'no_5min_or_candle'; skipped++;
+      console.warn(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ no 09:15 5-min candle`);
+      continue;
+    }
+
+    // Direction — the paper's per-stock rule, no index gate
+    const direction = bar.close > bar.open ? 'LONG' : bar.close < bar.open ? 'SHORT' : null;
+    if (!direction) {
+      c.status = 'SKIPPED'; c.skipReason = 'doji_first_candle'; skipped++;
+      console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ doji first candle (O=C=₹${bar.open}) — paper rule: no trade`);
+      continue;
+    }
+    const isLong = direction === 'LONG';
+
+    // Stop distance from daily ATR(14)
+    const atr14d = computeATR(dailyBars[c.symbol] || [], 14);
+    if (!(atr14d >= PAPER_MIN_ATR14D)) {
+      c.status = 'SKIPPED'; c.skipReason = `atr14d_below_floor_${atr14d?.toFixed?.(2) ?? 'na'}`; skipped++;
+      console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ ATR14d ₹${atr14d?.toFixed?.(2) ?? 'n/a'} < ₹${PAPER_MIN_ATR14D} floor`);
+      continue;
+    }
+    const stopDist = Math.max(0.05, snapToNSETick(PAPER_STOP_ATR_MULT * atr14d, 0.05, 'round'));
+
+    // Trigger at the OR edge
+    const trigger = isLong
+      ? snapToNSETick(bar.high, 0.05, 'ceil')
+      : snapToNSETick(bar.low,  0.05, 'floor');
+
+    // Sizing: risk-based, leverage-capped
+    const qtyByRisk = riskBudget ? Math.floor(riskBudget / stopDist) : Infinity;
+    const qtyByCap  = Math.floor(slotCap / trigger);
+    const qty       = Math.min(qtyByRisk, qtyByCap);
+    if (qty < 1) {
+      c.status = 'SKIPPED'; c.skipReason = 'qty_below_1'; skipped++;
+      console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ qty<1 (slotCap=₹${slotCap} / trigger=₹${trigger})`);
+      continue;
+    }
+
+    // Persist the setup
+    c.orHigh = bar.high; c.orLow = bar.low;
+    c.orRange = parseFloat((bar.high - bar.low).toFixed(2));
+    c.firstCandleOpen = bar.open; c.firstCandleClose = bar.close;
+    c.direction = direction; c.atr14d = parseFloat(atr14d.toFixed(2));
+    c.stopDistance = stopDist; c.qty = qty;
+
+    const ltp        = ltps[`NSE:${c.symbol}`]?.last_price;
+    const alreadyPast = ltp && (isLong ? ltp >= trigger : ltp <= trigger);
+    const entrySide  = isLong ? 'BUY' : 'SELL';
+    const riskPct    = (stopDist / trigger * 100).toFixed(2);
+    console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ${direction.padEnd(5)} OR=₹${bar.low}–₹${bar.high}  trigger=₹${trigger}  stopDist=₹${stopDist} (${riskPct}%)  qty=${qty}  rvol5=${c.rvol5}x  LTP=₹${ltp ?? '?'}${alreadyPast ? ' [ALREADY PAST — MARKET]' : ''}`);
+
+    try {
+      if (alreadyPast) {
+        // The paper's stop order would already have triggered → enter at market now
+        const res = await kiteOrderService.placeOrder({
+          tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: entrySide,
+          order_type: 'MARKET', product: 'MIS', quantity: qty,
+          simulationId: `orb_paper_entry_${c.symbol}`, orderType: 'ORB_ENTRY', source: 'ORB',
+        });
+        if (!res.success) throw new Error('placeOrder returned non-success');
+        await delay(2000);
+        let fill = null, fillFetchFailed = false;
+        try { fill = await kiteOrderService.getOrderDetails(res.orderId); }
+        catch (err) { fillFetchFailed = true; console.warn(`${LOG} [PAPER] ${c.symbol}: fill-status read failed (${err.message}) — treating as potentially live`); }
+        const filledQty = Number(fill?.filled_quantity || 0);
+
+        // 2026-06-11 review fix: SKIP only on a CONFIRMED terminal reject/cancel.
+        // A MARKET order almost always fills — if the status read failed or hasn't
+        // reported COMPLETE within 2s, assuming "not filled" would orphan a live
+        // position with NO protective stop and NO monitoring (SKIPPED is never
+        // looked at again). Ambiguous → assume LIVE: mark ENTERED at LTP, place
+        // the protective stop, and let the monitor / kite-order-sync reconcile.
+        // Worst case of guessing wrong: a stray SL-M on a non-position, which
+        // order-sync cancels — vs. the old worst case of an unstopped position.
+        if (!fillFetchFailed && (fill?.status === 'REJECTED' || fill?.status === 'CANCELLED')) {
+          c.status = 'SKIPPED'; c.skipReason = `paper_market_entry_${fill.status.toLowerCase()}: ${fill?.status_message || ''}`; skipped++;
+          c.entryOrderId = res.orderId;
+          console.error(`${LOG} [PAPER] ${c.symbol}: ❌ market entry ${fill.status} — no SL placed (confirmed dead)`);
+          continue;
+        }
+        if (fill?.status !== 'COMPLETE') {
+          console.warn(`${LOG} [PAPER] ${c.symbol}: ⚠ ambiguous fill state (status=${fill?.status ?? 'unknown'}, filled=${filledQty}/${qty}) — assuming LIVE, placing SL`);
+        }
+        c.entryOrderId = res.orderId;
+        c.entryPrice   = fill?.average_price || ltp;
+        c.qty          = filledQty || qty;
+        c.entryTime    = new Date();
+        c.status       = 'ENTERED';
+        doc.entriesCount = (doc.entriesCount || 0) + 1;
+        await placePaperProtectiveStop(doc, c);
+        immediate++;
+        await doc.save();   // persist live-order state immediately (crash safety)
+      } else {
+        // Resting stop-entry at the edge — the paper's actual mechanism
+        const res = await kiteOrderService.placeOrder({
+          tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: entrySide,
+          order_type: 'SL-M', trigger_price: trigger, product: 'MIS', quantity: qty,
+          simulationId: `orb_paper_entry_${c.symbol}`, orderType: 'ORB_ENTRY', source: 'ORB',
+        });
+        if (!res.success) throw new Error('placeOrder returned non-success');
+        c.entryOrderId = res.orderId;
+        c.status       = 'ARMED';
+        armed++;
+        await doc.save();   // persist live-order state immediately (crash safety)
+      }
+    } catch (err) {
+      const errMsg = err?.response?.data?.message || err?.message || String(err);
+      if (/MIS orders are currently blocked/i.test(errMsg)) {
+        console.warn(`${LOG} [PAPER] ${c.symbol}: ⏭ MIS-BLOCKED by broker — skipping. Msg: ${errMsg}`);
+        c.status = 'SKIPPED'; c.skipReason = 'mis_blocked_by_broker';
+      } else {
+        console.error(`${LOG} [PAPER] ${c.symbol}: ❌ entry order failed: ${errMsg}`);
+        c.status = 'SKIPPED'; c.skipReason = `paper_entry_failed: ${errMsg}`;
+      }
+      skipped++;
+    }
+  }
+
+  await doc.save();   // final save catches the skip markers from the last iteration
+  console.log(`${LOG} [PAPER] ─── Arming complete: ARMED=${armed}  immediate-ENTERED=${immediate}  skipped=${skipped} ───`);
+  await logStage('arming', armed + immediate > 0 || skipped === 0, {
+    armed, immediate, skipped,
+    names: inPlay.map(c => `${c.symbol}:${c.status}${c.direction ? ':' + c.direction : ''}`),
+  });
+  return { success: true, armed, immediate, skipped };
+}
+
 export async function recordOpeningRanges() {
+  // LEGACY — RETIRED 2026-06-11. The 5-min OR is set by placeOrbEntryOrders
+  // (09:24). This 15-min path is permanently disabled; body kept for reference.
+  console.log(`${LOG} [PHASE2] legacy 15-min OR recording retired — no-op (5-min OR set at 09:24)`);
+  return { success: true, skipped: true, reason: 'legacy_retired' };
+  // eslint-disable-next-line no-unreachable
   console.log(`${LOG} ════════════════════════════════════════`);
   console.log(`${LOG} ═══ PHASE 2: Record opening ranges [${istTimeStr()}] ═══`);
   console.log(`${LOG} ════════════════════════════════════════`);
@@ -1034,9 +1716,17 @@ export async function recordOpeningRanges() {
   }
   console.log(`${LOG} [PHASE2] Doc found — docId=${doc._id}  total candidates=${doc.candidates.length}`);
 
-  const watching = doc.candidates.filter(c => c.status === 'WATCHING');
-  const skipped  = doc.candidates.filter(c => c.status === 'SKIPPED');
-  console.log(`${LOG} [PHASE2] Candidate states: WATCHING=${watching.length}  SKIPPED=${skipped.length}  other=${doc.candidates.length - watching.length - skipped.length}`);
+  // 2026-06-11: in-play filter — only candidates the 09:21 RVOL snapshot marked
+  // inPlay get a range (inPlay !== false is FAIL-OPEN: if the snapshot never ran,
+  // inPlay is undefined and everyone passes, restoring pre-snapshot behaviour).
+  const allWatching = doc.candidates.filter(c => c.status === 'WATCHING');
+  const watching    = allWatching.filter(c => c.inPlay !== false);
+  const spectators  = allWatching.length - watching.length;
+  const skipped     = doc.candidates.filter(c => c.status === 'SKIPPED');
+  console.log(`${LOG} [PHASE2] Candidate states: WATCHING=${allWatching.length} (in-play=${watching.length}, spectators=${spectators})  SKIPPED=${skipped.length}  other=${doc.candidates.length - allWatching.length - skipped.length}`);
+  if (spectators > 0) {
+    console.log(`${LOG} [PHASE2] In-play filter ACTIVE (snapshot ${doc.rvolSnapshotAt?.toISOString() ?? '?'}${doc.rvol5Fallback ? ', FALLBACK selection' : ''}) — ranges only for ${watching.length} in-play names`);
+  }
 
   if (!watching.length) {
     console.warn(`${LOG} [PHASE2] ⚠️  No WATCHING candidates — nothing to set range on`);
@@ -1071,6 +1761,7 @@ export async function recordOpeningRanges() {
 
   for (const candidate of doc.candidates) {
     if (candidate.status !== 'WATCHING') continue;
+    if (candidate.inPlay === false) continue;   // spectator — no range, never RANGE_SET
 
     const q = ohlcMap[`NSE:${candidate.symbol}`];
     if (!q || !q.ohlc) {
@@ -1128,6 +1819,13 @@ export async function recordOpeningRanges() {
 // ══════════════════════════════════════════════════════════════════════════
 
 export async function checkBreakouts() {
+  // LEGACY — RETIRED 2026-06-11. Scanning is replaced by resting SL-M entry
+  // orders at the 5-min OR edge (placeOrbEntryOrders, 09:24); the exchange does
+  // the breakout detection. Permanently disabled — firing this as well would
+  // double-enter. Body kept for reference.
+  console.log(`${LOG} [BREAKOUT] legacy 2-bar confirmation scan retired — no-op (resting entries armed at 09:24)`);
+  return { skipped: true, reason: 'legacy_retired' };
+  // eslint-disable-next-line no-unreachable
   const ist    = MarketHoursUtil.toIST(new Date());
   const istMin = ist.getHours() * 60 + ist.getMinutes();
   const windowStart = BREAKOUT_START_HOUR * 60 + BREAKOUT_START_MIN;   // 09:46
@@ -1629,17 +2327,55 @@ export async function monitorOrbPositions() {
   if (!doc) return { active: 0, exited: 0 };
 
   const entered = doc.candidates.filter(c => c.status === 'ENTERED');
-  if (!entered.length) {
-    console.log(`${LOG} [MONITOR] [${istTimeStr()}] No open positions`);
+  const armed   = doc.candidates.filter(c => c.status === 'ARMED');
+  if (!entered.length && !armed.length) {
+    console.log(`${LOG} [MONITOR] [${istTimeStr()}] No open positions or armed entries`);
     return { active: 0, exited: 0 };
   }
 
   const ist          = MarketHoursUtil.toIST(new Date());
   const istMin       = ist.getHours() * 60 + ist.getMinutes();
+
+  // ── PAPER MODE: ARMED entry-order servicing (2026-06-11) ──────────────────
+  // Resting SL-M entries placed at 09:24. Each cycle: fill → ENTERED + protective
+  // SL; reject/cancel → SKIPPED; still unfilled at 15:00 → cancel (no fresh entry
+  // that close to the 15:15 flat). Runs before position monitoring so a fill is
+  // protected within one cycle (≤5 min exposure between exchange fill and SL).
+  let armedFilled = 0;
+  for (const c of armed) {
+    if (!c.entryOrderId) { c.status = 'SKIPPED'; c.skipReason = 'armed_without_order_id'; continue; }
+    try {
+      const ord = await kiteOrderService.getOrderDetails(c.entryOrderId);
+      const st  = ord?.status;
+      if (st === 'COMPLETE') {
+        c.entryPrice = ord.average_price || c.orHigh;
+        c.qty        = Number(ord.filled_quantity || c.qty);
+        c.entryTime  = new Date();
+        c.status     = 'ENTERED';
+        doc.entriesCount = (doc.entriesCount || 0) + 1;
+        console.log(`${LOG} [MONITOR] 🔫 ${c.symbol} [${c.direction}] ENTRY TRIGGERED @ ₹${c.entryPrice} qty=${c.qty} — placing protective SL`);
+        const slOk = await placePaperProtectiveStop(doc, c, '[MONITOR]');
+        armedFilled++;
+        await logStage('fill', slOk, { symbol: c.symbol, direction: c.direction, entry: c.entryPrice, qty: c.qty, stop: c.stopPrice, slPlaced: slOk });
+      } else if (st === 'REJECTED' || st === 'CANCELLED') {
+        c.status = 'SKIPPED'; c.skipReason = `paper_entry_${st.toLowerCase()}: ${ord?.status_message || ''}`;
+        console.warn(`${LOG} [MONITOR] ${c.symbol}: armed entry ${st} — ${ord?.status_message || 'no reason given'}`);
+      } else if (istMin >= PAPER_ENTRY_CUTOFF_MIN) {
+        try { await kiteOrderService.cancelOrder(c.entryOrderId); } catch (_) {}
+        c.status = 'SKIPPED'; c.skipReason = 'unfilled_at_entry_cutoff_15:00';
+        console.log(`${LOG} [MONITOR] ${c.symbol}: armed entry unfilled at 15:00 cutoff — cancelled`);
+      }
+    } catch (err) {
+      console.error(`${LOG} [MONITOR] ${c.symbol}: armed-order status check failed: ${err.message}`);
+    }
+  }
+  if (armedFilled || doc.isModified()) await doc.save();
   // 10:30 TIME EXIT is DISABLED by default (2026-05-25 change). Re-enable via
   // env if needed for testing. When disabled, the monitor falls through to BE
   // trail + candle-structure tighten and lets winners ride until 15:15.
-  const timeExitEnabled = process.env.ORB_TIME_EXIT_ENABLED === 'true';
+  // RETIRED 2026-06-11 (paper cutover, no flags): 10:30 time-exit permanently off —
+  // paper exits are stop-hit or 15:15 only.
+  const timeExitEnabled = LEGACY_ENGINE;
   const pastTimeExit = timeExitEnabled && (istMin >= TIME_EXIT_HOUR * 60 + TIME_EXIT_MIN);
 
   console.log(`${LOG} [MONITOR] ════════════ [${istTimeStr()}] ════════════`);
@@ -1666,7 +2402,9 @@ export async function monitorOrbPositions() {
   // pct-only cushion (atr=0) and candle-analysis skips structure check.
   let preCandles5m  = {};
   let preCandles15m = {};
-  if (entered.length) {
+  // RETIRED 2026-06-11: candle prefetch only served the BE-trail and candle-exit
+  // engines, both dead-gated — skipping it saves the heaviest per-cycle Kite calls.
+  if (LEGACY_ENGINE && entered.length) {
     try {
       const multi = await kiteOrderService.getIntradayMultiCandles(
         entered.map(c => c.symbol),
@@ -1686,7 +2424,7 @@ export async function monitorOrbPositions() {
     const ltp = ltpData[`NSE:${c.symbol}`]?.last_price;
     console.log(`${LOG} [MONITOR] ── ${c.symbol} ──────────────────────────`);
     console.log(`${LOG} [MONITOR]   entry=₹${c.entryPrice}  stop=₹${c.stopPrice}  target=₹${c.targetPrice}  LTP=${ltp ? `₹${ltp}` : 'N/A'}`);
-    console.log(`${LOG} [MONITOR]   SL orderId=${c.stopOrderId || 'none'}  TGT orderId=${c.targetOrderId || 'none'}  beTrailed=${c._beTrailed || false}`);
+    console.log(`${LOG} [MONITOR]   SL orderId=${c.stopOrderId || 'none'}  TGT orderId=${c.targetOrderId || 'none'}  beTrailed=${c.beTrailed || false}`);
 
     if (ltp) {
       // Direction-aware P&L: for SHORT, profit is when LTP < entryPrice.
@@ -1823,26 +2561,25 @@ export async function monitorOrbPositions() {
       }
     }
 
-    // ── Breakeven trail — DISABLED 2026-06-05 (evening) ─────────────────────
-    // Per user request: "let it be the original stoploss". The original SL placed
-    // at entry holds untouched for the entire trade. No BE move, no cushioning.
-    // Trade closes via one of:
-    //   1. Original SL hits (PnL = −1R, max loss)
-    //   2. RSI-exhaustion exit fires (in the candle-analysis block below)
-    //   3. Confirmed 2-bar 15-min structure break (also in candle-analysis)
-    //   4. 15:15 force-exit cron
-    //
-    // Why removed: the cushioned-BE was already an improvement over "BE = entry"
-    // but a single exit signal (RSI exhaustion) does the same job more cleanly
-    // without modifying the SL mid-trade. Keeping the SL static eliminates the
-    // whole class of "Kite rejects modify because trigger too close to LTP" bugs
-    // and the silent emergency-exit fallbacks they caused (AMBUJACEM, PATANJALI
-    // on 2026-06-05).
-    //
-    // To re-enable (for testing), un-comment the block below and the matching
-    // computeBeStop / replaceSlOrderWithNewTrigger calls.
-    /*
-    if (c.status === 'ENTERED' && c.stopOrderId && !c._beTrailed) {
+    // ── Breakeven trail — RE-ENABLED 2026-06-11 (BE-at-+1R, one-time) ────────
+    // History: disabled 2026-06-05 ("let it be the original stoploss") because the
+    // candle-tighten engine was bleeding winners and SL modifies caused Kite-reject
+    // bugs. Re-enabled per design discussion 2026-06-11: with no profit target and
+    // ride-to-15:15, a static 1.5%-wide SL means winners decay back into time-exits
+    // while losers reliably pay −1R — negative asymmetry by construction. The
+    // Zarattini EOD-exit result only holds with risk removed/tiny. ONE move only:
+    //   at +1R unrealised → SL to cushioned BE (computeBeStop: entry ± max(0.3%,
+    //   0.5×ATR_5m)) via cancel+replace. After that the SL never moves again —
+    //   candle trail/tighten stays DISABLED (the 2026-06-05 finding stands).
+    // Differences vs the old commented block:
+    //   • c.beTrailed is now a PERSISTED schema field (the old `_beTrailed` was
+    //     transient — reset every 5-min cycle → would re-place the same SL forever).
+    //   (2026-06-11 later: dead-gated by LEGACY_ENGINE — paper spec never moves the SL.)
+    // RETIRED 2026-06-11 (paper cutover, no flags): no BE move — the paper never
+    // modifies its stop, and with a 0.1×ATR stop the BE cushion (≥0.3%) would sit
+    // WIDER than the stop itself. Block kept (dead-gated) for reference.
+    const beTrailEnabled = LEGACY_ENGINE;
+    if (beTrailEnabled && c.status === 'ENTERED' && c.stopOrderId && !c.beTrailed) {
       const risk        = cIsLong ? (c.entryPrice - c.stopPrice) : (c.stopPrice - c.entryPrice);
       const currentGain = ltp ? (cIsLong ? (ltp - c.entryPrice) : (c.entryPrice - ltp)) : null;
       if (ltp) {
@@ -1863,8 +2600,8 @@ export async function monitorOrbPositions() {
           logTag:     '[MONITOR]',
         });
         if (replaceRes.success) {
-          c._beTrailed = true;
-          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] BE trail complete — new SL ${replaceRes.newOrderId} @ ₹${beStop}`);
+          c.beTrailed = true;
+          console.log(`${LOG} [MONITOR]   ✅ ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] BE trail complete — new SL ${replaceRes.newOrderId} @ ₹${beStop} (one-time; SL frozen here until exit)`);
           changed = true;
         } else if (replaceRes.exited) {
           exitedThisRun++;
@@ -1872,7 +2609,6 @@ export async function monitorOrbPositions() {
         }
       }
     }
-    */
   }
 
   // ── Candle structure analysis — exit / trail / tighten ────────────────────
@@ -1889,7 +2625,14 @@ export async function monitorOrbPositions() {
   const ORB_SIDEWAYS_PCT     = 0.3;
 
   const stillEntered = doc.candidates.filter(c => c.status === 'ENTERED');
+  // RETIRED 2026-06-11 (paper cutover, no flags): the entire candle-analysis
+  // engine (RSI-exhaustion, VWAP reversal, 15-min structure break, sideways cut,
+  // candle-shape tighten) is permanently dead-gated — paper exits are stop-hit
+  // or 15:15, nothing else. Block kept below for reference only.
   if (stillEntered.length) {
+    console.log(`${LOG} [CANDLE] retired — positions ride to stop or 15:15 (paper spec)`);
+  }
+  if (LEGACY_ENGINE && stillEntered.length) {
     const candleSymbols = stillEntered.map(c => c.symbol);
     console.log(`${LOG} [CANDLE] ── Candle analysis [${istTimeStr()}] ──────────────────`);
     // 2026-06-05: reuse pre-fetched 5m/15m bars from the BE-trail block above
@@ -2240,6 +2983,37 @@ export async function forceExitOrb() {
     return { exited: 0 };
   }
 
+  // Safety net: deal with any entry order still ARMED at 15:15 (the monitor's
+  // 15:00 cutoff should have caught these). FILL-AWARE (2026-06-11 audit fix):
+  // an order that triggered after the last monitor cycle is a REAL POSITION —
+  // blindly cancelling and marking SKIPPED would leave it open past the flat
+  // with no SL. Check status first: COMPLETE → promote to ENTERED so the flat
+  // loop below closes it; otherwise cancel the resting order.
+  const armedLeft = doc.candidates.filter(c => c.status === 'ARMED');
+  for (const c of armedLeft) {
+    let filled = false;
+    try {
+      const ord = c.entryOrderId ? await kiteOrderService.getOrderDetails(c.entryOrderId) : null;
+      if (ord?.status === 'COMPLETE') {
+        c.entryPrice = ord.average_price || c.orHigh;
+        c.qty        = Number(ord.filled_quantity || c.qty);
+        c.entryTime  = c.entryTime || new Date();
+        c.status     = 'ENTERED';
+        doc.entriesCount = (doc.entriesCount || 0) + 1;
+        filled = true;
+        console.warn(`${LOG} [FORCE-EXIT] ${c.symbol}: armed entry had FILLED @ ₹${c.entryPrice} — promoted to ENTERED for flat`);
+      }
+    } catch (err) {
+      console.error(`${LOG} [FORCE-EXIT] ${c.symbol}: armed-order status check failed (${err.message}) — attempting cancel`);
+    }
+    if (!filled) {
+      try { if (c.entryOrderId) await kiteOrderService.cancelOrder(c.entryOrderId); } catch (_) {}
+      c.status = 'SKIPPED'; c.skipReason = 'unfilled_at_force_exit';
+      console.log(`${LOG} [FORCE-EXIT] ${c.symbol}: cancelled still-armed entry order`);
+    }
+  }
+  if (armedLeft.length) await doc.save();
+
   const entered = doc.candidates.filter(c => c.status === 'ENTERED');
   if (!entered.length) {
     console.log(`${LOG} [FORCE-EXIT] No ENTERED positions — all already closed`);
@@ -2369,5 +3143,6 @@ export async function forceExitOrb() {
   console.log(`${LOG} Total PnL: ₹${doc.totalPnl >= 0 ? '+' : ''}${doc.totalPnl}`);
   console.log(`${LOG} ═══════════════════════════════════════════`);
 
+  await logStage('force-exit', true, { exited, totalPnl: doc.totalPnl, entriesCount: doc.entriesCount });
   return { exited };
 }

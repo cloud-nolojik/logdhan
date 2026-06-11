@@ -839,6 +839,40 @@ class KiteOrderService {
   }
 
   /**
+   * Get FULL quote for one or more instruments (includes day-cumulative `volume`,
+   * which /quote/ohlc does NOT return). Kite API: GET /quote?i=NSE:SYMBOL1&i=...
+   * Used by the 09:21 RVOL snapshot — one batched call replaces ~215 per-symbol
+   * historical fetches (which would 429).
+   *
+   * @param {string[]} instruments — Array of "EXCHANGE:SYMBOL" strings
+   * @returns {Object} — { "NSE:RELIANCE": { last_price, volume, ohlc: {...}, ... }, ... }
+   */
+  async getQuote(instruments) {
+    try {
+      console.log(`[KITE ORDER] Fetching full quote for ${instruments.length} instruments`);
+      // NOTE: deliberately NOT general URL-encoding — Kite requires the colon in
+      // "NSE:SYMBOL" raw (%3A breaks it) and spaces as '+'. Same convention as
+      // getLTP/getOHLC above.
+      const queryString = instruments
+        .map(i => `i=${i.replace(/ /g, '+')}`)
+        .join('&');
+
+      const response = await this.kiteService.makeRequest(
+        'GET',
+        `${kiteConfig.ENDPOINTS.QUOTE}?${queryString}`
+      );
+
+      const data = response.data || {};
+      console.log(`[KITE ORDER] Full quote response: ${Object.keys(data).length}/${instruments.length} instruments returned`);
+      return data;
+
+    } catch (error) {
+      console.error('[KITE ORDER] Full quote fetch failed:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Fetch intraday OHLCV candles for multiple symbols.
    *
    * Uses instrument_token from a getLTP call (avoiding a separate instrument lookup).

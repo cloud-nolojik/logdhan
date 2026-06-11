@@ -18,10 +18,13 @@
 import Agenda from 'agenda';
 import {
   fetchPreOpenUniverse,
+  takeRvolSnapshot,
+  placeOrbEntryOrders,
   recordOpeningRanges,
   checkBreakouts,
   monitorOrbPositions,
   forceExitOrb,
+  prefetchVolumeBaselines,
 } from '../orb/orbService.js';
 import { archiveToday, backfillRange } from '../backtest/candleArchive.service.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
@@ -111,6 +114,73 @@ class OrbJob {
         throw err;
       } finally {
         this.runningJobs.delete('pre-open');
+      }
+    });
+
+    // ── 1.5 In-play RVOL snapshot (9:21 AM) ─────────────────────────────────────
+    // Ranks the WATCHING universe by first-minutes RVOL (one batched /quote call)
+    // and marks the top names inPlay. Phase 2 then only sets ranges for those.
+    // FAIL-OPEN: if this job fails or never runs, Phase 2 takes the full universe.
+    this.agenda.define('orb-rvol-snapshot', async (job) => {
+      if (this.runningJobs.has('rvol-snapshot')) {
+        console.log(`${LOG} rvol-snapshot already running, skipping`);
+        return;
+      }
+      this.runningJobs.add('rvol-snapshot');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) {
+          console.log(`${LOG} Not a trading day — skipping rvol-snapshot`);
+          return { skipped: true, reason: 'not_trading_day' };
+        }
+
+        const t0 = Date.now();
+        console.log(`${LOG} [RVOL-SNAPSHOT] Ranking universe by first-minutes RVOL...`);
+        const result = await takeRvolSnapshot();
+        this.stats.lastRunAt  = new Date();
+        this.stats.lastResult = result;
+        console.log(`${LOG} [RVOL-SNAPSHOT] Done in ${Date.now() - t0}ms — inPlay=${result.inPlay ?? 'n/a'}/${result.total ?? 'n/a'}${result.fallback ? ' (FALLBACK)' : ''}${result.success ? '' : ` FAIL-OPEN (${result.reason})`}`);
+        return result;
+      } catch (err) {
+        // Fail-open: log + count, do NOT rethrow side effects into the pipeline —
+        // Phase 2 simply sees no inPlay flags and runs on the full universe.
+        console.error(`${LOG} [RVOL-SNAPSHOT] Failed (fail-open, full universe stands):`, err);
+        this.stats.errors++;
+        throw err;
+      } finally {
+        this.runningJobs.delete('rvol-snapshot');
+      }
+    });
+
+    // ── 1.6 Paper-spec entry arming (9:24 AM) ───────────────────────────────────
+    // Reads the 09:15–09:20 5-min candle for the in-play names and places resting
+    // SL-M entry orders at the OR edge (Zarattini spec).
+    this.agenda.define('orb-place-entries', async (job) => {
+      if (this.runningJobs.has('place-entries')) {
+        console.log(`${LOG} place-entries already running, skipping`);
+        return;
+      }
+      this.runningJobs.add('place-entries');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) {
+          console.log(`${LOG} Not a trading day — skipping place-entries`);
+          return { skipped: true, reason: 'not_trading_day' };
+        }
+
+        const t0 = Date.now();
+        console.log(`${LOG} [PLACE-ENTRIES] Arming paper-spec entries at 5-min OR edges...`);
+        const result = await placeOrbEntryOrders();
+        this.stats.lastRunAt  = new Date();
+        this.stats.lastResult = result;
+        console.log(`${LOG} [PLACE-ENTRIES] Done in ${Date.now() - t0}ms — armed=${result.armed ?? 0} immediate=${result.immediate ?? 0} skipped=${result.skipped ?? 0}`);
+        return result;
+      } catch (err) {
+        console.error(`${LOG} [PLACE-ENTRIES] Failed:`, err);
+        this.stats.errors++;
+        throw err;
+      } finally {
+        this.runningJobs.delete('place-entries');
       }
     });
 
@@ -264,8 +334,43 @@ class OrbJob {
       }
     });
 
+    // ── 7. Baseline prefetch (8:30 AM) ──────────────────────────────────────────
+    // Computes the 20-day RVOL volume profiles for the FULL F&O universe and
+    // caches them in orb_baselines. Moves the ~215-call historical burst from
+    // 09:08 (rate-ceiling hotspot, load-bearing for the paper pipeline) to the
+    // idle pre-market window. The 09:08 pre-open reads the cache; live fetch
+    // remains as per-symbol fallback.
+    this.agenda.define('orb-baseline-prefetch', async (job) => {
+      if (this.runningJobs.has('baseline-prefetch')) {
+        console.log(`${LOG} baseline-prefetch already running, skipping`);
+        return;
+      }
+      this.runningJobs.add('baseline-prefetch');
+      try {
+        const isTradingDay = await MarketHoursUtil.isTradingDay();
+        if (!isTradingDay) {
+          console.log(`${LOG} Not a trading day — skipping baseline-prefetch`);
+          return { skipped: true, reason: 'not_trading_day' };
+        }
+        const t0 = Date.now();
+        console.log(`${LOG} [BASELINE-PREFETCH] ▶ Computing RVOL baselines for tomorrow...`);
+        const result = await prefetchVolumeBaselines();
+        console.log(`${LOG} [BASELINE-PREFETCH] ✅ Done in ${Date.now() - t0}ms — upserted=${result.upserted ?? 0}/${result.total ?? 0}`);
+        return result;
+      } catch (err) {
+        console.error(`${LOG} [BASELINE-PREFETCH] Failed (morning will live-fetch):`, err);
+        this.stats.errors++;
+        throw err;
+      } finally {
+        this.runningJobs.delete('baseline-prefetch');
+      }
+    });
+
     // ── Manual triggers (one-shot, no concurrency guard needed) ─────────────────
     this.agenda.define('manual-orb-pre-open',    async (job) => fetchPreOpenUniverse(job.attrs.data || {}));
+    this.agenda.define('manual-orb-rvol-snapshot', async (job) => takeRvolSnapshot(job.attrs.data || {}));
+    this.agenda.define('manual-orb-place-entries', async (job) => placeOrbEntryOrders(job.attrs.data || {}));
+    this.agenda.define('manual-orb-baseline-prefetch', async (job) => prefetchVolumeBaselines(job.attrs.data || {}));
     this.agenda.define('manual-orb-record-range', async (job) => recordOpeningRanges(job.attrs.data || {}));
     this.agenda.define('manual-orb-check-breakout', async (job) => checkBreakouts(job.attrs.data || {}));
     this.agenda.define('manual-orb-monitor',     async (job) => monitorOrbPositions(job.attrs.data || {}));
@@ -298,6 +403,8 @@ class OrbJob {
         name: {
           $in: [
             'orb-pre-open',
+            'orb-rvol-snapshot',
+            'orb-place-entries',
             'orb-record-range',
             'orb-check-breakout',
             'orb-monitor',
@@ -306,19 +413,36 @@ class OrbJob {
         },
       });
 
-      // 9:08 AM IST — fetch NSE pre-open IEP universe
-      // Pre-open auction window is 9:00–9:08; prices stabilise by ~9:07.
-      // Running at :08 gives us the final IEP snapshot before the auction closes.
-      await this.agenda.every('8 9 * * 1-5', 'orb-pre-open', {}, {
+      // 8:35 AM IST — bootstrap the day (moved from 09:08, 2026-06-11).
+      // The paper pipeline depends on NOTHING from the pre-open auction: rvol5
+      // needs volumeProfile (cached at 08:30), arming needs the first 5-min
+      // candle (09:24), direction comes from that candle. So the day's doc +
+      // universe + baselines-from-cache + capital preflight all run at 08:35,
+      // right after the prefetch — 40 idle minutes before the open instead of
+      // 13 pressured ones. IEP/gap fields read ≈0 pre-auction (observability
+      // only; revisit if a gap/catalyst layer is built later).
+      // Agenda maxConcurrency=1 serialises this behind the 08:30 prefetch.
+      await this.agenda.every('35 8 * * 1-5', 'orb-pre-open', {}, {
         timezone: 'Asia/Kolkata',
       });
 
-      // 9:30 AM IST — read the completed first 15-min candle OHLC
-      // Market opens at 9:15; the 15-min candle closes at 9:30. One minute
-      // buffer (9:30 cron) gives the candle time to propagate through Kite.
-      await this.agenda.every('30 9 * * 1-5', 'orb-record-range', {}, {
+      // 9:21 AM IST — in-play RVOL snapshot. Market opened 09:15, so day-cumulative
+      // volume at 09:21 ≈ the first 6 minutes — the "opening relative volume" that
+      // Zarattini/Barbon/Aziz showed carries the entire ORB edge. Runs BEFORE the
+      // 09:30 record-range so Phase 2 only tracks the in-play names.
+      await this.agenda.every('21 9 * * 1-5', 'orb-rvol-snapshot', {}, {
         timezone: 'Asia/Kolkata',
       });
+
+      // 9:24 AM IST — arm resting SL-M entries at the 5-min OR edge
+      // (09:15–09:20 candle closed at 09:20; snapshot ran 09:21; 3-min buffer).
+      await this.agenda.every('24 9 * * 1-5', 'orb-place-entries', {}, {
+        timezone: 'Asia/Kolkata',
+      });
+
+      // RETIRED 2026-06-11 (paper cutover): orb-record-range (09:30, 15-min OR) is
+      // no longer scheduled — the 5-min OR is set by orb-place-entries at 09:24.
+      // The name stays in the cancel list above so stale Mongo entries are purged.
 
       // Breakout check at every 15-min boundary + 1 sec (10:01, 10:16, ... 14:01).
       // N-bar 15-min confirmation (CONFIRM_BARS in orbService, =2): at each check
@@ -336,13 +460,17 @@ class OrbJob {
       // window guard in checkBreakouts rejects anything before 09:46). Per-scan cap
       // (MAX_ENTRIES_PER_SCAN) spreads the daily budget across scans. The window guard
       // (BREAKOUT_START/END) is the source of truth; this cron just bounds the firing.
-      await this.agenda.every('1,16,31,46 9-11 * * 1-5', 'orb-check-breakout', {}, {
-        timezone: 'Asia/Kolkata',
-      });
+      // RETIRED 2026-06-11 (paper cutover): orb-check-breakout is no longer
+      // scheduled — resting SL-M entries at the OR edge replace scanning entirely
+      // (the exchange does the breakout detection). Name stays in the cancel list.
 
-      // Every 5 min, 9:00 AM – 2:59 PM IST — position monitor
-      // No-op if no ENTERED candidates exist for today.
-      await this.agenda.every('*/5 9-14 * * 1-5', 'orb-monitor', {}, {
+      // Every 5 min, 9:00 AM – 3:59 PM IST — position monitor.
+      // Extended 9-14 → 9-15 (2026-06-11 audit): the 15:00 unfilled-entry cutoff
+      // lives in the monitor, so it MUST run at 15:00/15:05/15:10 — with the old
+      // 9-14 bound the last run was 14:55 and the cutoff could never fire, and a
+      // fill between 14:55 and 15:15 would sit unprotected until force-exit.
+      // Runs after 15:15 are harmless no-ops (nothing ENTERED/ARMED remains).
+      await this.agenda.every('*/5 9-15 * * 1-5', 'orb-monitor', {}, {
         timezone: 'Asia/Kolkata',
       });
 
@@ -357,30 +485,30 @@ class OrbJob {
         timezone: 'Asia/Kolkata',
       });
 
+      // 8:30 AM IST — RVOL-baseline prefetch into orb_baselines (pre-market idle
+      // window, 38 min before the 09:08 pre-open). Moved from 16:15 (2026-06-11):
+      // a morning run has no dependency on the server having been up the previous
+      // evening, and "through yesterday" is unambiguous at this hour. The window
+      // logic in prefetchVolumeBaselines is time-aware either way.
+      await this.agenda.every('30 8 * * 1-5', 'orb-baseline-prefetch', {}, {
+        timezone: 'Asia/Kolkata',
+      });
+
       console.log(`${LOG} ═══════════════════════════════════════`);
-      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — ORB PATH (TIER-1: no gap filter, post 2026-05-26 evening):`);
-      console.log(`${LOG}   09:08       — pre-open universe: ALL F&O stocks saved (no gap pre-filter)`);
-      console.log(`${LOG}   09:30       — record OR via /quote/ohlc for all (quality filter: 0.5% ≤ OR range ≤ 2.5%)`);
-      console.log(`${LOG}   :01/:16/:31/:46 hourly 10-14 — 2-bar 15-min candle close confirmation scan`);
-      console.log(`${LOG}                   BOTH last 15-min candles must close past OR in same direction`);
-      console.log(`${LOG}                   first entry possible at 10:01 (Indian "10 AM rule")`);
-      console.log(`${LOG}                   last entry at 14:01 (74min runway to 15:15 force-exit)`);
-      console.log(`${LOG}                   ranked by distance% past OR, stale-gap skipped, up to 3 slots`);
-      console.log(`${LOG}   09:00–14:59 — position monitor every 5 min:`);
-      console.log(`${LOG}                   • check SL fill status`);
-      console.log(`${LOG}                   • BE trail to entry at +1R profit`);
-      console.log(`${LOG}                   • candle structure analysis (5m + 15m bars):`);
-      console.log(`${LOG}                       - bullish/bearish engulfing, hammer, doji, inside`);
-      console.log(`${LOG}                       - direction-aware (reversal patterns against the trade)`);
-      console.log(`${LOG}                       - volume drying / expanding confirmation`);
-      console.log(`${LOG}                       - 15m structure break = market exit`);
-      console.log(`${LOG}                       - reversal candle + vol = tighten SL`);
-      console.log(`${LOG}                   • sideways exit (40 min flat at ≤0.3% pnl)`);
-      console.log(`${LOG}   15:15       — force-exit (5 min before Zerodha auto-square)`);
-      console.log(`${LOG} ENTRY:  MARKET BUY/SELL on OR break  |  SL: OR_(High|Low) ∓ min(1%, OR range)  |  NO target`);
-      console.log(`${LOG} SL TRAIL: cancel old SL-M + place new SL-M with updated trigger (avoids Kite "permissible range" reject on modify)`);
-      console.log(`${LOG}   [disabled]  — 10:30 TIME EXIT      (set ORB_TIME_EXIT_ENABLED=true to re-enable)`);
-      console.log(`${LOG}   [disabled]  — Fixed target LIMIT   (no target order — winners ride to 15:15)`);
+      console.log(`${LOG} SCHEDULED JOBS (Mon-Fri IST) — PAPER-SPEC ORB (Zarattini, cutover 2026-06-11):`);
+      console.log(`${LOG}   09:21       — in-play RVOL snapshot: rank universe by first-6-min RVOL,`);
+      console.log(`${LOG}                   top-20 (rvol5 ≥ 1.0×) marked inPlay (fail-open on snapshot failure)`);
+      console.log(`${LOG}   09:24       — resting SL-M entries at the 5-min OR edge for top-8 in-play`);
+      console.log(`${LOG}                   direction = first-candle close vs open (doji = skip, NO index gate)`);
+      console.log(`${LOG}                   sizing = min(1% cash risk ÷ stopDist, slotCap ÷ price)`);
+      console.log(`${LOG}   09:00–14:59 — monitor every 5 min: ARMED fill → protective SL @ fill ∓ 0.10×ATR(14d);`);
+      console.log(`${LOG}                   SL fill check; unfilled entries cancelled at 15:00`);
+      console.log(`${LOG}   15:15       — force-exit: flat all positions + cancel stray resting entries`);
+      console.log(`${LOG}   08:30       — RVOL-baseline prefetch → orb_baselines (the day's only heavy API work)`);
+      console.log(`${LOG}   08:35       — day bootstrap: universe doc + baselines from cache + capital preflight`);
+      console.log(`${LOG}   15:45       — archive 1-min candles for backtesting`);
+      console.log(`${LOG} EXITS: stop hit or 15:15 ONLY — no target, no BE, no trail, no candle/RSI/VWAP exits`);
+      console.log(`${LOG} LEGACY (15-min OR, 2-bar scan, regime gate, candle engine) RETIRED 2026-06-11 — see git history`);
       console.log(`${LOG} ═══════════════════════════════════════`);
     } catch (error) {
       console.error(`${LOG} Failed to schedule:`, error);
@@ -394,6 +522,20 @@ class OrbJob {
     if (!this.isInitialized) throw new Error('ORB job not initialized');
     console.log(`${LOG} Manual pre-open trigger`);
     const job = await this.agenda.now('manual-orb-pre-open', opts);
+    return { success: true, jobId: job.attrs._id };
+  }
+
+  async triggerBaselinePrefetch(opts = {}) {
+    if (!this.isInitialized) throw new Error('ORB job not initialized');
+    console.log(`${LOG} Manual baseline-prefetch trigger`);
+    const job = await this.agenda.now('manual-orb-baseline-prefetch', opts);
+    return { success: true, jobId: job.attrs._id };
+  }
+
+  async triggerRvolSnapshot(opts = {}) {
+    if (!this.isInitialized) throw new Error('ORB job not initialized');
+    console.log(`${LOG} Manual rvol-snapshot trigger`);
+    const job = await this.agenda.now('manual-orb-rvol-snapshot', opts);
     return { success: true, jobId: job.attrs._id };
   }
 

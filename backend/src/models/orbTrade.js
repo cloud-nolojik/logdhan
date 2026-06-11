@@ -34,12 +34,39 @@ const orbCandidateSchema = new mongoose.Schema({
   relStrength:    Number,
   rankScore:      Number,
 
-  // Status
+  // In-play snapshot (2026-06-11) — set by the 09:21 orb-rvol-snapshot job.
+  // rvol5 = day-cumulative volume at ~09:21 (≈ first 6 min) vs the time-matched
+  // 09:15-slot baseline (scaled). inPlay=true → eligible for 09:24 entry arming;
+  // inPlay=false → spectator (kept for observability). undefined = snapshot never
+  // ran — NOTE (post paper-cutover): the system is then FAIL-CLOSED, not fail-open:
+  // placeOrbEntryOrders retries the snapshot once and otherwise refuses to arm,
+  // so a missing snapshot = a no-trade day, never "trade the whole universe".
+  rvol5:  Number,
+  inPlay: Boolean,
+
+  // Status. 'ARMED' (2026-06-11, paper mode) = resting SL-M entry order placed at
+  // the 5-min OR edge, waiting for the exchange to trigger it. ARMED → ENTERED on
+  // fill, ARMED → SKIPPED on reject/cancel/15:00 unfilled cutoff.
   status: {
     type: String,
-    enum: ['WATCHING', 'RANGE_SET', 'ENTERED', 'STOPPED_OUT', 'TARGET_HIT', 'TIME_EXIT', 'SKIPPED'],
+    enum: ['WATCHING', 'RANGE_SET', 'ARMED', 'ENTERED', 'STOPPED_OUT', 'TARGET_HIT', 'TIME_EXIT', 'SKIPPED'],
     default: 'WATCHING',
   },
+
+  // 2026-06-11 paper mode (Zarattini/Barbon/Aziz spec) — per-stock fields:
+  //   firstCandleOpen/Close — the 09:15–09:20 5-min candle that sets direction
+  //   (close>open → LONG only, close<open → SHORT only, equal → doji, skip)
+  //   atr14d        — daily ATR(14), stop sizing basis
+  //   stopDistance  — 0.10 × atr14d (tick-snapped); protective SL goes at
+  //                   fill price ∓ stopDistance once the entry triggers
+  firstCandleOpen:  Number,
+  firstCandleClose: Number,
+  atr14d:           Number,
+  stopDistance:     Number,
+
+  // Audit: why a candidate was SKIPPED (was already written by enterTrade but
+  // silently dropped by strict mode — now persisted).
+  skipReason: String,
 
   // Trade execution
   direction:   { type: String, default: 'LONG' },
@@ -61,6 +88,12 @@ const orbCandidateSchema = new mongoose.Schema({
   pnl:        Number,
   returnPct:  Number,
 
+  // 2026-06-11: BE-at-+1R re-enabled. PERSISTED (the old code used a transient
+  // `_beTrailed` that reset every 5-min monitor cycle → would have re-placed the
+  // same SL endlessly). true = the one-time move to cushioned breakeven was done;
+  // never trails again after this.
+  beTrailed: { type: Boolean, default: false },
+
   // VWAP reversal-exit state (2026-06-02) — per-stock cumulative VWAP, refreshed
   // each 5-min monitor cycle. vwapConsecutiveOpp counts consecutive closes on the
   // wrong side of VWAP; 2 in a row triggers an exit (institutional flow flipped).
@@ -77,6 +110,17 @@ const orbTradeSchema = new mongoose.Schema({
   entriesCount: { type: Number, default: 0 },
   totalPnl:     { type: Number, default: 0 },
   volBaselineRetried: { type: Boolean, default: false },  // lazy RVOL-baseline re-fetch attempted
+
+  // 2026-06-11: 09:21 in-play RVOL snapshot audit. rvolSnapshotAt=null means the
+  // job never ran (or failed open) — Phase 2 then treats ALL candidates as eligible.
+  // rvol5Fallback=true means fewer than the minimum names cleared the RVOL floor,
+  // so the top-N-by-rvol5 fallback selection was used (logged loudly).
+  rvolSnapshotAt: { type: Date, default: null },
+  rvol5Fallback:  { type: Boolean, default: false },
+
+  // 2026-06-11 paper mode: when the 09:24 orb-place-entries job armed the day's
+  // resting entry orders. Idempotency guard — the job refuses to run twice.
+  paperEntriesPlacedAt: { type: Date, default: null },
 
   // DEPRECATED 2026-06-02: the breakout-breadth 70% direction lock was removed —
   // the live Nifty regime (marketRegime, below) is now the sole direction authority.
