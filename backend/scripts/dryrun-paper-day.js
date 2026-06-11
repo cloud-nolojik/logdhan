@@ -75,7 +75,9 @@ async function main() {
   // kitesessions regardless of validity flags, patch it in, and hard-disable
   // auto-login for this process.
   const kiteSvc = kiteOrderService.kiteService;
-  kiteSvc._doAutoLogin = async () => { throw new Error('auto-login disabled in dry-run (would clobber the live token)'); };
+  const realGetValidSession = kiteSvc.getValidSession.bind(kiteSvc);
+  const realDoAutoLogin     = kiteSvc._doAutoLogin.bind(kiteSvc);
+  kiteSvc._doAutoLogin = async () => { throw new Error('auto-login disabled in dry-run (pass ALLOW_LOGIN=1 to permit — safe when the DB token is already dead, since the backend reads tokens from the DB per request and will adopt the new one)'); };
 
   // Gather candidate tokens: env override first, then EVERY distinct token in
   // kitesessions (newest token_expiry first). We PROBE each against Kite and
@@ -111,12 +113,27 @@ async function main() {
       console.log(`[0] ✗ token …${cand.access_token.slice(-6)} rejected (${cand.src}) — trying next`);
     }
   }
+  if (!working && process.env.ALLOW_LOGIN === '1') {
+    // All stored tokens are dead → nothing to clobber. Mint a fresh one via the
+    // service's own login flow (same code path as the 06:00 job). The new token
+    // is saved to kitesessions, so the live backend adopts it automatically.
+    console.log(`[0] All ${candidates.length} stored token(s) dead — ALLOW_LOGIN=1 set, minting a fresh one...`);
+    kiteSvc.getValidSession = realGetValidSession;
+    kiteSvc._doAutoLogin    = realDoAutoLogin;
+    try {
+      await kiteOrderService.getLTP(['NSE:RELIANCE']);
+      working = true;
+      console.log('[0] ✅ Fresh login OK — new token saved to kitesessions (backend will use it too)');
+    } catch (err) {
+      console.error(`[0] ✗ fresh login also failed: ${err.message}`);
+    }
+  }
   if (!working) {
     console.error(`\n❌ Probed ${candidates.length} token(s) — Kite rejected all. No live token exists right now.`);
-    console.error('   The clean fix: trigger the backend\'s own token refresh (it owns the login');
-    console.error('   lifecycle), then rerun. On the server:');
-    console.error('     pm2 restart logdhan-backend     # next API call auto-logins at startup');
-    console.error('   or wait for the 06:00 kite-token-refresh job and run this before market open.\n');
+    console.error('   Options:');
+    console.error('     ALLOW_LOGIN=1 node scripts/dryrun-paper-day.js   # mint a fresh token (safe: dead tokens can\'t be clobbered)');
+    console.error('     pm2 restart 1                                    # or let the backend re-login on its next API call');
+    console.error('     ...or wait for the 06:00 kite-token-refresh job and run this before market open.\n');
     await mongoose.disconnect(); process.exit(1);
   }
 
