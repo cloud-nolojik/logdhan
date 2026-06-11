@@ -75,37 +75,49 @@ async function main() {
   // kitesessions regardless of validity flags, patch it in, and hard-disable
   // auto-login for this process.
   const kiteSvc = kiteOrderService.kiteService;
-  let tokenDoc = null;
-  if (process.env.KITE_ACCESS_TOKEN) {
-    tokenDoc = { access_token: process.env.KITE_ACCESS_TOKEN };
-    console.log('[0] Using KITE_ACCESS_TOKEN from env');
-  } else {
-    tokenDoc = await mongoose.connection.collection('kitesessions')
-      .find({ access_token: { $exists: true, $nin: [null, ''] } })
-      .sort({ updatedAt: -1 }).limit(1).next();
-    if (tokenDoc) {
-      console.log(`[0] Using existing token …${tokenDoc.access_token.slice(-6)} from kitesessions (updated ${tokenDoc.updatedAt?.toISOString?.() ?? '?'}, validity flags bypassed — dry-run only)`);
+  kiteSvc._doAutoLogin = async () => { throw new Error('auto-login disabled in dry-run (would clobber the live token)'); };
+
+  // Gather candidate tokens: env override first, then EVERY distinct token in
+  // kitesessions (newest token_expiry first). We PROBE each against Kite and
+  // use the first that works — sorting by updatedAt alone is a trap, because
+  // the 403-invalidation handler bumps updatedAt on DEAD docs, making the
+  // most-recently-updated doc the most-recently-killed token.
+  const candidates = [];
+  if (process.env.KITE_ACCESS_TOKEN) candidates.push({ access_token: process.env.KITE_ACCESS_TOKEN, src: 'env' });
+  const docs = await mongoose.connection.collection('kitesessions')
+    .find({ access_token: { $exists: true, $nin: [null, ''] } })
+    .sort({ token_expiry: -1, updatedAt: -1 }).limit(10).toArray();
+  const seen = new Set(candidates.map(c => c.access_token));
+  for (const d of docs) {
+    if (seen.has(d.access_token)) continue;
+    seen.add(d.access_token);
+    candidates.push({ ...d, src: `db(expiry=${d.token_expiry?.toISOString?.()?.slice(0, 16) ?? '?'})` });
+  }
+  if (!candidates.length) {
+    console.error('\n❌ No access_token found anywhere (env or kitesessions collection).');
+    console.error('   Trigger a fresh login from the live backend (or wait for the 06:00 job), then rerun.\n');
+    await mongoose.disconnect(); process.exit(1);
+  }
+
+  let working = null;
+  for (const cand of candidates) {
+    kiteSvc.getValidSession = async () => cand;            // bypass validity gate
+    try {
+      await kiteOrderService.getLTP(['NSE:RELIANCE']);
+      working = cand;
+      console.log(`[0] ✅ Token …${cand.access_token.slice(-6)} works (${cand.src})`);
+      break;
+    } catch (_) {
+      console.log(`[0] ✗ token …${cand.access_token.slice(-6)} rejected (${cand.src}) — trying next`);
     }
   }
-  if (!tokenDoc?.access_token) {
-    console.error('\n❌ No access_token found anywhere in the kitesessions collection.');
-    console.error('   Run this where the live backend runs (its 06:00 token job populates it),');
-    console.error('   or pass one explicitly:  KITE_ACCESS_TOKEN=xxxx node scripts/dryrun-paper-day.js\n');
-    await mongoose.disconnect();
-    process.exit(1);
-  }
-  kiteSvc.getValidSession = async () => tokenDoc;          // bypass validity gate
-  kiteSvc._doAutoLogin    = async () => { throw new Error('auto-login disabled in dry-run (would clobber the live token)'); };
-
-  try {
-    await kiteOrderService.getLTP(['NSE:RELIANCE']);
-    console.log('[0] Kite session OK — token works');
-  } catch (err) {
-    console.error(`\n❌ The existing token was rejected by Kite (${err.message}).`);
-    console.error('   It has likely expired (tokens die ~6 AM next day). Wait for the 06:00');
-    console.error('   token-refresh job, or trigger a fresh login from the live backend, then rerun.\n');
-    await mongoose.disconnect();
-    process.exit(1);
+  if (!working) {
+    console.error(`\n❌ Probed ${candidates.length} token(s) — Kite rejected all. No live token exists right now.`);
+    console.error('   The clean fix: trigger the backend\'s own token refresh (it owns the login');
+    console.error('   lifecycle), then rerun. On the server:');
+    console.error('     pm2 restart logdhan-backend     # next API call auto-logins at startup');
+    console.error('   or wait for the 06:00 kite-token-refresh job and run this before market open.\n');
+    await mongoose.disconnect(); process.exit(1);
   }
 
   // 1) Universe
