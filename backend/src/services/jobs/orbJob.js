@@ -464,13 +464,16 @@ class OrbJob {
       // scheduled — resting SL-M entries at the OR edge replace scanning entirely
       // (the exchange does the breakout detection). Name stays in the cancel list.
 
-      // Every 5 min, 9:00 AM – 3:59 PM IST — position monitor.
-      // Extended 9-14 → 9-15 (2026-06-11 audit): the 15:00 unfilled-entry cutoff
-      // lives in the monitor, so it MUST run at 15:00/15:05/15:10 — with the old
-      // 9-14 bound the last run was 14:55 and the cutoff could never fire, and a
-      // fill between 14:55 and 15:15 would sit unprotected until force-exit.
-      // Runs after 15:15 are harmless no-ops (nothing ENTERED/ARMED remains).
-      await this.agenda.every('*/5 9-15 * * 1-5', 'orb-monitor', {}, {
+      // EVERY MINUTE, 9:00 AM – 3:59 PM IST — position monitor.
+      // */5 → */1 (2026-06-12, after TATACHEM): a resting entry can fill the
+      // moment after a monitor cycle, leaving the position with NO protective
+      // stop for up to 5 minutes — TATACHEM filled, reversed through its stop
+      // level inside that blind spot, and paid ~2.3R instead of 1R. Per-minute
+      // servicing caps the naked window at ~60s. Cost: zero when flat (the
+      // ENTERED/ARMED check is Mongo-only), ~4 calls/min with open positions —
+      // far under Kite's ceiling. The runningJobs guard prevents overlap.
+      // (15:00 unfilled-entry cutoff also lives here — 9-15 hour bound required.)
+      await this.agenda.every('* 9-15 * * 1-5', 'orb-monitor', {}, {
         timezone: 'Asia/Kolkata',
       });
 

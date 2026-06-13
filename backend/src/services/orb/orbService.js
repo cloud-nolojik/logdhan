@@ -1433,13 +1433,33 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
         return true;
       }
     } catch (err) {
+      const errMsg = err?.response?.data?.message || err?.message || String(err);
+
+      // Price already through the stop (fill-to-SL latency): Kite rejects an
+      // SL-M whose trigger is on the wrong side of LTP. No retry can fix that —
+      // go straight to the emergency flat (2026-06-12: TATACHEM burned ~1R
+      // making a second identical doomed attempt before flatting).
+      if (/than the last traded price/i.test(errMsg)) {
+        console.error(`${LOG} ${logTag} ${c.symbol}: price already through the stop (${errMsg.slice(0, 90)}…) — skipping retries, flatting now`);
+        break;
+      }
+
+      // Tick-size reject: re-snap the ORIGINAL stop level to the script's tick.
+      // 2026-06-12 BUG FIX (ICICIGI): the old code passed the parsed tick (0.10)
+      // as the PRICE — placing a stop at ₹0.1. For a BUY stop Kite rejected it,
+      // but a SELL stop at ₹0.1 would be ACCEPTED and never fire = naked
+      // position that looks protected. parseKiteTickError returns the TICK SIZE,
+      // not a price — use it as the snap quantum.
       const tick = parseKiteTickError(err);
-      if (tick && attempt === 1) {
-        stop = snapToNSETick(tick, 0.05, isLong ? 'floor' : 'ceil');
-        console.warn(`${LOG} ${logTag} ${c.symbol}: SL tick-reject — retrying @ ₹${stop}`);
+      if (tick && tick < 1 && attempt === 1) {
+        stop = snapToNSETick(
+          isLong ? c.entryPrice - c.stopDistance : c.entryPrice + c.stopDistance,
+          tick, isLong ? 'floor' : 'ceil'
+        );
+        console.warn(`${LOG} ${logTag} ${c.symbol}: tick-size reject — re-snapping stop to ₹${tick} multiples → ₹${stop}`);
         continue;
       }
-      console.error(`${LOG} ${logTag} ${c.symbol}: ❌ SL placement failed (attempt ${attempt}): ${err.message}`);
+      console.error(`${LOG} ${logTag} ${c.symbol}: ❌ SL placement failed (attempt ${attempt}): ${errMsg}`);
     }
   }
 
@@ -2329,7 +2349,11 @@ export async function monitorOrbPositions() {
   const entered = doc.candidates.filter(c => c.status === 'ENTERED');
   const armed   = doc.candidates.filter(c => c.status === 'ARMED');
   if (!entered.length && !armed.length) {
-    console.log(`${LOG} [MONITOR] [${istTimeStr()}] No open positions or armed entries`);
+    // Per-minute cadence (2026-06-12): only log the idle no-op every 5th minute
+    // so the log doesn't gain ~350 useless lines a day.
+    if (new Date().getMinutes() % 5 === 0) {
+      console.log(`${LOG} [MONITOR] [${istTimeStr()}] No open positions or armed entries`);
+    }
     return { active: 0, exited: 0 };
   }
 
