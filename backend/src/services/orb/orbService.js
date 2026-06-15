@@ -1559,21 +1559,24 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
     }
   }
 
-  // Both attempts failed → position UNPROTECTED → emergency flat NOW.
-  console.error(`${LOG} ${logTag} ${c.symbol}: ⚠⚠ NO PROTECTIVE SL — firing emergency ${exitSide} MARKET`);
-  await logStage('protective-sl', false, { symbol: c.symbol, action: 'emergency_exit', entry: c.entryPrice });
-  try {
-    await kiteOrderService.placeOrder({
-      tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: exitSide,
-      order_type: 'MARKET', product: 'MIS', quantity: c.qty,
-      simulationId: `orb_emergency_no_sl_${c.symbol}`, orderType: 'ORB_EMERGENCY_EXIT', source: 'ORB',
-    });
-    c.status     = 'TIME_EXIT';
-    c.exitTime   = new Date();
-    c.exitReason = 'emergency_exit_no_protective_sl';
-  } catch (emErr) {
-    console.error(`${LOG} ${logTag} ${c.symbol}: ❌❌ EMERGENCY EXIT ALSO FAILED — MANUAL INTERVENTION NEEDED: ${emErr.message}`);
-  }
+  // Both attempts failed → position UNPROTECTED.
+  // 2026-06-15 (Vijesh): the auto emergency MARKET exit is DISABLED — only ALERT,
+  // do not auto-flatten. The position is left open and unprotected for MANUAL
+  // handling. (Code kept below, commented, to re-enable later if wanted.)
+  console.error(`${LOG} ${logTag} ${c.symbol}: ⚠⚠ NO PROTECTIVE SL PLACED — position is UNPROTECTED. Auto-exit is OFF — MANUAL INTERVENTION NEEDED (place a stop or close the position).`);
+  await logStage('protective-sl', false, { symbol: c.symbol, action: 'alert_no_auto_exit', entry: c.entryPrice });
+  // try {
+  //   await kiteOrderService.placeOrder({
+  //     tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: exitSide,
+  //     order_type: 'MARKET', product: 'MIS', quantity: c.qty,
+  //     simulationId: `orb_emergency_no_sl_${c.symbol}`, orderType: 'ORB_EMERGENCY_EXIT', source: 'ORB',
+  //   });
+  //   c.status     = 'TIME_EXIT';
+  //   c.exitTime   = new Date();
+  //   c.exitReason = 'emergency_exit_no_protective_sl';
+  // } catch (emErr) {
+  //   console.error(`${LOG} ${logTag} ${c.symbol}: ❌❌ EMERGENCY EXIT ALSO FAILED — MANUAL INTERVENTION NEEDED: ${emErr.message}`);
+  // }
   return false;
 }
 
@@ -2532,6 +2535,35 @@ export async function monitorOrbPositions() {
       const unrealised = parseFloat((priceDiff * c.qty).toFixed(2));
       const pct        = parseFloat((priceDiff / c.entryPrice * 100).toFixed(2));
       console.log(`${LOG} [MONITOR]   [${isLong ? 'LONG' : 'SHORT'}] unrealised PnL=₹${unrealised >= 0 ? '+' : ''}${unrealised} (${pct >= 0 ? '+' : ''}${pct}%)`);
+    }
+
+    // ── EXTERNAL/MANUAL CLOSE DETECTION (2026-06-15) ─────────────────────────
+    // If the position is flat at the broker but our SL hasn't filled, it was
+    // closed outside this engine (you exited manually, or Zerodha squared it).
+    // The protective SL is then ORPHANED — left resting it can later trigger and
+    // open a naked REVERSE position. So: cancel the orphaned SL (+TGT), book the
+    // broker's realised P&L, and mark the trade closed. Only acts on a CONFIRMED
+    // flat (qty===0); a Kite API error returns null and we fall through safely.
+    const brokerQty = await getActualPositionQty(c.symbol);
+    if (brokerQty === 0) {
+      let slComplete = false;
+      if (c.stopOrderId) {
+        try { const slo = await kiteOrderService.getOrderDetails(c.stopOrderId); slComplete = slo?.status === 'COMPLETE'; } catch (_) {}
+      }
+      if (!slComplete) {
+        if (c.stopOrderId) {
+          try { await kiteOrderService.cancelOrder(c.stopOrderId); console.log(`${LOG} [MONITOR]   🧹 ${c.symbol}: flat at broker (external/manual close) — cancelled orphaned SL ${c.stopOrderId}`); }
+          catch (e) { console.warn(`${LOG} [MONITOR]   ${c.symbol}: orphaned-SL cancel failed: ${e.message}`); }
+        }
+        if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); } catch (_) {} }
+        c.status     = 'TIME_EXIT';
+        c.exitReason = 'closed_externally';
+        await bookAlreadyClosedPnl(c, '[MONITOR]');
+        console.log(`${LOG} [MONITOR]   ✅ ${c.symbol}: booked external close — no orphaned orders left`);
+        exitedThisRun++; changed = true;
+        continue;
+      }
+      // SL filled → the stop-status block below records it as STOPPED_OUT
     }
 
     // ── 10:30 time-exit ─────────────────────────────────────────────────────
