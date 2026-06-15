@@ -124,8 +124,8 @@ const RVOL5_FALLBACK_N        = 10;    // fallback: top-10 by rvol5 regardless o
 //     capital ÷ price). Paper trades top-20; current capital funds 8 slots.
 const PAPER_STOP_ATR_MULT    = 0.10;   // stop distance = 10% of daily ATR(14)
 const PAPER_MIN_ATR14D       = 0.50;   // ₹ — paper FILTER 3 (ATR floor); stop must be ≥ 1 tick
-const PAPER_RISK_PCT         = 1.0;    // % of cash risked per trade (paper: 1% of account)
-const PAPER_MAX_ENTRIES      = 8;      // paper: top-20; leverage-capped to 8 slots at current capital
+export const PAPER_RISK_PCT    = 1.0;  // % of cash risked per trade (paper: 1% of account)
+export const PAPER_MAX_ENTRIES = 8;    // paper: top-20; leverage-capped to 8 slots at current capital
 const PAPER_ENTRY_CUTOFF_MIN = 15 * 60; // 15:00 IST — cancel still-unfilled ARMED entries
 
 // ── LEGACY ENGINE — RETIRED 2026-06-11 (full paper-spec cutover, no flags) ──
@@ -261,7 +261,12 @@ async function logStage(stage, ok, detail = undefined) {
 }
 
 function snapToNSETick(price, tick = 0.05, mode = 'round') {
-  const factor = Math.round(1 / tick);
+  // Guard against bad tick data (missing / 0 / absurd). Real NSE equity ticks are
+  // ≤ ₹0.50; anything outside (0,1] is corrupt and would make factor=0 → NaN price
+  // (which silently breaks order placement live and the backtest). Fall back to 0.05.
+  let t = Number(tick);
+  if (!Number.isFinite(t) || t <= 0 || t > 1) t = 0.05;
+  const factor = Math.round(1 / t);
   if (mode === 'floor') return Math.floor(price * factor) / factor;
   if (mode === 'ceil')  return Math.ceil(price  * factor) / factor;
   return Math.round(price * factor) / factor;
@@ -284,7 +289,14 @@ async function getNseTickSize(symbol) {
     const s = await Stock.findOne({ trading_symbol: key, segment: 'NSE_EQ' })
       .select('tick_size').lean();
     const t = Number(s?.tick_size);
-    if (Number.isFinite(t) && t > 0) tick = t;
+    // Only accept a sane tick. Real NSE equity ticks are ≤ ₹0.50; a stored value
+    // that's 0, missing, or absurd (>₹1) is corrupt data and would otherwise feed
+    // a NaN trigger into order placement. Fall back to ₹0.05 and flag it loudly.
+    if (Number.isFinite(t) && t > 0 && t <= 1) {
+      tick = t;
+    } else if (s) {
+      console.warn(`${LOG} getNseTickSize(${key}): corrupt tick_size=${s.tick_size} in Stock — using ₹0.05 (fix the instrument record)`);
+    }
   } catch (err) {
     console.warn(`${LOG} getNseTickSize(${key}) lookup failed: ${err.message} — defaulting ₹0.05`);
   }
@@ -1426,6 +1438,53 @@ export async function takeRvolSnapshot() {
 // ══════════════════════════════════════════════════════════════════════════
 
 /**
+ * PAPER-SPEC SETUP — pure, shared by the live arming loop and the backtest so the
+ * two can never diverge (2026-06-15 extraction). Given a stock's first 5-min OR
+ * candle, daily ATR(14), tick size and capital budgets, returns the ORB entry
+ * trigger, structural stop (opposite OR edge), 1R distance and risk/leverage-
+ * capped qty — or { ok:false, skipReason } for the paper's skip rules (no OR
+ * candle, doji, ATR floor, qty<1). No I/O; fully unit-testable.
+ *
+ *   • Direction  — first 5-min candle: close>open → LONG, close<open → SHORT, doji → skip
+ *   • Trigger    — OR high (long) / OR low (short), snapped to tick
+ *   • Stop       — opposite OR edge (long → OR low, short → OR high), snapped to tick
+ *   • 1R         — |trigger − stop| (the OR range), floored at one tick
+ *   • Qty        — min(riskBudget ÷ 1R, slotCap ÷ trigger), ≥ 1
+ *
+ * @param {{open:number,high:number,low:number,close:number}} bar  first 5-min candle
+ * @param {number}      atr14d      daily ATR(14)
+ * @param {number}      tickSize    instrument tick (e.g. 0.05 / 0.10)
+ * @param {number|null} riskBudget  ₹ risk per trade (1% of cash); null → no risk cap
+ * @param {number}      slotCap     ₹ slot capital (leverage cap)
+ * @param {number}     [minAtr]     ATR floor (defaults to PAPER_MIN_ATR14D)
+ */
+export function buildPaperSetup({ bar, atr14d, tickSize, riskBudget, slotCap, minAtr = PAPER_MIN_ATR14D }) {
+  if (!bar || !(bar.high > bar.low)) return { ok: false, skipReason: 'no_5min_or_candle' };
+  const direction = bar.close > bar.open ? 'LONG' : bar.close < bar.open ? 'SHORT' : null;
+  if (!direction) return { ok: false, skipReason: 'doji_first_candle' };
+  if (!(atr14d >= minAtr)) return { ok: false, skipReason: `atr14d_below_floor_${atr14d?.toFixed?.(2) ?? 'na'}` };
+  const isLong = direction === 'LONG';
+
+  const trigger = isLong ? snapToNSETick(bar.high, tickSize, 'ceil')
+                         : snapToNSETick(bar.low,  tickSize, 'floor');
+  const orStop  = isLong ? snapToNSETick(bar.low,  tickSize, 'floor')
+                         : snapToNSETick(bar.high, tickSize, 'ceil');
+  const stopDist = Math.max(tickSize, isLong ? (trigger - orStop) : (orStop - trigger));
+
+  // Defensive: never let bad OR levels / tick produce NaN that masquerades as a
+  // valid armed order downstream (qty<1 wouldn't catch NaN since NaN<1 is false).
+  if (!Number.isFinite(trigger) || !Number.isFinite(stopDist) || stopDist <= 0) {
+    return { ok: false, skipReason: 'bad_or_levels', trigger, stopDist, direction };
+  }
+  const qtyByRisk = riskBudget ? Math.floor(riskBudget / stopDist) : Infinity;
+  const qtyByCap  = Math.floor(slotCap / trigger);
+  const qty       = Math.min(qtyByRisk, qtyByCap);
+  if (!Number.isFinite(qty) || qty < 1) return { ok: false, skipReason: 'qty_below_1', trigger, stopDist, direction };
+
+  return { ok: true, direction, isLong, trigger, orStop, stopDist, qty };
+}
+
+/**
  * Protective SL-M for a just-filled paper entry. STRUCTURAL ORB STOP (2026-06-15,
  * Vijesh): the stop sits at the OPPOSITE end of the 5-min opening range — long →
  * OR low, short → OR high — a fixed price, not fill ∓ distance. This makes 1R ≈
@@ -1626,62 +1685,25 @@ async function placeOrbEntryOrdersOn(doc) {
 
   let armed = 0, immediate = 0, skipped = 0;
   for (const c of inPlay) {
-    const bars5 = candles5[c.symbol] || [];
-    const bar   = bars5.find(b => slotKey(b.date) === '09:15');
-    if (!bar || !(bar.high > bar.low)) {
-      c.status = 'SKIPPED'; c.skipReason = 'no_5min_or_candle'; skipped++;
-      console.warn(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ no 09:15 5-min candle`);
-      continue;
-    }
-
-    // Direction — the paper's per-stock rule, no index gate
-    const direction = bar.close > bar.open ? 'LONG' : bar.close < bar.open ? 'SHORT' : null;
-    if (!direction) {
-      c.status = 'SKIPPED'; c.skipReason = 'doji_first_candle'; skipped++;
-      console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ doji first candle (O=C=₹${bar.open}) — paper rule: no trade`);
-      continue;
-    }
-    const isLong = direction === 'LONG';
-
-    // Stop distance from daily ATR(14)
-    const atr14d = computeATR(dailyBars[c.symbol] || [], 14);
-    if (!(atr14d >= PAPER_MIN_ATR14D)) {
-      c.status = 'SKIPPED'; c.skipReason = `atr14d_below_floor_${atr14d?.toFixed?.(2) ?? 'na'}`; skipped++;
-      console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ ATR14d ₹${atr14d?.toFixed?.(2) ?? 'n/a'} < ₹${PAPER_MIN_ATR14D} floor`);
-      continue;
-    }
-    // Snap the entry trigger and structural stop to the script's REAL tick. The
-    // resting SL-M entry below has no tick-reject retry, so a wrong tick (e.g. a
-    // 0.05-snapped edge on a 0.10-tick script) would 400 and silently SKIP it.
+    const bars5    = candles5[c.symbol] || [];
+    const bar      = bars5.find(b => slotKey(b.date) === '09:15');
+    const atr14d   = computeATR(dailyBars[c.symbol] || [], 14);
     const tickSize = await getNseTickSize(c.symbol);
 
-    // Trigger at the OR edge
-    const trigger = isLong
-      ? snapToNSETick(bar.high, tickSize, 'ceil')
-      : snapToNSETick(bar.low,  tickSize, 'floor');
-
-    // STRUCTURAL ORB STOP (2026-06-15, Vijesh): stop at the OPPOSITE end of the
-    // 5-min opening range — long → OR low, short → OR high — instead of the old
-    // 0.10×ATR distance. 1R becomes ≈ the OR range (~1–2% of price typically),
-    // so NSE round-trip costs drop from ~0.5R to a small fraction of R. Sizing
-    // MUST use this same distance, else a stop sized for 0.10×ATR but placed at
-    // the OR edge would risk many× the intended 1%. A very wide OR shrinks qty;
-    // qty<1 is handled by the skip below. (Protective stop placed off c.orLow/
-    // c.orHigh in placePaperProtectiveStop — keep these consistent.)
-    const orStop = isLong
-      ? snapToNSETick(bar.low,  tickSize, 'floor')
-      : snapToNSETick(bar.high, tickSize, 'ceil');
-    const stopDist = Math.max(tickSize, isLong ? (trigger - orStop) : (orStop - trigger));
-
-    // Sizing: risk-based, leverage-capped
-    const qtyByRisk = riskBudget ? Math.floor(riskBudget / stopDist) : Infinity;
-    const qtyByCap  = Math.floor(slotCap / trigger);
-    const qty       = Math.min(qtyByRisk, qtyByCap);
-    if (qty < 1) {
-      c.status = 'SKIPPED'; c.skipReason = 'qty_below_1'; skipped++;
-      console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ qty<1 (slotCap=₹${slotCap} / trigger=₹${trigger})`);
+    // Entry/stop/sizing computed by the SHARED pure function buildPaperSetup so
+    // the live path and the backtest can never diverge (2026-06-15 extraction).
+    const setup = buildPaperSetup({ bar, atr14d, tickSize, riskBudget, slotCap });
+    if (!setup.ok) {
+      c.status = 'SKIPPED'; c.skipReason = setup.skipReason; skipped++;
+      const tag = `${LOG} [PAPER] ${c.symbol.padEnd(14)}`;
+      if (setup.skipReason === 'no_5min_or_candle')           console.warn(`${tag} ⏭ no 09:15 5-min candle`);
+      else if (setup.skipReason === 'doji_first_candle')      console.log(`${tag} ⏭ doji first candle (O=C=₹${bar?.open}) — paper rule: no trade`);
+      else if (setup.skipReason.startsWith('atr14d_below'))   console.log(`${tag} ⏭ ATR14d ₹${atr14d?.toFixed?.(2) ?? 'n/a'} < ₹${PAPER_MIN_ATR14D} floor`);
+      else if (setup.skipReason === 'qty_below_1')            console.log(`${tag} ⏭ qty<1 (slotCap=₹${slotCap} / trigger=₹${setup.trigger})`);
+      else                                                    console.log(`${tag} ⏭ ${setup.skipReason}`);
       continue;
     }
+    const { direction, isLong, trigger, stopDist, qty } = setup;
 
     // Persist the setup
     c.orHigh = bar.high; c.orLow = bar.low;
