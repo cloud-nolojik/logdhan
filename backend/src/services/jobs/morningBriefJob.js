@@ -168,14 +168,20 @@ class MorningBriefJob {
         name: 'morning-brief'
       });
 
-      // Monday at 8:00 AM IST
-      // Cron: minute hour day month weekday
-      // 0 8 * * 1 = 8:00 AM, Monday only
-      await this.agenda.every('0 8 * * 1', 'morning-brief', {}, {
-        timezone: 'Asia/Kolkata'
-      });
-
-      console.log('[MORNING BRIEF JOB] Recurring job scheduled: 8:00 AM IST, Monday');
+      // DISABLED 2026-06-15 (Vijesh): morning-brief recurring run turned off.
+      // The agenda.cancel() above still runs on startup, so any previously
+      // persisted Monday job is deleted and nothing is re-scheduled. The job
+      // handler (defineJobs) and manual-morning-brief trigger are left intact —
+      // to re-enable, uncomment the agenda.every() block below.
+      console.log('[MORNING BRIEF JOB] ⏸️ morning-brief recurring job DISABLED (existing job cancelled, not re-scheduled)');
+      // // Monday at 8:00 AM IST
+      // // Cron: minute hour day month weekday
+      // // 0 8 * * 1 = 8:00 AM, Monday only
+      // await this.agenda.every('0 8 * * 1', 'morning-brief', {}, {
+      //   timezone: 'Asia/Kolkata'
+      // });
+      //
+      // console.log('[MORNING BRIEF JOB] Recurring job scheduled: 8:00 AM IST, Monday');
 
     } catch (error) {
       console.error('[MORNING BRIEF JOB] Failed to schedule jobs:', error);

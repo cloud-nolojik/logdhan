@@ -15,6 +15,7 @@ import kiteOrderService from '../kiteOrder.service.js';
 import OrbTrade from '../../models/orbTrade.js';
 import OrbBaseline from '../../models/orbBaseline.js';
 import OrbPipelineLog from '../../models/orbPipelineLog.js';
+import Stock from '../../models/stock.js';
 import MarketHoursUtil from '../../utils/marketHours.js';
 import { getFnoSymbols } from '../../constants/fnoUniverse.js';
 import { analyzeIntradayStructure, checkSidewaysExit } from '../dailyPicks/tradingDecisions.js';
@@ -264,6 +265,31 @@ function snapToNSETick(price, tick = 0.05, mode = 'round') {
   if (mode === 'floor') return Math.floor(price * factor) / factor;
   if (mode === 'ceil')  return Math.ceil(price  * factor) / factor;
   return Math.round(price * factor) / factor;
+}
+
+// Per-symbol NSE tick size, cached for the process lifetime (tick sizes are
+// static intraday). Reads the real tick from the Stock collection and falls
+// back to ₹0.05 if the instrument isn't found. Snapping order prices to the
+// REAL tick on the FIRST attempt avoids the wasted round-trip + tick-reject
+// retry we hit on 0.10-tick scripts (e.g. ASIANPAINT 2786.15 → rejected →
+// re-snapped 2786.2). For the resting entry order — which has NO retry — using
+// the right tick is the difference between an armed trade and a silent skip.
+const _nseTickCache = new Map();
+async function getNseTickSize(symbol) {
+  const key = String(symbol || '').toUpperCase();
+  if (!key) return 0.05;
+  if (_nseTickCache.has(key)) return _nseTickCache.get(key);
+  let tick = 0.05;
+  try {
+    const s = await Stock.findOne({ trading_symbol: key, segment: 'NSE_EQ' })
+      .select('tick_size').lean();
+    const t = Number(s?.tick_size);
+    if (Number.isFinite(t) && t > 0) tick = t;
+  } catch (err) {
+    console.warn(`${LOG} getNseTickSize(${key}) lookup failed: ${err.message} — defaulting ₹0.05`);
+  }
+  _nseTickCache.set(key, tick);
+  return tick;
 }
 
 function parseKiteTickError(err) {
@@ -1407,9 +1433,13 @@ export async function takeRvolSnapshot() {
 async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
   const isLong   = (c.direction || 'LONG') === 'LONG';
   const exitSide = isLong ? 'SELL' : 'BUY';
+  // Snap to the instrument's REAL tick on the first attempt (e.g. 0.10 for
+  // ASIANPAINT) — not a blanket 0.05 — so a 0.10-tick script doesn't eat a
+  // tick-reject + retry before the position is protected.
+  const tickSize = await getNseTickSize(c.symbol);
   let stop = snapToNSETick(
     isLong ? c.entryPrice - c.stopDistance : c.entryPrice + c.stopDistance,
-    0.05, isLong ? 'floor' : 'ceil'
+    tickSize, isLong ? 'floor' : 'ceil'
   );
 
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1613,12 +1643,17 @@ async function placeOrbEntryOrdersOn(doc) {
       console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ ATR14d ₹${atr14d?.toFixed?.(2) ?? 'n/a'} < ₹${PAPER_MIN_ATR14D} floor`);
       continue;
     }
-    const stopDist = Math.max(0.05, snapToNSETick(PAPER_STOP_ATR_MULT * atr14d, 0.05, 'round'));
+    // Snap stop distance and the resting entry trigger to the script's REAL
+    // tick. The resting SL-M entry below has no tick-reject retry, so a wrong
+    // tick (e.g. a 0.05-snapped edge on a 0.10-tick script) would 400 and
+    // silently SKIP the trade.
+    const tickSize = await getNseTickSize(c.symbol);
+    const stopDist = Math.max(tickSize, snapToNSETick(PAPER_STOP_ATR_MULT * atr14d, tickSize, 'round'));
 
     // Trigger at the OR edge
     const trigger = isLong
-      ? snapToNSETick(bar.high, 0.05, 'ceil')
-      : snapToNSETick(bar.low,  0.05, 'floor');
+      ? snapToNSETick(bar.high, tickSize, 'ceil')
+      : snapToNSETick(bar.low,  tickSize, 'floor');
 
     // Sizing: risk-based, leverage-capped
     const qtyByRisk = riskBudget ? Math.floor(riskBudget / stopDist) : Infinity;

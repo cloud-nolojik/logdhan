@@ -218,15 +218,21 @@ class WeekendScreeningJob {
       });
       console.log(`[SCREENING JOB] 🗑️ Cancelled ${cancelResult} existing jobs`);
 
-      // Saturday 6 PM IST only
-      console.log('[SCREENING JOB] 📅 Scheduling new recurring job: "0 18 * * 6" (Sat 6PM IST)');
-      const job = await this.agenda.every('0 18 * * 6', 'weekend-screening', { day: 'saturday' }, {
-        timezone: 'Asia/Kolkata'
-      });
-
-      console.log('[SCREENING JOB] ✅ Recurring job scheduled: Sat 6PM IST');
-      console.log(`[SCREENING JOB] 📋 Job ID: ${job.attrs._id}`);
-      console.log(`[SCREENING JOB] 📋 Next Run At: ${job.attrs.nextRunAt}`);
+      // DISABLED 2026-06-15 (Vijesh): weekend-screening recurring run turned off.
+      // The agenda.cancel() above still runs on startup, so any previously
+      // persisted Saturday job is deleted and nothing is re-scheduled. The job
+      // handler (defineJobs) and manual-screening trigger are left intact — to
+      // re-enable, uncomment the agenda.every() block below.
+      console.log('[SCREENING JOB] ⏸️ weekend-screening recurring job DISABLED (existing job cancelled, not re-scheduled)');
+      // // Saturday 6 PM IST only
+      // console.log('[SCREENING JOB] 📅 Scheduling new recurring job: "0 18 * * 6" (Sat 6PM IST)');
+      // const job = await this.agenda.every('0 18 * * 6', 'weekend-screening', { day: 'saturday' }, {
+      //   timezone: 'Asia/Kolkata'
+      // });
+      //
+      // console.log('[SCREENING JOB] ✅ Recurring job scheduled: Sat 6PM IST');
+      // console.log(`[SCREENING JOB] 📋 Job ID: ${job.attrs._id}`);
+      // console.log(`[SCREENING JOB] 📋 Next Run At: ${job.attrs.nextRunAt}`);
 
     } catch (error) {
       console.error('[SCREENING JOB] ❌ Failed to schedule jobs:', error.message);
