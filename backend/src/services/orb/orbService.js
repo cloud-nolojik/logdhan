@@ -1426,21 +1426,30 @@ export async function takeRvolSnapshot() {
 // ══════════════════════════════════════════════════════════════════════════
 
 /**
- * Protective SL-M for a just-filled paper entry: fill price ∓ stopDistance
- * (0.10 × daily ATR14, computed at arm time). 2-attempt tick-retry like
- * enterTrade; if both fail the position is UNPROTECTED → emergency MARKET exit.
+ * Protective SL-M for a just-filled paper entry. STRUCTURAL ORB STOP (2026-06-15,
+ * Vijesh): the stop sits at the OPPOSITE end of the 5-min opening range — long →
+ * OR low, short → OR high — a fixed price, not fill ∓ distance. This makes 1R ≈
+ * the OR range so NSE intraday costs are a small fraction of R, and (being far
+ * from the breakout edge where the fill happens) it never lands on the wrong side
+ * of LTP at placement. Falls back to fill ∓ stopDistance if OR levels are missing.
+ * 2-attempt tick-retry; if both fail the position is UNPROTECTED → emergency exit.
  */
 async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
   const isLong   = (c.direction || 'LONG') === 'LONG';
   const exitSide = isLong ? 'SELL' : 'BUY';
-  // Snap to the instrument's REAL tick on the first attempt (e.g. 0.10 for
-  // ASIANPAINT) — not a blanket 0.05 — so a 0.10-tick script doesn't eat a
-  // tick-reject + retry before the position is protected.
   const tickSize = await getNseTickSize(c.symbol);
-  let stop = snapToNSETick(
-    isLong ? c.entryPrice - c.stopDistance : c.entryPrice + c.stopDistance,
-    tickSize, isLong ? 'floor' : 'ceil'
-  );
+  // OR-extreme stop, snapped to the real tick (floor for a long stop, ceil for a
+  // short stop → always the slightly-wider, safer side). `t` is the snap quantum
+  // so the tick-reject retry below can re-snap to the broker-reported tick.
+  const computeStop = (t) => {
+    if (isLong  && Number.isFinite(c.orLow))  return snapToNSETick(c.orLow,  t, 'floor');
+    if (!isLong && Number.isFinite(c.orHigh)) return snapToNSETick(c.orHigh, t, 'ceil');
+    return snapToNSETick(
+      isLong ? c.entryPrice - c.stopDistance : c.entryPrice + c.stopDistance,
+      t, isLong ? 'floor' : 'ceil'
+    );
+  };
+  let stop = computeStop(tickSize);
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
@@ -1459,7 +1468,8 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
       if (slRes.success) {
         c.stopOrderId = slRes.orderId;
         c.stopPrice   = stop;
-        console.log(`${LOG} ${logTag} ${c.symbol}: ✅ protective SL-M ${exitSide} @ ₹${stop} (0.1×ATR14d=₹${c.stopDistance}, ${(c.stopDistance / c.entryPrice * 100).toFixed(2)}% from fill ₹${c.entryPrice}) — orderId=${slRes.orderId}`);
+        const riskPerShare = Math.abs(c.entryPrice - stop);
+        console.log(`${LOG} ${logTag} ${c.symbol}: ✅ protective SL-M ${exitSide} @ ₹${stop} (OR-edge stop, 1R=₹${riskPerShare.toFixed(2)}, ${(riskPerShare / c.entryPrice * 100).toFixed(2)}% from fill ₹${c.entryPrice}) — orderId=${slRes.orderId}`);
         return true;
       }
     } catch (err) {
@@ -1482,10 +1492,7 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
       // not a price — use it as the snap quantum.
       const tick = parseKiteTickError(err);
       if (tick && tick < 1 && attempt === 1) {
-        stop = snapToNSETick(
-          isLong ? c.entryPrice - c.stopDistance : c.entryPrice + c.stopDistance,
-          tick, isLong ? 'floor' : 'ceil'
-        );
+        stop = computeStop(tick);
         console.warn(`${LOG} ${logTag} ${c.symbol}: tick-size reject — re-snapping stop to ₹${tick} multiples → ₹${stop}`);
         continue;
       }
@@ -1643,17 +1650,28 @@ async function placeOrbEntryOrdersOn(doc) {
       console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ ATR14d ₹${atr14d?.toFixed?.(2) ?? 'n/a'} < ₹${PAPER_MIN_ATR14D} floor`);
       continue;
     }
-    // Snap stop distance and the resting entry trigger to the script's REAL
-    // tick. The resting SL-M entry below has no tick-reject retry, so a wrong
-    // tick (e.g. a 0.05-snapped edge on a 0.10-tick script) would 400 and
-    // silently SKIP the trade.
+    // Snap the entry trigger and structural stop to the script's REAL tick. The
+    // resting SL-M entry below has no tick-reject retry, so a wrong tick (e.g. a
+    // 0.05-snapped edge on a 0.10-tick script) would 400 and silently SKIP it.
     const tickSize = await getNseTickSize(c.symbol);
-    const stopDist = Math.max(tickSize, snapToNSETick(PAPER_STOP_ATR_MULT * atr14d, tickSize, 'round'));
 
     // Trigger at the OR edge
     const trigger = isLong
       ? snapToNSETick(bar.high, tickSize, 'ceil')
       : snapToNSETick(bar.low,  tickSize, 'floor');
+
+    // STRUCTURAL ORB STOP (2026-06-15, Vijesh): stop at the OPPOSITE end of the
+    // 5-min opening range — long → OR low, short → OR high — instead of the old
+    // 0.10×ATR distance. 1R becomes ≈ the OR range (~1–2% of price typically),
+    // so NSE round-trip costs drop from ~0.5R to a small fraction of R. Sizing
+    // MUST use this same distance, else a stop sized for 0.10×ATR but placed at
+    // the OR edge would risk many× the intended 1%. A very wide OR shrinks qty;
+    // qty<1 is handled by the skip below. (Protective stop placed off c.orLow/
+    // c.orHigh in placePaperProtectiveStop — keep these consistent.)
+    const orStop = isLong
+      ? snapToNSETick(bar.low,  tickSize, 'floor')
+      : snapToNSETick(bar.high, tickSize, 'ceil');
+    const stopDist = Math.max(tickSize, isLong ? (trigger - orStop) : (orStop - trigger));
 
     // Sizing: risk-based, leverage-capped
     const qtyByRisk = riskBudget ? Math.floor(riskBudget / stopDist) : Infinity;
