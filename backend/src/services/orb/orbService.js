@@ -1497,10 +1497,13 @@ export function paperStopLevel({ refPrice, orLow, orHigh, isLong, atr14d, tickSi
   if (PAPER_STOP_MODE === 'oredge') {
     const edge = isLong ? orLow : orHigh;
     if (Number.isFinite(edge)) return snapToNSETick(edge, tickSize, isLong ? 'floor' : 'ceil');
+    // 'oredge' requested but the OR edge is missing → fall through to the ATR stop.
   }
-  // Paper-faithful tight stop: a fraction of daily ATR from the entry/fill edge,
-  // floored at one tick so it can never collapse to the entry price.
-  const dist = Math.max(tickSize, (Number.isFinite(atr14d) ? atr14d : 0) * PAPER_STOP_ATR_MULT);
+  // Paper-faithful tight stop: k × daily ATR from the entry/fill edge. REQUIRE a
+  // real ATR — return null (NOT a degenerate one-tick stop) so the caller falls
+  // back to the 1R distance it already sized, if ATR is somehow missing at place time.
+  if (!Number.isFinite(atr14d) || atr14d <= 0) return null;
+  const dist = Math.max(tickSize, atr14d * PAPER_STOP_ATR_MULT);
   const raw  = isLong ? refPrice - dist : refPrice + dist;
   return snapToNSETick(raw, tickSize, isLong ? 'floor' : 'ceil');
 }
@@ -1519,6 +1522,7 @@ export function buildPaperSetup({ bar, atr14d, tickSize, riskBudget, slotCap, mi
   // backtest sizes 1R off this; the live protective SL re-derives it from the
   // actual fill via the same shared helper, so the two can't diverge.
   const orStop  = paperStopLevel({ refPrice: trigger, orLow: bar.low, orHigh: bar.high, isLong, atr14d, tickSize });
+  if (!Number.isFinite(orStop)) return { ok: false, skipReason: 'bad_stop_level', trigger, direction };
   const stopDist = Math.max(tickSize, isLong ? (trigger - orStop) : (orStop - trigger));
 
   // Defensive: never let bad OR levels / tick produce NaN that masquerades as a
@@ -1551,13 +1555,13 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
   // short stop → always the slightly-wider, safer side). `t` is the snap quantum
   // so the tick-reject retry below can re-snap to the broker-reported tick.
   const computeStop = (t) => {
-    // Stop k×ATR from the ACTUAL FILL (paper spec) in 'atr' mode, or the opposite
-    // OR edge in 'oredge' mode — same shared helper as buildPaperSetup, snapped to
-    // the real per-symbol tick `t` so Kite accepts the trigger price.
-    if (Number.isFinite(c.atr14d) || Number.isFinite(c.orLow) || Number.isFinite(c.orHigh)) {
-      return paperStopLevel({ refPrice: c.entryPrice, orLow: c.orLow, orHigh: c.orHigh, isLong, atr14d: c.atr14d, tickSize: t });
-    }
-    // Last-ditch: the 1R distance we sized on at arming, off the fill.
+    // Stop in the configured mode, snapped to the real per-symbol tick `t` so Kite
+    // accepts it: 'atr' = k×ATR from the ACTUAL FILL (paper spec), 'oredge' = the
+    // opposite OR edge. Same shared helper as buildPaperSetup so the two can't
+    // diverge. If the helper can't produce a level (e.g. ATR missing in atr mode),
+    // fall back to the 1R distance already sized at arming — never a one-tick stop.
+    const lvl = paperStopLevel({ refPrice: c.entryPrice, orLow: c.orLow, orHigh: c.orHigh, isLong, atr14d: c.atr14d, tickSize: t });
+    if (Number.isFinite(lvl)) return lvl;
     return snapToNSETick(
       isLong ? c.entryPrice - c.stopDistance : c.entryPrice + c.stopDistance,
       t, isLong ? 'floor' : 'ceil'
@@ -1583,7 +1587,7 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
         c.stopOrderId = slRes.orderId;
         c.stopPrice   = stop;
         const riskPerShare = Math.abs(c.entryPrice - stop);
-        console.log(`${LOG} ${logTag} ${c.symbol}: ✅ protective SL-M ${exitSide} @ ₹${stop} (ATR-buffered OR stop, 1R=₹${riskPerShare.toFixed(2)}, ${(riskPerShare / c.entryPrice * 100).toFixed(2)}% from fill ₹${c.entryPrice}) — orderId=${slRes.orderId}`);
+        console.log(`${LOG} ${logTag} ${c.symbol}: ✅ protective SL-M ${exitSide} @ ₹${stop} (${PAPER_STOP_MODE === 'atr' ? `${PAPER_STOP_ATR_MULT}×ATR14 stop` : 'OR-edge stop'}, 1R=₹${riskPerShare.toFixed(2)}, ${(riskPerShare / c.entryPrice * 100).toFixed(2)}% from fill ₹${c.entryPrice}) — orderId=${slRes.orderId}`);
         return true;
       }
     } catch (err) {
@@ -1605,7 +1609,7 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
       // position that looks protected. parseKiteTickError returns the TICK SIZE,
       // not a price — use it as the snap quantum.
       const tick = parseKiteTickError(err);
-      if (tick && tick < 1 && attempt === 1) {
+      if (tick && tick <= 1 && attempt === 1) {
         _nseTickCache.set(String(c.symbol).toUpperCase(), tick);   // self-heal cache for later orders
         stop = computeStop(tick);
         console.warn(`${LOG} ${logTag} ${c.symbol}: tick-size reject — re-snapping stop to ₹${tick} multiples → ₹${stop} (tick cache fixed)`);
