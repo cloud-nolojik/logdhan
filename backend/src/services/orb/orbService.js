@@ -122,11 +122,37 @@ const RVOL5_FALLBACK_N        = 10;    // fallback: top-10 by rvol5 regardless o
 //     stop the BE cushion would sit WIDER than the stop itself).
 //   • Sizing = min(risk-based: 1% of cash ÷ stopDistance, leverage cap: slot
 //     capital ÷ price). Paper trades top-20; current capital funds 8 slots.
-const PAPER_STOP_ATR_MULT    = 0.10;   // stop distance = 10% of daily ATR(14)
+// Stop distance = PAPER_STOP_ATR_MULT × daily ATR(14) from the FILL — the paper's
+// tight stop (SSRN 4729284 uses 0.10; the QQQ companion 4416622 swept it and found
+// 0.05 optimal). Env-overridable so backtestOrbPaper.js can sweep the grid:
+//   ORB_STOP_ATR_MULT=0.05 node src/scripts/backtestOrbPaper.js …
+const PAPER_STOP_ATR_MULT    = Number(process.env.ORB_STOP_ATR_MULT ?? 0.10);
 const PAPER_MIN_ATR14D       = 0.50;   // ₹ — paper FILTER 3 (ATR floor); stop must be ≥ 1 tick
 export const PAPER_RISK_PCT    = 1.0;  // % of cash risked per trade (paper: 1% of account)
 export const PAPER_MAX_ENTRIES = 8;    // paper: top-20; leverage-capped to 8 slots at current capital
 const PAPER_ENTRY_CUTOFF_MIN = 15 * 60; // 15:00 IST — cancel still-unfilled ARMED entries
+
+// ── 2026-06-16 — STOP MODE (research: STOP_LOSS_RESEARCH_16Jun2026.md) ───────
+// The Zarattini "stocks in play" paper this strategy replicates earns its edge
+// from a DELIBERATELY TIGHT stop (k×ATR from the fill) + EOD hold — NOT a wide
+// structural stop. A 240k-trade study confirms the tight stop ~doubles expectancy
+// vs a wide one (lower win rate, higher edge), and the opposite OR edge sits in
+// the 5-min noise band (~86% of days that break one side tag the other) so it
+// gets wicked. The right fix for wicks is re-entry + close-confirm, not widening.
+//   'atr'    (default, paper-faithful) → stop = k×ATR(14) from the fill/entry edge
+//   'oredge' (Vijesh 15-Jun)            → stop = opposite OR edge (kept for A/B)
+// Backtest both: ORB_STOP_MODE=oredge vs ORB_STOP_ATR_MULT={0.05,0.10,0.15,0.20}
+const PAPER_STOP_MODE = (process.env.ORB_STOP_MODE ?? 'atr').toLowerCase();
+
+// ── 2026-06-16 — NO-CHASE extension gate ────────────────────────────────────
+// Max distance price may already be PAST the trigger at 09:24 and STILL be taken
+// at MARKET, as a multiple of daily ATR(14). Beyond this the fill is an extended
+// chase — you buy/sell a stretched price with the structural stop now far away
+// ("don't chase the opening hat"). A near-trigger alreadyPast (a fresh break) is
+// fine and still enters. NOTE: invisible to backtestOrbPaper.js, which idealises
+// fills AT the trigger — this only closes the live-vs-backtest slippage gap on
+// gap-and-run names. 0 disables (always chase, legacy). Tunable via env.
+const PAPER_MAX_ENTRY_EXTENSION_ATR = Number(process.env.ORB_MAX_ENTRY_EXT_ATR ?? 0.5);
 
 // ── LEGACY ENGINE — RETIRED 2026-06-11 (full paper-spec cutover, no flags) ──
 // The 15-min OR path (recordOpeningRanges), the 2-bar confirmation scan
@@ -1458,6 +1484,27 @@ export async function takeRvolSnapshot() {
  * @param {number}      slotCap     ₹ slot capital (leverage cap)
  * @param {number}     [minAtr]     ATR floor (defaults to PAPER_MIN_ATR14D)
  */
+/**
+ * Protective-stop PRICE for a paper trade, snapped to the symbol's real NSE tick
+ * (floor for a long stop, ceil for a short stop → always the slightly-wider, valid
+ * side, and a multiple of the true tick so Kite accepts it). Shared by buildPaperSetup
+ * (sizing + the backtest's exit sim — refPrice=trigger) and the live protective-SL
+ * placement (refPrice=actual fill) so the level can NEVER diverge between them.
+ *   PAPER_STOP_MODE='atr'    → refPrice ∓ PAPER_STOP_ATR_MULT × ATR(14)  (paper-faithful)
+ *   PAPER_STOP_MODE='oredge' → opposite OR edge                          (legacy A/B)
+ */
+export function paperStopLevel({ refPrice, orLow, orHigh, isLong, atr14d, tickSize }) {
+  if (PAPER_STOP_MODE === 'oredge') {
+    const edge = isLong ? orLow : orHigh;
+    if (Number.isFinite(edge)) return snapToNSETick(edge, tickSize, isLong ? 'floor' : 'ceil');
+  }
+  // Paper-faithful tight stop: a fraction of daily ATR from the entry/fill edge,
+  // floored at one tick so it can never collapse to the entry price.
+  const dist = Math.max(tickSize, (Number.isFinite(atr14d) ? atr14d : 0) * PAPER_STOP_ATR_MULT);
+  const raw  = isLong ? refPrice - dist : refPrice + dist;
+  return snapToNSETick(raw, tickSize, isLong ? 'floor' : 'ceil');
+}
+
 export function buildPaperSetup({ bar, atr14d, tickSize, riskBudget, slotCap, minAtr = PAPER_MIN_ATR14D }) {
   if (!bar || !(bar.high > bar.low)) return { ok: false, skipReason: 'no_5min_or_candle' };
   const direction = bar.close > bar.open ? 'LONG' : bar.close < bar.open ? 'SHORT' : null;
@@ -1467,8 +1514,11 @@ export function buildPaperSetup({ bar, atr14d, tickSize, riskBudget, slotCap, mi
 
   const trigger = isLong ? snapToNSETick(bar.high, tickSize, 'ceil')
                          : snapToNSETick(bar.low,  tickSize, 'floor');
-  const orStop  = isLong ? snapToNSETick(bar.low,  tickSize, 'floor')
-                         : snapToNSETick(bar.high, tickSize, 'ceil');
+  // Stop in the configured mode (2026-06-16): 'atr' = k×ATR from the breakout edge
+  // (paper-faithful tight stop), 'oredge' = opposite OR edge (legacy A/B). The
+  // backtest sizes 1R off this; the live protective SL re-derives it from the
+  // actual fill via the same shared helper, so the two can't diverge.
+  const orStop  = paperStopLevel({ refPrice: trigger, orLow: bar.low, orHigh: bar.high, isLong, atr14d, tickSize });
   const stopDist = Math.max(tickSize, isLong ? (trigger - orStop) : (orStop - trigger));
 
   // Defensive: never let bad OR levels / tick produce NaN that masquerades as a
@@ -1501,8 +1551,13 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
   // short stop → always the slightly-wider, safer side). `t` is the snap quantum
   // so the tick-reject retry below can re-snap to the broker-reported tick.
   const computeStop = (t) => {
-    if (isLong  && Number.isFinite(c.orLow))  return snapToNSETick(c.orLow,  t, 'floor');
-    if (!isLong && Number.isFinite(c.orHigh)) return snapToNSETick(c.orHigh, t, 'ceil');
+    // Stop k×ATR from the ACTUAL FILL (paper spec) in 'atr' mode, or the opposite
+    // OR edge in 'oredge' mode — same shared helper as buildPaperSetup, snapped to
+    // the real per-symbol tick `t` so Kite accepts the trigger price.
+    if (Number.isFinite(c.atr14d) || Number.isFinite(c.orLow) || Number.isFinite(c.orHigh)) {
+      return paperStopLevel({ refPrice: c.entryPrice, orLow: c.orLow, orHigh: c.orHigh, isLong, atr14d: c.atr14d, tickSize: t });
+    }
+    // Last-ditch: the 1R distance we sized on at arming, off the fill.
     return snapToNSETick(
       isLong ? c.entryPrice - c.stopDistance : c.entryPrice + c.stopDistance,
       t, isLong ? 'floor' : 'ceil'
@@ -1528,7 +1583,7 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
         c.stopOrderId = slRes.orderId;
         c.stopPrice   = stop;
         const riskPerShare = Math.abs(c.entryPrice - stop);
-        console.log(`${LOG} ${logTag} ${c.symbol}: ✅ protective SL-M ${exitSide} @ ₹${stop} (OR-edge stop, 1R=₹${riskPerShare.toFixed(2)}, ${(riskPerShare / c.entryPrice * 100).toFixed(2)}% from fill ₹${c.entryPrice}) — orderId=${slRes.orderId}`);
+        console.log(`${LOG} ${logTag} ${c.symbol}: ✅ protective SL-M ${exitSide} @ ₹${stop} (ATR-buffered OR stop, 1R=₹${riskPerShare.toFixed(2)}, ${(riskPerShare / c.entryPrice * 100).toFixed(2)}% from fill ₹${c.entryPrice}) — orderId=${slRes.orderId}`);
         return true;
       }
     } catch (err) {
@@ -1551,8 +1606,9 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
       // not a price — use it as the snap quantum.
       const tick = parseKiteTickError(err);
       if (tick && tick < 1 && attempt === 1) {
+        _nseTickCache.set(String(c.symbol).toUpperCase(), tick);   // self-heal cache for later orders
         stop = computeStop(tick);
-        console.warn(`${LOG} ${logTag} ${c.symbol}: tick-size reject — re-snapping stop to ₹${tick} multiples → ₹${stop}`);
+        console.warn(`${LOG} ${logTag} ${c.symbol}: tick-size reject — re-snapping stop to ₹${tick} multiples → ₹${stop} (tick cache fixed)`);
         continue;
       }
       console.error(`${LOG} ${logTag} ${c.symbol}: ❌ SL placement failed (attempt ${attempt}): ${errMsg}`);
@@ -1644,6 +1700,7 @@ async function placeOrbEntryOrdersOn(doc) {
   }
   const symbols = inPlay.map(c => c.symbol);
   console.log(`${LOG} [PAPER] Arming top ${symbols.length} by rvol5: ${symbols.join(', ')}`);
+  console.log(`${LOG} [PAPER] Stop config: mode=${PAPER_STOP_MODE}${PAPER_STOP_MODE === 'atr' ? ` (${PAPER_STOP_ATR_MULT}×ATR14 from fill)` : ' (opposite OR edge)'}  |  no-chase gate=${PAPER_MAX_ENTRY_EXTENSION_ATR}×ATR`);
 
   // Data: first 5-min candle, ~30 trading days of daily bars (ATR14), LTP
   const istNowD = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
@@ -1721,6 +1778,21 @@ async function placeOrbEntryOrdersOn(doc) {
     const riskPct    = (stopDist / trigger * 100).toFixed(2);
     console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ${direction.padEnd(5)} OR=₹${bar.low}–₹${bar.high}  trigger=₹${trigger}  stopDist=₹${stopDist} (${riskPct}%)  qty=${qty}  rvol5=${c.rvol5}x  LTP=₹${ltp ?? '?'}${alreadyPast ? ' [ALREADY PAST — MARKET]' : ''}`);
 
+    // NO-CHASE extension gate (2026-06-16): an alreadyPast name fills at MARKET; if
+    // price has run more than PAPER_MAX_ENTRY_EXTENSION_ATR × ATR(14) beyond the
+    // trigger, that's an extended chase — skip it rather than buy/sell the stretch.
+    if (alreadyPast && Number.isFinite(atr14d) && PAPER_MAX_ENTRY_EXTENSION_ATR > 0) {
+      const extension = isLong ? (ltp - trigger) : (trigger - ltp);
+      const maxExt    = PAPER_MAX_ENTRY_EXTENSION_ATR * atr14d;
+      if (extension > maxExt) {
+        c.status = 'SKIPPED';
+        c.skipReason = `extended_chase_${(extension / atr14d).toFixed(2)}xATR`;
+        skipped++;
+        console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ extended chase — LTP ₹${ltp} is ${(extension / atr14d).toFixed(2)}×ATR past trigger ₹${trigger} (cap ${PAPER_MAX_ENTRY_EXTENSION_ATR}×) — not chasing`);
+        continue;
+      }
+    }
+
     try {
       if (alreadyPast) {
         // The paper's stop order would already have triggered → enter at market now
@@ -1763,17 +1835,37 @@ async function placeOrbEntryOrdersOn(doc) {
         immediate++;
         await doc.save();   // persist live-order state immediately (crash safety)
       } else {
-        // Resting stop-entry at the edge — the paper's actual mechanism
-        const res = await kiteOrderService.placeOrder({
-          tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: entrySide,
-          order_type: 'SL-M', trigger_price: trigger, product: 'MIS', quantity: qty,
-          simulationId: `orb_paper_entry_${c.symbol}`, orderType: 'ORB_ENTRY', source: 'ORB',
-        });
-        if (!res.success) throw new Error('placeOrder returned non-success');
-        c.entryOrderId = res.orderId;
-        c.status       = 'ARMED';
-        armed++;
-        await doc.save();   // persist live-order state immediately (crash safety)
+        // Resting stop-entry at the edge — the paper's actual mechanism. 2-attempt
+        // tick-retry (2026-06-16): the resting entry previously had NO retry, so a
+        // stale/missing Stock.tick_size (wrong tick for this NSE symbol) → Kite
+        // rejects the trigger price → the trade is SILENTLY LOST. Now: on a tick
+        // reject, re-snap the trigger to the broker-reported tick, fix the cache so
+        // later orders for this symbol are right, and retry once.
+        let placed = false, trig = trigger;
+        for (let attempt = 1; attempt <= 2 && !placed; attempt++) {
+          try {
+            const res = await kiteOrderService.placeOrder({
+              tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: entrySide,
+              order_type: 'SL-M', trigger_price: trig, product: 'MIS', quantity: qty,
+              simulationId: `orb_paper_entry_${c.symbol}`, orderType: 'ORB_ENTRY', source: 'ORB',
+            });
+            if (!res.success) throw new Error('placeOrder returned non-success');
+            c.entryOrderId = res.orderId;
+            c.status       = 'ARMED';
+            armed++;
+            placed = true;
+            await doc.save();   // persist live-order state immediately (crash safety)
+          } catch (e2) {
+            const tick = parseKiteTickError(e2);
+            if (tick && tick <= 1 && attempt === 1) {
+              _nseTickCache.set(String(c.symbol).toUpperCase(), tick);
+              trig = snapToNSETick(trigger, tick, isLong ? 'ceil' : 'floor');
+              console.warn(`${LOG} [PAPER] ${c.symbol}: entry tick-reject — re-snapping trigger to ₹${tick} multiples → ₹${trig} (tick cache fixed)`);
+              continue;
+            }
+            throw e2;   // non-tick error, or 2nd failure → bubble to outer catch (SKIPPED)
+          }
+        }
       }
     } catch (err) {
       const errMsg = err?.response?.data?.message || err?.message || String(err);

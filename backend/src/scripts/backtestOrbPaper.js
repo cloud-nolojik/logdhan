@@ -70,6 +70,7 @@ const CAPITAL = Number(arg('capital', 100000));
 const COST_RT = Number(arg('cost', 0));        // round-trip cost as fraction of notional (off by default)
 const SLIP_TICKS = Number(arg('slip', 0));     // adverse ticks on a stop-market exit (off by default)
 const ENTRY_SLIP = Number(arg('entryslip', 0)); // breakout entry slippage as fraction of price (e.g. 0.0003 = 3bps)
+const TOP_N = Math.min(Number(arg('top', PAPER_MAX_ENTRIES)), PAPER_MAX_ENTRIES); // trade only the top-N picks by rvol5/day (default 8)
 const VERBOSE = has('verbose');
 const NO_XLSX = has('no-xlsx');
 const OUT = arg('out', null);
@@ -151,7 +152,7 @@ async function main() {
 
   console.log(`\n=========  ORB PAPER-SPEC BACKTEST  =========`);
   console.log(`Days: ${dates.length} (${dates[0]} → ${dates[dates.length - 1]})  capital ₹${cash}  slotCap ₹${slotCap.toFixed(0)}  riskBudget ₹${riskBudget.toFixed(0)}`);
-  console.log(`Costs: ${(COST_RT * 100).toFixed(3)}% round-trip + ${SLIP_TICKS} tick stop slippage + ${(ENTRY_SLIP * 100).toFixed(3)}% entry slippage   |  max ${PAPER_MAX_ENTRIES} slots/day (leverage cap)\n`);
+  console.log(`Costs: ${(COST_RT * 100).toFixed(3)}% round-trip + ${SLIP_TICKS} tick stop slippage + ${(ENTRY_SLIP * 100).toFixed(3)}% entry slippage   |  trading top ${TOP_N} by rvol5/day (cap ${PAPER_MAX_ENTRIES})\n`);
 
   const dailyBars = {};   // sym -> [{high,low,close} ...] prior daily bars (for ATR)
   const base15 = {};      // sym -> [past 15-min 09:15 volumes]
@@ -217,7 +218,7 @@ async function main() {
     // 5×. If more names were selected (live occasionally armed >8), keep the top
     // 8 by rvol5 — otherwise the backtest takes positions the account can't hold
     // and over-states PnL on exactly the busiest days.
-    picks = picks.sort((a, b) => (b.rvol5 ?? -Infinity) - (a.rvol5 ?? -Infinity)).slice(0, PAPER_MAX_ENTRIES);
+    picks = picks.sort((a, b) => (b.rvol5 ?? -Infinity) - (a.rvol5 ?? -Infinity)).slice(0, TOP_N);
 
     let dayNet = 0, dayFilled = 0, dayArmed = 0;
     for (const p of picks) {
