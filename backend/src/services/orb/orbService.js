@@ -105,10 +105,15 @@ const RVOL_ENTRY_MIN       = 1.1;
 // is front-loaded, so the first ~6 min of the 09:15–09:30 slot normally carries
 // ~55% of that slot's volume (estimate — calibrate from archived 1-min candles).
 const RVOL5_TOP_N             = 20;    // max names marked in-play
-const RVOL5_MIN               = 1.0;   // floor — paper spec exactly: RVOL ≥ 100% (was 1.5 pre-paper-mode)
+// RVOL floor — only names trading ≥ this × their normal opening volume are "in play".
+// 2026-06-17: raised 1.0 → 2.0. 1.0× ("normal volume") is below every practitioner's
+// noise floor and is NOT a stocks-in-play filter. The paper got its selectivity from a
+// 7,000-name universe (top-20 = top 0.3%); our 215-name F&O set (top-8 = top 3.7%) does
+// ~10× less filtering, so the explicit floor must do that work — and a higher floor also
+// kills the low-RVOL trades that are pure cost bleed. Env-tunable for the sweep: practitioner
+// consensus 2.0 (min) → 3.0 (high-conviction); expect ~2.5–3.0 to win once NSE costs are in.
+const RVOL5_MIN               = Number(process.env.ORB_RVOL_MIN ?? 2.0);
 const RVOL5_BASELINE_FRACTION = 0.55;  // share of the 09:15 slot traded by ~09:21
-const RVOL5_MIN_QUALIFIED     = 5;     // if fewer clear the floor → fallback selection
-const RVOL5_FALLBACK_N        = 10;    // fallback: top-10 by rvol5 regardless of floor
 
 // ── 2026-06-11 — PAPER MODE (Zarattini/Barbon/Aziz, SSRN 4729284) ───────────
 // Live cutover to the paper's exact entry/stop/exit spec, per design discussion:
@@ -1369,29 +1374,25 @@ export function computeRvol5(volumeSoFar, volumeProfile) {
 }
 
 /**
- * Select the in-play set from [{ symbol, rvol5 }] rows.
- *   normal:   top RVOL5_TOP_N of those with rvol5 ≥ RVOL5_MIN
- *   fallback: if fewer than RVOL5_MIN_QUALIFIED clear the floor, take the top
- *             RVOL5_FALLBACK_N by rvol5 regardless (guards against a mis-set
- *             BASELINE_FRACTION silently producing zero-trade days while the
- *             constant is still uncalibrated).
- * Returns { selected: Set<symbol>, fallback: boolean, ranked: rows sorted desc }.
- * Pure + exported for testing.
+ * Select the in-play set from [{ symbol, rvol5 }] rows: the top RVOL5_TOP_N names with
+ * rvol5 ≥ RVOL5_MIN. The count FLOATS — fewer (or zero) on a thin day. No junk-padding
+ * fallback (removed 2026-06-17). Returns { selected: Set<symbol>, fallback: false (kept
+ * for caller/schema compat), ranked: rows sorted desc }. Pure + exported for testing.
  */
 export function selectInPlay(rows, {
   topN = RVOL5_TOP_N,
   minRvol = RVOL5_MIN,
-  minQualified = RVOL5_MIN_QUALIFIED,
-  fallbackN = RVOL5_FALLBACK_N,
 } = {}) {
   const ranked = (rows || [])
     .filter(r => Number.isFinite(r.rvol5))
     .sort((a, b) => b.rvol5 - a.rvol5);
-  const qualified = ranked.filter(r => r.rvol5 >= minRvol).slice(0, topN);
-  if (qualified.length >= minQualified) {
-    return { selected: new Set(qualified.map(r => r.symbol)), fallback: false, ranked };
-  }
-  return { selected: new Set(ranked.slice(0, fallbackN).map(r => r.symbol)), fallback: true, ranked };
+  // GATE-THEN-FLOAT (2026-06-17): only names ABOVE the RVOL floor are in play, up to topN.
+  // The count FLOATS with how many real in-play names exist that day — busy day → many,
+  // quiet day → few, dead day → ZERO (a valid thin-day outcome, not a failure). The old
+  // junk-padding fallback (top-N regardless of floor when few qualified) is REMOVED — it
+  // padded thin days with sub-floor names that only add cost and a weak/negative edge.
+  const selected = ranked.filter(r => r.rvol5 >= minRvol).slice(0, topN);
+  return { selected: new Set(selected.map(r => r.symbol)), fallback: false, ranked };
 }
 
 /**
@@ -1406,7 +1407,7 @@ export function selectInPlay(rows, {
  * CLOSED: a broken snapshot = a no-trade day (selection is mandatory per the
  * paper; the unranked universe is the 3.2%/yr mode). A selection that
  * legitimately finds nothing in play is NOT a failure — that is a thin day and
- * trading less is the correct outcome (floor + fallback above still apply).
+ * trading less — or nothing — is the correct outcome (the RVOL floor above gates it).
  */
 export async function takeRvolSnapshot() {
   console.log(`${LOG} ════════════════════════════════════════`);
@@ -1479,10 +1480,10 @@ export async function takeRvolSnapshot() {
   doc.rvol5Fallback  = fallback;
   await doc.save();
 
-  if (fallback) {
-    console.warn(`${LOG} [RVOL5] ⚠️  FALLBACK: <${RVOL5_MIN_QUALIFIED} names cleared rvol5≥${RVOL5_MIN} — took top ${selected.size} by rvol5 regardless. Check RVOL5_BASELINE_FRACTION calibration.`);
+  if (selected.size === 0) {
+    console.log(`${LOG} [RVOL5] ⚠️  No names cleared the rvol5≥${RVOL5_MIN}× floor — thin day, NO trades (correct outcome, not a failure).`);
   }
-  console.log(`${LOG} [RVOL5] In-play: ${selected.size}/${watching.length} (floor=${RVOL5_MIN}× topN=${RVOL5_TOP_N} fraction=${RVOL5_BASELINE_FRACTION})`);
+  console.log(`${LOG} [RVOL5] In-play: ${selected.size}/${watching.length} (floor=${RVOL5_MIN}× topN=${RVOL5_TOP_N} fraction=${RVOL5_BASELINE_FRACTION}) — count floats with how many clear the gate`);
   ranked.slice(0, RVOL5_TOP_N).forEach((r, i) => {
     const mark = selected.has(r.symbol) ? '✅ IN-PLAY ' : '   spectator';
     console.log(`${LOG} [RVOL5]   #${String(i + 1).padStart(2)} ${r.symbol.padEnd(14)} rvol5=${r.rvol5.toFixed(2)}x ${mark}`);

@@ -72,6 +72,7 @@ const SLIP_TICKS = Number(arg('slip', 0));     // adverse ticks on a stop-market
 const ENTRY_SLIP = Number(arg('entryslip', 0)); // breakout entry slippage as fraction of price (e.g. 0.0003 = 3bps)
 const TOP_N = Math.min(Number(arg('top', PAPER_MAX_ENTRIES)), PAPER_MAX_ENTRIES); // trade only the top-N picks by rvol5/day (default 8)
 const ENTRY_MODE = (process.env.ORB_ENTRY_MODE ?? 'confirmed').toLowerCase(); // 'confirmed' (close-confirm+exhaustion) vs 'touch' (resting SL-M) — matches live
+const RVOL_MIN = Number(process.env.ORB_RVOL_MIN ?? 2.0); // RVOL floor — matches live RVOL5_MIN; sweep {2.0,2.5,3.0}
 const VERBOSE = has('verbose');
 const NO_XLSX = has('no-xlsx');
 const OUT = arg('out', null);
@@ -219,7 +220,12 @@ async function main() {
     // 5×. If more names were selected (live occasionally armed >8), keep the top
     // 8 by rvol5 — otherwise the backtest takes positions the account can't hold
     // and over-states PnL on exactly the busiest days.
-    picks = picks.sort((a, b) => (b.rvol5 ?? -Infinity) - (a.rvol5 ?? -Infinity)).slice(0, TOP_N);
+    // Apply the RVOL gate uniformly (recorded + reconstructed days) so the floor sweep
+    // is honest, then the leverage-cap top-N. Names without a stored rvol5 are kept.
+    picks = picks
+      .filter(p => !Number.isFinite(p.rvol5) || p.rvol5 >= RVOL_MIN)
+      .sort((a, b) => (b.rvol5 ?? -Infinity) - (a.rvol5 ?? -Infinity))
+      .slice(0, TOP_N);
 
     let dayNet = 0, dayFilled = 0, dayArmed = 0;
     for (const p of picks) {

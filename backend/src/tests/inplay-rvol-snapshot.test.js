@@ -58,29 +58,27 @@ describe('selectInPlay', () => {
     expect(selected.has('S39')).toBe(false);
   });
 
-  it('floor boundary: rvol5 exactly at RVOL5_MIN (1.0) qualifies', () => {
-    const rows = [1.0, 1.0, 1.0, 1.0, 1.0].map((v, i) => ({ symbol: `E${i}`, rvol5: v }));
-    const { selected, fallback } = selectInPlay(rows);
-    expect(fallback).toBe(false);          // 5 qualified == minQualified
-    expect(selected.size).toBe(5);
+  it('floor boundary: rvol5 exactly at the floor qualifies, just below does not', () => {
+    const rows = [2.0, 2.0, 1.99, 1.5].map((v, i) => ({ symbol: `E${i}`, rvol5: v }));
+    const { selected, fallback } = selectInPlay(rows, { minRvol: 2.0 });
+    expect(fallback).toBe(false);
+    expect(selected.size).toBe(2);          // the two ≥ 2.0
+    expect(selected.has('E2')).toBe(false); // 1.99 — below the floor, NOT padded in
   });
 
-  it('fallback fires when fewer than minQualified clear the floor', () => {
-    const rows = [1.0, 1.0, 1.0, 0.9].map((v, i) => ({ symbol: `F${i}`, rvol5: v }));
-    // only 3 ≥ 1.0 < minQualified(5) → top-10 ranked regardless of floor
-    const { selected, fallback } = selectInPlay(rows);
-    expect(fallback).toBe(true);
-    expect(selected.size).toBe(4);         // all 4 (fewer than fallbackN=10 exist)
-    expect(selected.has('F3')).toBe(true); // below floor but in fallback set
+  it('count FLOATS: only names above the floor are selected (no padding)', () => {
+    const rows = [3.0, 2.5, 2.1, 1.8, 1.2, 0.9].map((v, i) => ({ symbol: `F${i}`, rvol5: v }));
+    const { selected, fallback } = selectInPlay(rows, { minRvol: 2.0 });
+    expect(fallback).toBe(false);           // fallback removed — always false now
+    expect(selected.size).toBe(3);          // exactly the 3 ≥ 2.0, not padded to a fixed count
+    expect(selected.has('F3')).toBe(false); // 1.8 — junk, excluded
   });
 
-  it('fallback is still ranked and capped at fallbackN', () => {
-    const rows = mk(30, 0.99, 0.01);       // all below floor
-    const { selected, fallback } = selectInPlay(rows);
-    expect(fallback).toBe(true);
-    expect(selected.size).toBe(10);
-    expect(selected.has('S0')).toBe(true);
-    expect(selected.has('S10')).toBe(false);
+  it('nothing clears the floor → ZERO selected (thin day, no junk-padding fallback)', () => {
+    const rows = mk(30, 1.99, 0.01);        // all below a 2.0 floor
+    const { selected, fallback } = selectInPlay(rows, { minRvol: 2.0 });
+    expect(fallback).toBe(false);
+    expect(selected.size).toBe(0);          // the old fallback would have padded to 10 — gone
   });
 
   it('filters null/NaN/undefined rvol5 — never selectable, even via fallback', () => {
