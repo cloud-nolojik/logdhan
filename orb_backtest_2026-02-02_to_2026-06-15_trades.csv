@@ -7,657 +7,958 @@ Date,Symbol,Dir,Filled,Result,Trigger,Stop,Exit,Qty,Gross,Net,R,rvol5,Source
 2026-02-03,SONACOMS,,N,skipped (atr14d_below_floor_0.00),,,,,,,,,reconstructed
 2026-02-03,KEI,,N,skipped (atr14d_below_floor_0.00),,,,,,,,,reconstructed
 2026-02-03,POLICYBZR,,N,skipped (atr14d_below_floor_0.00),,,,,,,,,reconstructed
-2026-02-04,PERSISTENT,S,Y,exited at stoploss,5804,5900.8,5900.8,9,-871,-871,-1.00,5.763976766175873,reconstructed
-2026-02-04,EXIDEIND,S,N,no fill (never triggered),332.55,335.4,,,,,,,reconstructed
-2026-02-04,ABCAPITAL,S,Y,exited at stoploss,342.4,347.2,347.2,164,-787,-787,-1.00,4.765417795951294,reconstructed
-2026-02-04,COFORGE,S,Y,exited at stoploss,1593.7,1611.9,1611.9,35,-637,-637,-1.00,4.52644525068455,reconstructed
-2026-02-04,HAL,S,N,no fill (never triggered),4097.6,4149.6,,,,,,,reconstructed
-2026-02-04,VBL,S,Y,exited at 15:15,438.2,448.55,445,96,-653,-653,-0.66,4.198462837684296,reconstructed
-2026-02-04,MANKIND,S,Y,exited at 15:15,2126.9,2148.95,2093.9,26,858,858,1.50,4.151145543827312,reconstructed
-2026-02-04,TCS,S,Y,exited at 15:15,3031.2,3067.8,2999.7,18,567,567,0.86,3.9471788006249753,reconstructed
-2026-02-05,TRENT,L,Y,exited at 15:15,2673,2643.45,2756.7,21,1758,1758,2.83,6.99861750056838,reconstructed
-2026-02-05,NHPC,L,Y,exited at 15:15,80,79,80.16,703,112,112,0.16,6.620633103576436,reconstructed
-2026-02-05,CUMMINSIND,L,Y,exited at 15:15,4190,4142.5,4387.9,13,2573,2573,4.17,3.2744668242670625,reconstructed
-2026-02-05,IOC,L,N,no fill (never triggered),178,176,,,,,,,reconstructed
-2026-02-05,TATAPOWER,L,Y,exited at stoploss,366.4,364.25,364.25,153,-329,-329,-1.00,3.142405518901652,reconstructed
-2026-02-05,NYKAA,L,Y,exited at 15:15,258.2,255.8,258.6,217,87,87,0.17,2.8464360528612827,reconstructed
-2026-02-05,GODREJCP,L,N,no fill (never triggered),1173.9,1167.65,,,,,,,reconstructed
-2026-02-05,MARICO,L,Y,exited at stoploss,745.8,741.9,741.9,75,-292,-292,-1.00,2.492843174150154,reconstructed
-2026-02-06,NYKAA,L,Y,exited at stoploss,271,268.5,268.5,207,-517,-517,-1.00,19.415701506327327,reconstructed
-2026-02-06,LICI,L,Y,exited at 15:15,439.9,437.95,451.2,127,1435,1435,5.79,11.754663845630606,reconstructed
-2026-02-06,KAYNES,L,Y,exited at stoploss,3532,3479.75,3479.75,15,-784,-784,-1.00,6.981430031659974,reconstructed
-2026-02-06,ADANIPORTS,L,N,no fill (never triggered),1575.5,1560.3,,,,,,,reconstructed
-2026-02-06,MGL,L,Y,exited at 15:15,1085,1079.5,1147.8,51,3203,3203,11.42,4.23877670424896,reconstructed
-2026-02-06,POLICYBZR,L,Y,exited at stoploss,1525.9,1499.95,1499.95,36,-934,-934,-1.00,4.189977511335961,reconstructed
-2026-02-06,HEROMOTOCO,S,N,no fill (never triggered),5715.5,5746.3,,,,,,,reconstructed
-2026-02-06,UNOMINDA,S,Y,exited at 15:15,1197.2,1208,1158.4,46,1785,1785,3.59,3.1880285379014714,reconstructed
-2026-02-09,KALYANKJIL,L,Y,exited at 15:15,407.7,404.15,437.25,137,4048,4048,8.32,13.638976361711196,reconstructed
-2026-02-09,SHREECEM,L,Y,exited at 15:15,26970,26864.5,27135,2,330,330,1.56,12.311633753958278,reconstructed
-2026-02-09,SBIN,L,Y,exited at stoploss,1135,1129.2,1129.2,49,-284,-284,-1.00,9.509188321718218,reconstructed
-2026-02-09,MGL,L,Y,exited at stoploss,1176.6,1167.55,1167.55,47,-425,-425,-1.00,4.671424695120478,reconstructed
-2026-02-09,SIEMENS,S,N,no fill (never triggered),3036.7,3064.3,,,,,,,reconstructed
-2026-02-09,TATASTEEL,S,Y,exited at stoploss,199,201,201,282,-564,-564,-1.00,3.55959666693137,reconstructed
-2026-02-09,TORNTPOWER,S,Y,exited at 15:15,1419.3,1428.25,1421,39,-66,-66,-0.19,3.269075387966708,reconstructed
-2026-02-09,GODREJCP,S,Y,exited at stoploss,1170,1175.55,1175.55,48,-266,-266,-1.00,3.2656106238730005,reconstructed
-2026-02-10,BSE,L,Y,exited at stoploss,3150,3126.35,3126.35,17,-402,-402,-1.00,4.67295216237988,reconstructed
-2026-02-10,AUROPHARMA,L,N,no fill (never triggered),1218.7,1208.9,,,,,,,reconstructed
-2026-02-10,KALYANKJIL,S,Y,exited at stoploss,432.4,437.75,437.75,130,-696,-696,-1.00,3.290443968835214,reconstructed
-2026-02-10,ZYDUSLIFE,S,Y,exited at 15:15,903.75,909.1,888.7,62,933,933,2.81,3.210430687959797,reconstructed
-2026-02-10,LUPIN,L,N,no fill (never triggered),2233.8,2221.45,,,,,,,reconstructed
-2026-02-10,TITAGARH,L,N,no fill (never triggered),798.75,795.2,,,,,,,reconstructed
-2026-02-10,TITAN,S,Y,exited at stoploss,4267.6,4290.9,4290.9,13,-303,-303,-1.00,2.3180324414782714,reconstructed
-2026-02-10,BLUESTARCO,L,Y,exited at stoploss,1971.5,1956.3,1956.3,28,-426,-426,-1.00,2.25145578828285,reconstructed
-2026-02-11,JUBLFOOD,S,Y,exited at 15:15,557.6,561.15,547.55,100,1005,1005,2.83,43.27330899118592,reconstructed
-2026-02-11,APOLLOHOSP,L,Y,exited at stoploss,7550,7521.4,7521.4,7,-200,-200,-1.00,14.100451015384534,reconstructed
-2026-02-11,TORNTPOWER,S,Y,exited at stoploss,1397.7,1407.55,1407.55,40,-394,-394,-1.00,12.830249318699122,reconstructed
-2026-02-11,EICHERMOT,L,Y,exited at 15:15,7707,7675.2,7779.5,7,508,508,2.28,11.979137655009907,reconstructed
-2026-02-11,BRITANNIA,L,N,no fill (never triggered),6156,6134.25,,,,,,,reconstructed
-2026-02-11,BHEL,L,N,no fill (never triggered),263.25,261.6,,,,,,,reconstructed
-2026-02-11,TITAN,S,Y,exited at stoploss,4313.5,4335.9,4335.9,13,-291,-291,-1.00,7.61902669763911,reconstructed
-2026-02-11,ASTRAL,L,Y,exited at 15:15,1578,1570.2,1591.5,35,473,473,1.73,5.4257720332871635,reconstructed
-2026-02-12,SJVN,L,N,no fill (never triggered),82,81,,,,,,,reconstructed
-2026-02-12,BHEL,L,Y,exited at stoploss,261.8,259.85,259.85,214,-417,-417,-1.00,19.61675930786927,reconstructed
-2026-02-12,DIVISLAB,S,Y,exited at 15:15,6201.5,6254.2,6198,9,32,32,0.07,9.640103201735432,reconstructed
-2026-02-12,MFSL,L,Y,exited at 15:15,1771.4,1762.95,1817.5,31,1429,1429,5.46,7.730509151505969,reconstructed
-2026-02-12,TECHM,S,Y,exited at 15:15,1571.6,1584,1533,35,1351,1351,3.11,3.5657729364347817,reconstructed
-2026-02-12,LAURUSLABS,S,N,no fill (never triggered),985,992.6,,,,,,,reconstructed
-2026-02-12,ASHOKLEY,L,Y,exited at 15:15,209,207,211.11,269,568,568,1.06,3.1081167284346036,reconstructed
-2026-02-12,COFORGE,S,Y,exited at 15:15,1450,1463.05,1422.7,38,1037,1037,2.09,2.976399302124335,reconstructed
-2026-02-13,MUTHOOTFIN,S,Y,exited at 15:15,3660.3,3692.3,3583.5,15,1152,1152,2.40,16.99105844006761,reconstructed
-2026-02-13,PIIND,L,Y,exited at stoploss,3189.2,3165.3,3165.3,17,-406,-406,-1.00,9.752308592957087,reconstructed
-2026-02-13,KPITTECH,S,Y,exited at stoploss,839.2,846.8,846.8,67,-509,-509,-1.00,6.53286256654511,reconstructed
-2026-02-13,INDHOTEL,S,N,no fill (never triggered),685.85,689.1,,,,,,,reconstructed
-2026-02-13,INFY,L,Y,exited at 15:15,1296,1283.4,1339.6,43,1875,1875,3.46,5.2208415391109515,reconstructed
-2026-02-13,BIOCON,L,Y,exited at stoploss,379.55,377.35,377.35,148,-326,-326,-1.00,5.202364690934321,reconstructed
-2026-02-13,TECHM,L,Y,exited at stoploss,1503,1489.7,1489.7,37,-492,-492,-1.00,4.646463680817216,reconstructed
-2026-02-13,IRCTC,S,Y,exited at stoploss,621.8,624.4,624.4,90,-234,-234,-1.00,4.591348050253202,reconstructed
-2026-02-16,TORNTPHARM,L,Y,exited at stoploss,4259.9,4244.5,4244.5,13,-200,-200,-1.00,17.392976706008653,reconstructed
-2026-02-16,GMRAIRPORT,L,Y,exited at 15:15,99,98,100.65,568,937,937,1.65,6.131275605939209,reconstructed
-2026-02-16,MANAPPURAM,S,N,no fill (never triggered),295.35,297.6,,,,,,,reconstructed
-2026-02-16,ALKEM,L,Y,exited at stoploss,5518,5480.95,5480.95,10,-371,-371,-1.00,5.2559513007902074,reconstructed
-2026-02-16,ANGELONE,L,Y,exited at 15:15,254,251.95,257.3,221,729,729,1.61,4.327300572165635,reconstructed
-2026-02-16,PPLPHARMA,L,N,no fill (never triggered),170,168,,,,,,,reconstructed
-2026-02-16,INOXWIND,S,Y,exited at stoploss,101,102,102,556,-556,-556,-1.00,3.7628579440538292,reconstructed
-2026-02-16,IGL,L,Y,exited at stoploss,172,171,171,327,-327,-327,-1.00,3.3899970889688036,reconstructed
-2026-02-17,TIINDIA,S,Y,exited at stoploss,2480.4,2505.75,2505.75,22,-558,-558,-1.00,3.4621239089150437,reconstructed
-2026-02-17,ASIANPAINT,L,N,no fill (never triggered),2452.4,2441.95,,,,,,,reconstructed
-2026-02-17,GMRAIRPORT,L,Y,exited at stoploss,102,101,101,551,-551,-551,-1.00,3.1807442308116576,reconstructed
-2026-02-17,FEDERALBNK,S,N,no fill (never triggered),283.05,284.5,,,,,,,reconstructed
-2026-02-17,HINDALCO,S,Y,exited at stoploss,884.45,890.6,890.6,63,-387,-387,-1.00,1.9952737210838816,reconstructed
-2026-02-17,LUPIN,L,Y,exited at stoploss,2250,2239.3,2239.3,25,-267,-267,-1.00,1.6618452855497763,reconstructed
-2026-02-17,PNB,L,Y,exited at 15:15,118,117,121.3,476,1571,1571,3.30,1.6596521337873096,reconstructed
-2026-02-17,SUPREMEIND,S,Y,exited at stoploss,3873.3,3895.75,3895.75,14,-314,-314,-1.00,1.4781510107015456,reconstructed
-2026-02-18,DABUR,S,Y,exited at stoploss,508.7,510.55,510.55,110,-204,-204,-1.00,11.458583518778848,reconstructed
-2026-02-18,ICICIGI,L,N,no fill (never triggered),1983.1,1975.1,,,,,,,reconstructed
-2026-02-18,RBLBANK,L,Y,exited at stoploss,326.85,325.25,325.25,172,-275,-275,-1.00,3.5346197540246918,reconstructed
-2026-02-18,INOXWIND,L,N,no fill (never triggered),103,102,,,,,,,reconstructed
-2026-02-18,UNIONBANK,L,Y,exited at 15:15,192,190,193.16,292,339,339,0.58,2.702582120950011,reconstructed
-2026-02-18,COLPAL,S,N,no fill (never triggered),2148.7,2157.3,,,,,,,reconstructed
-2026-02-18,SRF,L,Y,exited at stoploss,2731.7,2712,2712,20,-394,-394,-1.00,2.4943532024400077,reconstructed
-2026-02-18,INFY,S,Y,exited at 15:15,1333.7,1346.5,1344.9,42,-470,-470,-0.88,2.1409116449455503,reconstructed
-2026-02-19,NCC,L,Y,exited at 15:15,146,144,149.69,385,1421,1421,1.84,20.578787176508115,reconstructed
-2026-02-19,RBLBANK,L,Y,exited at stoploss,333.8,332.2,332.2,168,-269,-269,-1.00,4.229510841400526,reconstructed
-2026-02-19,JSWENERGY,L,Y,exited at stoploss,495.7,493.35,493.35,113,-266,-266,-1.00,4.080101088153734,reconstructed
-2026-02-19,COLPAL,L,Y,exited at stoploss,2225.2,2216.3,2216.3,25,-222,-222,-1.00,3.195569564737606,reconstructed
-2026-02-19,OIL,S,Y,exited at stoploss,461.6,465.1,465.1,121,-423,-423,-1.00,2.452193729721716,reconstructed
-2026-02-19,HFCL,L,N,no fill (never triggered),76,75,,,,,,,reconstructed
-2026-02-19,ZYDUSLIFE,S,Y,exited at 15:15,914.6,919.3,901.9,61,775,775,2.70,1.8231804739409299,reconstructed
-2026-02-19,ONGC,S,Y,exited at stoploss,268.3,269.75,269.75,209,-303,-303,-1.00,1.7871887503702362,reconstructed
-2026-02-20,ABB,L,Y,exited at stoploss,5993,5961.55,5961.55,9,-283,-283,-1.00,14.174759534763268,reconstructed
-2026-02-20,PERSISTENT,S,Y,exited at stoploss,5108,5158.25,5158.25,11,-553,-553,-1.00,3.6899566262894123,reconstructed
-2026-02-20,OIL,L,N,no fill (never triggered),486.15,482.4,,,,,,,reconstructed
-2026-02-20,DALBHARAT,S,Y,exited at stoploss,2056.6,2067.5,2067.5,27,-294,-294,-1.00,2.5595733563257985,reconstructed
-2026-02-20,IRCTC,L,Y,exited at 15:15,633.7,630.9,644.8,88,977,977,3.96,2.3502648165774938,reconstructed
-2026-02-20,TATACOMM,L,N,no fill (never triggered),1689.5,1680.2,,,,,,,reconstructed
-2026-02-20,PRESTIGE,L,Y,exited at stoploss,1499.5,1489.35,1489.35,37,-376,-376,-1.00,1.7693673061579414,reconstructed
-2026-02-20,CIPLA,L,Y,exited at stoploss,1333.9,1328.8,1328.8,42,-214,-214,-1.00,1.6726998444026155,reconstructed
-2026-02-23,AUBANK,S,Y,exited at stoploss,965.25,970.1,970.1,58,-281,-281,-1.00,26.132559012304814,reconstructed
-2026-02-23,UPL,S,Y,exited at 15:15,688.8,693.3,645.25,81,3528,3528,9.68,7.55001920220407,reconstructed
-2026-02-23,ABB,S,Y,exited at stoploss,5955.5,5992.3,5992.3,9,-331,-331,-1.00,4.961188667964825,reconstructed
-2026-02-23,CUMMINSIND,S,N,no fill (never triggered),4769.9,4802.15,,,,,,,reconstructed
+2026-02-04,PERSISTENT,S,N,skipped (no_confirm),5804,5852.4,,,,,,,reconstructed
+2026-02-04,EXIDEIND,S,N,skipped (no_confirm),332.55,334,,,,,,,reconstructed
+2026-02-04,ABCAPITAL,S,N,skipped (no_confirm),342.4,344.8,,,,,,,reconstructed
+2026-02-04,COFORGE,S,Y,exited at stoploss,1593.7,1602.8,1601.3,35,-318,-382,-1.20,4.52644525068455,reconstructed
+2026-02-04,HAL,S,N,skipped (no_confirm),4097.6,4123.6,,,,,,,reconstructed
+2026-02-04,VBL,S,N,skipped (no_confirm),438.2,443.4,,,,,,,reconstructed
+2026-02-04,MANKIND,S,Y,exited at 15:15,2126.9,2137.95,2093.9,26,536,475,1.65,4.151145543827312,reconstructed
+2026-02-04,TCS,S,Y,exited at 15:15,3031.2,3049.5,2999.7,18,536,476,1.45,3.9471788006249753,reconstructed
+2026-02-05,TRENT,L,Y,exited at stoploss,2673,2658.2,2701.1,21,-311,-375,-1.21,6.99861750056838,reconstructed
+2026-02-05,TRENT,L,Y,exited at stoploss,2673,2658.2,2671.8999999999996,21,-311,-374,-1.20,6.99861750056838,reconstructed
+2026-02-05,NHPC,L,Y,exited at 15:15,80,79,80.16,703,569,508,0.72,6.620633103576436,reconstructed
+2026-02-05,CUMMINSIND,L,Y,exited at stoploss,4190,4166.25,4187.55,13,-309,-370,-1.20,3.2744668242670625,reconstructed
+2026-02-05,CUMMINSIND,L,Y,exited at stoploss,4190,4166.25,4250.75,13,-309,-371,-1.20,3.2744668242670625,reconstructed
+2026-02-05,IOC,L,N,skipped (no_confirm),178,177,,,,,,,reconstructed
+2026-02-05,TATAPOWER,L,N,skipped (no_confirm),366.4,365.3,,,,,,,reconstructed
+2026-02-05,NYKAA,L,Y,exited at stoploss,258.2,257,257.3,217,-260,-333,-1.28,2.8464360528612827,reconstructed
+2026-02-05,NYKAA,L,Y,exited at stoploss,258.2,257,257.23,217,-260,-333,-1.28,2.8464360528612827,reconstructed
+2026-02-05,GODREJCP,L,N,skipped (no_confirm),1173.9,1170.75,,,,,,,reconstructed
+2026-02-05,MARICO,L,N,skipped (no_confirm),745.8,743.85,,,,,,,reconstructed
+2026-02-06,NYKAA,L,Y,exited at stoploss,271,269.75,273.1,207,-259,-332,-1.28,19.415701506327327,reconstructed
+2026-02-06,NYKAA,L,Y,exited at 15:15,271,269.75,277.84,207,859,797,3.08,19.415701506327327,reconstructed
+2026-02-06,LICI,L,Y,exited at stoploss,439.9,438.9,444.85,127,-127,-196,-1.54,11.754663845630606,reconstructed
+2026-02-06,LICI,L,Y,exited at 15:15,439.9,438.9,451.2,127,800,738,5.81,11.754663845630606,reconstructed
+2026-02-06,KAYNES,L,Y,exited at stoploss,3532,3505.85,3518.95,15,-392,-451,-1.15,6.981430031659974,reconstructed
+2026-02-06,KAYNES,L,Y,exited at stoploss,3532,3505.85,3506.35,15,-392,-451,-1.15,6.981430031659974,reconstructed
+2026-02-06,ADANIPORTS,L,N,skipped (no_confirm),1575.5,1567.9,,,,,,,reconstructed
+2026-02-06,MGL,L,Y,exited at stoploss,1085,1082.25,1095.05,51,-140,-204,-1.46,4.23877670424896,reconstructed
+2026-02-06,MGL,L,Y,exited at stoploss,1085,1082.25,1089.35,51,-140,-204,-1.46,4.23877670424896,reconstructed
+2026-02-06,POLICYBZR,L,Y,exited at 15:15,1525.9,1512.9,1525.5,36,-324,-385,-0.82,4.189977511335961,reconstructed
+2026-02-06,HEROMOTOCO,S,N,skipped (no_confirm),5715.5,5730.9,,,,,,,reconstructed
+2026-02-06,UNOMINDA,S,Y,exited at stoploss,1197.2,1202.6,1191.4999999999998,46,-248,-311,-1.25,3.1880285379014714,reconstructed
+2026-02-06,UNOMINDA,S,Y,exited at 15:15,1197.2,1202.6,1158.4,46,1357,1297,5.22,3.1880285379014714,reconstructed
+2026-02-09,KALYANKJIL,L,Y,exited at stoploss,407.7,405.9,416.45,137,-247,-316,-1.28,13.638976361711196,reconstructed
+2026-02-09,KALYANKJIL,L,Y,exited at stoploss,407.7,405.9,414.8,137,-247,-316,-1.28,13.638976361711196,reconstructed
+2026-02-09,SHREECEM,L,Y,exited at stoploss,26970,26917.25,27047.25,2,-105,-165,-1.57,12.311633753958278,reconstructed
+2026-02-09,SHREECEM,L,Y,exited at stoploss,26970,26917.25,27002.25,2,-105,-165,-1.57,12.311633753958278,reconstructed
+2026-02-09,SBIN,L,Y,exited at 15:15,1135,1132.1,1146.9,49,564,502,3.53,9.509188321718218,reconstructed
+2026-02-09,MGL,L,Y,exited at stoploss,1176.6,1172.05,1172.75,47,-214,-277,-1.30,4.671424695120478,reconstructed
+2026-02-09,SIEMENS,S,N,skipped (no_confirm),3036.7,3050.5,,,,,,,reconstructed
+2026-02-09,TATASTEEL,S,Y,exited at stoploss,199,200,200.19,282,-282,-626,-2.22,3.55959666693137,reconstructed
+2026-02-09,TORNTPOWER,S,Y,exited at stoploss,1419.3,1423.8,1423.4,39,-175,-238,-1.36,3.269075387966708,reconstructed
+2026-02-09,GODREJCP,S,N,skipped (no_confirm),1170,1172.8,,,,,,,reconstructed
+2026-02-10,BSE,L,Y,exited at stoploss,3150,3138.15,3152.55,17,-201,-261,-1.30,4.67295216237988,reconstructed
+2026-02-10,BSE,L,Y,exited at stoploss,3150,3138.15,3154.25,17,-201,-262,-1.30,4.67295216237988,reconstructed
+2026-02-10,AUROPHARMA,L,N,skipped (no_confirm),1218.7,1213.8,,,,,,,reconstructed
+2026-02-10,KALYANKJIL,S,Y,exited at stoploss,432.4,435.1,433.85,130,-351,-419,-1.19,3.290443968835214,reconstructed
+2026-02-10,KALYANKJIL,S,Y,exited at stoploss,432.4,435.1,433.70000000000005,130,-351,-419,-1.19,3.290443968835214,reconstructed
+2026-02-10,ZYDUSLIFE,S,Y,exited at 15:15,903.75,906.45,888.7,62,877,816,4.87,3.210430687959797,reconstructed
+2026-02-10,LUPIN,L,N,skipped (no_confirm),2233.8,2227.6,,,,,,,reconstructed
+2026-02-10,TITAGARH,L,N,skipped (no_confirm),798.75,796.95,,,,,,,reconstructed
+2026-02-10,TITAN,S,Y,exited at stoploss,4267.6,4279.25,4265.75,13,-151,-213,-1.41,2.3180324414782714,reconstructed
+2026-02-10,TITAN,S,Y,exited at stoploss,4267.6,4279.25,4272.849999999999,13,-151,-213,-1.41,2.3180324414782714,reconstructed
+2026-02-10,BLUESTARCO,L,Y,exited at stoploss,1971.5,1963.9,1978,28,-213,-275,-1.29,2.25145578828285,reconstructed
+2026-02-10,BLUESTARCO,L,Y,exited at stoploss,1971.5,1963.9,1964.5,28,-213,-275,-1.29,2.25145578828285,reconstructed
+2026-02-11,JUBLFOOD,S,Y,exited at 15:15,557.6,559.4,547.55,100,915,854,4.74,43.27330899118592,reconstructed
+2026-02-11,APOLLOHOSP,L,Y,exited at stoploss,7550,7535.7,7589.2,7,-100,-159,-1.59,14.100451015384534,reconstructed
+2026-02-11,APOLLOHOSP,L,Y,exited at stoploss,7550,7535.7,7579.2,7,-100,-159,-1.59,14.100451015384534,reconstructed
+2026-02-11,TORNTPOWER,S,N,skipped (no_confirm),1397.7,1402.65,,,,,,,reconstructed
+2026-02-11,EICHERMOT,L,Y,exited at stoploss,7707,7691.1,7766.6,7,-111,-172,-1.54,11.979137655009907,reconstructed
+2026-02-11,EICHERMOT,L,Y,exited at stoploss,7707,7691.1,7754.1,7,-111,-171,-1.54,11.979137655009907,reconstructed
+2026-02-11,BRITANNIA,L,N,skipped (no_confirm),6156,6145.1,,,,,,,reconstructed
+2026-02-11,BHEL,L,N,skipped (no_confirm),263.25,262.4,,,,,,,reconstructed
+2026-02-11,TITAN,S,Y,exited at stoploss,4313.5,4324.7,4320.599999999999,13,-146,-208,-1.43,7.61902669763911,reconstructed
+2026-02-11,TITAN,S,Y,exited at 15:15,4313.5,4324.7,4251.1,13,766,704,4.84,7.61902669763911,reconstructed
+2026-02-11,ASTRAL,L,N,skipped (no_confirm),1578,1574.1,,,,,,,reconstructed
+2026-02-12,SJVN,L,N,skipped (no_confirm),82,81,,,,,,,reconstructed
+2026-02-12,BHEL,L,Y,exited at stoploss,261.8,260.8,261,214,-214,-286,-1.34,19.61675930786927,reconstructed
+2026-02-12,DIVISLAB,S,N,skipped (no_confirm),6201.5,6227.85,,,,,,,reconstructed
+2026-02-12,MFSL,L,Y,exited at stoploss,1771.4,1767.15,1767.85,31,-132,-194,-1.47,7.730509151505969,reconstructed
+2026-02-12,MFSL,L,Y,exited at 15:15,1771.4,1767.15,1817.5,31,1352,1291,9.80,7.730509151505969,reconstructed
+2026-02-12,TECHM,S,Y,exited at stoploss,1571.6,1577.8,1571.7,35,-217,-279,-1.29,3.5657729364347817,reconstructed
+2026-02-12,TECHM,S,Y,exited at stoploss,1571.6,1577.8,1568.4,35,-217,-279,-1.29,3.5657729364347817,reconstructed
+2026-02-12,LAURUSLABS,S,N,skipped (no_confirm),985,988.8,,,,,,,reconstructed
+2026-02-12,ASHOKLEY,L,Y,exited at stoploss,209,208,209.8,269,-269,-600,-2.23,3.1081167284346036,reconstructed
+2026-02-12,ASHOKLEY,L,Y,exited at 15:15,209,208,211.11,269,594,533,1.98,3.1081167284346036,reconstructed
+2026-02-12,COFORGE,S,Y,exited at stoploss,1450,1456.55,1447.25,38,-249,-311,-1.25,2.976399302124335,reconstructed
+2026-02-12,COFORGE,S,Y,exited at stoploss,1450,1456.55,1450.6499999999999,38,-249,-311,-1.25,2.976399302124335,reconstructed
+2026-02-13,MUTHOOTFIN,S,Y,exited at 15:15,3660.3,3676.3,3583.5,15,645,585,2.44,16.99105844006761,reconstructed
+2026-02-13,PIIND,L,Y,exited at stoploss,3189.2,3177.25,3189.05,17,-203,-264,-1.30,9.752308592957087,reconstructed
+2026-02-13,PIIND,L,Y,exited at stoploss,3189.2,3177.25,3186.05,17,-203,-264,-1.30,9.752308592957087,reconstructed
+2026-02-13,KPITTECH,S,Y,exited at stoploss,839.2,843,842.1999999999999,67,-255,-320,-1.26,6.53286256654511,reconstructed
+2026-02-13,KPITTECH,S,Y,exited at stoploss,839.2,843,838.9,67,-255,-319,-1.25,6.53286256654511,reconstructed
+2026-02-13,INDHOTEL,S,N,skipped (no_confirm),685.85,687.5,,,,,,,reconstructed
+2026-02-13,INFY,L,Y,exited at stoploss,1296,1289.7,1293,43,-271,-335,-1.23,5.2208415391109515,reconstructed
+2026-02-13,INFY,L,Y,exited at 15:15,1296,1289.7,1339.6,43,1810,1749,6.46,5.2208415391109515,reconstructed
+2026-02-13,BIOCON,L,N,skipped (no_confirm),379.55,378.45,,,,,,,reconstructed
+2026-02-13,TECHM,L,Y,exited at 15:15,1503,1496.35,1534.2,37,1025,964,3.92,4.646463680817216,reconstructed
+2026-02-13,IRCTC,S,N,skipped (no_confirm),621.8,623.1,,,,,,,reconstructed
+2026-02-16,TORNTPHARM,L,Y,exited at stoploss,4259.9,4252.2,4260,13,-100,-162,-1.62,17.392976706008653,reconstructed
+2026-02-16,TORNTPHARM,L,Y,exited at stoploss,4259.9,4252.2,4256.8,13,-100,-162,-1.62,17.392976706008653,reconstructed
+2026-02-16,GMRAIRPORT,L,Y,exited at 15:15,99,98,100.65,568,858,796,1.40,6.131275605939209,reconstructed
+2026-02-16,MANAPPURAM,S,N,skipped (no_confirm),295.35,296.5,,,,,,,reconstructed
+2026-02-16,ALKEM,L,Y,exited at stoploss,5518,5499.45,5515.45,10,-186,-247,-1.33,5.2559513007902074,reconstructed
+2026-02-16,ANGELONE,L,Y,exited at stoploss,254,252.95,256.84999999999997,221,-232,-306,-1.32,4.327300572165635,reconstructed
+2026-02-16,ANGELONE,L,Y,exited at stoploss,254,252.95,255.64999999999998,221,-232,-306,-1.32,4.327300572165635,reconstructed
+2026-02-16,PPLPHARMA,L,N,skipped (no_confirm),170,169,,,,,,,reconstructed
+2026-02-16,INOXWIND,S,Y,exited at stoploss,101,102,101.2,556,-556,-1173,-2.11,3.7628579440538292,reconstructed
+2026-02-16,INOXWIND,S,Y,exited at stoploss,101,102,102.41,556,-556,-1174,-2.11,3.7628579440538292,reconstructed
+2026-02-16,IGL,L,Y,exited at stoploss,172,171,170.25,327,-327,-716,-2.19,3.3899970889688036,reconstructed
+2026-02-16,IGL,L,Y,exited at 15:15,172,171,171.3,327,16,-45,-0.14,3.3899970889688036,reconstructed
+2026-02-17,TIINDIA,S,Y,exited at 15:15,2480.4,2493.1,2459.3,22,455,395,1.42,3.4621239089150437,reconstructed
+2026-02-17,ASIANPAINT,L,N,skipped (no_confirm),2452.4,2447.15,,,,,,,reconstructed
+2026-02-17,GMRAIRPORT,L,Y,exited at stoploss,102,101,100.9,551,-551,-1164,-2.11,3.1807442308116576,reconstructed
+2026-02-17,FEDERALBNK,S,N,skipped (no_confirm),283.05,283.8,,,,,,,reconstructed
+2026-02-17,HINDALCO,S,Y,exited at stoploss,884.45,887.55,886.5999999999999,63,-195,-260,-1.33,1.9952737210838816,reconstructed
+2026-02-17,LUPIN,L,Y,exited at stoploss,2250,2244.65,2251.4500000000003,25,-134,-197,-1.47,1.6618452855497763,reconstructed
+2026-02-17,LUPIN,L,Y,exited at stoploss,2250,2244.65,2247.4500000000003,25,-134,-197,-1.47,1.6618452855497763,reconstructed
+2026-02-17,PNB,L,Y,exited at 15:15,118,117,121.3,476,1480,1418,2.98,1.6596521337873096,reconstructed
+2026-02-17,SUPREMEIND,S,N,skipped (no_confirm),3873.3,3884.55,,,,,,,reconstructed
+2026-02-18,DABUR,S,Y,exited at stoploss,508.7,509.65,507.25,110,-104,-171,-1.64,11.458583518778848,reconstructed
+2026-02-18,DABUR,S,Y,exited at stoploss,508.7,509.65,509.2,110,-104,-171,-1.64,11.458583518778848,reconstructed
+2026-02-18,ICICIGI,L,N,skipped (no_confirm),1983.1,1979.1,,,,,,,reconstructed
+2026-02-18,RBLBANK,L,N,skipped (no_confirm),326.85,326.05,,,,,,,reconstructed
+2026-02-18,INOXWIND,L,N,skipped (no_confirm),103,102,,,,,,,reconstructed
+2026-02-18,UNIONBANK,L,Y,exited at 15:15,192,191,193.16,292,400,338,1.16,2.702582120950011,reconstructed
+2026-02-18,COLPAL,S,N,skipped (no_confirm),2148.7,2153,,,,,,,reconstructed
+2026-02-18,SRF,L,Y,exited at stoploss,2731.7,2721.85,2723.9500000000003,20,-197,-258,-1.31,2.4943532024400077,reconstructed
+2026-02-18,SRF,L,Y,exited at stoploss,2731.7,2721.85,2724.15,20,-197,-258,-1.31,2.4943532024400077,reconstructed
+2026-02-18,INFY,S,Y,exited at stoploss,1333.7,1340.1,1336.4999999999998,42,-269,-332,-1.24,2.1409116449455503,reconstructed
+2026-02-19,NCC,L,Y,exited at 15:15,146,145,149.69,385,1421,1359,3.53,20.578787176508115,reconstructed
+2026-02-19,RBLBANK,L,Y,exited at stoploss,333.8,333,333.34999999999997,168,-134,-205,-1.52,4.229510841400526,reconstructed
+2026-02-19,RBLBANK,L,Y,exited at stoploss,333.8,333,334,168,-134,-205,-1.52,4.229510841400526,reconstructed
+2026-02-19,JSWENERGY,L,N,skipped (no_confirm),495.7,494.5,,,,,,,reconstructed
+2026-02-19,COLPAL,L,Y,exited at stoploss,2225.2,2220.75,2223.65,25,-111,-174,-1.56,3.195569564737606,reconstructed
+2026-02-19,COLPAL,L,Y,exited at stoploss,2225.2,2220.75,2222.25,25,-111,-174,-1.56,3.195569564737606,reconstructed
+2026-02-19,OIL,S,N,skipped (no_confirm),461.6,463.35,,,,,,,reconstructed
+2026-02-19,HFCL,L,N,skipped (no_confirm),76,75,,,,,,,reconstructed
+2026-02-19,ZYDUSLIFE,S,Y,exited at stoploss,914.6,916.95,916.25,61,-143,-208,-1.45,1.8231804739409299,reconstructed
+2026-02-19,ZYDUSLIFE,S,Y,exited at 15:15,914.6,916.95,901.9,61,741,680,4.74,1.8231804739409299,reconstructed
+2026-02-19,ONGC,S,Y,exited at stoploss,268.3,269.05,268.9,209,-157,-229,-1.46,1.7871887503702362,reconstructed
+2026-02-19,ONGC,S,Y,exited at stoploss,268.3,269.05,268.75,209,-157,-229,-1.46,1.7871887503702362,reconstructed
+2026-02-20,ABB,L,Y,exited at stoploss,5993,5977.25,5977.75,9,-142,-202,-1.42,14.174759534763268,reconstructed
+2026-02-20,ABB,L,Y,exited at stoploss,5993,5977.25,5989.75,9,-142,-202,-1.42,14.174759534763268,reconstructed
+2026-02-20,PERSISTENT,S,Y,exited at stoploss,5108,5133.15,5127.15,11,-277,-339,-1.23,3.6899566262894123,reconstructed
+2026-02-20,PERSISTENT,S,Y,exited at stoploss,5108,5133.15,5130.15,11,-277,-339,-1.23,3.6899566262894123,reconstructed
+2026-02-20,OIL,L,N,skipped (no_confirm),486.15,484.25,,,,,,,reconstructed
+2026-02-20,DALBHARAT,S,N,skipped (no_confirm),2056.6,2062.05,,,,,,,reconstructed
+2026-02-20,IRCTC,L,Y,exited at stoploss,633.7,632.3,635.0999999999999,88,-123,-189,-1.54,2.3502648165774938,reconstructed
+2026-02-20,IRCTC,L,Y,exited at stoploss,633.7,632.3,636.6999999999999,88,-123,-189,-1.54,2.3502648165774938,reconstructed
+2026-02-20,TATACOMM,L,N,skipped (no_confirm),1689.5,1684.85,,,,,,,reconstructed
+2026-02-20,PRESTIGE,L,N,skipped (no_confirm),1499.5,1494.4,,,,,,,reconstructed
+2026-02-20,CIPLA,L,Y,exited at stoploss,1333.9,1331.35,1334.6499999999999,42,-107,-171,-1.60,1.6726998444026155,reconstructed
+2026-02-20,CIPLA,L,Y,exited at 15:15,1333.9,1331.35,1342,42,290,228,2.13,1.6726998444026155,reconstructed
+2026-02-23,AUBANK,S,Y,exited at stoploss,965.25,967.7,954.85,58,-142,-206,-1.45,26.132559012304814,reconstructed
+2026-02-23,AUBANK,S,Y,exited at stoploss,965.25,967.7,960.4000000000001,58,-142,-206,-1.45,26.132559012304814,reconstructed
+2026-02-23,UPL,S,Y,exited at 15:15,688.8,691.05,645.25,81,2584,2524,13.85,7.55001920220407,reconstructed
+2026-02-23,ABB,S,Y,exited at stoploss,5955.5,5973.9,5969.9,9,-166,-225,-1.36,4.961188667964825,reconstructed
+2026-02-23,ABB,S,Y,exited at stoploss,5955.5,5973.9,5962.4,9,-166,-225,-1.36,4.961188667964825,reconstructed
+2026-02-23,CUMMINSIND,S,N,skipped (no_confirm),4769.9,4786.05,,,,,,,reconstructed
 2026-02-23,IDFCFIRSTB,,N,skipped (no_5min_or_candle),,,,,,,,,reconstructed
-2026-02-23,CIPLA,S,Y,exited at stoploss,1314.4,1319.4,1319.4,42,-210,-210,-1.00,3.469269719851717,reconstructed
-2026-02-23,AXISBANK,L,Y,exited at stoploss,1393.8,1387.75,1387.75,40,-242,-242,-1.00,2.4785462339377005,reconstructed
-2026-02-23,KEI,S,Y,exited at stoploss,4778.5,4808.2,4808.2,11,-327,-327,-1.00,2.391058155895113,reconstructed
-2026-02-24,IDFCFIRSTB,L,Y,exited at stoploss,71,70,70,792,-792,-792,-1.00,21.370991408462668,reconstructed
-2026-02-24,JSL,L,N,no fill (never triggered),814,809.2,,,,,,,reconstructed
-2026-02-24,UPL,L,N,no fill (never triggered),653.65,648.15,,,,,,,reconstructed
-2026-02-24,PERSISTENT,S,Y,exited at 15:15,4838.5,4884.1,4668.5,11,1870,1870,3.73,3.3300712285946776,reconstructed
-2026-02-24,COFORGE,S,Y,exited at 15:15,1257.1,1270.15,1212.4,44,1967,1967,3.43,2.678158037884929,reconstructed
-2026-02-24,MGL,L,Y,exited at 15:15,1179,1171.55,1191,47,564,564,1.61,2.6559092575446037,reconstructed
-2026-02-24,BAJAJ-AUTO,S,Y,exited at stoploss,9685,9720.6,9720.6,5,-178,-178,-1.00,2.5174621845407628,reconstructed
-2026-02-24,HCLTECH,S,Y,exited at 15:15,1383.2,1392.6,1338.4,40,1792,1792,4.77,2.417473864759004,reconstructed
-2026-02-25,IDFCFIRSTB,S,Y,exited at 15:15,70,71,70.26,803,-209,-209,-0.26,5.94376039596008,reconstructed
-2026-02-25,IRFC,S,Y,exited at 15:15,105,106,104.59,535,219,219,0.41,5.815792489655728,reconstructed
-2026-02-25,CUMMINSIND,S,Y,exited at stoploss,4911.6,4941.05,4941.05,11,-324,-324,-1.00,5.123897177803792,reconstructed
-2026-02-25,SAIL,L,Y,exited at 15:15,164,162,164.96,342,328,328,0.48,4.358688844772248,reconstructed
-2026-02-25,KPITTECH,L,Y,exited at stoploss,796.5,789.6,789.6,70,-483,-483,-1.00,4.082969720643361,reconstructed
-2026-02-25,NTPC,L,Y,exited at stoploss,388,386.7,386.7,144,-187,-187,-1.00,3.559131041591213,reconstructed
-2026-02-25,CESC,L,Y,exited at stoploss,161,160,160,349,-349,-349,-1.00,3.4769989042589624,reconstructed
-2026-02-25,DRREDDY,S,N,no fill (never triggered),1266.9,1271.4,,,,,,,reconstructed
+2026-02-23,CIPLA,S,Y,exited at stoploss,1314.4,1316.9,1314.3,42,-105,-168,-1.60,3.469269719851717,reconstructed
+2026-02-23,AXISBANK,L,Y,exited at stoploss,1393.8,1390.75,1392.8500000000001,40,-122,-185,-1.52,2.4785462339377005,reconstructed
+2026-02-23,AXISBANK,L,Y,exited at stoploss,1393.8,1390.75,1392.75,40,-122,-185,-1.52,2.4785462339377005,reconstructed
+2026-02-23,KEI,S,Y,exited at stoploss,4778.5,4793.35,4793.05,11,-163,-222,-1.36,2.391058155895113,reconstructed
+2026-02-23,KEI,S,Y,exited at stoploss,4778.5,4793.35,4789.450000000001,11,-163,-222,-1.36,2.391058155895113,reconstructed
+2026-02-24,IDFCFIRSTB,L,N,skipped (no_confirm),71,70,,,,,,,reconstructed
+2026-02-24,JSL,L,N,skipped (no_confirm),814,811.6,,,,,,,reconstructed
+2026-02-24,UPL,L,N,skipped (no_confirm),653.65,650.9,,,,,,,reconstructed
+2026-02-24,PERSISTENT,S,Y,exited at 15:15,4838.5,4861.3,4668.5,11,1744,1685,6.72,3.3300712285946776,reconstructed
+2026-02-24,COFORGE,S,Y,exited at 15:15,1257.1,1263.65,1212.4,44,1813,1752,6.08,2.678158037884929,reconstructed
+2026-02-24,MGL,L,Y,exited at 15:15,1179,1175.25,1191,47,494,432,2.45,2.6559092575446037,reconstructed
+2026-02-24,BAJAJ-AUTO,S,N,skipped (no_confirm),9685,9702.8,,,,,,,reconstructed
+2026-02-24,HCLTECH,S,Y,exited at 15:15,1383.2,1387.9,1338.4,40,1580,1519,8.08,2.417473864759004,reconstructed
+2026-02-25,IDFCFIRSTB,S,N,skipped (no_confirm),70,71,,,,,,,reconstructed
+2026-02-25,IRFC,S,Y,exited at 15:15,105,106,104.59,535,246,184,0.34,5.815792489655728,reconstructed
+2026-02-25,CUMMINSIND,S,Y,exited at stoploss,4911.6,4926.35,4924.55,11,-162,-222,-1.37,5.123897177803792,reconstructed
+2026-02-25,CUMMINSIND,S,Y,exited at stoploss,4911.6,4926.35,4919.85,11,-162,-222,-1.37,5.123897177803792,reconstructed
+2026-02-25,SAIL,L,Y,exited at 15:15,164,163,164.96,342,164,102,0.30,4.358688844772248,reconstructed
+2026-02-25,KPITTECH,L,Y,exited at stoploss,796.5,793.05,793.8499999999999,70,-242,-306,-1.27,4.082969720643361,reconstructed
+2026-02-25,KPITTECH,L,Y,exited at stoploss,796.5,793.05,793.8499999999999,70,-242,-306,-1.27,4.082969720643361,reconstructed
+2026-02-25,NTPC,L,N,skipped (no_confirm),388,387.35,,,,,,,reconstructed
+2026-02-25,CESC,L,N,skipped (no_confirm),161,160,,,,,,,reconstructed
+2026-02-25,DRREDDY,S,N,skipped (no_confirm),1266.9,1269.15,,,,,,,reconstructed
 2026-02-26,POONAWALLA,,N,skipped (doji_first_candle),,,,,,,,,reconstructed
-2026-02-26,MANAPPURAM,L,Y,exited at stoploss,294.6,292.65,292.65,190,-371,-371,-1.00,5.273976978484255,reconstructed
-2026-02-26,ETERNAL,L,Y,exited at stoploss,252.8,250.8,250.8,222,-444,-444,-1.00,4.715993080963669,reconstructed
-2026-02-26,BANDHANBNK,L,Y,exited at stoploss,189,187,187,297,-594,-594,-1.00,3.832262424941292,reconstructed
-2026-02-26,BANKBARODA,L,Y,exited at stoploss,312.2,310.95,310.95,180,-225,-225,-1.00,2.5952043282028936,reconstructed
-2026-02-26,IEX,L,N,no fill (never triggered),131,130,,,,,,,reconstructed
-2026-02-26,ZYDUSLIFE,S,N,no fill (never triggered),922.25,926.3,,,,,,,reconstructed
-2026-02-26,IRFC,L,N,no fill (never triggered),106,105,,,,,,,reconstructed
-2026-02-27,LTF,S,N,no fill (never triggered),278,279.8,,,,,,,reconstructed
-2026-02-27,IRCTC,S,N,no fill (never triggered),580,583.25,,,,,,,reconstructed
-2026-02-27,NBCC,S,Y,exited at 15:15,93,94,92.56,604,266,266,0.44,2.953561212505277,reconstructed
-2026-02-27,BANDHANBNK,S,Y,exited at stoploss,180,182,182,312,-624,-624,-1.00,2.507494285939158,reconstructed
-2026-02-27,FORTIS,S,Y,exited at 15:15,963.45,968.1,940.9,58,1308,1308,4.85,2.4180938183451,reconstructed
-2026-02-27,PETRONET,L,Y,exited at 15:15,320.45,318.95,323.35,175,508,508,1.93,2.2910142596586986,reconstructed
-2026-02-27,TATACONSUM,S,Y,exited at 15:15,1149.4,1153.65,1139.9,48,456,456,2.24,2.0333391988484686,reconstructed
-2026-02-27,MANKIND,L,N,no fill (never triggered),2275,2265.6,,,,,,,reconstructed
-2026-03-02,KEI,L,Y,exited at stoploss,5150,5123.9,5123.9,10,-261,-261,-1.00,6.046766337964219,reconstructed
-2026-03-02,NHPC,L,N,no fill (never triggered),76,75,,,,,,,reconstructed
-2026-03-02,OIL,S,Y,exited at 15:15,493.05,496.1,489.8,114,371,371,1.07,3.963933451297225,reconstructed
-2026-03-02,ONGC,S,Y,exited at 15:15,286.3,287.65,282.65,196,715,715,2.70,3.5856693665473776,reconstructed
-2026-03-02,DALBHARAT,L,Y,exited at stoploss,1957.9,1948.8,1948.8,28,-255,-255,-1.00,3.4485682620781533,reconstructed
-2026-03-02,CAMS,L,Y,exited at stoploss,664,660.55,660.55,84,-290,-290,-1.00,3.166984642457674,reconstructed
+2026-02-26,MANAPPURAM,L,Y,exited at stoploss,294.6,293.6,293.65,190,-190,-261,-1.37,5.273976978484255,reconstructed
+2026-02-26,ETERNAL,L,Y,exited at stoploss,252.8,251.8,252.55,222,-222,-295,-1.33,4.715993080963669,reconstructed
+2026-02-26,ETERNAL,L,Y,exited at stoploss,252.8,251.8,251.95,222,-222,-295,-1.33,4.715993080963669,reconstructed
+2026-02-26,BANDHANBNK,L,Y,exited at stoploss,189,188,187.41,297,-297,-656,-2.21,3.832262424941292,reconstructed
+2026-02-26,BANKBARODA,L,Y,exited at stoploss,312.2,311.55,311.8,180,-117,-188,-1.61,2.5952043282028936,reconstructed
+2026-02-26,IEX,L,N,skipped (no_confirm),131,130,,,,,,,reconstructed
+2026-02-26,ZYDUSLIFE,S,N,skipped (no_confirm),922.25,924.3,,,,,,,reconstructed
+2026-02-26,IRFC,L,N,skipped (no_confirm),106,105,,,,,,,reconstructed
+2026-02-27,LTF,S,N,skipped (no_confirm),278,278.9,,,,,,,reconstructed
+2026-02-27,IRCTC,S,N,skipped (no_confirm),580,581.65,,,,,,,reconstructed
+2026-02-27,NBCC,S,Y,exited at 15:15,93,94,92.56,604,580,518,0.86,2.953561212505277,reconstructed
+2026-02-27,BANDHANBNK,S,Y,exited at stoploss,180,181,181.06,312,-312,-686,-2.20,2.507494285939158,reconstructed
+2026-02-27,BANDHANBNK,S,Y,exited at stoploss,180,181,180.75,312,-312,-686,-2.20,2.507494285939158,reconstructed
+2026-02-27,FORTIS,S,Y,exited at stoploss,963.45,965.8,963.6499999999999,58,-136,-201,-1.47,2.4180938183451,reconstructed
+2026-02-27,FORTIS,S,Y,exited at 15:15,963.45,965.8,940.9,58,1291,1229,9.02,2.4180938183451,reconstructed
+2026-02-27,PETRONET,L,Y,exited at stoploss,320.45,319.7,322.4,175,-131,-202,-1.54,2.2910142596586986,reconstructed
+2026-02-27,PETRONET,L,Y,exited at stoploss,320.45,319.7,322.55,175,-131,-202,-1.54,2.2910142596586986,reconstructed
+2026-02-27,TATACONSUM,S,Y,exited at 15:15,1149.4,1151.55,1139.9,48,451,391,3.78,2.0333391988484686,reconstructed
+2026-02-27,MANKIND,L,N,skipped (no_confirm),2275,2270.3,,,,,,,reconstructed
+2026-03-02,KEI,L,Y,exited at stoploss,5150,5136.95,5173.95,10,-131,-188,-1.44,6.046766337964219,reconstructed
+2026-03-02,KEI,L,Y,exited at stoploss,5150,5136.95,5146.95,10,-131,-188,-1.44,6.046766337964219,reconstructed
+2026-03-02,NHPC,L,Y,exited at stoploss,76,75,74.27,740,-740,-1541,-2.08,4.435220382279574,reconstructed
+2026-03-02,OIL,S,Y,exited at stoploss,493.05,494.6,488.15000000000003,114,-177,-243,-1.38,3.963933451297225,reconstructed
+2026-03-02,OIL,S,Y,exited at stoploss,493.05,494.6,488.6,114,-177,-243,-1.38,3.963933451297225,reconstructed
+2026-03-02,ONGC,S,Y,exited at stoploss,286.3,287,285.45,196,-137,-208,-1.52,3.5856693665473776,reconstructed
+2026-03-02,ONGC,S,Y,exited at stoploss,286.3,287,281.4,196,-137,-208,-1.51,3.5856693665473776,reconstructed
+2026-03-02,DALBHARAT,L,Y,exited at stoploss,1957.9,1953.35,1966.1499999999999,28,-127,-189,-1.49,3.4485682620781533,reconstructed
+2026-03-02,DALBHARAT,L,Y,exited at stoploss,1957.9,1953.35,1968.4499999999998,28,-127,-190,-1.49,3.4485682620781533,reconstructed
+2026-03-02,CAMS,L,Y,exited at stoploss,664,662.25,666.1,84,-147,-213,-1.45,3.166984642457674,reconstructed
+2026-03-02,CAMS,L,Y,exited at stoploss,664,662.25,663.6,84,-147,-213,-1.45,3.166984642457674,reconstructed
 2026-03-02,YESBANK,,N,skipped (atr14d_below_floor_0.34),,,,,,,,,reconstructed
-2026-03-02,BPCL,L,N,no fill (never triggered),376.95,375.25,,,,,,,reconstructed
-2026-03-04,PETRONET,S,Y,exited at stoploss,284.4,286.05,286.05,197,-325,-325,-1.00,14.461255424669664,reconstructed
-2026-03-04,LT,S,Y,exited at stoploss,3776.3,3795.7,3795.7,14,-272,-272,-1.00,13.30658583543266,reconstructed
-2026-03-04,SOLARINDS,L,Y,exited at stoploss,14347,14273.1,14273.1,3,-222,-222,-1.00,8.154546747030514,reconstructed
-2026-03-04,ACC,S,Y,exited at stoploss,1519.9,1525.4,1525.4,37,-203,-203,-1.00,7.10064626610611,reconstructed
-2026-03-04,BEL,S,Y,exited at stoploss,452.5,454.6,454.6,124,-260,-260,-1.00,7.008861499323178,reconstructed
-2026-03-04,BHARTIARTL,S,N,no fill (never triggered),1815.3,1822.85,,,,,,,reconstructed
-2026-03-04,RELIANCE,S,Y,exited at stoploss,1316,1321.6,1321.6,42,-235,-235,-1.00,6.484061921142315,reconstructed
-2026-03-04,ULTRACEMCO,S,Y,exited at stoploss,12123,12166.5,12166.5,4,-174,-174,-1.00,6.24507110802237,reconstructed
-2026-03-05,CAMS,L,Y,exited at stoploss,643.65,639.65,639.65,87,-348,-348,-1.00,12.20077411159662,reconstructed
-2026-03-05,PETRONET,L,Y,exited at 15:15,282.85,280.7,291.6,198,1733,1733,4.07,5.21771451063774,reconstructed
-2026-03-05,SOLARINDS,L,N,no fill (never triggered),14962,14882.2,,,,,,,reconstructed
-2026-03-05,BHARATFORG,L,N,no fill (never triggered),1918,1906.5,,,,,,,reconstructed
-2026-03-05,COALINDIA,L,Y,exited at 15:15,445.5,443.4,447.85,126,296,296,1.12,3.468247522760323,reconstructed
-2026-03-05,NATIONALUM,L,Y,exited at 15:15,384.85,382.4,396,146,1628,1628,4.55,2.9614714012009355,reconstructed
-2026-03-05,INDIGO,S,Y,exited at stoploss,4339,4362.55,4362.55,12,-283,-283,-1.00,2.7336844102607474,reconstructed
-2026-03-05,LT,L,Y,exited at 15:15,3949.7,3926.8,4019.5,14,977,977,3.05,2.6448943633130257,reconstructed
-2026-03-06,MAZDOCK,L,Y,exited at 15:15,2420,2404.2,2475,23,1265,1265,3.48,11.587842594596406,reconstructed
-2026-03-06,ICICIBANK,S,Y,exited at stoploss,1322.9,1327.45,1327.45,42,-191,-191,-1.00,4.603401359175182,reconstructed
-2026-03-06,BLUESTARCO,L,Y,exited at stoploss,1968.8,1957.7,1957.7,28,-311,-311,-1.00,3.3188024872639077,reconstructed
-2026-03-06,HINDALCO,S,N,no fill (never triggered),943.65,950,,,,,,,reconstructed
-2026-03-06,BPCL,S,Y,exited at 15:15,357.05,359.1,352.45,157,722,722,2.24,3.184695766819155,reconstructed
-2026-03-06,LUPIN,L,Y,exited at stoploss,2360.7,2351.7,2351.7,23,-207,-207,-1.00,2.7838477158960098,reconstructed
-2026-03-06,PETRONET,L,Y,exited at stoploss,292.8,290.55,290.55,192,-432,-432,-1.00,2.6367726512958094,reconstructed
-2026-03-06,NATIONALUM,S,N,no fill (never triggered),386.75,389.55,,,,,,,reconstructed
-2026-03-09,HINDPETRO,S,N,no fill (never triggered),370.15,373.2,,,,,,,reconstructed
-2026-03-09,BPCL,S,Y,exited at stoploss,326.15,328.3,328.3,172,-370,-370,-1.00,6.958840801683859,reconstructed
-2026-03-09,ASIANPAINT,S,Y,exited at stoploss,2169,2179.1,2179.1,25,-252,-252,-1.00,5.600853862251166,reconstructed
-2026-03-09,SHRIRAMFIN,S,N,no fill (never triggered),934.2,940.65,,,,,,,reconstructed
-2026-03-09,OIL,S,Y,exited at 15:15,477.6,481.05,474.95,117,310,310,0.77,5.18663947218975,reconstructed
-2026-03-09,TATASTEEL,S,N,no fill (never triggered),187,189,,,,,,,reconstructed
-2026-03-09,ONGC,S,Y,exited at stoploss,278.85,280.5,280.5,201,-332,-332,-1.00,4.778531413097011,reconstructed
-2026-03-09,INDIGO,S,Y,exited at stoploss,4100,4126.35,4126.35,13,-343,-343,-1.00,4.605192088775639,reconstructed
-2026-03-10,BPCL,S,Y,exited at 15:15,328.95,331.45,325.75,170,544,544,1.28,4.730286636153736,reconstructed
-2026-03-10,DIXON,L,Y,exited at 15:15,10530,10454.65,10907,5,1885,1885,5.00,4.025493532739705,reconstructed
-2026-03-10,HDFCBANK,S,N,no fill (never triggered),840.6,844.1,,,,,,,reconstructed
-2026-03-10,GLENMARK,L,Y,exited at stoploss,2171,2160.35,2160.35,25,-266,-266,-1.00,3.0672816277578003,reconstructed
-2026-03-10,DMART,S,Y,exited at 15:15,3980.5,3999.2,3935.6,14,629,629,2.40,2.9999740449253496,reconstructed
-2026-03-10,ASHOKLEY,L,N,no fill (never triggered),196,194,,,,,,,reconstructed
-2026-03-10,IOC,S,Y,exited at 15:15,161,163,159.99,349,352,352,0.50,2.7596504192317375,reconstructed
-2026-03-10,APLAPOLLO,L,Y,exited at stoploss,2156.7,2145.25,2145.25,26,-298,-298,-1.00,2.2894052275218795,reconstructed
-2026-03-11,ATGL,L,Y,exited at 15:15,518.9,516.4,566.9,108,5184,5184,19.20,14.140669403283066,reconstructed
-2026-03-11,ICICIGI,S,Y,exited at stoploss,1874.7,1883.7,1883.7,30,-270,-270,-1.00,7.5967356401965915,reconstructed
-2026-03-11,ASTRAL,L,Y,exited at stoploss,1701.9,1693.05,1693.05,33,-292,-292,-1.00,6.259556775335072,reconstructed
-2026-03-11,NCC,L,N,no fill (never triggered),155,153,,,,,,,reconstructed
-2026-03-11,SUPREMEIND,S,N,no fill (never triggered),3938,3960.3,,,,,,,reconstructed
-2026-03-11,POLYCAB,S,Y,exited at stoploss,7545.5,7599.2,7599.2,7,-376,-376,-1.00,3.9700345852026553,reconstructed
-2026-03-11,GLENMARK,L,Y,exited at stoploss,2274,2262,2262,24,-288,-288,-1.00,3.8614992976499107,reconstructed
-2026-03-11,MFSL,S,N,no fill (never triggered),1709.4,1718.65,,,,,,,reconstructed
-2026-03-12,ATGL,L,Y,exited at stoploss,646,642.35,642.35,87,-318,-318,-1.00,67.01626095893134,reconstructed
-2026-03-12,SRF,S,N,no fill (never triggered),2446.6,2461.3,,,,,,,reconstructed
-2026-03-12,MGL,S,N,no fill (never triggered),1010.1,1018.25,,,,,,,reconstructed
-2026-03-12,IGL,S,N,no fill (never triggered),157,159,,,,,,,reconstructed
-2026-03-12,ASTRAL,S,N,no fill (never triggered),1633.1,1643.15,,,,,,,reconstructed
-2026-03-12,COLPAL,S,Y,exited at stoploss,2007.3,2018.45,2018.45,28,-312,-312,-1.00,3.0375811009694114,reconstructed
-2026-03-12,BRITANNIA,S,Y,exited at stoploss,5830,5852.7,5852.7,9,-204,-204,-1.00,2.7383044982698954,reconstructed
-2026-03-12,JINDALSTEL,S,N,no fill (never triggered),1164,1170.7,,,,,,,reconstructed
-2026-03-13,CESC,L,N,no fill (never triggered),166,164,,,,,,,reconstructed
-2026-03-13,HFCL,S,Y,exited at 15:15,75,76,71.7,750,2475,2475,3.30,12.466767595987386,reconstructed
-2026-03-13,ATGL,L,N,no fill (never triggered),644.85,640.2,,,,,,,reconstructed
-2026-03-13,JSWENERGY,L,N,no fill (never triggered),530.5,526.85,,,,,,,reconstructed
-2026-03-13,COALINDIA,L,N,no fill (never triggered),475.9,473.2,,,,,,,reconstructed
-2026-03-13,LT,S,Y,exited at 15:15,3635.5,3664.1,3455,15,2708,2708,6.31,3.4909425136071186,reconstructed
-2026-03-13,ABB,L,N,no fill (never triggered),6554,6509.5,,,,,,,reconstructed
-2026-03-13,PPLPHARMA,L,Y,exited at stoploss,145,144,144,387,-387,-387,-1.00,2.8509588784806645,reconstructed
-2026-03-16,ATGL,S,Y,exited at 15:15,555.05,560.9,522.05,101,3333,3333,5.64,6.642049805730546,reconstructed
-2026-03-16,MARUTI,L,Y,exited at stoploss,12654,12569.35,12569.35,4,-339,-339,-1.00,3.746270985802058,reconstructed
-2026-03-16,ULTRACEMCO,L,Y,exited at stoploss,10945,10875.3,10875.3,5,-349,-349,-1.00,3.444703765665411,reconstructed
-2026-03-16,BHARTIARTL,S,Y,exited at stoploss,1783.7,1793.5,1793.5,31,-304,-304,-1.00,3.291864231917958,reconstructed
-2026-03-16,HINDPETRO,S,Y,exited at stoploss,353.65,357.45,357.45,159,-604,-604,-1.00,3.052513173172825,reconstructed
-2026-03-16,SHRIRAMFIN,S,Y,exited at stoploss,978,986.6,986.6,57,-490,-490,-1.00,2.728683008796075,reconstructed
-2026-03-16,COLPAL,S,Y,exited at stoploss,1928.9,1940.3,1940.3,29,-331,-331,-1.00,2.5949535617187163,reconstructed
-2026-03-16,DABUR,S,N,no fill (never triggered),450,452.6,,,,,,,reconstructed
-2026-03-17,ANGELONE,S,Y,exited at stoploss,214.65,216.55,216.55,262,-498,-498,-1.00,3.1500581419401334,reconstructed
-2026-03-17,MARUTI,L,Y,exited at stoploss,12817,12727.5,12727.5,4,-358,-358,-1.00,2.936456034627525,reconstructed
-2026-03-17,ATGL,S,N,no fill (never triggered),490,497.05,,,,,,,reconstructed
-2026-03-17,COFORGE,S,Y,exited at stoploss,1045.6,1055.8,1055.8,53,-541,-541,-1.00,2.365085795663253,reconstructed
-2026-03-17,FORTIS,S,N,no fill (never triggered),795,800.6,,,,,,,reconstructed
-2026-03-17,ITC,S,Y,exited at stoploss,298.2,299.3,299.3,188,-207,-207,-1.00,2.1780078237706175,reconstructed
-2026-03-17,JSL,S,Y,exited at stoploss,697,703.75,703.75,80,-540,-540,-1.00,1.9647822570736955,reconstructed
-2026-03-17,FEDERALBNK,S,Y,exited at stoploss,258.25,259.85,259.85,217,-347,-347,-1.00,1.747156608660937,reconstructed
-2026-03-18,BAJFINANCE,L,N,no fill (never triggered),893.95,888.35,,,,,,,reconstructed
-2026-03-18,TATAELXSI,L,Y,exited at stoploss,4244.5,4216.75,4216.75,13,-361,-361,-1.00,2.6230021626227074,reconstructed
-2026-03-18,CYIENT,L,Y,exited at stoploss,873.75,866.8,866.8,64,-445,-445,-1.00,2.517329624344988,reconstructed
-2026-03-18,TATAPOWER,L,N,no fill (never triggered),405.5,403.05,,,,,,,reconstructed
-2026-03-18,TITAGARH,L,N,no fill (never triggered),652.8,647.35,,,,,,,reconstructed
-2026-03-18,TATACONSUM,L,Y,exited at stoploss,1079.7,1074.15,1074.15,52,-289,-289,-1.00,2.196607256085955,reconstructed
-2026-03-18,OFSS,L,Y,exited at 15:15,6314,6278,6426,8,896,896,3.11,2.147168155614328,reconstructed
-2026-03-18,EICHERMOT,L,Y,exited at stoploss,7063.5,7011.2,7011.2,7,-366,-366,-1.00,1.932773434844147,reconstructed
-2026-03-19,HDFCBANK,L,Y,exited at stoploss,806.85,802.7,802.7,69,-286,-286,-1.00,14.241093991204654,reconstructed
-2026-03-19,ATGL,L,Y,exited at stoploss,563,555.45,555.45,99,-747,-747,-1.00,7.98314450553033,reconstructed
-2026-03-19,GRASIM,S,Y,exited at 15:15,2656.5,2672.2,2603.2,21,1119,1119,3.39,7.695709371599931,reconstructed
-2026-03-19,FORTIS,S,Y,exited at 15:15,820.75,826.8,817,68,255,255,0.62,4.700833917238853,reconstructed
-2026-03-19,AXISBANK,S,Y,exited at 15:15,1208.7,1215.55,1204.6,46,189,189,0.60,3.925147524678828,reconstructed
-2026-03-19,HINDPETRO,S,Y,exited at stoploss,330.4,334.2,334.2,170,-646,-646,-1.00,3.207590976766238,reconstructed
-2026-03-19,PETRONET,S,Y,exited at 15:15,275.5,278.15,270.55,204,1010,1010,1.87,2.7756275646399784,reconstructed
-2026-03-19,HINDUNILVR,S,Y,exited at 15:15,2107.2,2117,2075.6,26,822,822,3.22,2.499365940180834,reconstructed
-2026-03-20,TATAPOWER,L,Y,exited at stoploss,411.8,409.3,409.3,136,-340,-340,-1.00,6.018573719563338,reconstructed
-2026-03-20,HDFCBANK,L,Y,exited at stoploss,792,787.05,787.05,71,-351,-351,-1.00,5.904777261984956,reconstructed
-2026-03-20,ATGL,S,Y,exited at 15:15,565,573.4,554.5,99,1040,1040,1.25,4.886351760894556,reconstructed
-2026-03-20,SHRIRAMFIN,L,N,no fill (never triggered),965.6,956.1,,,,,,,reconstructed
-2026-03-20,HINDPETRO,L,Y,exited at stoploss,340.55,336.45,336.45,165,-677,-677,-1.00,3.0678403903375915,reconstructed
-2026-03-20,CHOLAFIN,L,N,no fill (never triggered),1468,1455.8,,,,,,,reconstructed
-2026-03-20,SBILIFE,L,N,no fill (never triggered),1919.9,1909.05,,,,,,,reconstructed
-2026-03-20,MANKIND,S,Y,exited at stoploss,1990,2003.3,2003.3,28,-372,-372,-1.00,2.674985464868114,reconstructed
-2026-03-23,GRASIM,S,Y,exited at 15:15,2571.4,2587.7,2525.4,21,966,966,2.82,6.001296772951879,reconstructed
-2026-03-23,TATACHEM,S,Y,exited at stoploss,603.25,606.8,606.8,93,-330,-330,-1.00,4.116021655013681,reconstructed
-2026-03-23,PETRONET,S,Y,exited at 15:15,245.4,248.35,238.15,229,1660,1660,2.46,3.9126019454899468,reconstructed
-2026-03-23,MUTHOOTFIN,S,Y,exited at stoploss,3160.2,3184.25,3184.25,17,-409,-409,-1.00,3.8948058017480776,reconstructed
-2026-03-23,MAXHEALTH,S,Y,exited at stoploss,950.3,956.05,956.05,59,-339,-339,-1.00,3.805830863601902,reconstructed
-2026-03-23,GODREJCP,S,Y,exited at stoploss,997.3,1004.2,1004.2,56,-386,-386,-1.00,3.7374552453695937,reconstructed
-2026-03-23,LICHSGFIN,S,Y,exited at 15:15,471.4,474.5,461.1,119,1226,1226,3.32,3.686190728710662,reconstructed
-2026-03-23,MARICO,S,Y,exited at stoploss,729.85,733.3,733.3,77,-266,-266,-1.00,3.121902574568701,reconstructed
-2026-03-24,GAIL,S,Y,exited at 15:15,137,139,137.52,410,-213,-213,-0.26,3.719523288393912,reconstructed
-2026-03-24,LODHA,S,Y,exited at stoploss,732.25,739.85,739.85,76,-578,-578,-1.00,3.700992968317585,reconstructed
-2026-03-24,ASIANPAINT,L,Y,exited at 15:15,2215,2201.9,2218.4,25,85,85,0.26,2.9708017618438975,reconstructed
-2026-03-24,POWERGRID,S,Y,exited at stoploss,295.8,297.55,297.55,190,-332,-332,-1.00,2.9027282230026783,reconstructed
-2026-03-24,ALKEM,L,Y,exited at 15:15,5243,5217.1,5300.5,10,575,575,2.22,2.732759535003574,reconstructed
-2026-03-24,INOXWIND,S,Y,exited at stoploss,77,78,78,730,-730,-730,-1.00,2.546960900553253,reconstructed
-2026-03-24,DALBHARAT,S,Y,exited at stoploss,1752.1,1766.4,1766.4,32,-458,-458,-1.00,2.5332197230847844,reconstructed
-2026-03-24,BPCL,S,Y,exited at stoploss,272.65,275.6,275.6,206,-608,-608,-1.00,2.499001199318034,reconstructed
-2026-03-25,UNITDSPR,S,Y,exited at 15:15,1321,1330.3,1310.2,42,454,454,1.16,13.642203375748428,reconstructed
-2026-03-25,UNOMINDA,L,Y,exited at stoploss,1099.5,1090.4,1090.4,51,-464,-464,-1.00,8.713750232318876,reconstructed
-2026-03-25,LODHA,L,Y,exited at stoploss,752.6,745.55,745.55,74,-522,-522,-1.00,6.013961652757203,reconstructed
-2026-03-25,SYNGENE,L,Y,exited at 15:15,418,415.3,419.65,134,221,221,0.61,4.990063792067614,reconstructed
-2026-03-25,GRANULES,L,Y,exited at 15:15,619.45,615.1,630.05,90,954,954,2.44,4.46104712171462,reconstructed
-2026-03-25,AMBUJACEM,L,Y,exited at stoploss,424.4,421.2,421.2,132,-422,-422,-1.00,4.113444133862577,reconstructed
-2026-03-25,GODREJCP,L,Y,exited at 15:15,1026.9,1020.65,1040.1,54,713,713,2.11,3.3658480211565798,reconstructed
-2026-03-25,MGL,L,Y,exited at stoploss,954.4,945.85,945.85,58,-496,-496,-1.00,3.314338039932917,reconstructed
-2026-03-27,OFSS,L,Y,exited at stoploss,6732,6690.25,6690.25,8,-334,-334,-1.00,9.496078625494576,reconstructed
-2026-03-27,BPCL,L,N,no fill (never triggered),298.5,295.75,,,,,,,reconstructed
-2026-03-27,HINDPETRO,S,Y,exited at 15:15,350.2,354.1,341.65,160,1368,1368,2.19,4.056460307237849,reconstructed
-2026-03-27,BDL,S,Y,exited at 15:15,1180.8,1192.1,1137.7,47,2026,2026,3.81,3.162026370776968,reconstructed
-2026-03-27,GODREJCP,S,Y,exited at 15:15,1014.5,1021,1008,55,358,358,1.00,3.089161848347047,reconstructed
-2026-03-27,VBL,S,Y,exited at 15:15,393,395.9,390.2,143,400,400,0.97,3.0687551463162985,reconstructed
-2026-03-27,CIPLA,L,Y,exited at stoploss,1239.9,1234.5,1234.5,45,-243,-243,-1.00,3.060821569320821,reconstructed
-2026-03-27,PHOENIXLTD,S,Y,exited at stoploss,1521.4,1531.85,1531.85,36,-376,-376,-1.00,3.04479453637373,reconstructed
-2026-03-30,COLPAL,S,Y,exited at 15:15,1840.3,1852.1,1789,30,1539,1539,4.35,6.787494018664921,reconstructed
-2026-03-30,ICICIGI,S,Y,exited at stoploss,1687.3,1696.3,1696.3,33,-297,-297,-1.00,6.381398017018758,reconstructed
-2026-03-30,OBEROIRLTY,L,Y,exited at stoploss,1452.7,1443,1443,38,-369,-369,-1.00,5.147337527830911,reconstructed
-2026-03-30,AXISBANK,S,Y,exited at stoploss,1157.5,1165.15,1165.15,48,-367,-367,-1.00,4.589364123277298,reconstructed
-2026-03-30,KOTAKBANK,S,Y,exited at stoploss,352.95,355,355,159,-326,-326,-1.00,3.8491828164245923,reconstructed
-2026-03-30,GODREJCP,L,Y,exited at stoploss,1004,997.35,997.35,56,-372,-372,-1.00,3.671563394722271,reconstructed
-2026-03-30,UNIONBANK,S,Y,exited at 15:15,170,172,164.37,330,1858,1858,2.81,3.657547066593546,reconstructed
-2026-03-30,CHOLAFIN,L,Y,exited at stoploss,1387.1,1375,1375,40,-484,-484,-1.00,3.5435839187866227,reconstructed
-2026-04-01,DMART,L,Y,exited at 15:15,4229,4204.5,4262.3,13,433,433,1.36,15.669836443647917,reconstructed
-2026-04-01,ASHOKLEY,L,N,no fill (never triggered),163,161,,,,,,,reconstructed
-2026-04-01,NESTLEIND,L,Y,exited at stoploss,1190.4,1185.2,1185.2,47,-244,-244,-1.00,5.7866894239425655,reconstructed
-2026-04-01,AUROPHARMA,L,Y,exited at stoploss,1355.4,1348.25,1348.25,41,-293,-293,-1.00,5.081118787281525,reconstructed
-2026-04-01,GLENMARK,L,Y,exited at stoploss,2220,2204.35,2204.35,25,-391,-391,-1.00,4.571457447065449,reconstructed
-2026-04-01,JUBLFOOD,S,Y,exited at 15:15,447,450.55,444.1,125,362,362,0.82,4.481609265680615,reconstructed
-2026-04-01,TRENT,L,Y,exited at stoploss,2349.3,2332,2332,23,-398,-398,-1.00,4.256806437524901,reconstructed
-2026-04-01,MANKIND,L,Y,exited at stoploss,2035.8,2022.2,2022.2,27,-367,-367,-1.00,4.2306420924681865,reconstructed
-2026-04-02,DMART,L,Y,exited at 15:15,4256,4228.2,4366.1,13,1431,1431,3.96,4.557112590076462,reconstructed
-2026-04-02,SUNPHARMA,S,N,no fill (never triggered),1620,1628.05,,,,,,,reconstructed
-2026-04-02,PRESTIGE,S,Y,exited at stoploss,1107.5,1118.55,1118.55,50,-552,-552,-1.00,4.15610339432033,reconstructed
-2026-04-02,PAGEIND,L,Y,exited at stoploss,32940,32752,32752,1,-188,-188,-1.00,3.813807887672706,reconstructed
-2026-04-02,SUPREMEIND,S,Y,exited at stoploss,3478.2,3504.4,3504.4,16,-419,-419,-1.00,3.757890193468906,reconstructed
-2026-04-02,BOSCHLTD,L,Y,exited at stoploss,30445,30247.9,30247.9,1,-197,-197,-1.00,3.4564428818572464,reconstructed
-2026-04-02,MAZDOCK,S,Y,exited at stoploss,2219,2241.4,2241.4,25,-560,-560,-1.00,2.8906094263640343,reconstructed
-2026-04-02,CIPLA,S,Y,exited at stoploss,1174.5,1180.4,1180.4,47,-277,-277,-1.00,2.725724861665446,reconstructed
-2026-04-06,RBLBANK,S,N,no fill (never triggered),302.3,304.15,,,,,,,reconstructed
-2026-04-06,DMART,S,Y,exited at stoploss,4384.3,4413.8,4413.8,12,-354,-354,-1.00,11.015856395151552,reconstructed
-2026-04-06,TRENT,L,Y,exited at 15:15,2467.2,2447.7,2554.4,22,1918,1918,4.47,6.75530828995717,reconstructed
-2026-04-06,DABUR,S,Y,exited at stoploss,417.35,419.9,419.9,134,-342,-342,-1.00,5.144501372367412,reconstructed
-2026-04-06,BOSCHLTD,L,Y,exited at stoploss,32775,32554.85,32554.85,1,-220,-220,-1.00,4.582161164480117,reconstructed
-2026-04-06,PRESTIGE,S,N,no fill (never triggered),1133.6,1144.8,,,,,,,reconstructed
-2026-04-06,DALBHARAT,L,Y,exited at 15:15,1809.3,1793.6,1875.2,31,2043,2043,4.20,3.1830091406813668,reconstructed
-2026-04-06,LAURUSLABS,S,Y,exited at stoploss,1016.55,1024.65,1024.65,55,-446,-446,-1.00,3.0898412360769707,reconstructed
-2026-04-07,JUBLFOOD,S,Y,exited at 15:15,428.05,431.85,412.65,131,2017,2017,4.05,25.01070772177906,reconstructed
-2026-04-07,GODREJCP,L,Y,exited at 15:15,1024,1018.35,1027.25,54,176,176,0.58,17.202743910515057,reconstructed
-2026-04-07,TITAGARH,L,Y,exited at 15:15,665,659,694,84,2436,2436,4.83,8.324618449119544,reconstructed
-2026-04-07,HINDALCO,L,Y,exited at stoploss,964.25,957.55,957.55,58,-389,-389,-1.00,5.66544429058433,reconstructed
-2026-04-07,PRESTIGE,S,N,no fill (never triggered),1156,1167.5,,,,,,,reconstructed
-2026-04-07,KALYANKJIL,S,Y,exited at 15:15,424,427.25,414.5,132,1254,1254,2.92,4.435959306965153,reconstructed
-2026-04-07,TATACONSUM,L,Y,exited at 15:15,1050,1043.95,1062.3,53,652,652,2.03,3.796841278035962,reconstructed
-2026-04-07,ADANIGREEN,S,Y,exited at stoploss,912.5,920.3,920.3,61,-476,-476,-1.00,3.0417934846574353,reconstructed
-2026-04-08,TITAGARH,S,Y,exited at stoploss,711.9,718.8,718.8,79,-545,-545,-1.00,14.759392389879054,reconstructed
-2026-04-08,PIDILITIND,S,Y,exited at stoploss,1359.1,1367.75,1367.75,41,-355,-355,-1.00,10.22001768641104,reconstructed
-2026-04-08,TITAN,L,Y,exited at 15:15,4385.4,4357.8,4490.6,12,1262,1262,3.81,9.672103222230723,reconstructed
-2026-04-08,JUBLFOOD,S,N,no fill (never triggered),423.6,428,,,,,,,reconstructed
-2026-04-08,BAJAJFINSV,L,Y,exited at stoploss,1799,1788.2,1788.2,31,-335,-335,-1.00,8.47740216418855,reconstructed
-2026-04-08,INDIGO,L,Y,exited at stoploss,4695.6,4656.6,4656.6,11,-429,-429,-1.00,7.936403115714106,reconstructed
-2026-04-08,LICI,L,Y,exited at 15:15,393.8,391.5,396.85,142,433,433,1.33,7.637219789877504,reconstructed
-2026-04-08,ASHOKLEY,L,Y,exited at 15:15,166,164,172.54,338,2211,2211,3.27,7.258344254647959,reconstructed
-2026-04-09,BOSCHLTD,L,Y,exited at stoploss,36930,36674.85,36674.85,1,-255,-255,-1.00,21.8472780289684,reconstructed
-2026-04-09,NHPC,S,Y,exited at 15:15,77,78,77.24,730,-175,-175,-0.24,7.509988910847698,reconstructed
-2026-04-09,AMBUJACEM,S,Y,exited at 15:15,432.2,435.75,434.7,130,-325,-325,-0.70,5.676377617693936,reconstructed
-2026-04-09,TITAGARH,L,Y,exited at stoploss,721,713.95,713.95,78,-550,-550,-1.00,4.346093304879549,reconstructed
-2026-04-09,CHAMBLFERT,L,Y,exited at stoploss,472,468.75,468.75,119,-387,-387,-1.00,4.263391740068198,reconstructed
-2026-04-09,NTPC,L,Y,exited at stoploss,381.05,379.15,379.15,147,-279,-279,-1.00,4.126241207551367,reconstructed
-2026-04-09,OBEROIRLTY,L,Y,exited at 15:15,1647,1634.45,1655.4,34,286,286,0.67,3.6203290385085514,reconstructed
-2026-04-09,EXIDEIND,S,Y,exited at 15:15,312.7,314.85,311.35,179,242,242,0.63,3.4530369774829848,reconstructed
-2026-04-10,IRB,S,N,no fill (never triggered),21,22,,,,,,,reconstructed
-2026-04-10,POONAWALLA,L,Y,exited at 15:15,397.9,393.85,399.55,141,233,233,0.41,8.553567329617072,reconstructed
-2026-04-10,SUNPHARMA,S,Y,exited at stoploss,1643.6,1653.3,1653.3,34,-330,-330,-1.00,6.720849501511503,reconstructed
-2026-04-10,WIPRO,S,Y,exited at 15:15,205,207,204.94,274,16,16,0.03,5.752175496478504,reconstructed
-2026-04-10,TCS,S,Y,exited at 15:15,2530.1,2543.45,2527.1,22,66,66,0.22,4.941850914541282,reconstructed
-2026-04-10,BOSCHLTD,L,Y,exited at 15:15,37350,37078.25,37340,1,-10,-10,-0.04,3.986532850702151,reconstructed
-2026-04-10,PRESTIGE,L,Y,exited at stoploss,1351.5,1338.55,1338.55,41,-531,-531,-1.00,3.0695362872396754,reconstructed
-2026-04-10,GODREJPROP,S,Y,exited at stoploss,1725,1739.75,1739.75,32,-472,-472,-1.00,3.0502020202550586,reconstructed
-2026-04-13,TATACHEM,S,N,no fill (never triggered),676.15,682.8,,,,,,,reconstructed
-2026-04-13,ADANIENSOL,L,Y,exited at 15:15,1140,1130.2,1175.3,49,1730,1730,3.60,4.259057569989331,reconstructed
-2026-04-13,COALINDIA,L,N,no fill (never triggered),439.5,436.45,,,,,,,reconstructed
-2026-04-13,ADANIGREEN,L,Y,exited at 15:15,1066.65,1057.45,1086.35,52,1024,1024,2.14,3.6940340755139838,reconstructed
-2026-04-13,TATACONSUM,L,Y,exited at 15:15,1089.3,1083.45,1090.5,51,61,61,0.21,3.239110691404456,reconstructed
-2026-04-13,LODHA,L,Y,exited at 15:15,805.8,797.75,822.95,69,1183,1183,2.13,3.0736424831852736,reconstructed
-2026-04-13,ASIANPAINT,S,N,no fill (never triggered),2262,2277.45,,,,,,,reconstructed
-2026-04-13,VOLTAS,L,Y,exited at 15:15,1297,1283.95,1362,43,2795,2795,4.98,2.984410018319006,reconstructed
-2026-04-15,ICICIPRULI,S,Y,exited at stoploss,565,568.7,568.7,99,-366,-366,-1.00,36.098266844126684,reconstructed
-2026-04-15,LICI,S,N,no fill (never triggered),412.3,415,,,,,,,reconstructed
-2026-04-15,DRREDDY,S,Y,exited at stoploss,1198.8,1206.6,1206.6,46,-359,-359,-1.00,7.6261403460273645,reconstructed
-2026-04-15,HINDALCO,S,N,no fill (never triggered),1002.1,1008.15,,,,,,,reconstructed
-2026-04-15,CYIENT,L,Y,exited at 15:15,950.75,943.15,961.3,59,622,622,1.39,5.404246459307403,reconstructed
-2026-04-15,HFCL,L,N,no fill (never triggered),92,91,,,,,,,reconstructed
-2026-04-15,ABFRL,L,N,no fill (never triggered),66,65,,,,,,,reconstructed
-2026-04-15,INDUSTOWER,S,Y,exited at 15:15,427.1,429.95,420.1,131,917,917,2.46,4.756795503839002,reconstructed
-2026-04-16,ICICIGI,L,Y,exited at 15:15,1892,1879.85,1889.2,29,-81,-81,-0.23,6.369788393481129,reconstructed
-2026-04-16,SIEMENS,L,N,no fill (never triggered),3619.3,3592.1,,,,,,,reconstructed
-2026-04-16,BLUESTARCO,L,Y,exited at stoploss,1865.4,1847.75,1847.75,30,-530,-530,-1.00,3.9526305498787067,reconstructed
-2026-04-16,LODHA,L,N,no fill (never triggered),878.45,870.35,,,,,,,reconstructed
-2026-04-16,JSWENERGY,L,N,no fill (never triggered),539,535,,,,,,,reconstructed
-2026-04-16,ASTRAL,S,Y,exited at 15:15,1593,1607.25,1576,35,595,595,1.19,3.691897718943939,reconstructed
-2026-04-16,CONCOR,S,Y,exited at stoploss,493.05,496.5,496.5,114,-393,-393,-1.00,3.5395279862393663,reconstructed
-2026-04-16,IREDA,L,N,no fill (never triggered),131,130,,,,,,,reconstructed
-2026-04-17,ANGELONE,L,Y,exited at 15:15,305.65,303.1,323.16,184,3222,3222,6.87,11.469883865900378,reconstructed
-2026-04-17,WIPRO,L,N,no fill (never triggered),207,205,,,,,,,reconstructed
-2026-04-17,RVNL,L,Y,exited at stoploss,304,301,301,185,-555,-555,-1.00,6.215600667076067,reconstructed
-2026-04-17,HDFCLIFE,S,Y,exited at stoploss,607.2,611.3,611.3,92,-377,-377,-1.00,5.685462998638847,reconstructed
-2026-04-17,CESC,L,N,no fill (never triggered),176,175,,,,,,,reconstructed
-2026-04-17,ADANIGREEN,S,Y,exited at stoploss,1110,1119.3,1119.3,50,-465,-465,-1.00,4.541165962154986,reconstructed
-2026-04-17,VBL,L,Y,exited at stoploss,470.75,467.75,467.75,119,-357,-357,-1.00,4.00537529732873,reconstructed
-2026-04-17,ITC,L,Y,exited at stoploss,301.75,300.65,300.65,186,-205,-205,-1.00,3.297653768693974,reconstructed
-2026-04-20,YESBANK,S,Y,exited at 15:15,20,21,19.87,1000,130,130,0.13,11.786017758103572,reconstructed
-2026-04-20,IEX,S,Y,exited at 15:15,127,128,125.43,442,694,694,1.57,8.816486663552729,reconstructed
-2026-04-20,TVSMOTOR,L,Y,exited at stoploss,3762.3,3738.9,3738.9,14,-328,-328,-1.00,6.55907817424617,reconstructed
-2026-04-20,BHEL,L,Y,exited at 15:15,321.85,319.4,325.5,174,635,635,1.49,5.1354523643800265,reconstructed
-2026-04-20,TRENT,L,Y,exited at stoploss,2798.5,2778,2778,20,-410,-410,-1.00,4.188122490665537,reconstructed
-2026-04-20,JIOFIN,S,Y,exited at stoploss,237,239,239,237,-474,-474,-1.00,3.718825892714679,reconstructed
-2026-04-20,ANGELONE,L,N,no fill (never triggered),326.65,323.8,,,,,,,reconstructed
-2026-04-20,NESTLEIND,S,Y,exited at stoploss,1277.5,1283.7,1283.7,44,-273,-273,-1.00,2.9970142583569994,reconstructed
-2026-04-21,PNBHOUSING,L,Y,exited at 15:15,972.85,965.85,979.5,57,379,379,0.95,49.977803928881805,reconstructed
-2026-04-21,SBILIFE,S,Y,exited at 15:15,1920.7,1931,1912.3,29,244,244,0.82,9.199063969847277,reconstructed
-2026-04-21,ADANIPORTS,L,Y,exited at stoploss,1605,1594.75,1594.75,35,-359,-359,-1.00,6.669277280169118,reconstructed
-2026-04-21,OBEROIRLTY,L,Y,exited at stoploss,1734,1721.5,1721.5,32,-400,-400,-1.00,4.7380780860205896,reconstructed
-2026-04-21,VEDL,S,Y,exited at 15:15,410.35,412.85,402,137,1144,1144,3.34,4.715115022672871,reconstructed
-2026-04-21,JSWENERGY,L,N,no fill (never triggered),557.4,553.55,,,,,,,reconstructed
-2026-04-21,CESC,L,N,no fill (never triggered),183,181,,,,,,,reconstructed
-2026-04-21,LICHSGFIN,L,Y,exited at 15:15,549.65,546.9,564.7,102,1535,1535,5.47,3.0051430815853277,reconstructed
-2026-04-22,NESTLEIND,L,Y,exited at stoploss,1419,1411.85,1411.85,39,-279,-279,-1.00,8.139600595272908,reconstructed
-2026-04-22,HCLTECH,S,Y,exited at 15:15,1315,1322.9,1284.2,42,1294,1294,3.90,7.80422065505465,reconstructed
-2026-04-22,TATAELXSI,S,Y,exited at 15:15,4476.1,4506.15,4368,12,1297,1297,3.60,2.739873426128819,reconstructed
-2026-04-22,PERSISTENT,S,Y,exited at stoploss,5108,5144.05,5144.05,11,-397,-397,-1.00,1.1227400828411438,reconstructed
-2026-04-22,HAVELLS,S,N,no fill (never triggered),1326,1334.15,,,,,,,reconstructed
-2026-04-23,TATACOMM,L,Y,exited at stoploss,1559.8,1548.95,1548.95,36,-391,-391,-1.00,18.198363025896022,reconstructed
-2026-04-23,OFSS,S,N,no fill (never triggered),8031,8080.25,,,,,,,reconstructed
-2026-04-23,HAVELLS,S,Y,exited at 15:15,1286.7,1295.5,1259,43,1191,1191,3.15,13.807152727485928,reconstructed
-2026-04-23,TRENT,S,Y,exited at 15:15,2920.1,2941.9,2834,19,1636,1636,3.95,12.5147417558448,reconstructed
-2026-04-23,EXIDEIND,L,Y,exited at stoploss,357.3,354.85,354.85,157,-385,-385,-1.00,7.314046931424319,reconstructed
-2026-04-23,DRREDDY,L,Y,exited at 15:15,1256.8,1250.25,1326.8,44,3080,3080,10.69,6.716338986365307,reconstructed
-2026-04-23,SBILIFE,S,Y,exited at 15:15,1827.2,1838.25,1825.8,30,42,42,0.13,6.4766405084016165,reconstructed
-2026-04-23,COLPAL,S,N,no fill (never triggered),2057.6,2069.4,,,,,,,reconstructed
-2026-04-24,CIPLA,S,N,no fill (never triggered),1260,1265.2,,,,,,,reconstructed
-2026-04-24,IEX,S,Y,exited at 15:15,127,128,123.52,442,1538,1538,3.48,7.14510043900107,reconstructed
-2026-04-24,DRREDDY,L,Y,exited at stoploss,1313.1,1305.65,1305.65,42,-313,-313,-1.00,6.069271838657345,reconstructed
-2026-04-24,IIFL,S,Y,exited at stoploss,414.95,418.8,418.8,135,-520,-520,-1.00,5.2645697604772055,reconstructed
-2026-04-24,SUNPHARMA,S,Y,exited at 15:15,1645,1654.05,1619.3,34,874,874,2.84,5.145084717002799,reconstructed
-2026-04-24,CYIENT,S,Y,exited at 15:15,918.35,925.65,870.55,61,2916,2916,6.55,4.84758189942163,reconstructed
-2026-04-24,INFY,L,N,no fill (never triggered),1198,1190.85,,,,,,,reconstructed
-2026-04-24,HCLTECH,S,Y,exited at 15:15,1245,1254.35,1204.1,45,1841,1841,4.37,3.9063746952398204,reconstructed
-2026-04-27,PAYTM,S,Y,exited at stoploss,1056.05,1063.2,1063.2,53,-379,-379,-1.00,21.82039049300425,reconstructed
-2026-04-27,SUNPHARMA,L,Y,exited at stoploss,1699,1690.6,1690.6,33,-277,-277,-1.00,10.835964420989802,reconstructed
-2026-04-27,RBLBANK,S,N,no fill (never triggered),306.1,308,,,,,,,reconstructed
-2026-04-27,INDUSINDBK,L,Y,exited at stoploss,899.9,894.95,894.95,62,-307,-307,-1.00,5.17716271216958,reconstructed
-2026-04-27,PPLPHARMA,L,Y,exited at stoploss,171,169,169,328,-656,-656,-1.00,4.211756503801341,reconstructed
-2026-04-27,HUDCO,L,N,no fill (never triggered),217,215,,,,,,,reconstructed
-2026-04-27,LTF,L,Y,exited at stoploss,298.45,296.45,296.45,188,-376,-376,-1.00,3.8618811081563513,reconstructed
-2026-04-27,SHRIRAMFIN,S,Y,exited at stoploss,973.35,980.8,980.8,57,-425,-425,-1.00,3.7723452219789375,reconstructed
-2026-04-28,SUNPHARMA,L,Y,exited at 15:15,1728.8,1718.9,1746.5,32,566,566,1.79,9.763266300936492,reconstructed
-2026-04-28,PHOENIXLTD,S,Y,exited at 15:15,1786.3,1797.85,1758.8,31,853,853,2.38,9.763220582683527,reconstructed
-2026-04-28,AUBANK,S,Y,exited at 15:15,1048,1054.3,1019.9,53,1489,1489,4.46,6.869933815532765,reconstructed
-2026-04-28,ULTRACEMCO,S,Y,exited at 15:15,11935,11995.5,11801,4,536,536,2.21,6.136791371073369,reconstructed
-2026-04-28,SBICARD,L,Y,exited at stoploss,657.95,653.9,653.9,85,-344,-344,-1.00,6.100252884775359,reconstructed
-2026-04-28,INDUSTOWER,L,Y,exited at stoploss,416,413.65,413.65,135,-317,-317,-1.00,5.842035628830335,reconstructed
-2026-04-28,VBL,L,N,no fill (never triggered),529.4,525.75,,,,,,,reconstructed
-2026-04-28,GRASIM,L,Y,exited at stoploss,2829.5,2816.45,2816.45,19,-248,-248,-1.00,3.991159723707483,reconstructed
-2026-04-29,BANDHANBNK,L,Y,exited at 15:15,192,190,198.13,292,1790,1790,3.06,20.299639252690678,reconstructed
-2026-04-29,TATACHEM,L,N,no fill (never triggered),818.2,811.1,,,,,,,reconstructed
-2026-04-29,ETERNAL,S,Y,exited at stoploss,257,258.8,258.8,218,-392,-392,-1.00,8.6747004016856,reconstructed
-2026-04-29,DRREDDY,S,Y,exited at stoploss,1335.6,1343.3,1343.3,42,-323,-323,-1.00,6.960282052337175,reconstructed
-2026-04-29,PPLPHARMA,L,Y,exited at stoploss,168,166,166,334,-668,-668,-1.00,5.209479240973117,reconstructed
-2026-04-29,MARUTI,L,Y,exited at stoploss,13440,13366.8,13366.8,4,-293,-293,-1.00,4.995635189583665,reconstructed
-2026-04-29,RECLTD,S,Y,exited at 15:15,365.1,367.45,363.25,154,285,285,0.79,4.459106976909207,reconstructed
-2026-04-29,GLENMARK,L,N,no fill (never triggered),2474,2461,,,,,,,reconstructed
-2026-04-30,IIFL,S,Y,exited at stoploss,453,456.9,456.9,124,-484,-484,-1.00,51.64812785195466,reconstructed
-2026-04-30,TATACHEM,S,Y,exited at stoploss,814.1,821.25,821.25,69,-493,-493,-1.00,20.57965181442435,reconstructed
-2026-04-30,SYNGENE,L,Y,exited at stoploss,471.4,468.3,468.3,119,-369,-369,-1.00,14.673109638611123,reconstructed
-2026-04-30,CHOLAFIN,S,N,no fill (never triggered),1472.3,1481.5,,,,,,,reconstructed
-2026-04-30,BAJFINANCE,L,Y,exited at stoploss,969.8,965.05,965.05,58,-275,-275,-1.00,10.578812823636637,reconstructed
-2026-04-30,INDIANB,S,Y,exited at stoploss,807.85,813.9,813.9,69,-417,-417,-1.00,8.113332334611378,reconstructed
-2026-04-30,LUPIN,S,N,no fill (never triggered),2277.7,2287.35,,,,,,,reconstructed
-2026-04-30,BAJAJFINSV,L,Y,exited at stoploss,1790,1782.1,1782.1,31,-245,-245,-1.00,5.17793303768419,reconstructed
-2026-05-04,KOTAKBANK,S,N,no fill (never triggered),363,364.75,,,,,,,reconstructed
-2026-05-04,HFCL,L,N,no fill (never triggered),129,127,,,,,,,reconstructed
+2026-03-02,BPCL,L,N,skipped (no_confirm),376.95,376.1,,,,,,,reconstructed
+2026-03-04,PETRONET,S,Y,exited at 15:15,284.4,285.25,279.35,197,837,776,4.63,14.461255424669664,reconstructed
+2026-03-04,LT,S,Y,exited at stoploss,3776.3,3786,3775,14,-136,-194,-1.43,13.30658583543266,reconstructed
+2026-03-04,SOLARINDS,L,Y,exited at stoploss,14347,14310.05,14356.05,3,-111,-158,-1.43,8.154546747030514,reconstructed
+2026-03-04,SOLARINDS,L,Y,exited at stoploss,14347,14310.05,14341.05,3,-111,-158,-1.43,8.154546747030514,reconstructed
+2026-03-04,ACC,S,Y,exited at stoploss,1519.9,1522.65,1514.35,37,-102,-165,-1.62,7.10064626610611,reconstructed
+2026-03-04,ACC,S,Y,exited at stoploss,1519.9,1522.65,1517.75,37,-102,-165,-1.62,7.10064626610611,reconstructed
+2026-03-04,BEL,S,Y,exited at stoploss,452.5,453.55,452.75,124,-130,-198,-1.52,7.008861499323178,reconstructed
+2026-03-04,BEL,S,Y,exited at stoploss,452.5,453.55,453.35,124,-130,-198,-1.52,7.008861499323178,reconstructed
+2026-03-04,BHARTIARTL,S,N,skipped (no_confirm),1815.3,1819.1,,,,,,,reconstructed
+2026-03-04,RELIANCE,S,Y,exited at stoploss,1316,1318.8,1315.8,42,-118,-180,-1.53,6.484061921142315,reconstructed
+2026-03-04,ULTRACEMCO,S,Y,exited at stoploss,12123,12144.75,12051.75,4,-87,-140,-1.61,6.24507110802237,reconstructed
+2026-03-04,ULTRACEMCO,S,Y,exited at stoploss,12123,12144.75,12045.75,4,-87,-140,-1.61,6.24507110802237,reconstructed
+2026-03-05,CAMS,L,Y,exited at stoploss,643.65,641.65,641.9,87,-174,-240,-1.38,12.20077411159662,reconstructed
+2026-03-05,CAMS,L,Y,exited at stoploss,643.65,641.65,642,87,-174,-240,-1.38,12.20077411159662,reconstructed
+2026-03-05,PETRONET,L,Y,exited at stoploss,282.85,281.75,284.2,198,-218,-290,-1.33,5.21771451063774,reconstructed
+2026-03-05,PETRONET,L,Y,exited at 15:15,282.85,281.75,291.6,198,1673,1611,7.40,5.21771451063774,reconstructed
+2026-03-05,SOLARINDS,L,N,skipped (no_confirm),14962,14922.1,,,,,,,reconstructed
+2026-03-05,BHARATFORG,L,N,skipped (no_confirm),1918,1912.25,,,,,,,reconstructed
+2026-03-05,COALINDIA,L,Y,exited at stoploss,445.5,444.45,448.45,126,-132,-201,-1.52,3.468247522760323,reconstructed
+2026-03-05,COALINDIA,L,Y,exited at 15:15,445.5,444.45,447.85,126,50,-12,-0.09,3.468247522760323,reconstructed
+2026-03-05,NATIONALUM,L,Y,exited at stoploss,384.85,383.6,386.55,146,-182,-252,-1.38,2.9614714012009355,reconstructed
+2026-03-05,NATIONALUM,L,Y,exited at stoploss,384.85,383.6,384.85,146,-182,-252,-1.38,2.9614714012009355,reconstructed
+2026-03-05,INDIGO,S,Y,exited at stoploss,4339,4350.8,4348.1,12,-142,-199,-1.41,2.7336844102607474,reconstructed
+2026-03-05,LT,L,Y,exited at stoploss,3949.7,3938.25,3946.15,14,-160,-222,-1.38,2.6448943633130257,reconstructed
+2026-03-05,LT,L,Y,exited at 15:15,3949.7,3938.25,4019.5,14,903,842,5.25,2.6448943633130257,reconstructed
+2026-03-06,MAZDOCK,L,Y,exited at 15:15,2420,2412.1,2475,23,577,515,2.84,11.587842594596406,reconstructed
+2026-03-06,ICICIBANK,S,Y,exited at stoploss,1322.9,1325.2,1323.6,42,-97,-160,-1.65,4.603401359175182,reconstructed
+2026-03-06,ICICIBANK,S,Y,exited at 15:15,1322.9,1325.2,1311.8,42,433,372,3.85,4.603401359175182,reconstructed
+2026-03-06,BLUESTARCO,L,Y,exited at stoploss,1968.8,1963.25,1964.45,28,-155,-217,-1.40,3.3188024872639077,reconstructed
+2026-03-06,HINDALCO,S,N,skipped (no_confirm),943.65,946.85,,,,,,,reconstructed
+2026-03-06,BPCL,S,Y,exited at stoploss,357.05,358.1,356.25,157,-165,-234,-1.42,3.184695766819155,reconstructed
+2026-03-06,BPCL,S,Y,exited at stoploss,357.05,358.1,357.1,157,-165,-234,-1.42,3.184695766819155,reconstructed
+2026-03-06,LUPIN,L,Y,exited at stoploss,2360.7,2356.2,2357.7,23,-103,-164,-1.59,2.7838477158960098,reconstructed
+2026-03-06,PETRONET,L,Y,exited at stoploss,292.8,291.65,292.24999999999994,192,-221,-292,-1.32,2.6367726512958094,reconstructed
+2026-03-06,PETRONET,L,Y,exited at stoploss,292.8,291.65,292.15,192,-221,-292,-1.32,2.6367726512958094,reconstructed
+2026-03-06,NATIONALUM,S,N,skipped (no_confirm),386.75,388.15,,,,,,,reconstructed
+2026-03-09,HINDPETRO,S,N,skipped (no_confirm),370.15,371.7,,,,,,,reconstructed
+2026-03-09,BPCL,S,Y,exited at stoploss,326.15,327.25,326.95000000000005,172,-189,-259,-1.37,6.958840801683859,reconstructed
+2026-03-09,ASIANPAINT,S,Y,exited at stoploss,2169,2174.05,2173.25,25,-126,-187,-1.48,5.600853862251166,reconstructed
+2026-03-09,ASIANPAINT,S,Y,exited at stoploss,2169,2174.05,2172.15,25,-126,-187,-1.48,5.600853862251166,reconstructed
+2026-03-09,SHRIRAMFIN,S,N,skipped (no_confirm),934.2,937.45,,,,,,,reconstructed
+2026-03-09,OIL,S,Y,exited at stoploss,477.6,479.35,479.25,117,-205,-272,-1.33,5.18663947218975,reconstructed
+2026-03-09,OIL,S,Y,exited at 15:15,477.6,479.35,474.95,117,187,126,0.61,5.18663947218975,reconstructed
+2026-03-09,TATASTEEL,S,N,skipped (no_confirm),187,188,,,,,,,reconstructed
+2026-03-09,ONGC,S,Y,exited at stoploss,278.85,279.7,279.04999999999995,201,-171,-242,-1.42,4.778531413097011,reconstructed
+2026-03-09,ONGC,S,Y,exited at 15:15,278.85,279.7,271,201,1427,1366,7.99,4.778531413097011,reconstructed
+2026-03-09,INDIGO,S,Y,exited at stoploss,4100,4113.2,4080.2999999999997,13,-172,-230,-1.34,4.605192088775639,reconstructed
+2026-03-09,INDIGO,S,Y,exited at stoploss,4100,4113.2,4082.1,13,-172,-230,-1.34,4.605192088775639,reconstructed
+2026-03-10,BPCL,S,Y,exited at stoploss,328.95,330.2,329.6,170,-212,-282,-1.33,4.730286636153736,reconstructed
+2026-03-10,BPCL,S,Y,exited at stoploss,328.95,330.2,328.7,170,-212,-282,-1.33,4.730286636153736,reconstructed
+2026-03-10,DIXON,L,N,skipped (no_confirm),10530,10492.3,,,,,,,reconstructed
+2026-03-10,HDFCBANK,S,N,skipped (no_confirm),840.6,842.35,,,,,,,reconstructed
+2026-03-10,GLENMARK,L,Y,exited at stoploss,2171,2165.65,2170.65,25,-134,-195,-1.46,3.0672816277578003,reconstructed
+2026-03-10,GLENMARK,L,Y,exited at stoploss,2171,2165.65,2167.65,25,-134,-195,-1.46,3.0672816277578003,reconstructed
+2026-03-10,DMART,S,Y,exited at stoploss,3980.5,3989.85,3971.5499999999997,14,-131,-193,-1.47,2.9999740449253496,reconstructed
+2026-03-10,DMART,S,Y,exited at 15:15,3980.5,3989.85,3935.6,14,412,351,2.68,2.9999740449253496,reconstructed
+2026-03-10,ASHOKLEY,L,N,skipped (no_confirm),196,195,,,,,,,reconstructed
+2026-03-10,IOC,S,Y,exited at 15:15,161,162,159.99,349,527,465,1.33,2.7596504192317375,reconstructed
+2026-03-10,APLAPOLLO,L,Y,exited at stoploss,2156.7,2150.95,2151.95,26,-149,-213,-1.42,2.2894052275218795,reconstructed
+2026-03-10,APLAPOLLO,L,Y,exited at stoploss,2156.7,2150.95,2151.25,26,-149,-212,-1.42,2.2894052275218795,reconstructed
+2026-03-11,ATGL,L,Y,exited at stoploss,518.9,517.65,536.4,108,-135,-204,-1.51,14.140669403283066,reconstructed
+2026-03-11,ATGL,L,Y,exited at stoploss,518.9,517.65,534.95,108,-135,-204,-1.51,14.140669403283066,reconstructed
+2026-03-11,ICICIGI,S,Y,exited at stoploss,1874.7,1879.2,1878.4,30,-135,-198,-1.47,7.5967356401965915,reconstructed
+2026-03-11,ICICIGI,S,Y,exited at stoploss,1874.7,1879.2,1879.1,30,-135,-198,-1.47,7.5967356401965915,reconstructed
+2026-03-11,ASTRAL,L,Y,exited at stoploss,1701.9,1697.45,1704.05,33,-147,-211,-1.43,6.259556775335072,reconstructed
+2026-03-11,ASTRAL,L,Y,exited at stoploss,1701.9,1697.45,1697.55,33,-147,-210,-1.43,6.259556775335072,reconstructed
+2026-03-11,NCC,L,N,skipped (no_confirm),155,154,,,,,,,reconstructed
+2026-03-11,SUPREMEIND,S,N,skipped (no_confirm),3938,3949.15,,,,,,,reconstructed
+2026-03-11,POLYCAB,S,Y,exited at stoploss,7545.5,7572.35,7570.85,7,-188,-246,-1.31,3.9700345852026553,reconstructed
+2026-03-11,POLYCAB,S,Y,exited at 15:15,7545.5,7572.35,7412,7,669,611,3.25,3.9700345852026553,reconstructed
+2026-03-11,GLENMARK,L,N,skipped (no_confirm),2274,2268,,,,,,,reconstructed
+2026-03-11,MFSL,S,N,skipped (no_confirm),1709.4,1714.05,,,,,,,reconstructed
+2026-03-12,ATGL,L,Y,exited at stoploss,646,644.15,649.15,87,-161,-228,-1.41,67.01626095893134,reconstructed
+2026-03-12,ATGL,L,Y,exited at stoploss,646,644.15,644.9499999999999,87,-161,-227,-1.41,67.01626095893134,reconstructed
+2026-03-12,SRF,S,N,skipped (no_confirm),2446.6,2453.95,,,,,,,reconstructed
+2026-03-12,MGL,S,N,skipped (no_confirm),1010.1,1014.2,,,,,,,reconstructed
+2026-03-12,IGL,S,N,skipped (no_confirm),157,158,,,,,,,reconstructed
+2026-03-12,ASTRAL,S,N,skipped (no_confirm),1633.1,1638.15,,,,,,,reconstructed
+2026-03-12,COLPAL,S,Y,exited at stoploss,2007.3,2012.9,2011.4,28,-157,-220,-1.40,3.0375811009694114,reconstructed
+2026-03-12,COLPAL,S,Y,exited at stoploss,2007.3,2012.9,2010.1000000000001,28,-157,-220,-1.40,3.0375811009694114,reconstructed
+2026-03-12,BRITANNIA,S,Y,exited at stoploss,5830,5841.35,5840.85,9,-102,-160,-1.57,2.7383044982698954,reconstructed
+2026-03-12,BRITANNIA,S,Y,exited at stoploss,5830,5841.35,5830.35,9,-102,-160,-1.57,2.7383044982698954,reconstructed
+2026-03-12,JINDALSTEL,S,N,skipped (no_confirm),1164,1167.35,,,,,,,reconstructed
+2026-03-13,CESC,L,N,skipped (no_confirm),166,165,,,,,,,reconstructed
+2026-03-13,HFCL,S,Y,exited at stoploss,75,76,74.91,750,-750,-1561,-2.08,12.466767595987386,reconstructed
+2026-03-13,HFCL,S,Y,exited at stoploss,75,76,75.56,750,-750,-1562,-2.08,12.466767595987386,reconstructed
+2026-03-13,ATGL,L,N,skipped (no_confirm),644.85,642.5,,,,,,,reconstructed
+2026-03-13,JSWENERGY,L,N,skipped (no_confirm),530.5,528.65,,,,,,,reconstructed
+2026-03-13,COALINDIA,L,N,skipped (no_confirm),475.9,474.55,,,,,,,reconstructed
+2026-03-13,LT,S,Y,exited at stoploss,3635.5,3649.8,3636.3,15,-215,-275,-1.28,3.4909425136071186,reconstructed
+2026-03-13,LT,S,Y,exited at 15:15,3635.5,3649.8,3455,15,2605,2546,11.87,3.4909425136071186,reconstructed
+2026-03-13,ABB,L,N,skipped (no_confirm),6554,6531.75,,,,,,,reconstructed
+2026-03-13,PPLPHARMA,L,N,skipped (no_confirm),145,144,,,,,,,reconstructed
+2026-03-16,ATGL,S,Y,exited at stoploss,555.05,558,546,101,-298,-363,-1.22,6.642049805730546,reconstructed
+2026-03-16,ATGL,S,Y,exited at stoploss,555.05,558,553,101,-298,-364,-1.22,6.642049805730546,reconstructed
+2026-03-16,MARUTI,L,Y,exited at stoploss,12654,12611.65,12637.65,4,-169,-225,-1.33,3.746270985802058,reconstructed
+2026-03-16,MARUTI,L,Y,exited at 15:15,12654,12611.65,12761,4,416,360,2.13,3.746270985802058,reconstructed
+2026-03-16,ULTRACEMCO,L,Y,exited at stoploss,10945,10910.15,10931.15,5,-174,-235,-1.35,3.444703765665411,reconstructed
+2026-03-16,ULTRACEMCO,L,Y,exited at stoploss,10945,10910.15,10915.15,5,-174,-235,-1.35,3.444703765665411,reconstructed
+2026-03-16,BHARTIARTL,S,Y,exited at stoploss,1783.7,1788.6,1787.6,31,-152,-214,-1.41,3.291864231917958,reconstructed
+2026-03-16,BHARTIARTL,S,Y,exited at stoploss,1783.7,1788.6,1788.3,31,-152,-214,-1.41,3.291864231917958,reconstructed
+2026-03-16,HINDPETRO,S,Y,exited at stoploss,353.65,355.55,355.50000000000006,159,-302,-372,-1.23,3.052513173172825,reconstructed
+2026-03-16,HINDPETRO,S,Y,exited at stoploss,353.65,355.55,354.35,159,-302,-372,-1.23,3.052513173172825,reconstructed
+2026-03-16,SHRIRAMFIN,S,N,skipped (no_confirm),978,982.3,,,,,,,reconstructed
+2026-03-16,COLPAL,S,N,skipped (no_confirm),1928.9,1934.6,,,,,,,reconstructed
+2026-03-16,DABUR,S,N,skipped (no_confirm),450,451.3,,,,,,,reconstructed
+2026-03-17,ANGELONE,S,N,skipped (no_confirm),214.65,215.6,,,,,,,reconstructed
+2026-03-17,MARUTI,L,Y,exited at stoploss,12817,12772.25,12808.25,4,-179,-236,-1.32,2.936456034627525,reconstructed
+2026-03-17,MARUTI,L,Y,exited at stoploss,12817,12772.25,12822.25,4,-179,-236,-1.32,2.936456034627525,reconstructed
+2026-03-17,ATGL,S,N,skipped (no_confirm),490,493.55,,,,,,,reconstructed
+2026-03-17,COFORGE,S,Y,exited at stoploss,1045.6,1050.7,1038.6000000000001,53,-270,-333,-1.23,2.365085795663253,reconstructed
+2026-03-17,COFORGE,S,Y,exited at stoploss,1045.6,1050.7,1044.5000000000002,53,-270,-334,-1.23,2.365085795663253,reconstructed
+2026-03-17,FORTIS,S,N,skipped (no_confirm),795,797.8,,,,,,,reconstructed
+2026-03-17,ITC,S,Y,exited at stoploss,298.2,298.75,298.45,188,-103,-174,-1.69,2.1780078237706175,reconstructed
+2026-03-17,ITC,S,Y,exited at stoploss,298.2,298.75,298.40000000000003,188,-103,-174,-1.69,2.1780078237706175,reconstructed
+2026-03-17,JSL,S,Y,exited at stoploss,697,700.4,698.4,80,-272,-337,-1.24,1.9647822570736955,reconstructed
+2026-03-17,FEDERALBNK,S,Y,exited at stoploss,258.25,259.05,257.35,217,-174,-246,-1.42,1.747156608660937,reconstructed
+2026-03-17,FEDERALBNK,S,Y,exited at stoploss,258.25,259.05,257.85,217,-174,-246,-1.42,1.747156608660937,reconstructed
+2026-03-18,BAJFINANCE,L,N,skipped (no_confirm),893.95,891.15,,,,,,,reconstructed
+2026-03-18,TATAELXSI,L,Y,exited at stoploss,4244.5,4230.6,4241.1,13,-181,-242,-1.34,2.6230021626227074,reconstructed
+2026-03-18,TATAELXSI,L,Y,exited at stoploss,4244.5,4230.6,4242.1,13,-181,-242,-1.34,2.6230021626227074,reconstructed
+2026-03-18,CYIENT,L,Y,exited at stoploss,873.75,870.25,874.1,64,-224,-289,-1.29,2.517329624344988,reconstructed
+2026-03-18,CYIENT,L,Y,exited at stoploss,873.75,870.25,870.75,64,-224,-289,-1.29,2.517329624344988,reconstructed
+2026-03-18,TATAPOWER,L,N,skipped (no_confirm),405.5,404.25,,,,,,,reconstructed
+2026-03-18,TITAGARH,L,N,skipped (no_confirm),652.8,650.05,,,,,,,reconstructed
+2026-03-18,TATACONSUM,L,Y,exited at stoploss,1079.7,1076.9,1077.8,52,-146,-210,-1.44,2.196607256085955,reconstructed
+2026-03-18,TATACONSUM,L,Y,exited at stoploss,1079.7,1076.9,1077.4,52,-146,-210,-1.44,2.196607256085955,reconstructed
+2026-03-18,OFSS,L,Y,exited at 15:15,6314,6296,6426,8,544,488,3.39,2.147168155614328,reconstructed
+2026-03-18,EICHERMOT,L,N,skipped (no_confirm),7063.5,7037.35,,,,,,,reconstructed
+2026-03-19,HDFCBANK,L,Y,exited at stoploss,806.85,804.75,807.8,69,-145,-210,-1.45,14.241093991204654,reconstructed
+2026-03-19,HDFCBANK,L,Y,exited at stoploss,806.85,804.75,806.55,69,-145,-210,-1.45,14.241093991204654,reconstructed
+2026-03-19,ATGL,L,Y,exited at stoploss,563,559.2,561.95,99,-376,-443,-1.18,7.98314450553033,reconstructed
+2026-03-19,ATGL,L,Y,exited at stoploss,563,559.2,560.5,99,-376,-443,-1.18,7.98314450553033,reconstructed
+2026-03-19,GRASIM,S,Y,exited at stoploss,2656.5,2664.35,2653.25,21,-165,-227,-1.38,7.695709371599931,reconstructed
+2026-03-19,GRASIM,S,Y,exited at 15:15,2656.5,2664.35,2603.2,21,918,857,5.20,7.695709371599931,reconstructed
+2026-03-19,FORTIS,S,Y,exited at 15:15,820.75,823.8,817,68,194,132,0.64,4.700833917238853,reconstructed
+2026-03-19,AXISBANK,S,N,skipped (no_confirm),1208.7,1212.15,,,,,,,reconstructed
+2026-03-19,HINDPETRO,S,Y,exited at stoploss,330.4,332.3,330.8,170,-323,-393,-1.22,3.207590976766238,reconstructed
+2026-03-19,HINDPETRO,S,Y,exited at 15:15,330.4,332.3,324.55,170,935,873,2.70,3.207590976766238,reconstructed
+2026-03-19,PETRONET,S,N,skipped (no_confirm),275.5,276.85,,,,,,,reconstructed
+2026-03-19,HINDUNILVR,S,Y,exited at 15:15,2107.2,2112.1,2075.6,26,757,696,5.47,2.499365940180834,reconstructed
+2026-03-20,TATAPOWER,L,Y,exited at stoploss,411.8,410.55,413.5,136,-170,-239,-1.40,6.018573719563338,reconstructed
+2026-03-20,TATAPOWER,L,Y,exited at stoploss,411.8,410.55,414.25,136,-170,-239,-1.41,6.018573719563338,reconstructed
+2026-03-20,HDFCBANK,L,N,skipped (no_confirm),792,789.5,,,,,,,reconstructed
+2026-03-20,ATGL,S,Y,exited at stoploss,565,569.2,560.25,99,-416,-481,-1.16,4.886351760894556,reconstructed
+2026-03-20,ATGL,S,Y,exited at 15:15,565,569.2,554.5,99,505,444,1.07,4.886351760894556,reconstructed
+2026-03-20,SHRIRAMFIN,L,N,skipped (no_confirm),965.6,960.85,,,,,,,reconstructed
+2026-03-20,HINDPETRO,L,Y,exited at stoploss,340.55,338.5,340.09999999999997,165,-338,-409,-1.21,3.0678403903375915,reconstructed
+2026-03-20,CHOLAFIN,L,N,skipped (no_confirm),1468,1461.9,,,,,,,reconstructed
+2026-03-20,SBILIFE,L,N,skipped (no_confirm),1919.9,1914.45,,,,,,,reconstructed
+2026-03-20,MANKIND,S,Y,exited at stoploss,1990,1996.65,1993.95,28,-186,-249,-1.34,2.674985464868114,reconstructed
+2026-03-20,MANKIND,S,Y,exited at stoploss,1990,1996.65,1994.45,28,-186,-249,-1.34,2.674985464868114,reconstructed
+2026-03-23,GRASIM,S,Y,exited at 15:15,2571.4,2579.55,2525.4,21,788,728,4.26,6.001296772951879,reconstructed
+2026-03-23,TATACHEM,S,Y,exited at stoploss,603.25,605.05,603.4499999999999,93,-167,-234,-1.40,4.116021655013681,reconstructed
+2026-03-23,TATACHEM,S,Y,exited at stoploss,603.25,605.05,603.4,93,-167,-234,-1.40,4.116021655013681,reconstructed
+2026-03-23,PETRONET,S,Y,exited at 15:15,245.4,246.9,238.15,229,1569,1507,4.39,3.9126019454899468,reconstructed
+2026-03-23,MUTHOOTFIN,S,Y,exited at 15:15,3160.2,3172.25,3116.7,17,534,475,2.32,3.8948058017480776,reconstructed
+2026-03-23,MAXHEALTH,S,Y,exited at stoploss,950.3,953.2,948.7,59,-171,-235,-1.38,3.805830863601902,reconstructed
+2026-03-23,MAXHEALTH,S,Y,exited at stoploss,950.3,953.2,950.5000000000001,59,-171,-236,-1.38,3.805830863601902,reconstructed
+2026-03-23,GODREJCP,S,Y,exited at stoploss,997.3,1000.75,999.0500000000001,56,-193,-257,-1.33,3.7374552453695937,reconstructed
+2026-03-23,GODREJCP,S,Y,exited at stoploss,997.3,1000.75,999.45,56,-193,-257,-1.33,3.7374552453695937,reconstructed
+2026-03-23,LICHSGFIN,S,Y,exited at stoploss,471.4,472.95,470.35,119,-184,-252,-1.36,3.686190728710662,reconstructed
+2026-03-23,LICHSGFIN,S,Y,exited at 15:15,471.4,472.95,461.1,119,1071,1009,5.47,3.686190728710662,reconstructed
+2026-03-23,MARICO,S,Y,exited at stoploss,729.85,731.6,729.15,77,-135,-200,-1.49,3.121902574568701,reconstructed
+2026-03-23,MARICO,S,Y,exited at stoploss,729.85,731.6,729.9,77,-135,-200,-1.49,3.121902574568701,reconstructed
+2026-03-24,GAIL,S,Y,exited at stoploss,137,138,136.89,410,-410,-881,-2.15,3.719523288393912,reconstructed
+2026-03-24,GAIL,S,Y,exited at stoploss,137,138,137.7,410,-410,-882,-2.15,3.719523288393912,reconstructed
+2026-03-24,LODHA,S,Y,exited at stoploss,732.25,736.05,735.4,76,-289,-354,-1.22,3.700992968317585,reconstructed
+2026-03-24,LODHA,S,Y,exited at stoploss,732.25,736.05,735.0999999999999,76,-289,-354,-1.22,3.700992968317585,reconstructed
+2026-03-24,ASIANPAINT,L,N,skipped (no_confirm),2215,2208.45,,,,,,,reconstructed
+2026-03-24,POWERGRID,S,Y,exited at stoploss,295.8,296.7,296.04999999999995,190,-171,-242,-1.42,2.9027282230026783,reconstructed
+2026-03-24,ALKEM,L,N,skipped (no_confirm),5243,5230.05,,,,,,,reconstructed
+2026-03-24,INOXWIND,S,Y,exited at stoploss,77,78,78.5,730,-730,-1522,-2.09,2.546960900553253,reconstructed
+2026-03-24,DALBHARAT,S,Y,exited at stoploss,1752.1,1759.25,1754.95,32,-229,-292,-1.28,2.5332197230847844,reconstructed
+2026-03-24,DALBHARAT,S,Y,exited at stoploss,1752.1,1759.25,1754.65,32,-229,-292,-1.28,2.5332197230847844,reconstructed
+2026-03-24,BPCL,S,Y,exited at stoploss,272.65,274.15,273.55,206,-309,-381,-1.23,2.499001199318034,reconstructed
+2026-03-25,UNITDSPR,S,Y,exited at stoploss,1321,1325.65,1323.15,42,-195,-258,-1.32,13.642203375748428,reconstructed
+2026-03-25,UNITDSPR,S,Y,exited at stoploss,1321,1325.65,1323.0500000000002,42,-195,-258,-1.32,13.642203375748428,reconstructed
+2026-03-25,UNOMINDA,L,Y,exited at stoploss,1099.5,1094.95,1095.45,51,-232,-296,-1.28,8.713750232318876,reconstructed
+2026-03-25,LODHA,L,Y,exited at stoploss,752.6,749.05,751.8,74,-263,-328,-1.25,6.013961652757203,reconstructed
+2026-03-25,LODHA,L,Y,exited at stoploss,752.6,749.05,749.2499999999999,74,-263,-328,-1.25,6.013961652757203,reconstructed
+2026-03-25,SYNGENE,L,Y,exited at 15:15,418,416.65,419.65,134,121,59,0.33,4.990063792067614,reconstructed
+2026-03-25,GRANULES,L,Y,exited at stoploss,619.45,617.25,624.9499999999999,90,-198,-265,-1.34,4.46104712171462,reconstructed
+2026-03-25,GRANULES,L,Y,exited at 15:15,619.45,617.25,630.05,90,418,357,1.80,4.46104712171462,reconstructed
+2026-03-25,AMBUJACEM,L,Y,exited at stoploss,424.4,422.8,424.35,132,-211,-280,-1.32,4.113444133862577,reconstructed
+2026-03-25,AMBUJACEM,L,Y,exited at stoploss,424.4,422.8,423.40000000000003,132,-211,-280,-1.32,4.113444133862577,reconstructed
+2026-03-25,GODREJCP,L,Y,exited at 15:15,1026.9,1023.75,1040.1,54,405,344,2.02,3.3658480211565798,reconstructed
+2026-03-25,MGL,L,Y,exited at stoploss,954.4,950.1,964.1,58,-249,-314,-1.26,3.314338039932917,reconstructed
+2026-03-25,MGL,L,Y,exited at stoploss,954.4,950.1,953.3000000000001,58,-249,-313,-1.26,3.314338039932917,reconstructed
+2026-03-27,OFSS,L,Y,exited at stoploss,6732,6711.1,6821.1,8,-167,-228,-1.36,9.496078625494576,reconstructed
+2026-03-27,OFSS,L,Y,exited at stoploss,6732,6711.1,6798.6,8,-167,-228,-1.36,9.496078625494576,reconstructed
+2026-03-27,BPCL,L,N,skipped (no_confirm),298.5,297.1,,,,,,,reconstructed
+2026-03-27,HINDPETRO,S,Y,exited at stoploss,350.2,352.15,345.95,160,-312,-381,-1.22,4.056460307237849,reconstructed
+2026-03-27,HINDPETRO,S,Y,exited at 15:15,350.2,352.15,341.65,160,488,427,1.37,4.056460307237849,reconstructed
+2026-03-27,BDL,S,Y,exited at 15:15,1180.8,1186.45,1137.7,47,1951,1890,7.12,3.162026370776968,reconstructed
+2026-03-27,GODREJCP,S,N,skipped (no_confirm),1014.5,1017.75,,,,,,,reconstructed
+2026-03-27,VBL,S,Y,exited at stoploss,393,394.45,394.4,143,-207,-276,-1.33,3.0687551463162985,reconstructed
+2026-03-27,VBL,S,Y,exited at stoploss,393,394.45,394.2,143,-207,-276,-1.33,3.0687551463162985,reconstructed
+2026-03-27,CIPLA,L,Y,exited at stoploss,1239.9,1237.2,1240.8999999999999,45,-122,-185,-1.53,3.060821569320821,reconstructed
+2026-03-27,CIPLA,L,Y,exited at stoploss,1239.9,1237.2,1238.1,45,-122,-185,-1.52,3.060821569320821,reconstructed
+2026-03-27,PHOENIXLTD,S,Y,exited at stoploss,1521.4,1526.65,1522.45,36,-189,-251,-1.33,3.04479453637373,reconstructed
+2026-03-27,PHOENIXLTD,S,Y,exited at stoploss,1521.4,1526.65,1526.05,36,-189,-251,-1.33,3.04479453637373,reconstructed
+2026-03-30,COLPAL,S,Y,exited at 15:15,1840.3,1846.2,1789,30,1455,1394,7.88,6.787494018664921,reconstructed
+2026-03-30,ICICIGI,S,Y,exited at stoploss,1687.3,1691.8,1691,33,-148,-211,-1.42,6.381398017018758,reconstructed
+2026-03-30,OBEROIRLTY,L,Y,exited at stoploss,1452.7,1447.85,1453.1499999999999,38,-184,-247,-1.34,5.147337527830911,reconstructed
+2026-03-30,OBEROIRLTY,L,Y,exited at stoploss,1452.7,1447.85,1459.1499999999999,38,-184,-247,-1.34,5.147337527830911,reconstructed
+2026-03-30,AXISBANK,S,Y,exited at stoploss,1157.5,1161.35,1159.75,48,-185,-248,-1.34,4.589364123277298,reconstructed
+2026-03-30,AXISBANK,S,Y,exited at stoploss,1157.5,1161.35,1161.1499999999999,48,-185,-248,-1.34,4.589364123277298,reconstructed
+2026-03-30,KOTAKBANK,S,Y,exited at stoploss,352.95,354,353.8,159,-167,-237,-1.42,3.8491828164245923,reconstructed
+2026-03-30,KOTAKBANK,S,Y,exited at stoploss,352.95,354,353.90000000000003,159,-167,-237,-1.42,3.8491828164245923,reconstructed
+2026-03-30,GODREJCP,L,N,skipped (no_confirm),1004,1000.65,,,,,,,reconstructed
+2026-03-30,UNIONBANK,S,Y,exited at 15:15,170,171,164.37,330,1713,1651,5.00,3.657547066593546,reconstructed
+2026-03-30,CHOLAFIN,L,N,skipped (no_confirm),1387.1,1381.05,,,,,,,reconstructed
+2026-04-01,DMART,L,Y,exited at stoploss,4229,4216.75,4232.35,13,-159,-221,-1.39,15.669836443647917,reconstructed
+2026-04-01,DMART,L,Y,exited at stoploss,4229,4216.75,4238.15,13,-159,-221,-1.39,15.669836443647917,reconstructed
+2026-04-01,ASHOKLEY,L,N,skipped (no_confirm),163,162,,,,,,,reconstructed
+2026-04-01,NESTLEIND,L,N,skipped (no_confirm),1190.4,1187.8,,,,,,,reconstructed
+2026-04-01,AUROPHARMA,L,Y,exited at stoploss,1355.4,1351.8,1351.8999999999999,41,-148,-211,-1.43,5.081118787281525,reconstructed
+2026-04-01,AUROPHARMA,L,Y,exited at stoploss,1355.4,1351.8,1352.1,41,-148,-211,-1.43,5.081118787281525,reconstructed
+2026-04-01,GLENMARK,L,Y,exited at stoploss,2220,2212.15,2218.75,25,-196,-259,-1.32,4.571457447065449,reconstructed
+2026-04-01,GLENMARK,L,Y,exited at stoploss,2220,2212.15,2220.4500000000003,25,-196,-259,-1.32,4.571457447065449,reconstructed
+2026-04-01,JUBLFOOD,S,Y,exited at 15:15,447,448.8,444.1,125,287,226,1.00,4.481609265680615,reconstructed
+2026-04-01,TRENT,L,Y,exited at stoploss,2349.3,2340.65,2341.0499999999997,23,-199,-260,-1.30,4.256806437524901,reconstructed
+2026-04-01,MANKIND,L,Y,exited at stoploss,2035.8,2029,2029.9,27,-184,-245,-1.34,4.2306420924681865,reconstructed
+2026-04-02,DMART,L,Y,exited at stoploss,4256,4242.1,4270.1,13,-181,-243,-1.34,4.557112590076462,reconstructed
+2026-04-02,DMART,L,Y,exited at stoploss,4256,4242.1,4253.5,13,-181,-242,-1.34,4.557112590076462,reconstructed
+2026-04-02,SUNPHARMA,S,N,skipped (no_confirm),1620,1624.05,,,,,,,reconstructed
+2026-04-02,PRESTIGE,S,Y,exited at stoploss,1107.5,1113.05,1112.35,50,-277,-341,-1.23,4.15610339432033,reconstructed
+2026-04-02,PAGEIND,L,Y,exited at stoploss,32940,32846,32986,1,-94,-130,-1.39,3.813807887672706,reconstructed
+2026-04-02,PAGEIND,L,Y,exited at 15:15,32940,32846,33970,1,980,944,10.04,3.813807887672706,reconstructed
+2026-04-02,SUPREMEIND,S,Y,exited at stoploss,3478.2,3491.3,3456.5000000000005,16,-210,-271,-1.29,3.757890193468906,reconstructed
+2026-04-02,SUPREMEIND,S,Y,exited at stoploss,3478.2,3491.3,3458.1000000000004,16,-210,-271,-1.29,3.757890193468906,reconstructed
+2026-04-02,BOSCHLTD,L,Y,exited at 15:15,30445,30346.45,32030,1,1555,1521,15.44,3.4564428818572464,reconstructed
+2026-04-02,MAZDOCK,S,Y,exited at stoploss,2219,2230.2,2226.1,25,-280,-342,-1.22,2.8906094263640343,reconstructed
+2026-04-02,MAZDOCK,S,Y,exited at stoploss,2219,2230.2,2229.2,25,-280,-342,-1.22,2.8906094263640343,reconstructed
+2026-04-02,CIPLA,S,Y,exited at stoploss,1174.5,1177.45,1175.95,47,-139,-202,-1.45,2.725724861665446,reconstructed
+2026-04-02,CIPLA,S,Y,exited at stoploss,1174.5,1177.45,1174.65,47,-139,-202,-1.45,2.725724861665446,reconstructed
+2026-04-06,RBLBANK,S,N,skipped (no_confirm),302.3,303.25,,,,,,,reconstructed
+2026-04-06,DMART,S,Y,exited at stoploss,4384.3,4399.05,4381.65,12,-177,-235,-1.33,11.015856395151552,reconstructed
+2026-04-06,DMART,S,Y,exited at stoploss,4384.3,4399.05,4398.75,12,-177,-235,-1.33,11.015856395151552,reconstructed
+2026-04-06,TRENT,L,Y,exited at stoploss,2467.2,2457.45,2463.15,22,-214,-275,-1.28,6.75530828995717,reconstructed
+2026-04-06,TRENT,L,Y,exited at 15:15,2467.2,2457.45,2554.4,22,1582,1522,7.09,6.75530828995717,reconstructed
+2026-04-06,DABUR,S,Y,exited at stoploss,417.35,418.65,418.44999999999993,134,-174,-242,-1.39,5.144501372367412,reconstructed
+2026-04-06,DABUR,S,Y,exited at stoploss,417.35,418.65,417.9,134,-174,-242,-1.39,5.144501372367412,reconstructed
+2026-04-06,BOSCHLTD,L,Y,exited at stoploss,32775,32664.9,32849.9,1,-110,-146,-1.33,4.582161164480117,reconstructed
+2026-04-06,BOSCHLTD,L,Y,exited at stoploss,32775,32664.9,32974.9,1,-110,-147,-1.33,4.582161164480117,reconstructed
+2026-04-06,PRESTIGE,S,N,skipped (no_confirm),1133.6,1139.2,,,,,,,reconstructed
+2026-04-06,DALBHARAT,L,Y,exited at stoploss,1809.3,1801.45,1823.95,31,-243,-307,-1.26,3.1830091406813668,reconstructed
+2026-04-06,DALBHARAT,L,Y,exited at 15:15,1809.3,1801.45,1875.2,31,1603,1541,6.33,3.1830091406813668,reconstructed
+2026-04-06,LAURUSLABS,S,N,skipped (no_confirm),1016.55,1020.6,,,,,,,reconstructed
+2026-04-07,JUBLFOOD,S,Y,exited at stoploss,428.05,429.95,427.4,131,-249,-317,-1.27,25.01070772177906,reconstructed
+2026-04-07,JUBLFOOD,S,Y,exited at stoploss,428.05,429.95,428.79999999999995,131,-249,-317,-1.27,25.01070772177906,reconstructed
+2026-04-07,GODREJCP,L,Y,exited at stoploss,1024,1021.15,1036.0500000000002,54,-154,-218,-1.42,17.202743910515057,reconstructed
+2026-04-07,GODREJCP,L,Y,exited at stoploss,1024,1021.15,1026.4,54,-154,-218,-1.41,17.202743910515057,reconstructed
+2026-04-07,TITAGARH,L,Y,exited at 15:15,665,662,694,84,2310,2248,8.92,8.324618449119544,reconstructed
+2026-04-07,HINDALCO,L,N,skipped (no_confirm),964.25,960.9,,,,,,,reconstructed
+2026-04-07,PRESTIGE,S,N,skipped (no_confirm),1156,1161.75,,,,,,,reconstructed
+2026-04-07,KALYANKJIL,S,Y,exited at 15:15,424,425.65,414.5,132,1049,988,4.54,4.435959306965153,reconstructed
+2026-04-07,TATACONSUM,L,Y,exited at stoploss,1050,1046.95,1053.65,53,-162,-226,-1.40,3.796841278035962,reconstructed
+2026-04-07,TATACONSUM,L,Y,exited at stoploss,1050,1046.95,1048.55,53,-162,-226,-1.40,3.796841278035962,reconstructed
+2026-04-07,ADANIGREEN,S,N,skipped (no_confirm),912.5,916.4,,,,,,,reconstructed
+2026-04-08,TITAGARH,S,Y,exited at stoploss,711.9,715.35,713.5,79,-273,-338,-1.24,14.759392389879054,reconstructed
+2026-04-08,TITAGARH,S,Y,exited at 15:15,711.9,715.35,708.25,79,280,219,0.80,14.759392389879054,reconstructed
+2026-04-08,PIDILITIND,S,Y,exited at stoploss,1359.1,1363.45,1362.8500000000001,41,-178,-242,-1.36,10.22001768641104,reconstructed
+2026-04-08,TITAN,L,Y,exited at stoploss,4385.4,4371.6,4436.800000000001,12,-166,-225,-1.36,9.672103222230723,reconstructed
+2026-04-08,TITAN,L,Y,exited at stoploss,4385.4,4371.6,4424.700000000001,12,-166,-225,-1.36,9.672103222230723,reconstructed
+2026-04-08,JUBLFOOD,S,N,skipped (no_confirm),423.6,425.8,,,,,,,reconstructed
+2026-04-08,BAJAJFINSV,L,Y,exited at stoploss,1799,1793.6,1798.3999999999999,31,-167,-230,-1.38,8.47740216418855,reconstructed
+2026-04-08,INDIGO,L,Y,exited at stoploss,4695.6,4676.1,4685.4,11,-214,-272,-1.27,7.936403115714106,reconstructed
+2026-04-08,LICI,L,Y,exited at stoploss,393.8,392.65,395.4,142,-163,-232,-1.42,7.637219789877504,reconstructed
+2026-04-08,LICI,L,Y,exited at 15:15,393.8,392.65,396.85,142,185,123,0.75,7.637219789877504,reconstructed
+2026-04-08,ASHOKLEY,L,Y,exited at 15:15,166,165,172.54,338,1910,1848,5.47,7.258344254647959,reconstructed
+2026-04-09,BOSCHLTD,L,Y,exited at stoploss,36930,36802.4,36912.4,1,-128,-168,-1.32,21.8472780289684,reconstructed
+2026-04-09,BOSCHLTD,L,Y,exited at stoploss,36930,36802.4,36837.4,1,-128,-168,-1.32,21.8472780289684,reconstructed
+2026-04-09,NHPC,S,Y,exited at 15:15,77,78,77.24,730,-7,-69,-0.09,7.509988910847698,reconstructed
+2026-04-09,AMBUJACEM,S,N,skipped (no_confirm),432.2,434,,,,,,,reconstructed
+2026-04-09,TITAGARH,L,N,skipped (no_confirm),721,717.45,,,,,,,reconstructed
+2026-04-09,CHAMBLFERT,L,N,skipped (no_confirm),472,470.35,,,,,,,reconstructed
+2026-04-09,NTPC,L,Y,exited at stoploss,381.05,380.1,380.3,147,-140,-209,-1.49,4.126241207551367,reconstructed
+2026-04-09,NTPC,L,Y,exited at stoploss,381.05,380.1,380.95,147,-140,-209,-1.49,4.126241207551367,reconstructed
+2026-04-09,OBEROIRLTY,L,Y,exited at 15:15,1647,1640.7,1655.4,34,238,176,0.82,3.6203290385085514,reconstructed
+2026-04-09,EXIDEIND,S,Y,exited at 15:15,312.7,313.8,311.35,179,-18,-79,-0.40,3.4530369774829848,reconstructed
+2026-04-10,IRB,S,N,skipped (no_confirm),21,22,,,,,,,reconstructed
+2026-04-10,POONAWALLA,L,Y,exited at stoploss,397.9,395.85,396.85,141,-289,-358,-1.24,8.553567329617072,reconstructed
+2026-04-10,POONAWALLA,L,Y,exited at stoploss,397.9,395.85,396.6,141,-289,-358,-1.24,8.553567329617072,reconstructed
+2026-04-10,SUNPHARMA,S,Y,exited at stoploss,1643.6,1648.45,1644.8500000000001,34,-165,-228,-1.38,6.720849501511503,reconstructed
+2026-04-10,WIPRO,S,Y,exited at 15:15,205,206,204.94,274,121,59,0.21,5.752175496478504,reconstructed
+2026-04-10,TCS,S,Y,exited at stoploss,2530.1,2536.8,2516.7000000000003,22,-147,-209,-1.42,4.941850914541282,reconstructed
+2026-04-10,TCS,S,Y,exited at stoploss,2530.1,2536.8,2523.0000000000005,22,-147,-209,-1.42,4.941850914541282,reconstructed
+2026-04-10,BOSCHLTD,L,Y,exited at stoploss,37350,37214.1,37229.1,1,-136,-177,-1.30,3.986532850702151,reconstructed
+2026-04-10,BOSCHLTD,L,Y,exited at stoploss,37350,37214.1,37259.1,1,-136,-177,-1.30,3.986532850702151,reconstructed
+2026-04-10,PRESTIGE,L,N,skipped (no_confirm),1351.5,1345,,,,,,,reconstructed
+2026-04-10,GODREJPROP,S,Y,exited at stoploss,1725,1732.4,1722,32,-237,-299,-1.26,3.0502020202550586,reconstructed
+2026-04-10,GODREJPROP,S,Y,exited at 15:15,1725,1732.4,1716.1,32,240,179,0.76,3.0502020202550586,reconstructed
+2026-04-13,TATACHEM,S,N,skipped (no_confirm),676.15,679.5,,,,,,,reconstructed
+2026-04-13,ADANIENSOL,L,Y,exited at 15:15,1140,1135.1,1175.3,49,1676,1614,6.72,4.259057569989331,reconstructed
+2026-04-13,COALINDIA,L,N,skipped (no_confirm),439.5,437.95,,,,,,,reconstructed
+2026-04-13,ADANIGREEN,L,Y,exited at 15:15,1066.65,1062.05,1086.35,52,1017,956,3.99,3.6940340755139838,reconstructed
+2026-04-13,TATACONSUM,L,N,skipped (no_confirm),1089.3,1086.35,,,,,,,reconstructed
+2026-04-13,LODHA,L,Y,exited at stoploss,805.8,801.75,805.45,69,-279,-344,-1.23,3.0736424831852736,reconstructed
+2026-04-13,LODHA,L,Y,exited at 15:15,805.8,801.75,822.95,69,1107,1046,3.74,3.0736424831852736,reconstructed
+2026-04-13,ASIANPAINT,S,N,skipped (no_confirm),2262,2269.75,,,,,,,reconstructed
+2026-04-13,VOLTAS,L,Y,exited at stoploss,1297,1290.45,1318.3500000000001,43,-282,-346,-1.23,2.984410018319006,reconstructed
+2026-04-13,VOLTAS,L,Y,exited at 15:15,1297,1290.45,1362,43,2017,1954,6.94,2.984410018319006,reconstructed
+2026-04-15,ICICIPRULI,S,Y,exited at stoploss,565,566.85,566.2,99,-183,-250,-1.36,36.098266844126684,reconstructed
+2026-04-15,ICICIPRULI,S,Y,exited at 15:15,565,566.85,559.85,99,411,349,1.91,36.098266844126684,reconstructed
+2026-04-15,LICI,S,N,skipped (no_confirm),412.3,413.65,,,,,,,reconstructed
+2026-04-15,DRREDDY,S,N,skipped (no_confirm),1198.8,1202.7,,,,,,,reconstructed
+2026-04-15,HINDALCO,S,N,skipped (no_confirm),1002.1,1005.15,,,,,,,reconstructed
+2026-04-15,CYIENT,L,Y,exited at stoploss,950.75,946.95,964.2,59,-224,-290,-1.29,5.404246459307403,reconstructed
+2026-04-15,CYIENT,L,Y,exited at stoploss,950.75,946.95,960.6,59,-224,-290,-1.29,5.404246459307403,reconstructed
+2026-04-15,HFCL,L,N,skipped (no_confirm),92,91,,,,,,,reconstructed
+2026-04-15,ABFRL,L,N,skipped (no_confirm),66,65,,,,,,,reconstructed
+2026-04-15,INDUSTOWER,S,Y,exited at stoploss,427.1,428.55,426.84999999999997,131,-190,-258,-1.36,4.756795503839002,reconstructed
+2026-04-15,INDUSTOWER,S,Y,exited at 15:15,427.1,428.55,420.1,131,871,810,4.26,4.756795503839002,reconstructed
+2026-04-16,ICICIGI,L,N,skipped (no_confirm),1892,1885.9,,,,,,,reconstructed
+2026-04-16,SIEMENS,L,N,skipped (no_confirm),3619.3,3605.7,,,,,,,reconstructed
+2026-04-16,BLUESTARCO,L,N,skipped (no_confirm),1865.4,1856.55,,,,,,,reconstructed
+2026-04-16,LODHA,L,N,skipped (no_confirm),878.45,874.4,,,,,,,reconstructed
+2026-04-16,JSWENERGY,L,N,skipped (no_confirm),539,537,,,,,,,reconstructed
+2026-04-16,ASTRAL,S,Y,exited at 15:15,1593,1600.15,1576,35,196,135,0.54,3.691897718943939,reconstructed
+2026-04-16,CONCOR,S,Y,exited at stoploss,493.05,494.8,493.35,114,-199,-267,-1.34,3.5395279862393663,reconstructed
+2026-04-16,IREDA,L,Y,exited at stoploss,131,130,129.22,429,-429,-919,-2.14,3.3851031723300924,reconstructed
+2026-04-17,ANGELONE,L,N,skipped (no_confirm),305.65,304.35,,,,,,,reconstructed
+2026-04-17,WIPRO,L,N,skipped (no_confirm),207,206,,,,,,,reconstructed
+2026-04-17,RVNL,L,Y,exited at stoploss,304,302,302.18,185,-370,-617,-1.67,6.215600667076067,reconstructed
+2026-04-17,RVNL,L,Y,exited at stoploss,304,302,302.18,185,-370,-617,-1.67,6.215600667076067,reconstructed
+2026-04-17,HDFCLIFE,S,N,skipped (no_confirm),607.2,609.25,,,,,,,reconstructed
+2026-04-17,CESC,L,N,skipped (no_confirm),176,175,,,,,,,reconstructed
+2026-04-17,ADANIGREEN,S,N,skipped (no_confirm),1110,1114.65,,,,,,,reconstructed
+2026-04-17,VBL,L,Y,exited at stoploss,470.75,469.25,469.65,119,-178,-246,-1.38,4.00537529732873,reconstructed
+2026-04-17,VBL,L,Y,exited at stoploss,470.75,469.25,470.15,119,-178,-246,-1.38,4.00537529732873,reconstructed
+2026-04-17,ITC,L,N,skipped (no_confirm),301.75,301.2,,,,,,,reconstructed
+2026-04-20,YESBANK,S,Y,exited at 15:15,20,21,19.87,1000,290,268,0.27,11.786017758103572,reconstructed
+2026-04-20,IEX,S,Y,exited at 15:15,127,128,125.43,442,707,645,1.46,8.816486663552729,reconstructed
+2026-04-20,TVSMOTOR,L,N,skipped (no_confirm),3762.3,3750.6,,,,,,,reconstructed
+2026-04-20,BHEL,L,Y,exited at stoploss,321.85,320.6,324.45,174,-217,-289,-1.33,5.1354523643800265,reconstructed
+2026-04-20,BHEL,L,Y,exited at 15:15,321.85,320.6,325.5,174,44,-19,-0.09,5.1354523643800265,reconstructed
+2026-04-20,TRENT,L,Y,exited at stoploss,2798.5,2788.25,2799.05,20,-205,-268,-1.31,4.188122490665537,reconstructed
+2026-04-20,TRENT,L,Y,exited at 15:15,2798.5,2788.25,2830.1,20,516,454,2.22,4.188122490665537,reconstructed
+2026-04-20,JIOFIN,S,Y,exited at stoploss,237,238,237.7,237,-237,-536,-2.26,3.718825892714679,reconstructed
+2026-04-20,ANGELONE,L,N,skipped (no_confirm),326.65,325.2,,,,,,,reconstructed
+2026-04-20,NESTLEIND,S,N,skipped (no_confirm),1277.5,1280.6,,,,,,,reconstructed
+2026-04-21,PNBHOUSING,L,Y,exited at stoploss,972.85,969.35,988.05,57,-199,-265,-1.33,49.977803928881805,reconstructed
+2026-04-21,PNBHOUSING,L,Y,exited at stoploss,972.85,969.35,988.55,57,-199,-265,-1.33,49.977803928881805,reconstructed
+2026-04-21,SBILIFE,S,Y,exited at stoploss,1920.7,1925.85,1923.85,29,-149,-212,-1.42,9.199063969847277,reconstructed
+2026-04-21,SBILIFE,S,Y,exited at 15:15,1920.7,1925.85,1912.3,29,174,113,0.76,9.199063969847277,reconstructed
+2026-04-21,ADANIPORTS,L,Y,exited at stoploss,1605,1599.85,1600.25,35,-180,-244,-1.35,6.669277280169118,reconstructed
+2026-04-21,ADANIPORTS,L,Y,exited at stoploss,1605,1599.85,1603.35,35,-180,-244,-1.35,6.669277280169118,reconstructed
+2026-04-21,OBEROIRLTY,L,Y,exited at stoploss,1734,1727.75,1728.75,32,-200,-263,-1.31,4.7380780860205896,reconstructed
+2026-04-21,OBEROIRLTY,L,Y,exited at stoploss,1734,1727.75,1728.25,32,-200,-263,-1.31,4.7380780860205896,reconstructed
+2026-04-21,VEDL,S,Y,exited at 15:15,410.35,411.6,402,137,904,843,4.92,4.715115022672871,reconstructed
+2026-04-21,JSWENERGY,L,N,skipped (no_confirm),557.4,555.45,,,,,,,reconstructed
+2026-04-21,CESC,L,N,skipped (no_confirm),183,182,,,,,,,reconstructed
+2026-04-21,LICHSGFIN,L,Y,exited at stoploss,549.65,548.25,551.75,102,-143,-210,-1.47,3.0051430815853277,reconstructed
+2026-04-21,LICHSGFIN,L,Y,exited at stoploss,549.65,548.25,551.1,102,-143,-210,-1.47,3.0051430815853277,reconstructed
+2026-04-22,NESTLEIND,L,Y,exited at stoploss,1419,1415.4,1415.6000000000001,39,-140,-203,-1.45,8.139600595272908,reconstructed
+2026-04-22,NESTLEIND,L,Y,exited at stoploss,1419,1415.4,1417.3000000000002,39,-140,-203,-1.45,8.139600595272908,reconstructed
+2026-04-22,HCLTECH,S,Y,exited at stoploss,1315,1318.95,1314.3500000000001,42,-166,-229,-1.38,7.80422065505465,reconstructed
+2026-04-22,HCLTECH,S,Y,exited at stoploss,1315,1318.95,1312.25,42,-166,-228,-1.38,7.80422065505465,reconstructed
+2026-04-22,TATAELXSI,S,Y,exited at 15:15,4476.1,4491.15,4368,12,1224,1165,6.45,2.739873426128819,reconstructed
+2026-04-22,PERSISTENT,S,Y,exited at stoploss,5108,5126.05,5119.35,11,-199,-261,-1.31,1.1227400828411438,reconstructed
+2026-04-22,PERSISTENT,S,Y,exited at stoploss,5108,5126.05,5120.85,11,-199,-261,-1.31,1.1227400828411438,reconstructed
+2026-04-22,HAVELLS,S,N,skipped (no_confirm),1326,1330.1,,,,,,,reconstructed
+2026-04-23,TATACOMM,L,Y,exited at stoploss,1559.8,1554.35,1586.55,36,-196,-261,-1.33,18.198363025896022,reconstructed
+2026-04-23,TATACOMM,L,Y,exited at stoploss,1559.8,1554.35,1580.35,36,-196,-261,-1.33,18.198363025896022,reconstructed
+2026-04-23,OFSS,S,N,skipped (no_confirm),8031,8055.65,,,,,,,reconstructed
+2026-04-23,HAVELLS,S,Y,exited at stoploss,1286.7,1291.1,1282.4999999999998,43,-189,-252,-1.33,13.807152727485928,reconstructed
+2026-04-23,HAVELLS,S,Y,exited at 15:15,1286.7,1291.1,1259,43,684,623,3.29,13.807152727485928,reconstructed
+2026-04-23,TRENT,S,Y,exited at stoploss,2920.1,2931,2915.1,19,-207,-269,-1.30,12.5147417558448,reconstructed
+2026-04-23,TRENT,S,Y,exited at stoploss,2920.1,2931,2908.2000000000003,19,-207,-269,-1.30,12.5147417558448,reconstructed
+2026-04-23,EXIDEIND,L,Y,exited at stoploss,357.3,356.05,357.75,157,-196,-266,-1.36,7.314046931424319,reconstructed
+2026-04-23,DRREDDY,L,Y,exited at 15:15,1256.8,1253.5,1326.8,44,2358,2297,15.82,6.716338986365307,reconstructed
+2026-04-23,SBILIFE,S,N,skipped (no_confirm),1827.2,1832.75,,,,,,,reconstructed
+2026-04-23,COLPAL,S,N,skipped (no_confirm),2057.6,2063.5,,,,,,,reconstructed
+2026-04-24,CIPLA,S,N,skipped (no_confirm),1260,1262.6,,,,,,,reconstructed
+2026-04-24,IEX,S,Y,exited at stoploss,127,128,127.11,442,-442,-945,-2.14,7.14510043900107,reconstructed
+2026-04-24,IEX,S,Y,exited at 15:15,127,128,123.52,442,1556,1494,3.38,7.14510043900107,reconstructed
+2026-04-24,DRREDDY,L,Y,exited at stoploss,1313.1,1309.35,1310.75,42,-157,-220,-1.40,6.069271838657345,reconstructed
+2026-04-24,DRREDDY,L,Y,exited at 15:15,1313.1,1309.35,1317.3,42,151,91,0.57,6.069271838657345,reconstructed
+2026-04-24,IIFL,S,Y,exited at stoploss,414.95,416.9,416.75,135,-263,-332,-1.26,5.2645697604772055,reconstructed
+2026-04-24,IIFL,S,Y,exited at stoploss,414.95,416.9,416.8,135,-263,-332,-1.26,5.2645697604772055,reconstructed
+2026-04-24,SUNPHARMA,S,Y,exited at 15:15,1645,1649.55,1619.3,34,840,778,5.03,5.145084717002799,reconstructed
+2026-04-24,CYIENT,S,Y,exited at 15:15,918.35,922,870.55,61,2632,2571,11.55,4.84758189942163,reconstructed
+2026-04-24,INFY,L,N,skipped (no_confirm),1198,1194.4,,,,,,,reconstructed
+2026-04-24,HCLTECH,S,Y,exited at 15:15,1245,1249.7,1204.1,45,1647,1586,7.50,3.9063746952398204,reconstructed
+2026-04-27,PAYTM,S,Y,exited at stoploss,1056.05,1059.65,1059.2500000000002,53,-191,-255,-1.34,21.82039049300425,reconstructed
+2026-04-27,SUNPHARMA,L,Y,exited at stoploss,1699,1694.8,1723.7,33,-139,-203,-1.46,10.835964420989802,reconstructed
+2026-04-27,SUNPHARMA,L,Y,exited at 15:15,1699,1694.8,1732.4,33,297,234,1.69,10.835964420989802,reconstructed
+2026-04-27,RBLBANK,S,N,skipped (no_confirm),306.1,307.05,,,,,,,reconstructed
+2026-04-27,INDUSINDBK,L,N,skipped (no_confirm),899.9,897.4,,,,,,,reconstructed
+2026-04-27,PPLPHARMA,L,Y,exited at stoploss,171,170,169.95,328,-328,-718,-2.19,4.211756503801341,reconstructed
+2026-04-27,HUDCO,L,N,skipped (no_confirm),217,216,,,,,,,reconstructed
+2026-04-27,LTF,L,N,skipped (no_confirm),298.45,297.45,,,,,,,reconstructed
+2026-04-27,SHRIRAMFIN,S,Y,exited at stoploss,973.35,977.1,974.2,57,-214,-277,-1.30,3.7723452219789375,reconstructed
+2026-04-27,SHRIRAMFIN,S,Y,exited at stoploss,973.35,977.1,973.3,57,-214,-277,-1.30,3.7723452219789375,reconstructed
+2026-04-28,SUNPHARMA,L,Y,exited at 15:15,1728.8,1723.85,1746.5,32,509,448,2.83,9.763266300936492,reconstructed
+2026-04-28,PHOENIXLTD,S,Y,exited at stoploss,1786.3,1792.1,1783.8,31,-180,-242,-1.35,9.763220582683527,reconstructed
+2026-04-28,PHOENIXLTD,S,Y,exited at stoploss,1786.3,1792.1,1753.8999999999999,31,-180,-241,-1.34,9.763220582683527,reconstructed
+2026-04-28,AUBANK,S,Y,exited at stoploss,1048,1051.15,1041,53,-167,-230,-1.38,6.869933815532765,reconstructed
+2026-04-28,AUBANK,S,Y,exited at stoploss,1048,1051.15,1048.8000000000002,53,-167,-231,-1.38,6.869933815532765,reconstructed
+2026-04-28,ULTRACEMCO,S,Y,exited at 15:15,11935,11965.25,11801,4,516,464,3.83,6.136791371073369,reconstructed
+2026-04-28,SBICARD,L,Y,exited at stoploss,657.95,655.9,656.7499999999999,85,-174,-240,-1.38,6.100252884775359,reconstructed
+2026-04-28,SBICARD,L,Y,exited at stoploss,657.95,655.9,656.4,85,-174,-240,-1.38,6.100252884775359,reconstructed
+2026-04-28,INDUSTOWER,L,Y,exited at stoploss,416,414.8,415.90000000000003,135,-162,-231,-1.42,5.842035628830335,reconstructed
+2026-04-28,INDUSTOWER,L,Y,exited at stoploss,416,414.8,415.5,135,-162,-231,-1.42,5.842035628830335,reconstructed
+2026-04-28,VBL,L,N,skipped (no_confirm),529.4,527.55,,,,,,,reconstructed
+2026-04-28,GRASIM,L,Y,exited at stoploss,2829.5,2822.95,2827.85,19,-124,-185,-1.48,3.991159723707483,reconstructed
+2026-04-28,GRASIM,L,Y,exited at stoploss,2829.5,2822.95,2829.85,19,-124,-185,-1.48,3.991159723707483,reconstructed
+2026-04-29,BANDHANBNK,L,Y,exited at stoploss,192,191,194.82,292,-292,-647,-2.22,20.299639252690678,reconstructed
+2026-04-29,BANDHANBNK,L,Y,exited at 15:15,192,191,198.13,292,984,921,3.16,20.299639252690678,reconstructed
+2026-04-29,TATACHEM,L,N,skipped (no_confirm),818.2,814.65,,,,,,,reconstructed
+2026-04-29,ETERNAL,S,Y,exited at stoploss,257,257.9,257.10999999999996,218,-196,-269,-1.37,8.6747004016856,reconstructed
+2026-04-29,ETERNAL,S,Y,exited at stoploss,257,257.9,256.02,218,-196,-268,-1.37,8.6747004016856,reconstructed
+2026-04-29,DRREDDY,S,Y,exited at stoploss,1335.6,1339.45,1338.65,42,-162,-225,-1.39,6.960282052337175,reconstructed
+2026-04-29,DRREDDY,S,Y,exited at 15:15,1335.6,1339.45,1328.8,42,239,178,1.10,6.960282052337175,reconstructed
+2026-04-29,PPLPHARMA,L,Y,exited at stoploss,168,167,166.76,334,-334,-730,-2.18,5.209479240973117,reconstructed
+2026-04-29,MARUTI,L,Y,exited at stoploss,13440,13403.4,13448.4,4,-146,-206,-1.41,4.995635189583665,reconstructed
+2026-04-29,MARUTI,L,Y,exited at stoploss,13440,13403.4,13447.4,4,-146,-206,-1.41,4.995635189583665,reconstructed
+2026-04-29,RECLTD,S,Y,exited at stoploss,365.1,366.3,362.4,154,-185,-254,-1.37,4.459106976909207,reconstructed
+2026-04-29,RECLTD,S,Y,exited at stoploss,365.1,366.3,360.05,154,-185,-253,-1.37,4.459106976909207,reconstructed
+2026-04-29,GLENMARK,L,N,skipped (no_confirm),2474,2467.5,,,,,,,reconstructed
+2026-04-30,IIFL,S,Y,exited at stoploss,453,454.95,453.45,124,-242,-310,-1.28,51.64812785195466,reconstructed
+2026-04-30,TATACHEM,S,Y,exited at stoploss,814.1,817.7,815.8000000000001,69,-248,-313,-1.26,20.57965181442435,reconstructed
+2026-04-30,TATACHEM,S,Y,exited at stoploss,814.1,817.7,807.25,69,-248,-313,-1.26,20.57965181442435,reconstructed
+2026-04-30,SYNGENE,L,Y,exited at stoploss,471.4,469.85,470.80000000000007,119,-184,-252,-1.37,14.673109638611123,reconstructed
+2026-04-30,SYNGENE,L,Y,exited at stoploss,471.4,469.85,483.95000000000005,119,-184,-254,-1.38,14.673109638611123,reconstructed
+2026-04-30,CHOLAFIN,S,N,skipped (no_confirm),1472.3,1476.9,,,,,,,reconstructed
+2026-04-30,BAJFINANCE,L,Y,exited at stoploss,969.8,967.4,969.85,58,-139,-204,-1.47,10.578812823636637,reconstructed
+2026-04-30,INDIANB,S,Y,exited at stoploss,807.85,810.9,807.0999999999999,69,-210,-275,-1.31,8.113332334611378,reconstructed
+2026-04-30,LUPIN,S,N,skipped (no_confirm),2277.7,2282.55,,,,,,,reconstructed
+2026-04-30,BAJAJFINSV,L,N,skipped (no_confirm),1790,1786.05,,,,,,,reconstructed
+2026-05-04,KOTAKBANK,S,N,skipped (no_confirm),363,363.9,,,,,,,reconstructed
+2026-05-04,HFCL,L,N,skipped (no_confirm),129,128,,,,,,,reconstructed
 2026-05-04,IDEA,,N,skipped (atr14d_below_floor_0.30),,,,,,,,,reconstructed
-2026-05-04,CESC,L,Y,exited at stoploss,195,193,193,288,-576,-576,-1.00,7.297533025745901,reconstructed
-2026-05-04,TATACHEM,L,N,no fill (never triggered),843.9,836.45,,,,,,,reconstructed
-2026-05-04,BAJAJ-AUTO,L,N,no fill (never triggered),10477.5,10433.35,,,,,,,reconstructed
-2026-05-04,JINDALSTEL,L,Y,exited at stoploss,1273.5,1266.05,1266.05,44,-328,-328,-1.00,5.1993197335769805,reconstructed
-2026-05-04,SONACOMS,S,Y,exited at 15:15,588.5,592.8,577.55,95,1040,1040,2.55,5.0464674232231435,reconstructed
-2026-05-05,TATATECH,L,Y,exited at stoploss,630,626.2,626.2,89,-338,-338,-1.00,29.164910033136184,reconstructed
-2026-05-05,KEI,S,N,no fill (never triggered),4720.1,4755.45,,,,,,,reconstructed
-2026-05-05,TATACHEM,L,N,no fill (never triggered),816.9,809.55,,,,,,,reconstructed
-2026-05-05,AMBUJACEM,S,Y,exited at stoploss,432.3,435,435,130,-351,-351,-1.00,8.420723538074864,reconstructed
-2026-05-05,MANAPPURAM,S,Y,exited at stoploss,296.7,298.5,298.5,189,-340,-340,-1.00,8.094078118040835,reconstructed
-2026-05-05,ABCAPITAL,L,Y,exited at stoploss,359.85,357.6,357.6,156,-351,-351,-1.00,6.175130374314308,reconstructed
-2026-05-05,GODREJPROP,S,Y,exited at 15:15,1855,1867.2,1810.5,30,1335,1335,3.65,5.016541803378387,reconstructed
-2026-05-05,AARTIIND,S,Y,exited at stoploss,490.1,493.35,493.35,114,-370,-370,-1.00,4.579831327574006,reconstructed
-2026-05-06,POONAWALLA,S,Y,exited at stoploss,448,450.65,450.65,125,-331,-331,-1.00,28.766102887742903,reconstructed
-2026-05-06,COFORGE,L,Y,exited at stoploss,1274.4,1265.25,1265.25,44,-403,-403,-1.00,14.329457581356575,reconstructed
-2026-05-06,MARICO,L,N,no fill (never triggered),843.15,839.65,,,,,,,reconstructed
-2026-05-06,SRF,S,N,no fill (never triggered),2582.2,2594.15,,,,,,,reconstructed
-2026-05-06,TITAGARH,S,Y,exited at stoploss,840.6,846.9,846.9,66,-416,-416,-1.00,8.32806179457802,reconstructed
-2026-05-06,LT,S,N,no fill (never triggered),3900.1,3917.8,,,,,,,reconstructed
-2026-05-06,HDFCLIFE,L,Y,exited at 15:15,601.4,598.2,606.35,93,460,460,1.55,4.849621594824447,reconstructed
-2026-05-06,HEROMOTOCO,S,Y,exited at 15:15,5155.5,5181.65,5163,10,-75,-75,-0.29,4.742058792371499,reconstructed
-2026-05-07,BAJAJ-AUTO,S,N,no fill (never triggered),10324.5,10370.6,,,,,,,reconstructed
-2026-05-07,GODREJCP,S,Y,exited at 15:15,1037.3,1043.8,1037,54,16,16,0.05,9.675991133975682,reconstructed
-2026-05-07,HDFCLIFE,L,Y,exited at stoploss,614.55,611.4,611.4,91,-287,-287,-1.00,8.994020235007001,reconstructed
-2026-05-07,PAYTM,S,Y,exited at stoploss,1146,1152.75,1152.75,49,-331,-331,-1.00,8.952032143557659,reconstructed
-2026-05-07,KPITTECH,S,Y,exited at stoploss,714.85,720.6,720.6,78,-448,-448,-1.00,7.8974910361580095,reconstructed
-2026-05-07,SHREECEM,L,Y,exited at stoploss,25895,25778.7,25778.7,2,-233,-233,-1.00,7.88289131326344,reconstructed
-2026-05-07,POLYCAB,L,Y,exited at 15:15,8709,8664.1,9000,6,1746,1746,6.48,6.7121030874216485,reconstructed
-2026-05-07,POLICYBZR,L,N,no fill (never triggered),1735,1724.3,,,,,,,reconstructed
-2026-05-08,PIDILITIND,S,Y,exited at 15:15,1492.7,1498.85,1479.6,37,485,485,2.13,36.768779623012094,reconstructed
-2026-05-08,BRITANNIA,S,Y,exited at stoploss,5551,5576,5576,10,-250,-250,-1.00,20.532199045530994,reconstructed
-2026-05-08,DABUR,S,Y,exited at stoploss,479,481.4,481.4,117,-281,-281,-1.00,14.687996236713126,reconstructed
-2026-05-08,LUPIN,L,Y,exited at stoploss,2453,2441.95,2441.95,22,-243,-243,-1.00,8.343070058980999,reconstructed
-2026-05-08,BIOCON,L,Y,exited at stoploss,392.8,391,391,143,-257,-257,-1.00,6.384923684775064,reconstructed
-2026-05-08,TATACONSUM,L,Y,exited at stoploss,1173.9,1168.05,1168.05,47,-275,-275,-1.00,4.66808435146765,reconstructed
-2026-05-08,KPITTECH,S,N,no fill (never triggered),704,709.95,,,,,,,reconstructed
-2026-05-08,PPLPHARMA,S,Y,exited at stoploss,182,184,184,309,-618,-618,-1.00,3.6887578726508923,reconstructed
-2026-05-11,TATACONSUM,L,Y,exited at stoploss,1229,1223.1,1223.1,45,-266,-266,-1.00,28.054928677540456,reconstructed
-2026-05-11,ABB,S,Y,exited at stoploss,6340,6388.55,6388.55,8,-388,-388,-1.00,11.915377953440675,reconstructed
-2026-05-11,KALYANKJIL,S,Y,exited at stoploss,389,391.15,391.15,144,-310,-310,-1.00,8.886413969760856,reconstructed
-2026-05-11,TITAN,S,Y,exited at 15:15,4273.2,4294.75,4206.7,13,865,865,3.09,7.290370417486333,reconstructed
-2026-05-11,SBIN,S,Y,exited at 15:15,984.6,990.15,972.6,57,684,684,2.16,5.308445479995368,reconstructed
-2026-05-11,LUPIN,S,Y,exited at 15:15,2276.1,2288.5,2254.4,24,521,521,1.75,5.197421825251905,reconstructed
-2026-05-11,DALBHARAT,S,Y,exited at 15:15,1800,1812.8,1767.7,31,1001,1001,2.52,5.11854502246242,reconstructed
-2026-05-11,BANKINDIA,S,N,no fill (never triggered),137,138,,,,,,,reconstructed
-2026-05-12,JSWENERGY,S,N,no fill (never triggered),512,515.6,,,,,,,reconstructed
-2026-05-12,OIL,L,Y,exited at stoploss,486.5,483.7,483.7,115,-322,-322,-1.00,7.931597550561142,reconstructed
-2026-05-12,INDHOTEL,S,Y,exited at stoploss,657,659.95,659.95,85,-251,-251,-1.00,5.889399150364115,reconstructed
-2026-05-12,OBEROIRLTY,L,N,no fill (never triggered),1712,1703.35,,,,,,,reconstructed
-2026-05-12,TATACONSUM,L,N,no fill (never triggered),1282.7,1275.65,,,,,,,reconstructed
+2026-05-04,CESC,L,Y,exited at stoploss,195,194,199.45,288,-288,-640,-2.22,7.297533025745901,reconstructed
+2026-05-04,CESC,L,Y,exited at stoploss,195,194,197.25,288,-288,-639,-2.22,7.297533025745901,reconstructed
+2026-05-04,TATACHEM,L,N,skipped (no_confirm),843.9,840.15,,,,,,,reconstructed
+2026-05-04,BAJAJ-AUTO,L,N,skipped (no_confirm),10477.5,10455.4,,,,,,,reconstructed
+2026-05-04,JINDALSTEL,L,N,skipped (no_confirm),1273.5,1269.75,,,,,,,reconstructed
+2026-05-04,SONACOMS,S,Y,exited at stoploss,588.5,590.65,583.6,95,-204,-270,-1.32,5.0464674232231435,reconstructed
+2026-05-04,SONACOMS,S,Y,exited at stoploss,588.5,590.65,586.65,95,-204,-270,-1.32,5.0464674232231435,reconstructed
+2026-05-05,TATATECH,L,Y,exited at stoploss,630,628.1,630.8000000000001,89,-169,-235,-1.39,29.164910033136184,reconstructed
+2026-05-05,TATATECH,L,Y,exited at stoploss,630,628.1,642.7,89,-169,-237,-1.40,29.164910033136184,reconstructed
+2026-05-05,KEI,S,N,skipped (no_confirm),4720.1,4737.8,,,,,,,reconstructed
+2026-05-05,TATACHEM,L,N,skipped (no_confirm),816.9,813.2,,,,,,,reconstructed
+2026-05-05,AMBUJACEM,S,N,skipped (no_confirm),432.3,433.65,,,,,,,reconstructed
+2026-05-05,MANAPPURAM,S,N,skipped (no_confirm),296.7,297.6,,,,,,,reconstructed
+2026-05-05,ABCAPITAL,L,Y,exited at stoploss,359.85,358.7,358.9,156,-179,-249,-1.39,6.175130374314308,reconstructed
+2026-05-05,ABCAPITAL,L,Y,exited at stoploss,359.85,358.7,359.04999999999995,156,-179,-249,-1.39,6.175130374314308,reconstructed
+2026-05-05,GODREJPROP,S,Y,exited at stoploss,1855,1861.1,1847.1,30,-183,-245,-1.34,5.016541803378387,reconstructed
+2026-05-05,GODREJPROP,S,Y,exited at stoploss,1855,1861.1,1856.1,30,-183,-246,-1.34,5.016541803378387,reconstructed
+2026-05-05,AARTIIND,S,Y,exited at stoploss,490.1,491.75,491.09999999999997,114,-188,-255,-1.36,4.579831327574006,reconstructed
+2026-05-05,AARTIIND,S,Y,exited at stoploss,490.1,491.75,490.45,114,-188,-255,-1.36,4.579831327574006,reconstructed
+2026-05-06,POONAWALLA,S,Y,exited at stoploss,448,449.35,448.05,125,-169,-236,-1.40,28.766102887742903,reconstructed
+2026-05-06,POONAWALLA,S,Y,exited at stoploss,448,449.35,449.25,125,-169,-237,-1.40,28.766102887742903,reconstructed
+2026-05-06,COFORGE,L,Y,exited at stoploss,1274.4,1269.8,1277.1999999999998,44,-202,-267,-1.32,14.329457581356575,reconstructed
+2026-05-06,COFORGE,L,Y,exited at stoploss,1274.4,1269.8,1274.8999999999999,44,-202,-267,-1.32,14.329457581356575,reconstructed
+2026-05-06,MARICO,L,N,skipped (no_confirm),843.15,841.4,,,,,,,reconstructed
+2026-05-06,SRF,S,N,skipped (no_confirm),2582.2,2588.2,,,,,,,reconstructed
+2026-05-06,TITAGARH,S,Y,exited at stoploss,840.6,843.75,841.3,66,-208,-272,-1.31,8.32806179457802,reconstructed
+2026-05-06,TITAGARH,S,Y,exited at stoploss,840.6,843.75,841.65,66,-208,-272,-1.31,8.32806179457802,reconstructed
+2026-05-06,LT,S,N,skipped (no_confirm),3900.1,3908.95,,,,,,,reconstructed
+2026-05-06,HDFCLIFE,L,N,skipped (no_confirm),601.4,599.8,,,,,,,reconstructed
+2026-05-06,HEROMOTOCO,S,Y,exited at stoploss,5155.5,5168.6,5062.1,10,-131,-187,-1.43,4.742058792371499,reconstructed
+2026-05-06,HEROMOTOCO,S,Y,exited at stoploss,5155.5,5168.6,5081.1,10,-131,-187,-1.43,4.742058792371499,reconstructed
+2026-05-07,BAJAJ-AUTO,S,N,skipped (no_confirm),10324.5,10347.55,,,,,,,reconstructed
+2026-05-07,GODREJCP,S,N,skipped (no_confirm),1037.3,1040.55,,,,,,,reconstructed
+2026-05-07,HDFCLIFE,L,Y,exited at stoploss,614.55,612.95,613.0000000000001,91,-146,-212,-1.45,8.994020235007001,reconstructed
+2026-05-07,HDFCLIFE,L,Y,exited at 15:15,614.55,612.95,625.6,91,746,684,4.70,8.994020235007001,reconstructed
+2026-05-07,PAYTM,S,Y,exited at stoploss,1146,1149.4,1149.1000000000001,49,-167,-231,-1.39,8.952032143557659,reconstructed
+2026-05-07,KPITTECH,S,Y,exited at stoploss,714.85,717.75,715.65,78,-226,-291,-1.29,7.8974910361580095,reconstructed
+2026-05-07,KPITTECH,S,Y,exited at stoploss,714.85,717.75,717.4,78,-226,-291,-1.29,7.8974910361580095,reconstructed
+2026-05-07,SHREECEM,L,N,skipped (no_confirm),25895,25836.85,,,,,,,reconstructed
+2026-05-07,POLYCAB,L,Y,exited at stoploss,8709,8686.55,8775.55,6,-135,-193,-1.43,6.7121030874216485,reconstructed
+2026-05-07,POLYCAB,L,Y,exited at 15:15,8709,8686.55,9000,6,1191,1133,8.41,6.7121030874216485,reconstructed
+2026-05-07,POLICYBZR,L,N,skipped (no_confirm),1735,1729.65,,,,,,,reconstructed
+2026-05-08,PIDILITIND,S,Y,exited at stoploss,1492.7,1495.8,1495.6,37,-115,-177,-1.55,36.768779623012094,reconstructed
+2026-05-08,PIDILITIND,S,Y,exited at 15:15,1492.7,1495.8,1479.6,37,451,391,3.41,36.768779623012094,reconstructed
+2026-05-08,BRITANNIA,S,Y,exited at stoploss,5551,5563.5,5547.5,10,-125,-186,-1.49,20.532199045530994,reconstructed
+2026-05-08,BRITANNIA,S,Y,exited at stoploss,5551,5563.5,5549.5,10,-125,-186,-1.49,20.532199045530994,reconstructed
+2026-05-08,DABUR,S,Y,exited at stoploss,479,480.2,472.8,117,-140,-207,-1.47,14.687996236713126,reconstructed
+2026-05-08,DABUR,S,Y,exited at stoploss,479,480.2,473.2,117,-140,-207,-1.47,14.687996236713126,reconstructed
+2026-05-08,LUPIN,L,Y,exited at stoploss,2453,2447.45,2452.45,22,-122,-183,-1.50,8.343070058980999,reconstructed
+2026-05-08,BIOCON,L,Y,exited at stoploss,392.8,391.9,392.99999999999994,143,-129,-198,-1.54,6.384923684775064,reconstructed
+2026-05-08,BIOCON,L,Y,exited at stoploss,392.8,391.9,392.29999999999995,143,-129,-198,-1.54,6.384923684775064,reconstructed
+2026-05-08,TATACONSUM,L,N,skipped (no_confirm),1173.9,1170.95,,,,,,,reconstructed
+2026-05-08,KPITTECH,S,N,skipped (no_confirm),704,707,,,,,,,reconstructed
+2026-05-08,PPLPHARMA,S,N,skipped (no_confirm),182,183,,,,,,,reconstructed
+2026-05-11,TATACONSUM,L,Y,exited at stoploss,1229,1226.05,1237.25,45,-133,-196,-1.48,28.054928677540456,reconstructed
+2026-05-11,TATACONSUM,L,Y,exited at stoploss,1229,1226.05,1234.95,45,-133,-196,-1.48,28.054928677540456,reconstructed
+2026-05-11,ABB,S,N,skipped (no_confirm),6340,6364.3,,,,,,,reconstructed
+2026-05-11,KALYANKJIL,S,Y,exited at stoploss,389,390.1,386.75,144,-158,-227,-1.43,8.886413969760856,reconstructed
+2026-05-11,KALYANKJIL,S,Y,exited at stoploss,389,390.1,387.6,144,-158,-227,-1.43,8.886413969760856,reconstructed
+2026-05-11,TITAN,S,Y,exited at stoploss,4273.2,4284,4265.6,13,-140,-202,-1.44,7.290370417486333,reconstructed
+2026-05-11,TITAN,S,Y,exited at stoploss,4273.2,4284,4236,13,-140,-201,-1.43,7.290370417486333,reconstructed
+2026-05-11,SBIN,S,Y,exited at 15:15,984.6,987.4,972.6,57,604,543,3.40,5.308445479995368,reconstructed
+2026-05-11,LUPIN,S,Y,exited at stoploss,2276.1,2282.3,2272.1000000000004,24,-149,-210,-1.41,5.197421825251905,reconstructed
+2026-05-11,LUPIN,S,Y,exited at stoploss,2276.1,2282.3,2282.2000000000003,24,-149,-210,-1.41,5.197421825251905,reconstructed
+2026-05-11,DALBHARAT,S,Y,exited at stoploss,1800,1806.4,1796.8000000000002,31,-198,-261,-1.32,5.11854502246242,reconstructed
+2026-05-11,DALBHARAT,S,Y,exited at 15:15,1800,1806.4,1767.7,31,884,822,4.14,5.11854502246242,reconstructed
+2026-05-11,BANKINDIA,S,N,skipped (no_confirm),137,138,,,,,,,reconstructed
+2026-05-12,JSWENERGY,S,N,skipped (no_confirm),512,513.8,,,,,,,reconstructed
+2026-05-12,OIL,L,Y,exited at stoploss,486.5,485.1,486.25,115,-161,-228,-1.42,7.931597550561142,reconstructed
+2026-05-12,OIL,L,Y,exited at stoploss,486.5,485.1,485.20000000000005,115,-161,-228,-1.42,7.931597550561142,reconstructed
+2026-05-12,INDHOTEL,S,Y,exited at stoploss,657,658.5,657.55,85,-127,-193,-1.51,5.889399150364115,reconstructed
+2026-05-12,INDHOTEL,S,Y,exited at stoploss,657,658.5,655.1,85,-127,-193,-1.51,5.889399150364115,reconstructed
+2026-05-12,OBEROIRLTY,L,N,skipped (no_confirm),1712,1707.65,,,,,,,reconstructed
+2026-05-12,TATACONSUM,L,N,skipped (no_confirm),1282.7,1279.15,,,,,,,reconstructed
 2026-05-12,IDEA,,N,skipped (atr14d_below_floor_0.47),,,,,,,,,reconstructed
-2026-05-12,KALYANKJIL,S,Y,exited at 15:15,375.55,378.15,361.3,149,2123,2123,5.48,4.012405292425195,reconstructed
-2026-05-12,UPL,S,Y,exited at stoploss,645.55,648.9,648.9,87,-291,-291,-1.00,3.8452608676541615,reconstructed
-2026-05-13,DRREDDY,L,Y,exited at stoploss,1285.6,1277.1,1277.1,43,-365,-365,-1.00,14.243681861951856,reconstructed
-2026-05-13,KALYANKJIL,S,Y,exited at stoploss,340.55,343.4,343.4,165,-470,-470,-1.00,13.080202329866575,reconstructed
-2026-05-13,TATAPOWER,L,Y,exited at 15:15,405.85,403.65,404.6,138,-172,-172,-0.57,8.033079076245434,reconstructed
-2026-05-13,IIFL,S,N,no fill (never triggered),460.15,464.35,,,,,,,reconstructed
-2026-05-13,KEI,S,Y,exited at stoploss,4836.3,4876,4876,11,-437,-437,-1.00,6.820462825939924,reconstructed
-2026-05-13,TITAN,L,Y,exited at 15:15,4089.2,4062.35,4095.7,13,85,85,0.24,6.540535984144762,reconstructed
-2026-05-13,MFSL,S,Y,exited at stoploss,1630.2,1638.3,1638.3,34,-275,-275,-1.00,4.972612829738589,reconstructed
-2026-05-13,TORNTPOWER,L,N,no fill (never triggered),1559.2,1545.2,,,,,,,reconstructed
-2026-05-14,CIPLA,L,Y,exited at 15:15,1432.1,1424.75,1435.5,39,133,133,0.46,17.443364684420416,reconstructed
-2026-05-14,ZYDUSLIFE,L,Y,exited at stoploss,979.5,974.55,974.55,57,-282,-282,-1.00,13.199186985295004,reconstructed
-2026-05-14,ADANIENT,L,Y,exited at 15:15,2602.7,2585.85,2707.2,21,2195,2195,6.20,11.16715974707031,reconstructed
-2026-05-14,CROMPTON,S,Y,exited at stoploss,282.2,284.2,284.2,199,-398,-398,-1.00,8.942007620499815,reconstructed
-2026-05-14,OIL,L,Y,exited at stoploss,530,526.5,526.5,106,-371,-371,-1.00,5.760182739871287,reconstructed
-2026-05-14,SAIL,L,Y,exited at stoploss,205,203,203,274,-548,-548,-1.00,5.212174817714837,reconstructed
-2026-05-14,BHARTIARTL,S,N,no fill (never triggered),1798.6,1807,,,,,,,reconstructed
-2026-05-14,LICHSGFIN,S,Y,exited at stoploss,562.35,565.85,565.85,100,-350,-350,-1.00,3.777063446744536,reconstructed
-2026-05-15,JSWSTEEL,S,Y,exited at 15:15,1284.2,1289.55,1277.5,43,288,288,1.25,11.070879970158835,reconstructed
-2026-05-15,UNITDSPR,L,Y,exited at 15:15,1319,1312.95,1323.3,42,181,181,0.71,9.618664540051574,reconstructed
-2026-05-15,MUTHOOTFIN,S,Y,exited at stoploss,3328.1,3348.45,3348.45,16,-326,-326,-1.00,8.356574294441785,reconstructed
-2026-05-15,CHAMBLFERT,S,N,no fill (never triggered),431.05,433.3,,,,,,,reconstructed
-2026-05-15,ADANIENT,S,Y,exited at stoploss,2672,2690.35,2690.35,21,-385,-385,-1.00,6.744145236504729,reconstructed
-2026-05-15,ADANIGREEN,S,Y,exited at stoploss,1377.2,1388.8,1388.8,40,-464,-464,-1.00,5.989234926632929,reconstructed
-2026-05-15,VOLTAS,S,Y,exited at stoploss,1255,1265.4,1265.4,44,-458,-458,-1.00,5.074300804435844,reconstructed
-2026-05-15,KAYNES,S,Y,exited at stoploss,3215.3,3259,3259,17,-743,-743,-1.00,4.629124657303785,reconstructed
-2026-05-18,ICICIPRULI,S,N,no fill (never triggered),488.6,491.55,,,,,,,reconstructed
-2026-05-18,SOLARINDS,L,Y,exited at 15:15,17950,17850.9,18000,3,150,150,0.50,6.383350358837315,reconstructed
-2026-05-18,DELHIVERY,S,Y,exited at stoploss,451,453.75,453.75,124,-341,-341,-1.00,5.306734619441635,reconstructed
-2026-05-18,SJVN,S,N,no fill (never triggered),70,71,,,,,,,reconstructed
-2026-05-18,IDEA,L,Y,exited at 15:15,13,12,12.83,1000,-170,-170,-0.17,4.864504346789007,reconstructed
-2026-05-18,TATASTEEL,S,Y,exited at stoploss,207,209,209,271,-542,-542,-1.00,4.680042866926945,reconstructed
-2026-05-18,UNOMINDA,L,Y,exited at stoploss,1157.2,1150.15,1150.15,48,-338,-338,-1.00,4.487069509436111,reconstructed
-2026-05-18,HAL,S,Y,exited at stoploss,4305.2,4333.25,4333.25,13,-365,-365,-1.00,3.6538551020216237,reconstructed
-2026-05-19,ADANIGREEN,S,N,no fill (never triggered),1378.8,1390.65,,,,,,,reconstructed
-2026-05-19,ADANIENT,S,Y,exited at stoploss,2726.1,2745.3,2745.3,20,-384,-384,-1.00,5.920812438289029,reconstructed
-2026-05-19,UNOMINDA,S,Y,exited at stoploss,1018.5,1026.45,1026.45,55,-437,-437,-1.00,5.808700606248756,reconstructed
-2026-05-19,TCS,L,Y,exited at stoploss,2355.1,2344,2344,23,-255,-255,-1.00,4.629462236433733,reconstructed
-2026-05-19,TECHM,L,Y,exited at 15:15,1474,1465.85,1468.3,38,-217,-217,-0.70,3.7344587980681245,reconstructed
-2026-05-19,ASTRAL,S,Y,exited at stoploss,1482.6,1491.45,1491.45,37,-327,-327,-1.00,3.490206119709654,reconstructed
-2026-05-19,SOLARINDS,L,Y,exited at stoploss,18311,18203.6,18203.6,3,-322,-322,-1.00,3.124903792509826,reconstructed
-2026-05-19,HCLTECH,L,Y,exited at stoploss,1187.3,1181.9,1181.9,47,-254,-254,-1.00,2.668132532160734,reconstructed
-2026-05-20,ZYDUSLIFE,L,Y,exited at stoploss,1079.05,1073.65,1073.65,52,-281,-281,-1.00,40.31726695967832,reconstructed
-2026-05-20,PIIND,S,N,no fill (never triggered),2860.1,2876.7,,,,,,,reconstructed
-2026-05-20,MANKIND,L,Y,exited at 15:15,2549,2533.9,2586.7,22,829,829,2.50,18.417807239615808,reconstructed
-2026-05-20,TIINDIA,L,Y,exited at 15:15,2904.6,2882.1,2971.6,19,1273,1273,2.98,5.150855291811493,reconstructed
-2026-05-20,HINDALCO,L,Y,exited at 15:15,1067.3,1061.7,1085.5,52,946,946,3.25,2.4704224289154695,reconstructed
-2026-05-20,APOLLOHOSP,L,Y,exited at 15:15,7994.5,7968.1,8080,7,599,599,3.24,2.4310076503013014,reconstructed
-2026-05-20,GLENMARK,S,Y,exited at stoploss,2397.1,2410.75,2410.75,23,-314,-314,-1.00,2.421695157774345,reconstructed
-2026-05-20,BEL,S,Y,exited at 15:15,413,415.05,413.3,136,-41,-41,-0.15,2.217920041367012,reconstructed
-2026-05-21,GRASIM,L,Y,exited at stoploss,3098.3,3084.8,3084.8,18,-243,-243,-1.00,12.081288814295185,reconstructed
-2026-05-21,APOLLOHOSP,S,N,no fill (never triggered),8075,8104.35,,,,,,,reconstructed
-2026-05-21,JUBLFOOD,S,Y,exited at stoploss,438.6,441.85,441.85,128,-416,-416,-1.00,9.311880218401111,reconstructed
-2026-05-21,MOTHERSON,S,Y,exited at stoploss,135,136,136,416,-416,-416,-1.00,6.339727887312751,reconstructed
-2026-05-21,PIIND,S,Y,exited at 15:15,2860,2878.95,2739.8,19,2284,2284,6.34,4.490869602363426,reconstructed
-2026-05-21,BOSCHLTD,L,N,no fill (never triggered),37600,37401.55,,,,,,,reconstructed
-2026-05-21,IRB,L,Y,exited at 15:15,22,21,22.89,1000,890,890,0.89,3.276594855949984,reconstructed
-2026-05-21,JSWENERGY,L,N,no fill (never triggered),553.3,549.85,,,,,,,reconstructed
-2026-05-22,LICI,S,Y,exited at 15:15,413,414.5,407,136,816,816,4.00,21.101286080051878,reconstructed
-2026-05-22,PAGEIND,L,N,no fill (never triggered),40375,40168.55,,,,,,,reconstructed
-2026-05-22,NYKAA,S,Y,exited at 15:15,280.5,282.05,278.15,200,470,470,1.52,16.706409663134036,reconstructed
-2026-05-22,DALBHARAT,L,N,no fill (never triggered),1807,1795.25,,,,,,,reconstructed
-2026-05-22,MAXHEALTH,S,Y,exited at stoploss,1028.2,1033.55,1033.55,54,-289,-289,-1.00,8.958673638925397,reconstructed
-2026-05-22,VBL,S,Y,exited at stoploss,529,531.6,531.6,106,-276,-276,-1.00,7.268688410435349,reconstructed
-2026-05-22,BANKBARODA,L,Y,exited at stoploss,256.9,255.55,255.55,218,-294,-294,-1.00,5.800793003443157,reconstructed
-2026-05-22,PRESTIGE,S,Y,exited at stoploss,1354.1,1364.6,1364.6,41,-430,-430,-1.00,5.598537313506801,reconstructed
-2026-05-25,BPCL,L,Y,exited at stoploss,307.6,307.4,307.4,182,-36,-36,-1.00,,recorded
-2026-05-25,CANBK,L,N,no fill (never triggered),132,131,,,,,,,recorded
-2026-05-25,LICI,L,N,no fill (never triggered),841.9,841.7,,,,,,,recorded
-2026-05-25,INOXWIND,L,Y,exited at stoploss,98,97,97,573,-573,-573,-1.00,,recorded
-2026-05-26,CONCOR,S,Y,exited at stoploss,483.05,483.25,483.25,116,-23,-23,-1.00,,recorded
-2026-05-27,EXIDEIND,L,Y,exited at stoploss,372,371.8,371.8,151,-30,-30,-1.00,,recorded
-2026-05-27,JSWSTEEL,L,Y,exited at stoploss,1309.5,1309.3,1309.3,42,-8,-8,-1.00,,recorded
-2026-05-27,LODHA,L,Y,exited at stoploss,920.5,920.3,920.3,61,-12,-12,-1.00,,recorded
-2026-05-27,OFSS,L,Y,exited at 15:15,9994.5,9994.3,10317,5,1613,1613,1612.50,,recorded
-2026-05-27,SJVN,L,Y,exited at 15:15,75,74,75.59,750,443,443,0.59,,recorded
-2026-05-27,TITAGARH,L,Y,exited at stoploss,831.3,831.1,831.1,67,-13,-13,-1.00,,recorded
-2026-05-27,COALINDIA,L,Y,exited at stoploss,439.1,438.9,438.9,128,-26,-26,-1.00,,recorded
-2026-05-27,JSWENERGY,L,Y,exited at stoploss,587.5,587.3,587.3,95,-19,-19,-1.00,,recorded
-2026-05-29,CAMS,L,Y,exited at stoploss,791.3,791.05,791.05,71,-18,-18,-1.00,,recorded
-2026-05-29,JSL,S,Y,exited at stoploss,719,719.2,719.2,78,-16,-16,-1.00,,recorded
-2026-05-29,JUBLFOOD,L,Y,exited at stoploss,429.5,429.3,429.3,130,-26,-26,-1.00,,recorded
-2026-05-29,KAYNES,S,Y,exited at stoploss,3208.2,3208.4,3208.4,17,-3,-3,-1.00,,recorded
-2026-05-29,LODHA,L,Y,exited at stoploss,942.3,942.1,942.1,59,-12,-12,-1.00,,recorded
-2026-05-29,POLICYBZR,S,Y,exited at stoploss,1748.1,1748.3,1748.3,32,-6,-6,-1.00,,recorded
-2026-05-29,YESBANK,L,N,no fill (never triggered),24,23,,,,,,,recorded
-2026-05-29,ABFRL,L,Y,exited at 15:15,65,64,64.75,865,-216,-216,-0.25,,recorded
-2026-06-01,BSE,S,Y,exited at stoploss,4128,4128.2,4128.2,13,-3,-3,-1.00,,recorded
-2026-06-01,LTF,S,Y,exited at stoploss,281,281.2,281.2,200,-40,-40,-1.00,,recorded
-2026-06-01,CGPOWER,S,Y,exited at stoploss,916.8,917,917,61,-12,-12,-1.00,,recorded
-2026-06-01,IREDA,S,Y,exited at 15:15,130,131,126.35,432,1577,1577,3.65,,recorded
-2026-06-01,PNBHOUSING,S,Y,exited at stoploss,1034,1034.2,1034.2,54,-11,-11,-1.00,,recorded
-2026-06-02,ABB,L,Y,exited at stoploss,7020.5,7020.3,7020.3,8,-2,-2,-1.00,,recorded
-2026-06-02,COFORGE,L,Y,exited at stoploss,1490,1489.8,1489.8,37,-7,-7,-1.00,,recorded
-2026-06-02,INFY,L,Y,exited at stoploss,1251,1250.8,1250.8,44,-9,-9,-1.00,,recorded
-2026-06-02,KEI,L,Y,exited at stoploss,5118,5117.8,5117.8,10,-2,-2,-1.00,,recorded
-2026-06-02,HAVELLS,L,Y,exited at 15:15,1139.6,1139.35,1176,49,1784,1784,145.60,,recorded
-2026-06-03,AARTIIND,S,Y,exited at stoploss,464.3,464.5,464.5,121,-24,-24,-1.00,,recorded
-2026-06-03,ADANIPORTS,S,Y,exited at stoploss,1822.5,1822.7,1822.7,30,-6,-6,-1.00,,recorded
-2026-06-03,ANGELONE,S,Y,exited at stoploss,337.05,337.25,337.25,166,-33,-33,-1.00,,recorded
-2026-06-03,HDFCAMC,S,Y,exited at 15:15,2546,2546.2,2455.8,22,1984,1984,451.00,,recorded
-2026-06-03,TATACHEM,S,Y,exited at stoploss,728.75,728.95,728.95,77,-15,-15,-1.00,,recorded
-2026-06-04,OFSS,L,Y,exited at stoploss,9913,9912.8,9912.8,5,-1,-1,-1.00,,recorded
-2026-06-04,TITAGARH,L,Y,exited at 15:15,857,856.8,865.55,65,556,556,42.75,,recorded
-2026-06-04,VOLTAS,L,Y,exited at stoploss,1277.9,1277.7,1277.7,44,-9,-9,-1.00,,recorded
-2026-06-04,IIFL,L,Y,exited at stoploss,505.95,505.75,505.75,111,-22,-22,-1.00,,recorded
-2026-06-04,BLUESTARCO,L,Y,exited at stoploss,1628,1627.8,1627.8,34,-7,-7,-1.00,,recorded
-2026-06-05,ABCAPITAL,L,Y,exited at stoploss,356.9,356.7,356.7,157,-31,-31,-1.00,,recorded
-2026-06-05,BAJFINANCE,L,Y,exited at stoploss,885.9,885.7,885.7,63,-13,-13,-1.00,,recorded
-2026-06-05,LTF,L,Y,exited at stoploss,270.6,270.4,270.4,207,-41,-41,-1.00,,recorded
-2026-06-05,YESBANK,L,Y,exited at 15:15,23,22,23.29,1000,290,290,0.29,,recorded
-2026-06-05,AMBUJACEM,S,Y,exited at stoploss,428,428.2,428.2,131,-26,-26,-1.00,,recorded
-2026-06-05,HINDZINC,S,Y,exited at stoploss,597.1,597.35,597.35,94,-23,-23,-1.00,,recorded
-2026-06-05,PATANJALI,S,Y,exited at stoploss,424.5,424.7,424.7,132,-26,-26,-1.00,,recorded
-2026-06-05,PNBHOUSING,L,Y,exited at stoploss,1005.5,1005.3,1005.3,55,-11,-11,-1.00,,recorded
-2026-06-08,ADANIENSOL,L,Y,exited at stoploss,1587.1,1586.85,1586.85,35,-9,-9,-1.00,,recorded
-2026-06-08,TITAGARH,L,Y,exited at stoploss,848.4,848.2,848.2,66,-13,-13,-1.00,,recorded
-2026-06-08,TRENT,L,Y,exited at stoploss,2753.7,2753.5,2753.5,20,-4,-4,-1.00,,recorded
-2026-06-08,VBL,L,Y,exited at stoploss,518.3,518.05,518.05,108,-27,-27,-1.00,,recorded
-2026-06-08,VOLTAS,L,Y,exited at stoploss,1288,1287.8,1287.8,43,-9,-9,-1.00,,recorded
-2026-06-08,ALKEM,L,Y,exited at stoploss,5259.5,5259.3,5259.3,10,-2,-2,-1.00,,recorded
-2026-06-08,FORTIS,L,Y,exited at stoploss,978.7,978.5,978.5,57,-11,-11,-1.00,,recorded
-2026-06-09,OFSS,S,Y,exited at stoploss,9705.5,9705.7,9705.7,5,-1,-1,-1.00,,recorded
-2026-06-09,NATIONALUM,S,Y,exited at stoploss,375.05,375.25,375.25,149,-30,-30,-1.00,,recorded
-2026-06-10,JSWSTEEL,L,Y,exited at stoploss,1266,1265.8,1265.8,44,-9,-9,-1.00,,recorded
-2026-06-10,DMART,L,Y,exited at stoploss,4132,4131.8,4131.8,13,-3,-3,-1.00,,recorded
-2026-06-10,PAYTM,L,Y,exited at stoploss,1074.8,1074.6,1074.6,52,-10,-10,-1.00,,recorded
-2026-06-10,PIDILITIND,L,Y,exited at stoploss,1512.8,1512.6,1512.6,37,-7,-7,-1.00,,recorded
-2026-06-11,ICICIBANK,L,Y,exited at stoploss,1302.5,1302.3,1302.3,43,-9,-9,-1.00,,recorded
-2026-06-11,JSL,L,Y,exited at 15:15,661.5,661.3,681.25,85,1679,1679,98.75,,recorded
-2026-06-11,KEI,L,Y,exited at stoploss,5166.5,5166.3,5166.3,10,-2,-2,-1.00,,recorded
-2026-06-11,SOLARINDS,L,Y,exited at stoploss,17770,17769.8,17769.8,3,-1,-1,-1.00,,recorded
-2026-06-11,VEDL,L,Y,exited at stoploss,300.7,300.5,300.5,187,-37,-37,-1.00,,recorded
-2026-06-11,IDEA,L,N,no fill (never triggered),15,14,,,,,,,recorded
-2026-06-11,TORNTPHARM,L,Y,exited at stoploss,4532.8,4532.6,4532.6,12,-2,-2,-1.00,,recorded
-2026-06-11,IRCTC,L,Y,exited at stoploss,517,516.8,516.8,108,-22,-22,-1.00,,recorded
-2026-06-12,CYIENT,S,Y,exited at stoploss,871.5,876.3,876.3,64,-307,-307,-1.00,8.36,recorded
-2026-06-12,LT,L,Y,exited at stoploss,4002,3987.4,3987.4,14,-204,-204,-1.00,4.46,recorded
-2026-06-12,ICICIGI,S,Y,exited at stoploss,1685,1694.15,1694.15,33,-302,-302,-1.00,4.3,recorded
-2026-06-12,PNB,S,Y,exited at stoploss,105,106,106,535,-535,-535,-1.00,3.96,recorded
-2026-06-12,TATACHEM,L,Y,exited at stoploss,762.75,757.2,757.2,73,-405,-405,-1.00,3.41,recorded
-2026-06-12,BALKRISIND,S,Y,exited at stoploss,1993.6,2008.5,2008.5,28,-417,-417,-1.00,3.19,recorded
-2026-06-15,LTF,L,Y,exited at stoploss,295.05,293.25,293.25,190,-342,-342,-1.00,14.56,recorded
-2026-06-15,CHOLAFIN,L,Y,exited at stoploss,1659,1647.75,1647.75,33,-371,-371,-1.00,11.68,recorded
-2026-06-15,ASIANPAINT,S,Y,exited at stoploss,2780,2792.35,2792.35,20,-247,-247,-1.00,9.46,recorded
-2026-06-15,PETRONET,L,Y,exited at stoploss,287,285.65,285.65,195,-263,-263,-1.00,7.47,recorded
-2026-06-15,LT,L,Y,exited at stoploss,4194.7,4178.1,4178.1,13,-216,-216,-1.00,7.26,recorded
+2026-05-12,KALYANKJIL,S,Y,exited at stoploss,375.55,376.85,376.55,149,-194,-263,-1.36,4.012405292425195,reconstructed
+2026-05-12,KALYANKJIL,S,Y,exited at 15:15,375.55,376.85,361.3,149,2093,2032,10.49,4.012405292425195,reconstructed
+2026-05-12,UPL,S,Y,exited at stoploss,645.55,647.25,645.7,87,-148,-214,-1.45,3.8452608676541615,reconstructed
+2026-05-12,UPL,S,Y,exited at stoploss,645.55,647.25,645.6500000000001,87,-148,-214,-1.45,3.8452608676541615,reconstructed
+2026-05-13,DRREDDY,L,Y,exited at stoploss,1285.6,1281.35,1289.05,43,-183,-246,-1.35,14.243681861951856,reconstructed
+2026-05-13,DRREDDY,L,Y,exited at stoploss,1285.6,1281.35,1285.65,43,-183,-246,-1.35,14.243681861951856,reconstructed
+2026-05-13,KALYANKJIL,S,N,skipped (no_confirm),340.55,342,,,,,,,reconstructed
+2026-05-13,TATAPOWER,L,Y,exited at stoploss,405.85,404.75,405.09999999999997,138,-152,-220,-1.45,8.033079076245434,reconstructed
+2026-05-13,IIFL,S,N,skipped (no_confirm),460.15,462.25,,,,,,,reconstructed
+2026-05-13,KEI,S,N,skipped (no_confirm),4836.3,4856.15,,,,,,,reconstructed
+2026-05-13,TITAN,L,N,skipped (no_confirm),4089.2,4075.75,,,,,,,reconstructed
+2026-05-13,MFSL,S,Y,exited at stoploss,1630.2,1634.25,1627.1499999999999,34,-138,-200,-1.45,4.972612829738589,reconstructed
+2026-05-13,MFSL,S,Y,exited at stoploss,1630.2,1634.25,1623.1499999999999,34,-138,-200,-1.45,4.972612829738589,reconstructed
+2026-05-13,TORNTPOWER,L,N,skipped (no_confirm),1559.2,1552.2,,,,,,,reconstructed
+2026-05-14,CIPLA,L,N,skipped (no_confirm),1432.1,1428.4,,,,,,,reconstructed
+2026-05-14,ZYDUSLIFE,L,Y,exited at 15:15,979.5,977,991.35,57,556,494,3.47,13.199186985295004,reconstructed
+2026-05-14,ADANIENT,L,Y,exited at 15:15,2602.7,2594.25,2707.2,21,1896,1836,10.35,11.16715974707031,reconstructed
+2026-05-14,CROMPTON,S,N,skipped (no_confirm),282.2,283.2,,,,,,,reconstructed
+2026-05-14,OIL,L,N,skipped (no_confirm),530,528.25,,,,,,,reconstructed
+2026-05-14,SAIL,L,Y,exited at stoploss,205,204,205.28,274,-274,-610,-2.23,5.212174817714837,reconstructed
+2026-05-14,SAIL,L,Y,exited at stoploss,205,204,204.91,274,-274,-610,-2.23,5.212174817714837,reconstructed
+2026-05-14,BHARTIARTL,S,N,skipped (no_confirm),1798.6,1802.8,,,,,,,reconstructed
+2026-05-14,LICHSGFIN,S,Y,exited at stoploss,562.35,564.1,562.75,100,-175,-242,-1.38,3.777063446744536,reconstructed
+2026-05-15,JSWSTEEL,S,N,skipped (no_confirm),1284.2,1286.9,,,,,,,reconstructed
+2026-05-15,UNITDSPR,L,Y,exited at stoploss,1319,1315.95,1316.15,42,-128,-191,-1.49,9.618664540051574,reconstructed
+2026-05-15,UNITDSPR,L,Y,exited at stoploss,1319,1315.95,1320.15,42,-128,-191,-1.49,9.618664540051574,reconstructed
+2026-05-15,MUTHOOTFIN,S,Y,exited at stoploss,3328.1,3338.3,3333.0000000000005,16,-163,-222,-1.36,8.356574294441785,reconstructed
+2026-05-15,MUTHOOTFIN,S,Y,exited at stoploss,3328.1,3338.3,3334.2000000000003,16,-163,-223,-1.36,8.356574294441785,reconstructed
+2026-05-15,CHAMBLFERT,S,N,skipped (no_confirm),431.05,432.2,,,,,,,reconstructed
+2026-05-15,ADANIENT,S,N,skipped (no_confirm),2672,2681.2,,,,,,,reconstructed
+2026-05-15,ADANIGREEN,S,Y,exited at stoploss,1377.2,1383,1381.8999999999999,40,-232,-295,-1.27,5.989234926632929,reconstructed
+2026-05-15,VOLTAS,S,Y,exited at stoploss,1255,1260.2,1256.8,44,-229,-292,-1.27,5.074300804435844,reconstructed
+2026-05-15,VOLTAS,S,Y,exited at stoploss,1255,1260.2,1259.8,44,-229,-292,-1.28,5.074300804435844,reconstructed
+2026-05-15,KAYNES,S,Y,exited at stoploss,3215.3,3237.15,3228.65,17,-371,-432,-1.16,4.629124657303785,reconstructed
+2026-05-18,ICICIPRULI,S,N,skipped (no_confirm),488.6,490.1,,,,,,,reconstructed
+2026-05-18,SOLARINDS,L,N,skipped (no_confirm),17950,17900.45,,,,,,,reconstructed
+2026-05-18,DELHIVERY,S,Y,exited at stoploss,451,452.4,450.4,124,-174,-241,-1.39,5.306734619441635,reconstructed
+2026-05-18,DELHIVERY,S,Y,exited at stoploss,451,452.4,448.7,124,-174,-241,-1.39,5.306734619441635,reconstructed
+2026-05-18,SJVN,S,N,skipped (no_confirm),70,71,,,,,,,reconstructed
+2026-05-18,IDEA,L,Y,exited at 15:15,13,12,12.83,1000,-70,-84,-0.08,4.864504346789007,reconstructed
+2026-05-18,TATASTEEL,S,Y,exited at stoploss,207,208,207.85,271,-271,-604,-2.23,4.680042866926945,reconstructed
+2026-05-18,TATASTEEL,S,Y,exited at stoploss,207,208,208.4,271,-271,-604,-2.23,4.680042866926945,reconstructed
+2026-05-18,UNOMINDA,L,Y,exited at stoploss,1157.2,1153.65,1155.3500000000001,48,-170,-234,-1.37,4.487069509436111,reconstructed
+2026-05-18,HAL,S,Y,exited at stoploss,4305.2,4319.25,4279.05,13,-183,-244,-1.34,3.6538551020216237,reconstructed
+2026-05-18,HAL,S,Y,exited at stoploss,4305.2,4319.25,4263.650000000001,13,-183,-244,-1.34,3.6538551020216237,reconstructed
+2026-05-19,ADANIGREEN,S,N,skipped (no_confirm),1378.8,1384.75,,,,,,,reconstructed
+2026-05-19,ADANIENT,S,Y,exited at stoploss,2726.1,2735.7,2716.6,20,-192,-253,-1.32,5.920812438289029,reconstructed
+2026-05-19,ADANIENT,S,Y,exited at stoploss,2726.1,2735.7,2728,20,-192,-253,-1.32,5.920812438289029,reconstructed
+2026-05-19,UNOMINDA,S,Y,exited at stoploss,1018.5,1022.5,1018,55,-220,-284,-1.29,5.808700606248756,reconstructed
+2026-05-19,TCS,L,Y,exited at stoploss,2355.1,2349.5,2352.4,23,-129,-190,-1.47,4.629462236433733,reconstructed
+2026-05-19,TCS,L,Y,exited at stoploss,2355.1,2349.5,2352.4,23,-129,-190,-1.47,4.629462236433733,reconstructed
+2026-05-19,TECHM,L,Y,exited at stoploss,1474,1469.9,1477.3000000000002,38,-156,-220,-1.41,3.7344587980681245,reconstructed
+2026-05-19,TECHM,L,Y,exited at stoploss,1474,1469.9,1479.7,38,-156,-220,-1.41,3.7344587980681245,reconstructed
+2026-05-19,ASTRAL,S,Y,exited at stoploss,1482.6,1487.05,1479.45,37,-165,-227,-1.38,3.490206119709654,reconstructed
+2026-05-19,ASTRAL,S,Y,exited at 15:15,1482.6,1487.05,1447,37,1073,1013,6.15,3.490206119709654,reconstructed
+2026-05-19,SOLARINDS,L,Y,exited at stoploss,18311,18257.3,18293.3,3,-161,-222,-1.38,3.124903792509826,reconstructed
+2026-05-19,SOLARINDS,L,Y,exited at stoploss,18311,18257.3,18407.3,3,-161,-222,-1.38,3.124903792509826,reconstructed
+2026-05-19,HCLTECH,L,Y,exited at stoploss,1187.3,1184.6,1187.5,47,-127,-191,-1.50,2.668132532160734,reconstructed
+2026-05-19,HCLTECH,L,Y,exited at stoploss,1187.3,1184.6,1190.8,47,-127,-191,-1.50,2.668132532160734,reconstructed
+2026-05-20,ZYDUSLIFE,L,Y,exited at stoploss,1079.05,1076.35,1077.75,52,-140,-205,-1.46,40.31726695967832,reconstructed
+2026-05-20,ZYDUSLIFE,L,Y,exited at stoploss,1079.05,1076.35,1083.6,52,-140,-205,-1.46,40.31726695967832,reconstructed
+2026-05-20,PIIND,S,N,skipped (no_confirm),2860.1,2868.4,,,,,,,reconstructed
+2026-05-20,MANKIND,L,Y,exited at stoploss,2549,2541.45,2550.25,22,-166,-229,-1.38,18.417807239615808,reconstructed
+2026-05-20,MANKIND,L,Y,exited at stoploss,2549,2541.45,2548.25,22,-166,-229,-1.38,18.417807239615808,reconstructed
+2026-05-20,TIINDIA,L,Y,exited at stoploss,2904.6,2893.35,2920.75,19,-214,-276,-1.29,5.150855291811493,reconstructed
+2026-05-20,TIINDIA,L,Y,exited at 15:15,2904.6,2893.35,2971.6,19,998,936,4.38,5.150855291811493,reconstructed
+2026-05-20,HINDALCO,L,Y,exited at 15:15,1067.3,1064.5,1085.5,52,718,656,4.51,2.4704224289154695,reconstructed
+2026-05-20,APOLLOHOSP,L,Y,exited at stoploss,7994.5,7981.3,7988.3,7,-92,-154,-1.67,2.4310076503013014,reconstructed
+2026-05-20,APOLLOHOSP,L,Y,exited at 15:15,7994.5,7981.3,8080,7,560,498,5.39,2.4310076503013014,reconstructed
+2026-05-20,GLENMARK,S,Y,exited at stoploss,2397.1,2403.95,2398.95,23,-158,-219,-1.39,2.421695157774345,reconstructed
+2026-05-20,GLENMARK,S,Y,exited at stoploss,2397.1,2403.95,2400.85,23,-158,-219,-1.39,2.421695157774345,reconstructed
+2026-05-20,BEL,S,Y,exited at stoploss,413,414.05,413.1,136,-143,-211,-1.48,2.217920041367012,reconstructed
+2026-05-20,BEL,S,Y,exited at stoploss,413,414.05,413.85,136,-143,-211,-1.48,2.217920041367012,reconstructed
+2026-05-21,GRASIM,L,Y,exited at 15:15,3098.3,3091.55,3154.8,18,1006,945,7.78,12.081288814295185,reconstructed
+2026-05-21,APOLLOHOSP,S,N,skipped (no_confirm),8075,8089.7,,,,,,,reconstructed
+2026-05-21,JUBLFOOD,S,Y,exited at stoploss,438.6,440.25,438.15,128,-211,-279,-1.32,9.311880218401111,reconstructed
+2026-05-21,JUBLFOOD,S,Y,exited at stoploss,438.6,440.25,438.25,128,-211,-279,-1.32,9.311880218401111,reconstructed
+2026-05-21,MOTHERSON,S,Y,exited at stoploss,135,136,135.4,416,-416,-894,-2.15,6.339727887312751,reconstructed
+2026-05-21,PIIND,S,Y,exited at 15:15,2860,2869.5,2739.8,19,2113,2053,11.38,4.490869602363426,reconstructed
+2026-05-21,BOSCHLTD,L,N,skipped (no_confirm),37600,37500.75,,,,,,,reconstructed
+2026-05-21,IRB,L,Y,exited at 15:15,22,21,22.89,1000,1260,1236,1.24,3.276594855949984,reconstructed
+2026-05-21,JSWENERGY,L,N,skipped (no_confirm),553.3,551.55,,,,,,,reconstructed
+2026-05-22,LICI,S,Y,exited at stoploss,413,413.75,409.75,136,-102,-170,-1.67,21.101286080051878,reconstructed
+2026-05-22,LICI,S,Y,exited at stoploss,413,413.75,409.85,136,-102,-170,-1.67,21.101286080051878,reconstructed
+2026-05-22,PAGEIND,L,N,skipped (no_confirm),40375,40271.75,,,,,,,reconstructed
+2026-05-22,NYKAA,S,Y,exited at stoploss,280.5,281.3,278.3,200,-160,-231,-1.44,16.706409663134036,reconstructed
+2026-05-22,NYKAA,S,Y,exited at 15:15,280.5,281.3,278.15,200,-50,-111,-0.69,16.706409663134036,reconstructed
+2026-05-22,DALBHARAT,L,N,skipped (no_confirm),1807,1801.1,,,,,,,reconstructed
+2026-05-22,MAXHEALTH,S,Y,exited at stoploss,1028.2,1030.9,1021.7,54,-146,-209,-1.43,8.958673638925397,reconstructed
+2026-05-22,MAXHEALTH,S,Y,exited at stoploss,1028.2,1030.9,1027.6000000000001,54,-146,-209,-1.44,8.958673638925397,reconstructed
+2026-05-22,VBL,S,Y,exited at stoploss,529,530.3,529.8,106,-138,-205,-1.49,7.268688410435349,reconstructed
+2026-05-22,VBL,S,Y,exited at stoploss,529,530.3,529.5,106,-138,-205,-1.49,7.268688410435349,reconstructed
+2026-05-22,BANKBARODA,L,Y,exited at stoploss,256.9,256.2,256.65000000000003,218,-153,-225,-1.48,5.800793003443157,reconstructed
+2026-05-22,BANKBARODA,L,Y,exited at stoploss,256.9,256.2,256.55,218,-153,-225,-1.48,5.800793003443157,reconstructed
+2026-05-22,PRESTIGE,S,Y,exited at stoploss,1354.1,1359.35,1350.75,41,-215,-278,-1.29,5.598537313506801,reconstructed
+2026-05-22,PRESTIGE,S,Y,exited at stoploss,1354.1,1359.35,1357.35,41,-215,-278,-1.29,5.598537313506801,reconstructed
+2026-05-25,BPCL,L,Y,exited at stoploss,307.6,307.5,308.4,182,-18,-89,-4.89,,recorded
+2026-05-25,BPCL,L,Y,exited at stoploss,307.6,307.5,307.95,182,-18,-89,-4.89,,recorded
+2026-05-25,CANBK,L,N,skipped (no_confirm),132,131,,,,,,,recorded
+2026-05-25,LICI,L,N,skipped (no_confirm),841.9,841.8,,,,,,,recorded
+2026-05-25,INOXWIND,L,Y,exited at stoploss,98,97,96.3,573,-573,-1207,-2.11,,recorded
+2026-05-26,CONCOR,S,Y,exited at 15:15,483.05,483.15,476.4,116,748,687,59.19,,recorded
+2026-05-27,EXIDEIND,L,Y,exited at stoploss,372,371.9,373,151,-15,-85,-5.60,,recorded
+2026-05-27,EXIDEIND,L,Y,exited at stoploss,372,371.9,373.95,151,-15,-85,-5.61,,recorded
+2026-05-27,JSWSTEEL,L,Y,exited at stoploss,1309.5,1309.4,1317,42,-4,-67,-15.99,,recorded
+2026-05-27,JSWSTEEL,L,Y,exited at stoploss,1309.5,1309.4,1314.9,42,-4,-67,-15.97,,recorded
+2026-05-27,LODHA,L,Y,exited at stoploss,920.5,920.4,923.6,61,-6,-71,-11.66,,recorded
+2026-05-27,LODHA,L,Y,exited at stoploss,920.5,920.4,924.8,61,-6,-71,-11.67,,recorded
+2026-05-27,OFSS,L,Y,exited at stoploss,9994.5,9994.4,10042.9,5,-1,-56,-111.97,,recorded
+2026-05-27,OFSS,L,Y,exited at stoploss,9994.5,9994.4,10039.9,5,-1,-56,-111.94,,recorded
+2026-05-27,SJVN,L,Y,exited at 15:15,75,74,75.59,750,233,170,0.23,,recorded
+2026-05-27,TITAGARH,L,Y,exited at stoploss,831.3,831.2,839.8500000000001,67,-7,-72,-10.74,,recorded
+2026-05-27,TITAGARH,L,Y,exited at stoploss,831.3,831.2,837.4000000000001,67,-7,-72,-10.71,,recorded
+2026-05-27,COALINDIA,L,Y,exited at stoploss,439.1,439,440.4,128,-13,-81,-6.35,,recorded
+2026-05-27,COALINDIA,L,Y,exited at stoploss,439.1,439,440.04999999999995,128,-13,-81,-6.34,,recorded
+2026-05-27,JSWENERGY,L,Y,exited at stoploss,587.5,587.4,589.1,95,-10,-76,-7.98,,recorded
+2026-05-27,JSWENERGY,L,Y,exited at stoploss,587.5,587.4,594.9499999999999,95,-10,-76,-8.05,,recorded
+2026-05-29,CAMS,L,Y,exited at stoploss,791.3,791.15,791.3000000000001,71,-11,-76,-7.14,,recorded
+2026-05-29,CAMS,L,Y,exited at stoploss,791.3,791.15,794.45,71,-11,-76,-7.16,,recorded
+2026-05-29,JSL,S,Y,exited at stoploss,719,719.1,717.35,78,-8,-73,-9.39,,recorded
+2026-05-29,JSL,S,Y,exited at stoploss,719,719.1,715.45,78,-8,-73,-9.37,,recorded
+2026-05-29,JUBLFOOD,L,Y,exited at stoploss,429.5,429.4,431.54999999999995,130,-13,-81,-6.25,,recorded
+2026-05-29,JUBLFOOD,L,Y,exited at stoploss,429.5,429.4,431.09999999999997,130,-13,-81,-6.24,,recorded
+2026-05-29,KAYNES,S,Y,exited at stoploss,3208.2,3208.3,3197.3,17,-2,-62,-36.67,,recorded
+2026-05-29,KAYNES,S,Y,exited at stoploss,3208.2,3208.3,3205.2000000000003,17,-2,-62,-36.76,,recorded
+2026-05-29,LODHA,L,Y,exited at stoploss,942.3,942.2,949.4000000000001,59,-6,-70,-11.94,,recorded
+2026-05-29,LODHA,L,Y,exited at stoploss,942.3,942.2,946.95,59,-6,-70,-11.92,,recorded
+2026-05-29,POLICYBZR,S,Y,exited at stoploss,1748.1,1748.2,1746.5000000000002,32,-3,-66,-20.71,,recorded
+2026-05-29,POLICYBZR,S,Y,exited at stoploss,1748.1,1748.2,1745.7,32,-3,-66,-20.70,,recorded
+2026-05-29,YESBANK,L,Y,exited at 15:15,24,23,23.13,1000,-150,-176,-0.18,,recorded
+2026-05-29,ABFRL,L,Y,exited at 15:15,65,64,64.75,865,-52,-114,-0.13,,recorded
+2026-06-01,BSE,S,Y,exited at stoploss,4128,4128.1,4052.4000000000005,13,-1,-60,-46.08,,recorded
+2026-06-01,BSE,S,Y,exited at stoploss,4128,4128.1,4047.9000000000005,13,-1,-60,-46.03,,recorded
+2026-06-01,LTF,S,Y,exited at stoploss,281,281.1,278.70000000000005,200,-20,-91,-4.56,,recorded
+2026-06-01,LTF,S,Y,exited at stoploss,281,281.1,278.6,200,-20,-91,-4.56,,recorded
+2026-06-01,CGPOWER,S,Y,exited at stoploss,916.8,916.9,910.45,61,-6,-70,-11.51,,recorded
+2026-06-01,CGPOWER,S,Y,exited at stoploss,916.8,916.9,906.85,61,-6,-70,-11.47,,recorded
+2026-06-01,IREDA,S,Y,exited at 15:15,130,131,126.35,432,1452,1390,3.22,,recorded
+2026-06-01,PNBHOUSING,S,Y,exited at stoploss,1034,1034.1,1031.3999999999999,54,-5,-69,-12.84,,recorded
+2026-06-01,PNBHOUSING,S,Y,exited at stoploss,1034,1034.1,1029,54,-5,-69,-12.82,,recorded
+2026-06-02,ABB,L,Y,exited at stoploss,7020.5,7020.4,7087.4,8,-1,-64,-79.46,,recorded
+2026-06-02,ABB,L,Y,exited at stoploss,7020.5,7020.4,7115.4,8,-1,-64,-79.77,,recorded
+2026-06-02,COFORGE,L,Y,exited at stoploss,1490,1489.9,1490.5,37,-4,-66,-17.90,,recorded
+2026-06-02,COFORGE,L,Y,exited at stoploss,1490,1489.9,1500.4,37,-4,-67,-18.01,,recorded
+2026-06-02,INFY,L,N,skipped (no_confirm),1251,1250.9,,,,,,,recorded
+2026-06-02,KEI,L,Y,exited at stoploss,5118,5117.9,5122.9,10,-1,-58,-57.85,,recorded
+2026-06-02,KEI,L,Y,exited at stoploss,5118,5117.9,5125.4,10,-1,-58,-57.88,,recorded
+2026-06-02,HAVELLS,L,Y,exited at stoploss,1139.6,1139.5,1147.3000000000002,49,-5,-69,-14.12,,recorded
+2026-06-02,HAVELLS,L,Y,exited at stoploss,1139.6,1139.5,1149.5,49,-5,-69,-14.15,,recorded
+2026-06-03,AARTIIND,S,Y,exited at stoploss,464.3,464.4,463.95,121,-12,-80,-6.60,,recorded
+2026-06-03,AARTIIND,S,Y,exited at stoploss,464.3,464.4,464.24999999999994,121,-12,-80,-6.61,,recorded
+2026-06-03,ADANIPORTS,S,Y,exited at stoploss,1822.5,1822.6,1818.6,30,-3,-65,-21.50,,recorded
+2026-06-03,ADANIPORTS,S,Y,exited at stoploss,1822.5,1822.6,1817.3,30,-3,-64,-21.49,,recorded
+2026-06-03,ANGELONE,S,Y,exited at stoploss,337.05,337.2,337.09999999999997,166,-25,-95,-3.80,,recorded
+2026-06-03,ANGELONE,S,Y,exited at stoploss,337.05,337.2,335.7,166,-25,-94,-3.79,,recorded
+2026-06-03,HDFCAMC,S,Y,exited at 15:15,2546,2546.1,2455.8,22,1001,940,427.49,,recorded
+2026-06-03,TATACHEM,S,Y,exited at stoploss,728.75,728.85,728.2,77,-8,-73,-9.51,,recorded
+2026-06-03,TATACHEM,S,Y,exited at stoploss,728.75,728.85,728.0500000000001,77,-8,-73,-9.51,,recorded
+2026-06-04,OFSS,L,Y,exited at stoploss,9913,9912.9,9938.9,5,-1,-55,-110.83,,recorded
+2026-06-04,OFSS,L,Y,exited at stoploss,9913,9912.9,9992.4,5,-1,-56,-111.42,,recorded
+2026-06-04,TITAGARH,L,Y,exited at stoploss,857,856.9,866.55,65,-7,-72,-11.03,,recorded
+2026-06-04,TITAGARH,L,Y,exited at stoploss,857,856.9,865.9499999999999,65,-7,-72,-11.03,,recorded
+2026-06-04,VOLTAS,L,Y,exited at stoploss,1277.9,1277.8,1280.8,44,-4,-69,-15.59,,recorded
+2026-06-04,VOLTAS,L,Y,exited at stoploss,1277.9,1277.8,1285.1999999999998,44,-4,-69,-15.64,,recorded
+2026-06-04,IIFL,L,Y,exited at stoploss,505.95,505.85,507.3,111,-11,-79,-7.08,,recorded
+2026-06-04,IIFL,L,Y,exited at 15:15,505.95,505.85,530.2,111,2520,2458,221.42,,recorded
+2026-06-04,BLUESTARCO,L,Y,exited at stoploss,1628,1627.9,1630.6000000000001,34,-3,-66,-19.44,,recorded
+2026-06-04,BLUESTARCO,L,Y,exited at stoploss,1628,1627.9,1632.4,34,-3,-66,-19.46,,recorded
+2026-06-05,ABCAPITAL,L,Y,exited at stoploss,356.9,356.75,358.15000000000003,157,-24,-93,-3.96,,recorded
+2026-06-05,ABCAPITAL,L,Y,exited at stoploss,356.9,356.75,358.55,157,-24,-93,-3.96,,recorded
+2026-06-05,BAJFINANCE,L,Y,exited at stoploss,885.9,885.8,886.4,63,-6,-71,-11.25,,recorded
+2026-06-05,BAJFINANCE,L,Y,exited at stoploss,885.9,885.8,887.4499999999999,63,-6,-71,-11.26,,recorded
+2026-06-05,LTF,L,Y,exited at stoploss,270.6,270.5,270.54999999999995,207,-21,-93,-4.48,,recorded
+2026-06-05,LTF,L,Y,exited at stoploss,270.6,270.5,274.45,207,-21,-94,-4.52,,recorded
+2026-06-05,YESBANK,L,Y,exited at 15:15,23,22,23.29,1000,360,335,0.33,,recorded
+2026-06-05,AMBUJACEM,S,Y,exited at stoploss,428,428.1,427.40000000000003,131,-13,-81,-6.20,,recorded
+2026-06-05,AMBUJACEM,S,Y,exited at stoploss,428,428.1,427.25,131,-13,-81,-6.20,,recorded
+2026-06-05,HINDZINC,S,Y,exited at stoploss,597.1,597.2,595.3000000000001,94,-9,-76,-8.05,,recorded
+2026-06-05,HINDZINC,S,Y,exited at stoploss,597.1,597.2,593.7,94,-9,-75,-8.03,,recorded
+2026-06-05,PATANJALI,S,Y,exited at stoploss,424.5,424.6,423.85,132,-13,-81,-6.16,,recorded
+2026-06-05,PATANJALI,S,Y,exited at stoploss,424.5,424.6,423.70000000000005,132,-13,-81,-6.16,,recorded
+2026-06-05,PNBHOUSING,L,Y,exited at stoploss,1005.5,1005.4,1019.3,55,-6,-70,-12.71,,recorded
+2026-06-05,PNBHOUSING,L,Y,exited at stoploss,1005.5,1005.4,1020.8,55,-6,-70,-12.73,,recorded
+2026-06-08,ADANIENSOL,L,Y,exited at stoploss,1587.1,1587,1588.8000000000002,35,-3,-66,-18.98,,recorded
+2026-06-08,ADANIENSOL,L,Y,exited at stoploss,1587.1,1587,1592.9,35,-3,-67,-19.02,,recorded
+2026-06-08,TITAGARH,L,Y,exited at stoploss,848.4,848.3,848.85,66,-7,-72,-10.84,,recorded
+2026-06-08,TITAGARH,L,Y,exited at stoploss,848.4,848.3,853.55,66,-7,-72,-10.89,,recorded
+2026-06-08,TRENT,L,Y,exited at stoploss,2753.7,2753.6,2758.3,20,-2,-64,-31.84,,recorded
+2026-06-08,TRENT,L,Y,exited at stoploss,2753.7,2753.6,2765.3,20,-2,-64,-31.92,,recorded
+2026-06-08,VBL,L,Y,exited at stoploss,518.3,518.15,518.75,108,-16,-83,-5.14,,recorded
+2026-06-08,VBL,L,Y,exited at stoploss,518.3,518.15,518.35,108,-16,-83,-5.14,,recorded
+2026-06-08,VOLTAS,L,Y,exited at stoploss,1288,1287.9,1303.9,43,-4,-68,-15.84,,recorded
+2026-06-08,VOLTAS,L,Y,exited at stoploss,1288,1287.9,1305.3000000000002,43,-4,-68,-15.86,,recorded
+2026-06-08,ALKEM,L,Y,exited at stoploss,5259.5,5259.4,5271.9,10,-1,-59,-59.49,,recorded
+2026-06-08,ALKEM,L,Y,exited at stoploss,5259.5,5259.4,5267.4,10,-1,-59,-59.44,,recorded
+2026-06-08,FORTIS,L,Y,exited at 15:15,978.7,978.6,989.45,57,596,534,93.73,,recorded
+2026-06-09,OFSS,S,Y,exited at stoploss,9705.5,9705.6,9702.6,5,-1,-54,-108.23,,recorded
+2026-06-09,OFSS,S,Y,exited at stoploss,9705.5,9705.6,9681.1,5,-1,-54,-107.99,,recorded
+2026-06-09,NATIONALUM,S,Y,exited at stoploss,375.05,375.2,373.5,149,-22,-91,-4.07,,recorded
+2026-06-09,NATIONALUM,S,Y,exited at stoploss,375.05,375.2,373.54999999999995,149,-22,-91,-4.07,,recorded
+2026-06-10,JSWSTEEL,L,Y,exited at stoploss,1266,1265.9,1266,44,-4,-68,-15.43,,recorded
+2026-06-10,JSWSTEEL,L,Y,exited at stoploss,1266,1265.9,1278.2,44,-4,-68,-15.56,,recorded
+2026-06-10,DMART,L,Y,exited at stoploss,4132,4131.9,4161.099999999999,13,-1,-61,-47.27,,recorded
+2026-06-10,DMART,L,Y,exited at stoploss,4132,4131.9,4158.2,13,-1,-61,-47.24,,recorded
+2026-06-10,PAYTM,L,Y,exited at stoploss,1074.8,1074.7,1074.9,52,-5,-69,-13.33,,recorded
+2026-06-10,PAYTM,L,Y,exited at stoploss,1074.8,1074.7,1077.5,52,-5,-69,-13.35,,recorded
+2026-06-10,PIDILITIND,L,Y,exited at stoploss,1512.8,1512.7,1513.9,37,-4,-67,-18.15,,recorded
+2026-06-10,PIDILITIND,L,Y,exited at stoploss,1512.8,1512.7,1513.9,37,-4,-67,-18.15,,recorded
+2026-06-11,ICICIBANK,L,Y,exited at stoploss,1302.5,1302.4,1302.6000000000001,43,-4,-68,-15.83,,recorded
+2026-06-11,ICICIBANK,L,Y,exited at stoploss,1302.5,1302.4,1309.9,43,-4,-68,-15.91,,recorded
+2026-06-11,JSL,L,Y,exited at stoploss,661.5,661.4,670.9,85,-9,-75,-8.88,,recorded
+2026-06-11,JSL,L,Y,exited at stoploss,661.5,661.4,671.6999999999999,85,-9,-76,-8.89,,recorded
+2026-06-11,KEI,L,Y,exited at stoploss,5166.5,5166.4,5172.4,10,-1,-58,-58.40,,recorded
+2026-06-11,KEI,L,Y,exited at stoploss,5166.5,5166.4,5180.9,10,-1,-58,-58.49,,recorded
+2026-06-11,SOLARINDS,L,Y,exited at stoploss,17770,17769.9,17803.9,3,0,-59,-197.34,,recorded
+2026-06-11,SOLARINDS,L,Y,exited at stoploss,17770,17769.9,17807.9,3,0,-59,-197.39,,recorded
+2026-06-11,VEDL,L,Y,exited at stoploss,300.7,300.55,302.55,187,-28,-100,-3.55,,recorded
+2026-06-11,VEDL,L,Y,exited at stoploss,300.7,300.55,302.5,187,-28,-100,-3.55,,recorded
+2026-06-11,IDEA,L,Y,exited at 15:15,15,14,14.18,1000,-50,-66,-0.07,,recorded
+2026-06-11,TORNTPHARM,L,Y,exited at 15:15,4532.8,4532.7,4568.8,12,136,75,62.87,,recorded
+2026-06-11,IRCTC,L,Y,exited at stoploss,517,516.9,519.75,108,-11,-78,-7.22,,recorded
+2026-06-11,IRCTC,L,Y,exited at stoploss,517,516.9,517.6,108,-11,-78,-7.19,,recorded
+2026-06-12,CYIENT,S,Y,exited at stoploss,871.5,873.9,873.25,64,-154,-218,-1.42,8.36,recorded
+2026-06-12,CYIENT,S,Y,exited at stoploss,871.5,873.9,870.3,64,-154,-218,-1.42,8.36,recorded
+2026-06-12,LT,L,Y,exited at stoploss,4002,3994.7,3995.3999999999996,14,-102,-165,-1.61,4.46,recorded
+2026-06-12,LT,L,Y,exited at stoploss,4002,3994.7,3999.5,14,-102,-165,-1.61,4.46,recorded
+2026-06-12,ICICIGI,S,Y,exited at stoploss,1685,1689.6,1686.5,33,-152,-215,-1.41,4.3,recorded
+2026-06-12,ICICIGI,S,Y,exited at stoploss,1685,1689.6,1689.3,33,-152,-215,-1.41,4.3,recorded
+2026-06-12,PNB,S,Y,exited at stoploss,105,106,105.85,535,-535,-1132,-2.12,3.96,recorded
+2026-06-12,TATACHEM,L,N,skipped (no_confirm),762.75,759.95,,,,,,,recorded
+2026-06-12,BALKRISIND,S,Y,exited at stoploss,1993.6,2001.05,1997.95,28,-209,-271,-1.30,3.19,recorded
+2026-06-15,LTF,L,N,skipped (no_confirm),295.05,294.15,,,,,,,recorded
+2026-06-15,CHOLAFIN,L,Y,exited at stoploss,1659,1653.35,1654.6499999999999,33,-186,-248,-1.33,11.68,recorded
+2026-06-15,CHOLAFIN,L,Y,exited at stoploss,1659,1653.35,1655.75,33,-186,-248,-1.33,11.68,recorded
+2026-06-15,ASIANPAINT,S,Y,exited at 15:15,2780,2786.2,2741.2,20,768,707,5.70,9.46,recorded
+2026-06-15,PETRONET,L,Y,exited at stoploss,287,286.3,286.35,195,-136,-208,-1.52,7.47,recorded
+2026-06-15,PETRONET,L,Y,exited at stoploss,287,286.3,289.45,195,-136,-208,-1.53,7.47,recorded
+2026-06-15,LT,L,Y,exited at stoploss,4194.7,4186.4,4203.599999999999,13,-108,-169,-1.56,7.26,recorded
+2026-06-15,LT,L,Y,exited at stoploss,4194.7,4186.4,4196.5,13,-108,-169,-1.56,7.26,recorded

@@ -49,7 +49,7 @@ const orbCandidateSchema = new mongoose.Schema({
   // fill, ARMED → SKIPPED on reject/cancel/15:00 unfilled cutoff.
   status: {
     type: String,
-    enum: ['WATCHING', 'RANGE_SET', 'ARMED', 'ENTERED', 'STOPPED_OUT', 'TARGET_HIT', 'TIME_EXIT', 'SKIPPED'],
+    enum: ['WATCHING', 'RANGE_SET', 'ARMED', 'ENTERED', 'STOPPED_OUT', 'TARGET_HIT', 'TIME_EXIT', 'SKIPPED', 'REARM_WATCH', 'AWAIT_ENTRY'],
     default: 'WATCHING',
   },
 
@@ -74,6 +74,7 @@ const orbCandidateSchema = new mongoose.Schema({
   entryPrice:  Number,
   entryTime:   Date,
   stopPrice:   Number,
+  reentryCount: { type: Number, default: 0 },   // #4 re-entry: times re-armed after a stop this day
   targetPrice: Number,
 
   // Kite order IDs

@@ -54,7 +54,7 @@ import BacktestCandle from '../models/backtestCandle.js';
 import OrbTrade from '../models/orbTrade.js';
 import Stock from '../models/stock.js';
 import {
-  computeRvol5, selectInPlay, computeATR, slotKey, buildPaperSetup,
+  computeRvol5, selectInPlay, computeATR, slotKey, buildPaperSetup, evaluateReentry, evaluateEntry,
   PAPER_MAX_ENTRIES, PAPER_RISK_PCT,
 } from '../services/orb/orbService.js';
 
@@ -71,6 +71,7 @@ const COST_RT = Number(arg('cost', 0));        // round-trip cost as fraction of
 const SLIP_TICKS = Number(arg('slip', 0));     // adverse ticks on a stop-market exit (off by default)
 const ENTRY_SLIP = Number(arg('entryslip', 0)); // breakout entry slippage as fraction of price (e.g. 0.0003 = 3bps)
 const TOP_N = Math.min(Number(arg('top', PAPER_MAX_ENTRIES)), PAPER_MAX_ENTRIES); // trade only the top-N picks by rvol5/day (default 8)
+const ENTRY_MODE = (process.env.ORB_ENTRY_MODE ?? 'confirmed').toLowerCase(); // 'confirmed' (close-confirm+exhaustion) vs 'touch' (resting SL-M) — matches live
 const VERBOSE = has('verbose');
 const NO_XLSX = has('no-xlsx');
 const OUT = arg('out', null);
@@ -240,32 +241,87 @@ async function main() {
         trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: 'no_candles', trigger, stop: orStop, source: daySource });
         dayArmed--; continue;
       }
-      // simulate fill (09:24–15:00) then exit (stop or 15:15 close)
+      // intraday 1-min bars from 09:24 + completed 5-min candles (for confirm/reclaim)
       const bars = allBars.filter(b => { const s = slotKey(b.date); return s && toMin(s) >= toMin('09:24'); });
-      let entryIdx = -1;
-      for (let i = 0; i < bars.length; i++) {
-        const s = slotKey(bars[i].date); if (toMin(s) > toMin('15:00')) break;
-        if (isLong ? bars[i].high >= trigger : bars[i].low <= trigger) { entryIdx = i; break; }
+      const c5 = []; { let cur = null, bucket = null;
+        for (let i = 0; i < bars.length; i++) {
+          const s = slotKey(bars[i].date); if (!s) continue;
+          const bk = Math.floor((toMin(s) - toMin('09:15')) / 5);
+          if (bk !== bucket) { if (cur) c5.push(cur); cur = { startMin: toMin('09:15') + bk * 5, open: bars[i].open, high: bars[i].high, low: bars[i].low, close: bars[i].close, lastIdx: i }; bucket = bk; }
+          else { cur.high = Math.max(cur.high, bars[i].high); cur.low = Math.min(cur.low, bars[i].low); cur.close = bars[i].close; cur.lastIdx = i; }
+        }
+        if (cur) c5.push(cur);
       }
-      if (entryIdx < 0) { trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: 'no_fill', trigger, stop: orStop, source: daySource }); continue; }
+      const avgRangeBefore = (k) => { const prior = c5.slice(Math.max(0, k - 5), k); return prior.length ? prior.reduce((s, b) => s + Math.abs(b.high - b.low), 0) / prior.length : undefined; };
 
-      let exit = null, reason = null;
-      for (let i = entryIdx + 1; i < bars.length; i++) {
-        const s = slotKey(bars[i].date);
-        if (isLong ? bars[i].low <= orStop : bars[i].high >= orStop) { exit = orStop; reason = 'stop'; break; }
-        if (toMin(s) >= toMin('15:15')) { exit = bars[i].close; reason = 'time'; break; }
+      const replayExit = (startIdx, stopPx) => {
+        for (let i = startIdx + 1; i < bars.length; i++) {
+          const s = slotKey(bars[i].date);
+          if (isLong ? bars[i].low <= stopPx : bars[i].high >= stopPx) return { exitIdx: i, exit: stopPx, reason: 'stop' };
+          if (toMin(s) >= toMin('15:15')) return { exitIdx: i, exit: bars[i].close, reason: 'time' };
+        }
+        return { exitIdx: bars.length - 1, exit: bars[bars.length - 1].close, reason: 'time' };
+      };
+      const accountLeg = (entryPx, exit, reason, legTag) => {
+        const gross = (isLong ? (exit - entryPx) : (entryPx - exit)) * qty;
+        const cost  = COST_RT * entryPx * qty;
+        const slip  = reason === 'stop' ? SLIP_TICKS * tickSize * qty : 0;
+        const net   = gross - cost - slip;
+        trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: true, reason, trigger, stop: orStop, exit, qty, gross, net, r: net / (stopDist * qty), rvol5: p.rvol5, source: daySource, leg: legTag });
+        dayNet += net; dayFilled++;
+      };
+
+      // ── Leg-1 entry: TOUCH (resting SL-M at the OR edge) or CONFIRMED (close-confirm
+      // + exhaustion veto via evaluateEntry), per ORB_ENTRY_MODE — matches live. ──
+      let entryIdx = -1, entryFill = null, leg1Stop = orStop;
+      if (ENTRY_MODE === 'confirmed') {
+        for (let k = 0; k < c5.length; k++) {
+          const d = evaluateEntry({ direction: isLong ? 'LONG' : 'SHORT', orHigh: p.orBar.high, orLow: p.orBar.low,
+            lastClosed: { open: c5[k].open, high: c5[k].high, low: c5[k].low, close: c5[k].close }, nowMin: c5[k].startMin + 5, avgRange: avgRangeBefore(k) });
+          if (d.enter) { entryIdx = c5[k].lastIdx; entryFill = c5[k].close; leg1Stop = isLong ? c5[k].close - stopDist : c5[k].close + stopDist; break; }
+          if (d.reason === 'past_entry_cutoff') break;
+        }
+        if (entryIdx < 0) { trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: 'no_confirm', trigger, stop: orStop, source: daySource }); continue; }
+      } else {
+        for (let i = 0; i < bars.length; i++) {
+          const s = slotKey(bars[i].date); if (toMin(s) > toMin('15:00')) break;
+          if (isLong ? bars[i].high >= trigger : bars[i].low <= trigger) { entryIdx = i; break; }
+        }
+        if (entryIdx < 0) { trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: 'no_fill', trigger, stop: orStop, source: daySource }); continue; }
+        entryFill = isLong ? trigger * (1 + ENTRY_SLIP) : trigger * (1 - ENTRY_SLIP);
       }
-      if (exit === null) { const last = bars[bars.length - 1]; exit = last.close; reason = 'time'; }
 
-      // breakout entry fills slightly worse than the trigger (price moving through it)
-      const entryFill = isLong ? trigger * (1 + ENTRY_SLIP) : trigger * (1 - ENTRY_SLIP);
-      const gross = (isLong ? (exit - entryFill) : (entryFill - exit)) * qty;
-      const cost = COST_RT * trigger * qty;
-      const slip = reason === 'stop' ? SLIP_TICKS * tickSize * qty : 0;
-      const net = gross - cost - slip;
-      const R = stopDist * qty;
-      trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: true, reason, trigger, stop: orStop, exit, qty, gross, net, r: net / R, rvol5: p.rvol5, source: daySource });
-      dayNet += net; dayFilled++;
+      // Leg 1
+      let leg = replayExit(entryIdx, leg1Stop);
+      accountLeg(entryFill, leg.exit, leg.reason, 'L1');
+      let lastStopIdx = leg.reason === 'stop' ? leg.exitIdx : -1;
+
+      // Re-entry legs: after a stop, look for a 5-min candle that CLOSES back through
+      // the level (evaluateReentry); re-enter at that close with a fresh k×ATR stop.
+      let reentryCount = 0;
+      while (lastStopIdx >= 0) {
+        const cand = { direction: isLong ? 'LONG' : 'SHORT', orHigh: p.orBar.high, orLow: p.orBar.low, reentryCount };
+        let found = null;
+        for (let k = 0; k < c5.length; k++) {
+          if (c5[k].lastIdx <= lastStopIdx) continue;             // must complete AFTER the stop
+          const nowMin   = c5[k].startMin + 5;                    // candle close time
+          const prior    = c5.slice(Math.max(0, k - 5), k);
+          const avgRange = prior.length ? prior.reduce((s, b) => s + Math.abs(b.high - b.low), 0) / prior.length : undefined;
+          const dec = evaluateReentry({ candidate: cand, lastClosed: { open: c5[k].open, high: c5[k].high, low: c5[k].low, close: c5[k].close }, nowMin, avgRange });
+          if (dec.reenter) { found = c5[k]; break; }
+          if (dec.reason === 'past_cutoff' || dec.reason === 'max_reentries') break;
+        }
+        if (!found) break;
+        reentryCount++;
+        const reFill = found.close;
+        // NOTE: fill ∓ stopDist = the k×ATR stop from the fill — matches live ONLY in the
+        // default PAPER_STOP_MODE='atr'. Under ORB_STOP_MODE=oredge live would stop at the
+        // OR edge instead; this backtest does not model oredge re-entry/confirmed stops.
+        const reStop = isLong ? reFill - stopDist : reFill + stopDist;
+        leg = replayExit(found.lastIdx, reStop);
+        accountLeg(reFill, leg.exit, leg.reason, `R${reentryCount}`);
+        lastStopIdx = leg.reason === 'stop' ? leg.exitIdx : -1;
+      }
     }
     perDay.push({ date, armed: dayArmed, trades: dayFilled, net: dayNet });
 

@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, needsVolumeBaselineRetry, isBarComplete, _testExports } from '../services/orb/orbService.js';
+import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, needsVolumeBaselineRetry, isBarComplete, evaluateReentry, evaluateEntry, _testExports } from '../services/orb/orbService.js';
 
 const { MIN_DISTANCE_PCT } = _testExports;
 
@@ -316,5 +316,89 @@ describe('Forming-candle filter — isBarComplete (2026-06-03 bug fix)', () => {
 
   it('unparseable date → not complete (safe default)', () => {
     expect(isBarComplete('garbage', 601)).toBe(false);
+  });
+});
+
+describe('Re-entry decision — evaluateReentry (#4, 2026-06-17)', () => {
+  const longC  = { direction: 'LONG',  orHigh: 100, orLow: 95, reentryCount: 0 };
+  const shortC = { direction: 'SHORT', orHigh: 100, orLow: 95, reentryCount: 0 };
+  const at = (close) => ({ open: close, high: close + 0.5, low: close - 0.5, close });
+  const NOON = 11 * 60;   // 11:00 — before the 11:46 cutoff
+
+  it('LONG: a candle that CLOSES back above orHigh → re-enter', () => {
+    const r = evaluateReentry({ candidate: longC, lastClosed: at(100.5), nowMin: NOON });
+    expect(r.reenter).toBe(true);
+    expect(r.reason).toBe('reclaim');
+  });
+
+  it('SHORT: a candle that CLOSES back below orLow → re-enter', () => {
+    const r = evaluateReentry({ candidate: shortC, lastClosed: at(94.5), nowMin: NOON });
+    expect(r.reenter).toBe(true);
+  });
+
+  it('LONG: still below orHigh (no reclaim) → no re-entry — keeps you out of a falling stock', () => {
+    const r = evaluateReentry({ candidate: longC, lastClosed: at(98), nowMin: NOON });
+    expect(r.reenter).toBe(false);
+    expect(r.reason).toBe('no_reclaim');
+  });
+
+  it('re-entry budget exhausted → no re-entry (no death-by-whipsaw)', () => {
+    const r = evaluateReentry({ candidate: { ...longC, reentryCount: 1 }, lastClosed: at(100.5), nowMin: NOON, maxReentries: 1 });
+    expect(r.reenter).toBe(false);
+    expect(r.reason).toBe('max_reentries');
+  });
+
+  it('past the cutoff time (after 14:45) → no re-entry', () => {
+    const r = evaluateReentry({ candidate: longC, lastClosed: at(100.5), nowMin: 15 * 60 });
+    expect(r.reenter).toBe(false);
+    expect(r.reason).toBe('past_cutoff');
+  });
+
+  it('reclaim candle is an exhaustion thrust (range ≫ avg) → veto', () => {
+    const thrust = { open: 99, high: 108, low: 98.8, close: 101 };  // ~9.2 range vs avg 1
+    const r = evaluateReentry({ candidate: longC, lastClosed: thrust, nowMin: NOON, avgRange: 1, thrustMult: 1.5 });
+    expect(r.reenter).toBe(false);
+    expect(r.reason).toBe('reclaim_is_thrust');
+  });
+
+  it('normal-sized reclaim candle passes the thrust check', () => {
+    const r = evaluateReentry({ candidate: longC, lastClosed: at(100.5), nowMin: NOON, avgRange: 1, thrustMult: 1.5 });
+    expect(r.reenter).toBe(true);
+  });
+});
+
+describe('Confirmed entry — evaluateEntry (#3, close-confirm + exhaustion veto)', () => {
+  const base = { direction: 'LONG', orHigh: 100, orLow: 95 };
+  const MORN = 10 * 60;   // 10:00 — before the 11:46 fresh-entry cutoff
+
+  it('LONG: a normal candle that CLOSES above orHigh → enter', () => {
+    const r = evaluateEntry({ ...base, lastClosed: { open: 99, high: 101, low: 98.8, close: 100.6 }, nowMin: MORN, avgRange: 2 });
+    expect(r.enter).toBe(true);
+    expect(r.reason).toBe('confirmed');
+  });
+
+  it('LONG: candle WICKS above but CLOSES back below orHigh → no entry (fakeout filtered)', () => {
+    const r = evaluateEntry({ ...base, lastClosed: { open: 99, high: 100.8, low: 98.5, close: 99.4 }, nowMin: MORN, avgRange: 2 });
+    expect(r.enter).toBe(false);
+    expect(r.reason).toBe('no_close_confirm');
+  });
+
+  it('THE HAT: candle CLOSES strong above orHigh but is a climax thrust (range ≫ avg) → vetoed', () => {
+    // closes at 104 (well above 100) — close-confirm PASSES — but range 8 vs avg 2 = climax
+    const hat = { open: 96.5, high: 104.5, low: 96.5, close: 104 };
+    const r = evaluateEntry({ ...base, lastClosed: hat, nowMin: MORN, avgRange: 2, thrustMult: 1.5 });
+    expect(r.enter).toBe(false);
+    expect(r.reason).toBe('exhaustion_thrust');   // the key: close-confirm alone would have bought this
+  });
+
+  it('SHORT: a candle that closes below orLow (normal size) → enter', () => {
+    const r = evaluateEntry({ direction: 'SHORT', orHigh: 100, orLow: 95, lastClosed: { open: 96, high: 96.2, low: 93.8, close: 94.3 }, nowMin: MORN, avgRange: 2 });
+    expect(r.enter).toBe(true);
+  });
+
+  it('past the fresh-entry cutoff (after 11:46) → no entry', () => {
+    const r = evaluateEntry({ ...base, lastClosed: { open: 99, high: 101, low: 98.8, close: 100.6 }, nowMin: 12 * 60, avgRange: 2 });
+    expect(r.enter).toBe(false);
+    expect(r.reason).toBe('past_entry_cutoff');
   });
 });

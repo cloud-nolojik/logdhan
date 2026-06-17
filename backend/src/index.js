@@ -40,6 +40,7 @@ import tradingDaySequenceJob from './services/jobs/tradingDaySequenceJob.js'; //
 import regimeRecheckJob from './services/jobs/regimeRecheckJob.js'; // 11:00 IST regime-flip safety valve
 import weeklyReviewJob from './services/jobs/weeklyReviewJob.js'; // Saturday 10:00 IST auto-review
 import { initFillListener } from './services/dailyPicks/dailyPicksService.js'; // Postback → instant SL+target
+import { initOrbFillListener } from './services/orb/orbService.js'; // Postback → instant ORB protective SL
 
 import authRoutes from './routes/auth.js';
 import stockRoutes from './routes/stock.js';
@@ -294,6 +295,7 @@ async function initializeDailyEntryJob() {
   try {
     await dailyEntryJob.initialize();
     initFillListener(); // Start listening for postback fills → instant SL+target
+    initOrbFillListener(); // ORB: postback fills → instant protective SL (resting entries)
   } catch (error) {
     console.error('Failed to initialize daily entry job:', error);
   }

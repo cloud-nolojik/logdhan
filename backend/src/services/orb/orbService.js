@@ -12,6 +12,7 @@
  */
 
 import kiteOrderService from '../kiteOrder.service.js';
+import kiteOrderEvents from '../kiteOrderEvents.js';
 import OrbTrade from '../../models/orbTrade.js';
 import OrbBaseline from '../../models/orbBaseline.js';
 import OrbPipelineLog from '../../models/orbPipelineLog.js';
@@ -153,6 +154,41 @@ const PAPER_STOP_MODE = (process.env.ORB_STOP_MODE ?? 'atr').toLowerCase();
 // fills AT the trigger — this only closes the live-vs-backtest slippage gap on
 // gap-and-run names. 0 disables (always chase, legacy). Tunable via env.
 const PAPER_MAX_ENTRY_EXTENSION_ATR = Number(process.env.ORB_MAX_ENTRY_EXT_ATR ?? 0.5);
+
+// ── 2026-06-17 — RE-ENTRY (#4): re-arm a stopped name on a reclaim ───────────
+// A tight 0.10×ATR stop coughs up trades to noise pullbacks (16/17-Jun: GODREJPROP
+// stopped on the pullback, then recovered to +87). Re-entry recovers them: after a
+// stop-out we keep WATCHING the name (status REARM_WATCH) and re-arm in the SAME
+// direction when a completed 5-min candle CLOSES back through the original breakout
+// level (the reclaim). Self-protecting — a name that keeps going the wrong way never
+// reclaims, so it never re-enters (16-Jun IGL trended down all day → no re-entry).
+// Part of the strategy logic (no on/off flag — backtest reflects it identically).
+// The caps below stop death-by-whipsaw and are env-tunable for backtest sweeps.
+const ORB_REENTRY_MAX         = Number(process.env.ORB_REENTRY_MAX ?? 1);        // max re-entries per stock per day
+// Last re-entry time. NOT the 11:46 fresh-entry cutoff — a reclaim is a trend-
+// RESUMPTION that rides NSE's afternoon volatility resurgence (U-shape: midday lull
+// ~11:00–13:00, then a pickup peaking ~2% in the final half-hour) + the documented
+// late-day "intraday momentum" effect. 14:45 leaves ~30 min runway to the 15:15
+// flatten (Zerodha MIS square-off is 15:25). Research 17-Jun. Tunable: A/B 14:30
+// (=870) for more runway. minutes-of-day IST.
+const ORB_REENTRY_CUTOFF_MIN  = Number(process.env.ORB_REENTRY_CUTOFF_MIN ?? (14 * 60 + 45));
+const ORB_REENTRY_THRUST_MULT = Number(process.env.ORB_REENTRY_THRUST_MULT ?? 1.5); // skip a reclaim whose candle is a >1.5× avg-range exhaustion thrust
+
+// ── 2026-06-17 — #3 CONFIRMED ENTRY: close-confirm + exhaustion veto ─────────
+// Research (STOP_LOSS_RESEARCH + 17-Jun): the touch-fill resting entry buys (1) wick
+// fakeouts and (2) overbought "hats" — climax thrust candles that close strong above
+// the range then fade all day (16/17-Jun: IGL/CYIENT). Close-confirmation alone fixes
+// (1) but NOT (2) — a climax closes strong by definition. So a CONFIRMED entry pairs:
+//   • close-confirm  — a completed 5-min candle must CLOSE beyond the OR edge, and
+//   • exhaustion veto — skip if that candle's range > THRUST_MULT × recent avg range.
+// NOTE: this DEVIATES from the paper's validated touch entry (forfeits gap-and-go
+// runners that never close back) → MUST be backtested vs touch before going live.
+const ORB_ENTRY_CONFIRM_CUTOFF_MIN = Number(process.env.ORB_ENTRY_CUTOFF_MIN ?? (11 * 60 + 46)); // 11:46 = the fresh-entry window end (BREAKOUT_END)
+const ORB_ENTRY_THRUST_MULT        = Number(process.env.ORB_ENTRY_THRUST_MULT ?? 1.5);
+// Entry mechanism. 'confirmed' (new default) = monitor enters on a close-confirmed,
+// non-exhaustion 5-min candle (evaluateEntry). 'touch' = the paper's resting SL-M at
+// the OR edge (fills on a wick). Backtest both: ORB_ENTRY_MODE=touch vs confirmed.
+const ORB_ENTRY_MODE = (process.env.ORB_ENTRY_MODE ?? 'confirmed').toLowerCase();
 
 // ── LEGACY ENGINE — RETIRED 2026-06-11 (full paper-spec cutover, no flags) ──
 // The 15-min OR path (recordOpeningRanges), the 2-bar confirmation scan
@@ -1539,6 +1575,72 @@ export function buildPaperSetup({ bar, atr14d, tickSize, riskBudget, slotCap, mi
 }
 
 /**
+ * RE-ENTRY decision (#4, 2026-06-17). PURE — no I/O, unit-testable, shared by the live
+ * monitor and the backtest so they can't diverge. Given a stopped-out candidate and the
+ * latest COMPLETED 5-min candle, decide whether to re-arm in the SAME direction on a
+ * reclaim. Re-enter iff ALL of: re-entry budget left, before the cutoff, and the candle
+ * CLOSED back through the original breakout level (long → close > orHigh, short →
+ * close < orLow) without being an exhaustion thrust. The reclaim requirement is the
+ * safety: a name that keeps going the wrong way never closes back through, so it can
+ * never re-enter. Returns { reenter, reason }.
+ *   @param candidate   { direction, orHigh, orLow, reentryCount }
+ *   @param lastClosed  { open, high, low, close } — most recent COMPLETED 5-min candle
+ *   @param nowMin      IST minutes-of-day
+ *   @param avgRange    recent average 5-min candle range (for the thrust veto); optional
+ */
+export function evaluateReentry({ candidate, lastClosed, nowMin, avgRange,
+  maxReentries = ORB_REENTRY_MAX, cutoffMin = ORB_REENTRY_CUTOFF_MIN, thrustMult = ORB_REENTRY_THRUST_MULT }) {
+  if (!candidate || !lastClosed) return { reenter: false, reason: 'no_data' };
+  const isLong = (candidate.direction || 'LONG') === 'LONG';
+  const used   = candidate.reentryCount || 0;
+  if (used >= maxReentries)        return { reenter: false, reason: 'max_reentries' };
+  if (nowMin >= cutoffMin)         return { reenter: false, reason: 'past_cutoff' };
+  const level = isLong ? candidate.orHigh : candidate.orLow;
+  if (!Number.isFinite(level))     return { reenter: false, reason: 'no_level' };
+  const reclaimed = isLong ? lastClosed.close > level : lastClosed.close < level;
+  if (!reclaimed)                  return { reenter: false, reason: 'no_reclaim' };
+  // Don't reclaim-enter on an exhaustion thrust — a candle far larger than normal is a
+  // climax, not a clean resumption (the "hat" in candle terms).
+  const range = Math.abs(lastClosed.high - lastClosed.low);
+  if (Number.isFinite(avgRange) && avgRange > 0 && range > thrustMult * avgRange) {
+    return { reenter: false, reason: 'reclaim_is_thrust' };
+  }
+  return { reenter: true, reason: 'reclaim', direction: candidate.direction };
+}
+
+/**
+ * CONFIRMED ENTRY decision (#3, 2026-06-17). PURE — no I/O, unit-testable, shared by the
+ * live entry path and the backtest. Replaces the touch-fill resting entry with a CLOSE-
+ * CONFIRMED, EXHAUSTION-VETOED entry. Enter iff ALL of: before the fresh-entry cutoff;
+ * a completed 5-min candle CLOSED beyond the OR edge (long → close > orHigh, short →
+ * close < orLow) — kills wick fakeouts; and that candle is NOT a climax thrust
+ * (range ≤ thrustMult × recent avg range) — kills the overbought "hat" that a close-only
+ * rule would wave through. Returns { enter, reason }.
+ *   @param direction  'LONG' | 'SHORT'
+ *   @param orHigh/orLow  the 5-min opening range
+ *   @param lastClosed  { open, high, low, close } — most recent COMPLETED 5-min candle
+ *   @param nowMin      IST minutes-of-day
+ *   @param avgRange    recent average 5-min candle range (for the exhaustion veto); optional
+ */
+export function evaluateEntry({ direction, orHigh, orLow, lastClosed, nowMin, avgRange,
+  cutoffMin = ORB_ENTRY_CONFIRM_CUTOFF_MIN, thrustMult = ORB_ENTRY_THRUST_MULT }) {
+  if (!lastClosed) return { enter: false, reason: 'no_data' };
+  const isLong = (direction || 'LONG') === 'LONG';
+  if (nowMin >= cutoffMin) return { enter: false, reason: 'past_entry_cutoff' };
+  const level = isLong ? orHigh : orLow;
+  if (!Number.isFinite(level)) return { enter: false, reason: 'no_level' };
+  // (1) close-confirmation — body close beyond the edge, not a wick
+  const closedThrough = isLong ? lastClosed.close > level : lastClosed.close < level;
+  if (!closedThrough) return { enter: false, reason: 'no_close_confirm' };
+  // (2) exhaustion veto — a climax thrust closes strong but reverses (the "hat")
+  const range = Math.abs(lastClosed.high - lastClosed.low);
+  if (Number.isFinite(avgRange) && avgRange > 0 && range > thrustMult * avgRange) {
+    return { enter: false, reason: 'exhaustion_thrust' };
+  }
+  return { enter: true, reason: 'confirmed', direction };
+}
+
+/**
  * Protective SL-M for a just-filled paper entry. STRUCTURAL ORB STOP (2026-06-15,
  * Vijesh): the stop sits at the OPPOSITE end of the 5-min opening range — long →
  * OR low, short → OR high — a fixed price, not fill ∓ distance. This makes 1R ≈
@@ -1619,25 +1721,229 @@ async function placePaperProtectiveStop(doc, c, logTag = '[PAPER]') {
     }
   }
 
-  // Both attempts failed → position UNPROTECTED.
-  // 2026-06-15 (Vijesh): the auto emergency MARKET exit is DISABLED — only ALERT,
-  // do not auto-flatten. The position is left open and unprotected for MANUAL
-  // handling. (Code kept below, commented, to re-enable later if wanted.)
-  console.error(`${LOG} ${logTag} ${c.symbol}: ⚠⚠ NO PROTECTIVE SL PLACED — position is UNPROTECTED. Auto-exit is OFF — MANUAL INTERVENTION NEEDED (place a stop or close the position).`);
-  await logStage('protective-sl', false, { symbol: c.symbol, action: 'alert_no_auto_exit', entry: c.entryPrice });
-  // try {
-  //   await kiteOrderService.placeOrder({
-  //     tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: exitSide,
-  //     order_type: 'MARKET', product: 'MIS', quantity: c.qty,
-  //     simulationId: `orb_emergency_no_sl_${c.symbol}`, orderType: 'ORB_EMERGENCY_EXIT', source: 'ORB',
-  //   });
-  //   c.status     = 'TIME_EXIT';
-  //   c.exitTime   = new Date();
-  //   c.exitReason = 'emergency_exit_no_protective_sl';
-  // } catch (emErr) {
-  //   console.error(`${LOG} ${logTag} ${c.symbol}: ❌❌ EMERGENCY EXIT ALSO FAILED — MANUAL INTERVENTION NEEDED: ${emErr.message}`);
-  // }
+  // Both attempts failed → the position would be UNPROTECTED.
+  // FIX 1 (2026-06-17, re-enabled): FLATTEN AT MARKET instead of sitting naked. The
+  // SL fails mostly because price has already moved THROUGH the tight 0.10×ATR stop
+  // (Kite rejects an SL whose trigger is on the wrong side of LTP) — i.e. the trade
+  // has effectively already hit its stop, so booking the ~1R loss at market is the
+  // outcome we intended, and strictly safer than an uncapped naked position.
+  console.error(`${LOG} ${logTag} ${c.symbol}: ⚠⚠ protective SL could NOT be placed — FLATTENING AT MARKET (emergency exit) to avoid a naked position.`);
+  try {
+    const emRes = await kiteOrderService.placeOrder({
+      tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: exitSide,
+      order_type: 'MARKET', product: 'MIS', quantity: c.qty,
+      simulationId: `orb_emergency_no_sl_${c.symbol}`, orderType: 'ORB_EMERGENCY_EXIT', source: 'ORB',
+    });
+    if (!emRes?.success) throw new Error('emergency placeOrder returned non-success');
+    let exitPx = null;
+    try { await delay(1500); const od = await kiteOrderService.getOrderDetails(emRes.orderId); exitPx = od?.average_price ?? null; } catch (_) {}
+    const dir = isLong ? 1 : -1;
+    c.status     = 'TIME_EXIT';
+    c.exitTime   = new Date();
+    if (Number.isFinite(exitPx)) {
+      c.exitPrice  = exitPx;
+      c.pnl        = parseFloat(((exitPx - c.entryPrice) * dir * c.qty).toFixed(2));
+      c.returnPct  = c.entryPrice ? parseFloat(((exitPx - c.entryPrice) * dir / c.entryPrice * 100).toFixed(2)) : undefined;
+      c.exitReason = 'emergency_exit_no_protective_sl';
+      console.error(`${LOG} ${logTag} ${c.symbol}: 🛟 EMERGENCY EXIT done — ${exitSide} ${c.qty} @ ₹${exitPx}  PnL=₹${c.pnl}  (orderId=${emRes.orderId})`);
+    } else {
+      // 2026-06-17 review: don't fabricate a misleading ₹0 PnL on a fill-read failure —
+      // leave pnl/exitPrice UNSET and flag for kite-order-sync to reconcile from the broker.
+      c.exitReason = 'emergency_exit_no_protective_sl_unreconciled';
+      console.error(`${LOG} ${logTag} ${c.symbol}: 🛟 EMERGENCY EXIT placed (orderId=${emRes.orderId}) but fill price unread — PnL left UNSET for order-sync to reconcile.`);
+    }
+    await logStage('protective-sl', false, { symbol: c.symbol, action: 'emergency_market_exit', entry: c.entryPrice, exit: exitPx, pnl: c.pnl, qty: c.qty });
+  } catch (emErr) {
+    console.error(`${LOG} ${logTag} ${c.symbol}: ❌❌ EMERGENCY EXIT ALSO FAILED — position is NAKED, MANUAL INTERVENTION NEEDED: ${emErr.message}`);
+    await logStage('protective-sl', false, { symbol: c.symbol, action: 'emergency_exit_failed', entry: c.entryPrice, error: emErr.message });
+  }
   return false;
+}
+
+/**
+ * Claim + protect a just-FILLED resting ARMED entry. The atomic ARMED→ENTERED flip
+ * in Mongo IS the claim: exactly one caller can win it, so the postback fill-listener
+ * and the once-a-minute monitor can never BOTH place a protective stop (a double SL
+ * becomes a naked short when the second one triggers). The winner mutates the passed
+ * in-memory candidate `c` and places the SL; the caller persists the doc. Returns true
+ * if THIS caller claimed and handled the fill, false if another path already did.
+ * Only ARMED candidates are claimable — immediate MARKET entries are never ARMED, so
+ * they keep their synchronous in-arming SL and are untouched here.
+ */
+async function claimAndProtectFill(doc, c, { avgPrice, filledQty, logTag }) {
+  const res = await OrbTrade.updateOne(
+    { _id: doc._id, candidates: { $elemMatch: { entryOrderId: c.entryOrderId, status: 'ARMED' } } },
+    { $set: { 'candidates.$.status': 'ENTERED' } }
+  );
+  if (res.modifiedCount !== 1) {
+    console.log(`${LOG} ${logTag} ${c.symbol}: fill already claimed/handled by another path (modifiedCount=${res.modifiedCount}) — skipping to avoid a double SL`);
+    return false;   // lost the claim — another path owns this fill
+  }
+
+  c.entryPrice = Number(avgPrice) || c.entryPrice || c.orHigh;
+  c.qty        = Number(filledQty) || c.qty;
+  c.entryTime  = new Date();
+  c.status     = 'ENTERED';
+  doc.entriesCount = (doc.entriesCount || 0) + 1;
+  console.log(`${LOG} ${logTag} 🔫 ${c.symbol} [${c.direction}] ENTRY FILLED @ ₹${c.entryPrice} qty=${c.qty} — placing protective SL`);
+  const slOk = await placePaperProtectiveStop(doc, c, logTag);
+  await logStage('fill', slOk, { symbol: c.symbol, direction: c.direction, entry: c.entryPrice, qty: c.qty, stop: c.stopPrice, slPlaced: slOk, via: logTag });
+  return true;
+}
+
+/**
+ * Postback-driven INSTANT protective stop (2026-06-17). The once-a-minute monitor can
+ * leave up to ~60s between a resting entry filling at the exchange and the stop being
+ * placed — long enough for the tight 0.10×ATR stop to be blown through, so Kite rejects
+ * the SL ("trigger must be below LTP") and the position is left NAKED (16-Jun GODREJPROP).
+ * Kite's order postback fires ~1s after the fill with average_price + filled_quantity, so
+ * we place the SL immediately on it. The monitor stays as the idempotent fallback (the
+ * atomic claim in claimAndProtectFill makes a double-place impossible). ARMED resting
+ * entries only. Registered once at startup.
+ */
+export function initOrbFillListener() {
+  console.log(`${LOG} Initializing ORB fill listener (postback → instant protective SL)`);
+  kiteOrderEvents.on('order:complete', async (postback) => {
+    try {
+      const orderId = postback?.order_id;
+      if (!orderId) return;
+      const doc = await OrbTrade.findToday();
+      if (!doc) return;
+      const c = doc.candidates.find(x => x.entryOrderId === orderId && x.status === 'ARMED');
+      if (!c) {
+        // Diagnostic: if we DO have ARMED entries today but this fill didn't match one,
+        // log it (with the ARMED orderIds) so we can see whether an ORB fill postback is
+        // being missed / arriving with a different id format. Silent otherwise (most
+        // postbacks are daily-picks / swing / SL-exit orders, not ORB resting entries).
+        const armedIds = doc.candidates.filter(x => x.status === 'ARMED').map(x => x.entryOrderId);
+        if (armedIds.length) {
+          console.log(`${LOG} [FILL-LISTENER] postback orderId=${orderId} (sym=${postback.tradingsymbol} status=${postback.status} txn=${postback.transaction_type}) did NOT match an ARMED ORB entry — ARMED orderIds=${JSON.stringify(armedIds)}`);
+        }
+        return;
+      }
+      // Full payload logged so we can verify exactly what Kite sends on a fill.
+      console.log(`${LOG} [FILL-LISTENER] ${c.symbol}: ARMED entry fill via postback — full payload: ${JSON.stringify(postback)}`);
+      const claimed = await claimAndProtectFill(doc, c, { avgPrice: postback.average_price, filledQty: postback.filled_quantity, logTag: '[FILL-LISTENER]' });
+      if (claimed) await doc.save();
+      else console.log(`${LOG} [FILL-LISTENER] ${c.symbol}: monitor already claimed this fill first — no action (no double SL)`);
+    } catch (err) {
+      console.error(`${LOG} [FILL-LISTENER] error handling postback: ${err.message}`);
+    }
+  });
+  console.log(`${LOG} ORB fill listener active`);
+}
+
+/**
+ * PENDING-ENTRY processing (#3 confirmed entry + #4 re-entry, 2026-06-17). Handles both:
+ *   • AWAIT_ENTRY  — a confirmed FIRST entry: take it when a completed 5-min candle CLOSES
+ *     beyond the OR edge and isn't an exhaustion thrust (pure evaluateEntry).
+ *   • REARM_WATCH  — a RE-ENTRY after a stop: take it on a reclaim close (pure evaluateReentry).
+ * Both enter MARKET in the candidate's direction with a fresh k×ATR stop, protected
+ * synchronously (status → ENTERED, never ARMED, so the postback listener never double-
+ * fires). Past their respective cutoff with no trigger → retire to SKIPPED. Returns # changed.
+ */
+async function processPendingEntries(doc) {
+  const pending = doc.candidates.filter(c => c.status === 'AWAIT_ENTRY' || c.status === 'REARM_WATCH');
+  if (!pending.length) return 0;
+
+  const ist     = MarketHoursUtil.toIST(new Date());
+  const nowMin  = ist.getHours() * 60 + ist.getMinutes();
+  const symbols = [...new Set(pending.map(c => c.symbol))];
+
+  let candles5 = {};
+  try { candles5 = await kiteOrderService.getIntradayCandles(symbols, '5minute', 8); }
+  catch (err) { console.warn(`${LOG} [PENDING] candle fetch failed (${err.message}) — skipping this cycle`); return 0; }
+
+  // Capital basis: identical to arming (1% risk + leverage slot cap).
+  let slotCap = MIN_CAPITAL_PER_TRADE, riskBudget = null;
+  try {
+    const balance = await kiteOrderService.getAvailableBalance();
+    const buyingPower = balance.usableIntraday ?? balance.available;
+    slotCap    = Math.floor((buyingPower * ORB_CAPITAL_PCT) / PAPER_MAX_ENTRIES);
+    riskBudget = Math.floor((balance.available ?? buyingPower / 5) * (PAPER_RISK_PCT / 100));
+  } catch (_) { /* keep floor slotCap, risk cap disabled */ }
+
+  // #2 concurrency cap (2026-06-17 review): each slot is capital-sized for PAPER_MAX_ENTRIES
+  // concurrent positions. In confirmed mode every name is AWAIT_ENTRY (no resting-order
+  // bound) and re-entries pile on, so cap live OPEN positions or we over-leverage.
+  let openCount = doc.candidates.filter(c => c.status === 'ENTERED').length;
+  let changed = 0;
+  for (const c of pending) {
+    const isReentry  = c.status === 'REARM_WATCH';
+    // #1 forming-candle guard (2026-06-17 review): Kite returns the STILL-FORMING candle
+    // (its fetch only trims to now−60s), so drop any bar whose 5-min slot hasn't actually
+    // closed yet — otherwise we'd close-confirm on a partial candle (premature entry).
+    // Matches the backtest, which buckets only completed candles.
+    const bars       = (candles5[c.symbol] || []).filter(b => isBarComplete(b.date, nowMin, 5));
+    const lastClosed = bars.length ? bars[bars.length - 1] : null;   // most recent COMPLETED 5-min bar
+    const avgRange   = bars.length >= 2
+      ? bars.slice(0, -1).reduce((s, b) => s + Math.abs(b.high - b.low), 0) / (bars.length - 1)
+      : undefined;
+
+    // Decide via the matching pure function (shared with the backtest).
+    let go = false, retire = false;
+    if (isReentry) {
+      const d = evaluateReentry({ candidate: c, lastClosed, nowMin, avgRange });
+      go = d.reenter; retire = (d.reason === 'past_cutoff');
+    } else {
+      const d = evaluateEntry({ direction: c.direction, orHigh: c.orHigh, orLow: c.orLow, lastClosed, nowMin, avgRange });
+      go = d.enter; retire = (d.reason === 'past_entry_cutoff');
+    }
+    if (!go) {
+      if (retire) {
+        c.status = 'SKIPPED';
+        c.skipReason = isReentry ? 'reentry_window_closed_no_reclaim' : 'entry_window_closed_no_confirm';
+        changed++;
+        console.log(`${LOG} [PENDING] ${c.symbol}: ${isReentry ? 're-entry' : 'entry'} window closed without a ${isReentry ? 'reclaim' : 'confirmed breakout'} — retiring`);
+      }
+      continue;
+    }
+
+    // Trigger → enter MARKET in the candidate's direction with a fresh stop.
+    const isShort  = c.direction === 'SHORT';
+    const bar      = { high: c.orHigh, low: c.orLow, open: isShort ? c.orHigh : c.orLow, close: isShort ? c.orLow : c.orHigh };
+    const tickSize = await getNseTickSize(c.symbol);
+    const setup    = buildPaperSetup({ bar, atr14d: c.atr14d, tickSize, riskBudget, slotCap, minAtr: 0 });
+    if (!setup.ok) { console.warn(`${LOG} [PENDING] ${c.symbol}: setup not ok (${setup.skipReason}) — skipping`); continue; }
+
+    // #2 cap: hold at most PAPER_MAX_ENTRIES open at once. If full, leave the name in
+    // its pending state and try again next cycle (don't consume/skip it).
+    if (openCount >= PAPER_MAX_ENTRIES) {
+      console.log(`${LOG} [PENDING] ${c.symbol}: ${PAPER_MAX_ENTRIES} slots full — deferring ${isReentry ? 're-entry' : 'entry'} to a later cycle`);
+      continue;
+    }
+
+    const tag       = isReentry ? '[REENTRY]' : '[CONFIRM-ENTRY]';
+    const entrySide = setup.isLong ? 'BUY' : 'SELL';
+    try {
+      const res = await kiteOrderService.placeOrder({
+        tradingsymbol: c.symbol, exchange: 'NSE', transaction_type: entrySide,
+        order_type: 'MARKET', product: 'MIS', quantity: setup.qty,
+        simulationId: `orb_${isReentry ? 'reentry' : 'confirm'}_${c.symbol}`, orderType: 'ORB_ENTRY', source: 'ORB',
+      });
+      if (!res?.success) throw new Error('placeOrder returned non-success');
+      await delay(2000);
+      let fill = null; try { fill = await kiteOrderService.getOrderDetails(res.orderId); } catch (_) {}
+      c.entryOrderId = res.orderId;
+      c.entryPrice   = fill?.average_price || lastClosed?.close || c.orHigh;
+      c.qty          = Number(fill?.filled_quantity || setup.qty);
+      c.stopDistance = setup.stopDist;
+      c.entryTime    = new Date();
+      c.status       = 'ENTERED';
+      if (isReentry) c.reentryCount = (c.reentryCount || 0) + 1;
+      doc.entriesCount = (doc.entriesCount || 0) + 1;
+      openCount++;   // #2 consume a slot
+      console.log(`${LOG} ${tag} ${isReentry ? '🔁' : '🎯'} ${c.symbol} [${c.direction}] ENTERED @ ₹${c.entryPrice} qty=${c.qty}${isReentry ? ` (re-entry #${c.reentryCount})` : ''} — 5m close ₹${lastClosed?.close} ${setup.isLong ? '>' : '<'} OR ₹${setup.isLong ? c.orHigh : c.orLow}`);
+      const slOk = await placePaperProtectiveStop(doc, c, tag);
+      await logStage(isReentry ? 'reentry' : 'confirm-entry', slOk, { symbol: c.symbol, direction: c.direction, entry: c.entryPrice, qty: c.qty, slPlaced: slOk, ...(isReentry ? { count: c.reentryCount } : {}) });
+      changed++;
+    } catch (err) {
+      console.error(`${LOG} ${tag} ${c.symbol}: entry failed: ${err.message}`);
+      c.status = 'SKIPPED'; c.skipReason = `${isReentry ? 'reentry' : 'confirm_entry'}_failed: ${err.message}`; changed++;
+    }
+  }
+  if (changed) await doc.save();
+  return changed;
 }
 
 /**
@@ -1775,6 +2081,18 @@ async function placeOrbEntryOrdersOn(doc) {
     c.firstCandleOpen = bar.open; c.firstCandleClose = bar.close;
     c.direction = direction; c.atr14d = parseFloat(atr14d.toFixed(2));
     c.stopDistance = stopDist; c.qty = qty;
+
+    // #3 CONFIRMED-ENTRY mode: don't place a touch-fill resting order. Park the name as
+    // AWAIT_ENTRY; the monitor enters it (market) only when a 5-min candle CLOSES beyond
+    // the OR edge and isn't an exhaustion thrust (evaluateEntry). 'touch' mode below is
+    // the paper's original resting SL-M behaviour.
+    if (ORB_ENTRY_MODE === 'confirmed') {
+      c.status = 'AWAIT_ENTRY';
+      armed++;
+      console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ${direction.padEnd(5)} OR=₹${bar.low}–₹${bar.high}  trigger=₹${trigger}  stopDist=₹${stopDist} (${(stopDist / trigger * 100).toFixed(2)}%)  qty=${qty}  rvol5=${c.rvol5}x → AWAIT_ENTRY (close-confirm)`);
+      await doc.save();
+      continue;
+    }
 
     const ltp        = ltps[`NSE:${c.symbol}`]?.last_price;
     const alreadyPast = ltp && (isLong ? ltp >= trigger : ltp <= trigger);
@@ -2522,11 +2840,14 @@ export async function monitorOrbPositions() {
 
   const entered = doc.candidates.filter(c => c.status === 'ENTERED');
   const armed   = doc.candidates.filter(c => c.status === 'ARMED');
-  if (!entered.length && !armed.length) {
+  // AWAIT_ENTRY (confirmed first entry) + REARM_WATCH (re-entry) still need servicing
+  // even with no open/armed positions — don't bail before processPendingEntries runs.
+  const pending = doc.candidates.filter(c => c.status === 'AWAIT_ENTRY' || c.status === 'REARM_WATCH');
+  if (!entered.length && !armed.length && !pending.length) {
     // Per-minute cadence (2026-06-12): only log the idle no-op every 5th minute
     // so the log doesn't gain ~350 useless lines a day.
     if (new Date().getMinutes() % 5 === 0) {
-      console.log(`${LOG} [MONITOR] [${istTimeStr()}] No open positions or armed entries`);
+      console.log(`${LOG} [MONITOR] [${istTimeStr()}] No open positions, armed or pending entries`);
     }
     return { active: 0, exited: 0 };
   }
@@ -2546,15 +2867,15 @@ export async function monitorOrbPositions() {
       const ord = await kiteOrderService.getOrderDetails(c.entryOrderId);
       const st  = ord?.status;
       if (st === 'COMPLETE') {
-        c.entryPrice = ord.average_price || c.orHigh;
-        c.qty        = Number(ord.filled_quantity || c.qty);
-        c.entryTime  = new Date();
-        c.status     = 'ENTERED';
-        doc.entriesCount = (doc.entriesCount || 0) + 1;
-        console.log(`${LOG} [MONITOR] 🔫 ${c.symbol} [${c.direction}] ENTRY TRIGGERED @ ₹${c.entryPrice} qty=${c.qty} — placing protective SL`);
-        const slOk = await placePaperProtectiveStop(doc, c, '[MONITOR]');
-        armedFilled++;
-        await logStage('fill', slOk, { symbol: c.symbol, direction: c.direction, entry: c.entryPrice, qty: c.qty, stop: c.stopPrice, slPlaced: slOk });
+        // Atomic-claim the fill so this monitor and the postback fill-listener can
+        // never both place a stop (double SL → naked short). If the listener already
+        // protected it (~1s after the fill), this no-ops and leaves c untouched.
+        const claimed = await claimAndProtectFill(doc, c, {
+          avgPrice: ord.average_price || c.orHigh,
+          filledQty: ord.filled_quantity || c.qty,
+          logTag: '[MONITOR]',
+        });
+        if (claimed) armedFilled++;
       } else if (st === 'REJECTED' || st === 'CANCELLED') {
         c.status = 'SKIPPED'; c.skipReason = `paper_entry_${st.toLowerCase()}: ${ord?.status_message || ''}`;
         console.warn(`${LOG} [MONITOR] ${c.symbol}: armed entry ${st} — ${ord?.status_message || 'no reason given'}`);
@@ -2568,6 +2889,11 @@ export async function monitorOrbPositions() {
     }
   }
   if (armedFilled || doc.isModified()) await doc.save();
+
+  // #3/#4: service pending entries — confirmed first entries (AWAIT_ENTRY) and
+  // re-entries (REARM_WATCH). No-op when there are none. Runs before position
+  // monitoring so a fresh entry is protected within the same cycle.
+  await processPendingEntries(doc);
   // 10:30 TIME EXIT is DISABLED by default (2026-05-25 change). Re-enable via
   // env if needed for testing. When disabled, the monitor falls through to BE
   // trail + candle-structure tighten and lets winners ride until 15:15.
@@ -2752,6 +3078,18 @@ export async function monitorOrbPositions() {
           c.returnPct  = parseFloat((pnlSign(c.exitPrice) / c.entryPrice * 100).toFixed(2));
           if (c.targetOrderId) { try { await kiteOrderService.cancelOrder(c.targetOrderId); console.log(`${LOG} [MONITOR]   TGT cancelled (stop hit)`); } catch (_) {} }
           console.log(`${LOG} [MONITOR]   🔴 ${c.symbol} [${cIsLong ? 'LONG' : 'SHORT'}] STOPPED OUT @ ₹${c.exitPrice}  PnL=₹${c.pnl}`);
+          // #4 RE-ENTRY: this stopped leg keeps its realised PnL (terminal STOPPED_OUT);
+          // spawn a SEPARATE candidate that watches the same name for a reclaim, so the
+          // accounting of the two legs stays clean. Re-arm only while budget remains.
+          if ((c.reentryCount || 0) < ORB_REENTRY_MAX) {
+            doc.candidates.push({
+              symbol: c.symbol, status: 'REARM_WATCH', direction: c.direction,
+              orHigh: c.orHigh, orLow: c.orLow, orRange: c.orRange,
+              atr14d: c.atr14d, rvol5: c.rvol5, inPlay: c.inPlay,
+              reentryCount: (c.reentryCount || 0),   // re-entries TAKEN so far (incremented when the re-entry actually fills)
+            });
+            console.log(`${LOG} [MONITOR]   👁  ${c.symbol}: now watching for a re-entry reclaim (re-entry #${(c.reentryCount || 0) + 1} of ${ORB_REENTRY_MAX})`);
+          }
           exitedThisRun++;
           changed = true;
           continue;
