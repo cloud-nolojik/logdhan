@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, needsVolumeBaselineRetry, isBarComplete, evaluateReentry, evaluateEntry, _testExports } from '../services/orb/orbService.js';
+import { decideBreakoutActions, computeOrbStop, scoreCandidateQuality, buildVolumeProfile, slotKey, computeADRPct, needsVolumeBaselineRetry, isBarComplete, evaluateReentry, evaluateEntry, passesSelectionGate, dailySMA, _testExports } from '../services/orb/orbService.js';
 
 const { MIN_DISTANCE_PCT } = _testExports;
 
@@ -400,5 +400,58 @@ describe('Confirmed entry — evaluateEntry (#3, close-confirm + exhaustion veto
     const r = evaluateEntry({ ...base, lastClosed: { open: 99, high: 101, low: 98.8, close: 100.6 }, nowMin: 12 * 60, avgRange: 2 });
     expect(r.enter).toBe(false);
     expect(r.reason).toBe('past_entry_cutoff');
+  });
+
+  // VWAP directional gate (default ON)
+  const lc = { open: 99, high: 101, low: 98.8, close: 100.6 }; // closes above orHigh=100
+  it('VWAP gate: LONG with close ABOVE vwap → enter', () => {
+    expect(evaluateEntry({ ...base, lastClosed: lc, nowMin: MORN, avgRange: 2, vwap: 100 }).enter).toBe(true);
+  });
+  it('VWAP gate: LONG with close BELOW vwap → blocked (fading)', () => {
+    const r = evaluateEntry({ ...base, lastClosed: lc, nowMin: MORN, avgRange: 2, vwap: 101 });
+    expect(r.enter).toBe(false);
+    expect(r.reason).toBe('vwap_gate');
+  });
+  it('VWAP gate: SHORT with close BELOW vwap → enter; ABOVE → blocked', () => {
+    const sc = { direction: 'SHORT', orHigh: 100, orLow: 95, lastClosed: { open: 96, high: 96.2, low: 93.8, close: 94.3 }, nowMin: MORN, avgRange: 2 };
+    expect(evaluateEntry({ ...sc, vwap: 95 }).enter).toBe(true);
+    expect(evaluateEntry({ ...sc, vwap: 94 }).reason).toBe('vwap_gate');
+  });
+  it('VWAP gate: no vwap supplied → gate is skipped (fail-open)', () => {
+    expect(evaluateEntry({ ...base, lastClosed: lc, nowMin: MORN, avgRange: 2 }).enter).toBe(true);
+  });
+});
+
+describe('Selection gate — passesSelectionGate (#5 trend/RS)', () => {
+  it('dailySMA averages the last n daily closes', () => {
+    const bars = [{ close: 10 }, { close: 20 }, { close: 30 }, { close: 40 }];
+    expect(dailySMA(bars, 2)).toBe(35);  // (30+40)/2
+    expect(dailySMA([], 5)).toBeNaN();
+  });
+
+  it('LONG in an UPtrend AND outperforming Nifty → pass', () => {
+    const r = passesSelectionGate({ isLong: true, price: 105, sma: 100, stockRet: 0.02, niftyRet: 0.005 });
+    expect(r.pass).toBe(true);
+  });
+  it('LONG but BELOW the daily SMA (downtrend) → blocked (the counter-trend bounce)', () => {
+    const r = passesSelectionGate({ isLong: true, price: 98, sma: 100, stockRet: 0.02, niftyRet: 0.005 });
+    expect(r.pass).toBe(false);
+    expect(r.reason).toBe('against_trend');
+  });
+  it('LONG above SMA but LAGGING Nifty → blocked (just market beta)', () => {
+    const r = passesSelectionGate({ isLong: true, price: 105, sma: 100, stockRet: 0.003, niftyRet: 0.01 });
+    expect(r.pass).toBe(false);
+    expect(r.reason).toBe('weak_vs_nifty');
+  });
+  it('SHORT in a downtrend AND underperforming Nifty → pass', () => {
+    const r = passesSelectionGate({ isLong: false, price: 95, sma: 100, stockRet: -0.02, niftyRet: -0.005 });
+    expect(r.pass).toBe(true);
+  });
+  it('SHORT but ABOVE the SMA → blocked', () => {
+    expect(passesSelectionGate({ isLong: false, price: 102, sma: 100, stockRet: -0.02, niftyRet: 0 }).reason).toBe('against_trend');
+  });
+  it('missing inputs → that sub-signal fails open', () => {
+    // no sma, no nifty → both legs skip → pass
+    expect(passesSelectionGate({ isLong: true, price: 105 }).pass).toBe(true);
   });
 });

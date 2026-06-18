@@ -1,0 +1,6 @@
+Date,Symbol,Dir,Filled,Result,Trigger,Stop,Exit,Qty,Gross,Net,R,rvol5,Source
+2026-06-15,LTF,L,N,skipped (no_confirm),295.05,294.15,,,,,,,recorded
+2026-06-15,CHOLAFIN,L,Y,exited at stoploss,1659,1653.35,1654.6499999999999,33,-186,-248,-1.33,11.68,recorded
+2026-06-15,ASIANPAINT,S,Y,exited at 15:15,2780,2786.2,2741.2,20,768,707,5.70,9.46,recorded
+2026-06-15,PETRONET,L,Y,exited at stoploss,287,286.3,286.35,195,-136,-208,-1.52,7.47,recorded
+2026-06-15,LT,L,Y,exited at stoploss,4194.7,4186.4,4203.599999999999,13,-108,-169,-1.56,7.26,recorded

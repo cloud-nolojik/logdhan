@@ -55,8 +55,10 @@ import OrbTrade from '../models/orbTrade.js';
 import Stock from '../models/stock.js';
 import {
   computeRvol5, selectInPlay, computeATR, slotKey, buildPaperSetup, evaluateReentry, evaluateEntry,
+  passesSelectionGate, dailySMA,
   PAPER_MAX_ENTRIES, PAPER_RISK_PCT,
 } from '../services/orb/orbService.js';
+import { computeVwap } from '../services/dailyPicks/dailyPicksService.js'; // shared VWAP — same fn as live
 
 // ── args ────────────────────────────────────────────────────────────────────
 const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i >= 0 ? process.argv[i + 1] : d; };
@@ -73,6 +75,9 @@ const ENTRY_SLIP = Number(arg('entryslip', 0)); // breakout entry slippage as fr
 const TOP_N = Math.min(Number(arg('top', PAPER_MAX_ENTRIES)), PAPER_MAX_ENTRIES); // trade only the top-N picks by rvol5/day (default 8)
 const ENTRY_MODE = (process.env.ORB_ENTRY_MODE ?? 'confirmed').toLowerCase(); // 'confirmed' (close-confirm+exhaustion) vs 'touch' (resting SL-M) — matches live
 const RVOL_MIN = Number(process.env.ORB_RVOL_MIN ?? 2.0); // RVOL floor — matches live RVOL5_MIN; sweep {2.0,2.5,3.0}
+const DEBUG = has('debug'); // per-pick decision trace (use with a single --from/--to date)
+const NO_STOP = has('no-stop'); // ignore the protective stop — every trade rides to the 15:15 exit (measurement only; NEVER run live with no stop)
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`;
 const VERBOSE = has('verbose');
 const NO_XLSX = has('no-xlsx');
 const OUT = arg('out', null);
@@ -167,11 +172,14 @@ async function main() {
   for (const date of dates) {
     const docs = await BacktestCandle.find({ date, interval: 'minute' }).select('symbol bars').lean();
     const symBars = {};
+    let niftyBars = null;
     for (const doc of docs) {
-      if (doc.symbol === 'NIFTY 50') continue;          // index: not a tradable candidate
       const bars = (doc.bars || []).map(mapBar);
+      if (doc.symbol === 'NIFTY 50') { niftyBars = bars; continue; }  // index: capture for RS, not tradable
       if (bars.length) symBars[doc.symbol] = bars;
     }
+    const niftyOR = niftyBars ? aggregate(niftyBars, '09:15', '09:19') : null;
+    const niftyRet = niftyOR && niftyOR.open ? (niftyOR.close - niftyOR.open) / niftyOR.open : undefined;
 
     // DEFAULT: trade exactly the stocks the live system selected that day (from
     // orb_trades). The strategy mechanics (OR, entry, OR-edge stop, sizing) are
@@ -227,6 +235,7 @@ async function main() {
       .sort((a, b) => (b.rvol5 ?? -Infinity) - (a.rvol5 ?? -Infinity))
       .slice(0, TOP_N);
 
+    if (DEBUG) console.log(`\n═══════ ${date} — ${picks.length} picks above RVOL≥${RVOL_MIN}: ${picks.map(p => `${p.symbol}(${p.rvol5}x)`).join(', ')} ═══════`);
     let dayNet = 0, dayFilled = 0, dayArmed = 0;
     for (const p of picks) {
       const tickSize = await tickOf(p.symbol);
@@ -237,8 +246,19 @@ async function main() {
         trades.push({ date, symbol: p.symbol, dir: '', filled: false, reason: setup.skipReason, source: daySource });
         continue;
       }
-      dayArmed++;
       const { isLong, trigger, orStop, stopDist, qty } = setup;
+
+      // ── #5 SELECTION-STAGE trend/RS gate (before arming) ──────────────────
+      const sma      = dailySMA(dailyBars[p.symbol]);
+      const stockRet = p.orBar.open ? (p.orBar.close - p.orBar.open) / p.orBar.open : undefined;
+      const gate = passesSelectionGate({ isLong, price: p.orBar.close, sma, stockRet, niftyRet });
+      if (!gate.pass) {
+        if (DEBUG) console.log(`\n──── ${p.symbol}  ${isLong ? 'LONG' : 'SHORT'}  rvol5=${p.rvol5}x  ✗ selection-gate: ${gate.reason} (price=₹${p.orBar.close} sma=₹${(sma || 0).toFixed(2)} stockRet=${((stockRet || 0) * 100).toFixed(2)}% niftyRet=${((niftyRet || 0) * 100).toFixed(2)}%) — not armed`);
+        trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: `gate_${gate.reason}`, trigger, stop: orStop, source: daySource });
+        continue;
+      }
+      dayArmed++;
+      if (DEBUG) console.log(`\n──── ${p.symbol}  ${isLong ? 'LONG' : 'SHORT'}  rvol5=${p.rvol5}x  OR=₹${p.orBar.low}–₹${p.orBar.high}  ATR=₹${(p.atr14d || 0).toFixed(2)}  trigger=₹${trigger}  1R=₹${stopDist.toFixed(2)}  qty=${qty}  [entry=${ENTRY_MODE}]  (sma=₹${(sma || 0).toFixed(2)} RS=${(((stockRet || 0) - (niftyRet || 0)) * 100).toFixed(2)}%)`);
 
       // need intraday candles to replay the fill/exit path
       const allBars = symBars[p.symbol];
@@ -253,17 +273,19 @@ async function main() {
         for (let i = 0; i < bars.length; i++) {
           const s = slotKey(bars[i].date); if (!s) continue;
           const bk = Math.floor((toMin(s) - toMin('09:15')) / 5);
-          if (bk !== bucket) { if (cur) c5.push(cur); cur = { startMin: toMin('09:15') + bk * 5, open: bars[i].open, high: bars[i].high, low: bars[i].low, close: bars[i].close, lastIdx: i }; bucket = bk; }
-          else { cur.high = Math.max(cur.high, bars[i].high); cur.low = Math.min(cur.low, bars[i].low); cur.close = bars[i].close; cur.lastIdx = i; }
+          if (bk !== bucket) { if (cur) c5.push(cur); cur = { startMin: toMin('09:15') + bk * 5, open: bars[i].open, high: bars[i].high, low: bars[i].low, close: bars[i].close, volume: bars[i].volume || 0, lastIdx: i }; bucket = bk; }
+          else { cur.high = Math.max(cur.high, bars[i].high); cur.low = Math.min(cur.low, bars[i].low); cur.close = bars[i].close; cur.volume += (bars[i].volume || 0); cur.lastIdx = i; }
         }
         if (cur) c5.push(cur);
       }
       const avgRangeBefore = (k) => { const prior = c5.slice(Math.max(0, k - 5), k); return prior.length ? prior.reduce((s, b) => s + Math.abs(b.high - b.low), 0) / prior.length : undefined; };
+      // cumulative VWAP from the open through candle k (shared computeVwap → matches live)
+      const vwapThrough = (k) => computeVwap(c5.slice(0, k + 1)).vwap;
 
       const replayExit = (startIdx, stopPx) => {
         for (let i = startIdx + 1; i < bars.length; i++) {
           const s = slotKey(bars[i].date);
-          if (isLong ? bars[i].low <= stopPx : bars[i].high >= stopPx) return { exitIdx: i, exit: stopPx, reason: 'stop' };
+          if (!NO_STOP && (isLong ? bars[i].low <= stopPx : bars[i].high >= stopPx)) return { exitIdx: i, exit: stopPx, reason: 'stop' };
           if (toMin(s) >= toMin('15:15')) return { exitIdx: i, exit: bars[i].close, reason: 'time' };
         }
         return { exitIdx: bars.length - 1, exit: bars[bars.length - 1].close, reason: 'time' };
@@ -275,6 +297,7 @@ async function main() {
         const net   = gross - cost - slip;
         trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: true, reason, trigger, stop: orStop, exit, qty, gross, net, r: net / (stopDist * qty), rvol5: p.rvol5, source: daySource, leg: legTag });
         dayNet += net; dayFilled++;
+        if (DEBUG) console.log(`   [${legTag}] entry=₹${entryPx.toFixed(2)} → exit=₹${exit.toFixed(2)} (${reason === 'stop' ? 'STOPPED' : 'closed 15:15'})  net=₹${net.toFixed(1)}  R=${(net / (stopDist * qty)).toFixed(2)}`);
       };
 
       // ── Leg-1 entry: TOUCH (resting SL-M at the OR edge) or CONFIRMED (close-confirm
@@ -282,19 +305,22 @@ async function main() {
       let entryIdx = -1, entryFill = null, leg1Stop = orStop;
       if (ENTRY_MODE === 'confirmed') {
         for (let k = 0; k < c5.length; k++) {
+          const vw = vwapThrough(k);
           const d = evaluateEntry({ direction: isLong ? 'LONG' : 'SHORT', orHigh: p.orBar.high, orLow: p.orBar.low,
-            lastClosed: { open: c5[k].open, high: c5[k].high, low: c5[k].low, close: c5[k].close }, nowMin: c5[k].startMin + 5, avgRange: avgRangeBefore(k) });
+            lastClosed: { open: c5[k].open, high: c5[k].high, low: c5[k].low, close: c5[k].close }, nowMin: c5[k].startMin + 5, avgRange: avgRangeBefore(k), vwap: vw });
+          if (DEBUG && c5[k].startMin >= toMin('09:20')) console.log(`   ${hhmm(c5[k].startMin + 5)}  close=₹${c5[k].close}  vwap=₹${(vw ?? 0).toFixed(2)}  range=₹${(c5[k].high - c5[k].low).toFixed(2)}  →  ${d.reason}`);
           if (d.enter) { entryIdx = c5[k].lastIdx; entryFill = c5[k].close; leg1Stop = isLong ? c5[k].close - stopDist : c5[k].close + stopDist; break; }
           if (d.reason === 'past_entry_cutoff') break;
         }
-        if (entryIdx < 0) { trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: 'no_confirm', trigger, stop: orStop, source: daySource }); continue; }
+        if (entryIdx < 0) { if (DEBUG) console.log(`   ✗ no confirmed entry before 11:46 — no trade`); trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: 'no_confirm', trigger, stop: orStop, source: daySource }); continue; }
       } else {
         for (let i = 0; i < bars.length; i++) {
           const s = slotKey(bars[i].date); if (toMin(s) > toMin('15:00')) break;
           if (isLong ? bars[i].high >= trigger : bars[i].low <= trigger) { entryIdx = i; break; }
         }
-        if (entryIdx < 0) { trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: 'no_fill', trigger, stop: orStop, source: daySource }); continue; }
+        if (entryIdx < 0) { if (DEBUG) console.log(`   ✗ trigger ₹${trigger} never crossed — no fill`); trades.push({ date, symbol: p.symbol, dir: isLong ? 'L' : 'S', filled: false, reason: 'no_fill', trigger, stop: orStop, source: daySource }); continue; }
         entryFill = isLong ? trigger * (1 + ENTRY_SLIP) : trigger * (1 - ENTRY_SLIP);
+        if (DEBUG) console.log(`   ${hhmm(toMin(slotKey(bars[entryIdx].date)))}  touch entry @ ₹${entryFill.toFixed(2)}`);
       }
 
       // Leg 1
@@ -313,12 +339,13 @@ async function main() {
           const nowMin   = c5[k].startMin + 5;                    // candle close time
           const prior    = c5.slice(Math.max(0, k - 5), k);
           const avgRange = prior.length ? prior.reduce((s, b) => s + Math.abs(b.high - b.low), 0) / prior.length : undefined;
-          const dec = evaluateReentry({ candidate: cand, lastClosed: { open: c5[k].open, high: c5[k].high, low: c5[k].low, close: c5[k].close }, nowMin, avgRange });
+          const dec = evaluateReentry({ candidate: cand, lastClosed: { open: c5[k].open, high: c5[k].high, low: c5[k].low, close: c5[k].close }, nowMin, avgRange, vwap: vwapThrough(k) });
           if (dec.reenter) { found = c5[k]; break; }
           if (dec.reason === 'past_cutoff' || dec.reason === 'max_reentries') break;
         }
-        if (!found) break;
+        if (!found) { if (DEBUG) console.log(`   ↻ no reclaim after the stop — done with ${p.symbol}`); break; }
         reentryCount++;
+        if (DEBUG) console.log(`   ↻ re-entry #${reentryCount}: reclaim close @ ${hhmm(found.startMin + 5)} ₹${found.close}`);
         const reFill = found.close;
         // NOTE: fill ∓ stopDist = the k×ATR stop from the fill — matches live ONLY in the
         // default PAPER_STOP_MODE='atr'. Under ORB_STOP_MODE=oredge live would stop at the
@@ -350,7 +377,9 @@ async function main() {
   const rSum = filled.reduce((s, t) => s + t.r, 0);
 
   const noFill = trades.filter(t => !t.filled && t.reason === 'no_fill');
-  const notArmed = trades.filter(t => !t.filled && t.reason !== 'no_fill');  // no_candles / doji / qty<1 / atr floor
+  const gateFiltered = trades.filter(t => !t.filled && (t.reason || '').startsWith('gate_'));
+  const notArmed = trades.filter(t => !t.filled && t.reason !== 'no_fill' && !(t.reason || '').startsWith('gate_'));  // no_candles / doji / qty<1 / atr floor
+  const gateBreakdown = gateFiltered.reduce((m, t) => { const r = t.reason.replace('gate_', ''); m[r] = (m[r] || 0) + 1; return m; }, {});
 
   if (VERBOSE) {
     console.log(`EVERY recorded/selected pick and its outcome:`);
@@ -368,6 +397,7 @@ async function main() {
   console.log(`  Selection source:       ${srcCount.recorded} days from live orb_trades, ${srcCount.reconstructed} days reconstructed`);
   console.log(`  Funnel:                 ${trades.length} selected → ${filled.length + noFill.length} armed → ${filled.length} filled`);
   console.log(`  Not armed (skipped):    ${notArmed.length}  (${[...new Set(notArmed.map(t => t.reason))].join(', ') || 'none'})`);
+  console.log(`  Selection gate dropped: ${gateFiltered.length}  (${Object.entries(gateBreakdown).map(([r, n]) => `${r}:${n}`).join(', ') || 'none'})`);
   console.log(`  Armed but no fill:      ${noFill.length}  (trigger never crossed)`);
   console.log(`  Exits:                  ${stops.length} stop-outs, ${times.length} at 15:15`);
   console.log(`  Win rate (net>0):       ${filled.length ? (wins.length / filled.length * 100).toFixed(1) : '0'}%  (${wins.length}/${filled.length})`);

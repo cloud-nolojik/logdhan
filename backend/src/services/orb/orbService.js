@@ -128,11 +128,15 @@ const RVOL5_BASELINE_FRACTION = 0.55;  // share of the 09:15 slot traded by ~09:
 //     stop the BE cushion would sit WIDER than the stop itself).
 //   • Sizing = min(risk-based: 1% of cash ÷ stopDistance, leverage cap: slot
 //     capital ÷ price). Paper trades top-20; current capital funds 8 slots.
-// Stop distance = PAPER_STOP_ATR_MULT × daily ATR(14) from the FILL — the paper's
-// tight stop (SSRN 4729284 uses 0.10; the QQQ companion 4416622 swept it and found
-// 0.05 optimal). Env-overridable so backtestOrbPaper.js can sweep the grid:
-//   ORB_STOP_ATR_MULT=0.05 node src/scripts/backtestOrbPaper.js …
-const PAPER_STOP_ATR_MULT    = Number(process.env.ORB_STOP_ATR_MULT ?? 0.10);
+// Stop distance = PAPER_STOP_ATR_MULT × daily ATR(14) from the FILL.
+// 2026-06-19: default changed 0.10 → 3.0. The paper's 0.10 (SSRN 4729284) is a US-cost
+// number; on NSE costs the tiny 1R it produces is dwarfed by ~₹85/trade brokerage+slip,
+// so 0.10 LOST −₹9k over the Feb–Jun sample (cost drag 3× gross). The cost-inclusive
+// stop-width sweep showed a robust plateau at 3.0–4.0×ATR (~+₹6k net, 50% win, worst day
+// ~−₹1.3k); 3.0 is the conservative middle. (5.5+ looked better but is a qty<1 basket
+// artifact — fewer, outlier-dominated trades.) IN-SAMPLE on 89 calm days — forward-test
+// before sizing up. Env-overridable for the sweep: ORB_STOP_ATR_MULT=0.5 node …
+const PAPER_STOP_ATR_MULT    = Number(process.env.ORB_STOP_ATR_MULT ?? 3.0);
 const PAPER_MIN_ATR14D       = 0.50;   // ₹ — paper FILTER 3 (ATR floor); stop must be ≥ 1 tick
 export const PAPER_RISK_PCT    = 1.0;  // % of cash risked per trade (paper: 1% of account)
 export const PAPER_MAX_ENTRIES = 8;    // paper: top-20; leverage-capped to 8 slots at current capital
@@ -169,7 +173,11 @@ const PAPER_MAX_ENTRY_EXTENSION_ATR = Number(process.env.ORB_MAX_ENTRY_EXT_ATR ?
 // reclaims, so it never re-enters (16-Jun IGL trended down all day → no re-entry).
 // Part of the strategy logic (no on/off flag — backtest reflects it identically).
 // The caps below stop death-by-whipsaw and are env-tunable for backtest sweeps.
-const ORB_REENTRY_MAX         = Number(process.env.ORB_REENTRY_MAX ?? 1);        // max re-entries per stock per day
+// Default 0 (OFF) — 2026-06-18: backtest showed re-entry re-bought failed breakouts and
+// roughly DOUBLED loser bleed (15-Jun trace), and once the VWAP gate is on it's
+// neutralised anyway (a stopped trade is on the wrong side of VWAP → reclaim blocked).
+// Net-of-cost it never helped. Set ORB_REENTRY_MAX=1 to re-enable for testing.
+const ORB_REENTRY_MAX         = Number(process.env.ORB_REENTRY_MAX ?? 0);        // max re-entries per stock per day
 // Last re-entry time. NOT the 11:46 fresh-entry cutoff — a reclaim is a trend-
 // RESUMPTION that rides NSE's afternoon volatility resurgence (U-shape: midday lull
 // ~11:00–13:00, then a pickup peaking ~2% in the final half-hour) + the documented
@@ -193,7 +201,30 @@ const ORB_ENTRY_THRUST_MULT        = Number(process.env.ORB_ENTRY_THRUST_MULT ??
 // Entry mechanism. 'confirmed' (new default) = monitor enters on a close-confirmed,
 // non-exhaustion 5-min candle (evaluateEntry). 'touch' = the paper's resting SL-M at
 // the OR edge (fills on a wick). Backtest both: ORB_ENTRY_MODE=touch vs confirmed.
-const ORB_ENTRY_MODE = (process.env.ORB_ENTRY_MODE ?? 'confirmed').toLowerCase();
+// 2026-06-19: default 'touch' — the paper's validated resting-order entry. At the wide
+// 3.0×ATR stop, touch BEAT confirmed in the sweep (+₹10.9k vs +₹5.9k, same worst day):
+// it catches more breakouts and the early entry is no longer wicked. 'confirmed' (close-
+// confirm + exhaustion + VWAP gate) is kept for A/B but those entry-gates are inert in touch.
+const ORB_ENTRY_MODE = (process.env.ORB_ENTRY_MODE ?? 'touch').toLowerCase();
+
+// ── 2026-06-18 — VWAP directional gate (momentum) — INTEGRATED, ON ──────────
+// 18-Jun: MARICO & UNITDSPR were opening-spike "hats" that FELL BELOW VWAP as they
+// faded — the long (and its re-entry) bought straight into the fade. Part of the entry
+// logic now: take a long only while price is ABOVE VWAP (momentum intact), a short only
+// while BELOW. Uses the shared pure computeVwap so live and backtest can't diverge.
+// Default ON; the env override exists ONLY so the backtest can A/B with-vs-without
+// (ORB_GATE_VWAP=false), exactly like ORB_ENTRY_MODE=touch. Live always runs it.
+const ORB_GATE_VWAP = (process.env.ORB_GATE_VWAP ?? 'true').toLowerCase() === 'true';
+
+// ── 2026-06-18 — SELECTION-STAGE trend / relative-strength gate ──────────────
+// "Catch bad selections beforehand": the direction comes from one candle's colour, so
+// a green opening candle in a daily DOWNtrend (a fade-prone bounce — 18-Jun MARICO/
+// UNITDSPR) gets armed as a long. This gate runs at ARMING, before the order: take a
+// long only if the stock is in a daily UPtrend (price > SMA) AND outperforming Nifty in
+// the opening move; mirror for shorts. Each sub-signal fail-opens if its data is
+// missing. INTEGRATED + ON (env escape only for the backtest A/B, like the others).
+const ORB_GATE_TREND  = (process.env.ORB_GATE_TREND ?? 'true').toLowerCase() === 'true';
+const ORB_TREND_SMA_N = Number(process.env.ORB_TREND_SMA_N ?? 20);  // daily-close SMA period for the trend check
 
 // ── LEGACY ENGINE — RETIRED 2026-06-11 (full paper-spec cutover, no flags) ──
 // The 15-min OR path (recordOpeningRanges), the 2-bar confirmation scan
@@ -1589,7 +1620,7 @@ export function buildPaperSetup({ bar, atr14d, tickSize, riskBudget, slotCap, mi
  *   @param nowMin      IST minutes-of-day
  *   @param avgRange    recent average 5-min candle range (for the thrust veto); optional
  */
-export function evaluateReentry({ candidate, lastClosed, nowMin, avgRange,
+export function evaluateReentry({ candidate, lastClosed, nowMin, avgRange, vwap,
   maxReentries = ORB_REENTRY_MAX, cutoffMin = ORB_REENTRY_CUTOFF_MIN, thrustMult = ORB_REENTRY_THRUST_MULT }) {
   if (!candidate || !lastClosed) return { reenter: false, reason: 'no_data' };
   const isLong = (candidate.direction || 'LONG') === 'LONG';
@@ -1605,6 +1636,11 @@ export function evaluateReentry({ candidate, lastClosed, nowMin, avgRange,
   const range = Math.abs(lastClosed.high - lastClosed.low);
   if (Number.isFinite(avgRange) && avgRange > 0 && range > thrustMult * avgRange) {
     return { reenter: false, reason: 'reclaim_is_thrust' };
+  }
+  // VWAP directional gate — don't re-enter into the wrong side of VWAP (the fade).
+  if (ORB_GATE_VWAP && Number.isFinite(vwap)) {
+    const aligned = isLong ? lastClosed.close > vwap : lastClosed.close < vwap;
+    if (!aligned) return { reenter: false, reason: 'vwap_gate' };
   }
   return { reenter: true, reason: 'reclaim', direction: candidate.direction };
 }
@@ -1623,7 +1659,7 @@ export function evaluateReentry({ candidate, lastClosed, nowMin, avgRange,
  *   @param nowMin      IST minutes-of-day
  *   @param avgRange    recent average 5-min candle range (for the exhaustion veto); optional
  */
-export function evaluateEntry({ direction, orHigh, orLow, lastClosed, nowMin, avgRange,
+export function evaluateEntry({ direction, orHigh, orLow, lastClosed, nowMin, avgRange, vwap,
   cutoffMin = ORB_ENTRY_CONFIRM_CUTOFF_MIN, thrustMult = ORB_ENTRY_THRUST_MULT }) {
   if (!lastClosed) return { enter: false, reason: 'no_data' };
   const isLong = (direction || 'LONG') === 'LONG';
@@ -1638,7 +1674,49 @@ export function evaluateEntry({ direction, orHigh, orLow, lastClosed, nowMin, av
   if (Number.isFinite(avgRange) && avgRange > 0 && range > thrustMult * avgRange) {
     return { enter: false, reason: 'exhaustion_thrust' };
   }
+  // (3) VWAP directional gate — long only ABOVE VWAP, short only BELOW (don't buy/sell
+  // a name that has rolled to the wrong side of VWAP, i.e. is fading — 18-Jun MARICO/UNITDSPR)
+  if (ORB_GATE_VWAP && Number.isFinite(vwap)) {
+    const aligned = isLong ? lastClosed.close > vwap : lastClosed.close < vwap;
+    if (!aligned) return { enter: false, reason: 'vwap_gate' };
+  }
   return { enter: true, reason: 'confirmed', direction };
+}
+
+/**
+ * SELECTION-STAGE trend / relative-strength gate (#5, 2026-06-18). PURE — shared by live
+ * arming and the backtest. Runs BEFORE the entry, on the chosen direction, to drop the
+ * counter-trend / market-following picks the first-candle colour can't distinguish.
+ *   • Trend  — long only if price ABOVE the daily SMA (uptrend), short only if BELOW.
+ *   • RS     — long only if the stock OUTPERFORMED Nifty in the opening move, short only
+ *              if it UNDERperformed (filters "green only because the whole market is up").
+ * Each sub-signal fail-opens if its input is missing. Returns { pass, reason }.
+ *   @param isLong     direction
+ *   @param price      today's price proxy (the OR-candle close)
+ *   @param sma        SMA of the last N daily closes (trend reference)
+ *   @param stockRet   the stock's opening-range return  (close−open)/open
+ *   @param niftyRet   Nifty's opening-range return over the same window
+ */
+/** SMA of the last n daily CLOSES → single scalar (trend reference). Pure; shared. */
+export function dailySMA(dailyBars, n = ORB_TREND_SMA_N) {
+  const closes = (dailyBars || []).map(b => b?.close).filter(Number.isFinite).slice(-n);
+  return closes.length ? closes.reduce((s, x) => s + x, 0) / closes.length : NaN;
+}
+
+export function passesSelectionGate({ isLong, price, sma, stockRet, niftyRet }) {
+  if (!ORB_GATE_TREND) return { pass: true, reason: 'gate_off' };
+  // Trend alignment
+  if (Number.isFinite(price) && Number.isFinite(sma)) {
+    if (isLong  && !(price > sma)) return { pass: false, reason: 'against_trend' };   // long but below the daily trend
+    if (!isLong && !(price < sma)) return { pass: false, reason: 'against_trend' };   // short but above it
+  }
+  // Relative strength vs Nifty (opening move)
+  if (Number.isFinite(stockRet) && Number.isFinite(niftyRet)) {
+    const rs = stockRet - niftyRet;
+    if (isLong  && !(rs > 0)) return { pass: false, reason: 'weak_vs_nifty' };        // long but lagging the market
+    if (!isLong && !(rs < 0)) return { pass: false, reason: 'strong_vs_nifty' };      // short but leading the market
+  }
+  return { pass: true, reason: 'aligned' };
 }
 
 /**
@@ -1851,8 +1929,11 @@ async function processPendingEntries(doc) {
   const nowMin  = ist.getHours() * 60 + ist.getMinutes();
   const symbols = [...new Set(pending.map(c => c.symbol))];
 
+  // Fetch the FULL session (09:15→now): VWAP must be cumulative from the open, so we
+  // can't slice to the last few. The API always fetches from 09:15; a large count just
+  // disables the tail-slice. (~75 5-min candles in a full day.)
   let candles5 = {};
-  try { candles5 = await kiteOrderService.getIntradayCandles(symbols, '5minute', 8); }
+  try { candles5 = await kiteOrderService.getIntradayCandles(symbols, '5minute', 100); }
   catch (err) { console.warn(`${LOG} [PENDING] candle fetch failed (${err.message}) — skipping this cycle`); return 0; }
 
   // Capital basis: identical to arming (1% risk + leverage slot cap).
@@ -1877,17 +1958,21 @@ async function processPendingEntries(doc) {
     // Matches the backtest, which buckets only completed candles.
     const bars       = (candles5[c.symbol] || []).filter(b => isBarComplete(b.date, nowMin, 5));
     const lastClosed = bars.length ? bars[bars.length - 1] : null;   // most recent COMPLETED 5-min bar
-    const avgRange   = bars.length >= 2
-      ? bars.slice(0, -1).reduce((s, b) => s + Math.abs(b.high - b.low), 0) / (bars.length - 1)
+    // exhaustion baseline = the recent 5 candles before this one (not the whole session)
+    const recent     = bars.slice(-6, -1);
+    const avgRange   = recent.length
+      ? recent.reduce((s, b) => s + Math.abs(b.high - b.low), 0) / recent.length
       : undefined;
+    // VWAP cumulative from the open through the last completed candle (shared computeVwap)
+    const vwap = computeVwap(bars).vwap;
 
     // Decide via the matching pure function (shared with the backtest).
     let go = false, retire = false;
     if (isReentry) {
-      const d = evaluateReentry({ candidate: c, lastClosed, nowMin, avgRange });
+      const d = evaluateReentry({ candidate: c, lastClosed, nowMin, avgRange, vwap });
       go = d.reenter; retire = (d.reason === 'past_cutoff');
     } else {
-      const d = evaluateEntry({ direction: c.direction, orHigh: c.orHigh, orLow: c.orLow, lastClosed, nowMin, avgRange });
+      const d = evaluateEntry({ direction: c.direction, orHigh: c.orHigh, orLow: c.orLow, lastClosed, nowMin, avgRange, vwap });
       go = d.enter; retire = (d.reason === 'past_entry_cutoff');
     }
     if (!go) {
@@ -2031,6 +2116,15 @@ async function placeOrbEntryOrdersOn(doc) {
     return { success: false, reason: 'data_fetch_failed' };
   }
 
+  // Nifty opening-range candle for the RS leg of the selection gate (best-effort —
+  // the gate fail-opens on RS if this is missing, so a Nifty hiccup never blocks arming).
+  let niftyRet;
+  try {
+    const nc   = await kiteOrderService.getIntradayCandles(['NIFTY 50'], '5minute', 3);
+    const nbar = (nc['NIFTY 50'] || []).find(b => slotKey(b.date) === '09:15');
+    if (nbar && nbar.open) niftyRet = (nbar.close - nbar.open) / nbar.open;
+  } catch (e) { console.warn(`${LOG} [PAPER] Nifty RS fetch failed (${e.message}) — RS gate fail-open`); }
+
   // Capital: slot cap (leverage constraint) + risk budget (1% of cash)
   let slotCap = MIN_CAPITAL_PER_TRADE, riskBudget = null;
   try {
@@ -2075,6 +2169,18 @@ async function placeOrbEntryOrdersOn(doc) {
       continue;
     }
     const { direction, isLong, trigger, stopDist, qty } = setup;
+
+    // #5 SELECTION-STAGE trend/RS gate — drop counter-trend / market-following picks
+    // BEFORE arming (this stock's daily SMA + its opening-range RS vs Nifty). Same shared
+    // pure function as the backtest. Each leg fail-opens if its data is missing.
+    const gateSma = dailySMA(dailyBars[c.symbol] || []);
+    const gateRet = bar.open ? (bar.close - bar.open) / bar.open : undefined;
+    const sgate   = passesSelectionGate({ isLong, price: bar.close, sma: gateSma, stockRet: gateRet, niftyRet });
+    if (!sgate.pass) {
+      c.status = 'SKIPPED'; c.skipReason = `selection_gate_${sgate.reason}`; skipped++;
+      console.log(`${LOG} [PAPER] ${c.symbol.padEnd(14)} ⏭ selection gate: ${sgate.reason} (${direction} price=₹${bar.close} sma=₹${(gateSma || 0).toFixed(2)} stockRS=${(((gateRet || 0) - (niftyRet || 0)) * 100).toFixed(2)}%)`);
+      continue;
+    }
 
     // Persist the setup
     c.orHigh = bar.high; c.orLow = bar.low;

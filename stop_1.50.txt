@@ -1,0 +1,115 @@
+[19-06-2026 01:43:03 IST] 
+=========  ORB PAPER-SPEC BACKTEST  =========
+[19-06-2026 01:43:03 IST] Days: 89 (2026-02-02 → 2026-06-15)  capital ₹100000  slotCap ₹56250  riskBudget ₹1000
+[19-06-2026 01:43:03 IST] Costs: 0.110% round-trip + 1 tick stop slippage + 0.030% entry slippage   |  trading top 8 by rvol5/day (cap 8)
+
+[19-06-2026 01:44:27 IST] Per-day (armed = passed paper rule, filled = entry triggered):
+[19-06-2026 01:44:27 IST]   2026-02-02  armed= 0  filled= 0  net=₹0
+[19-06-2026 01:44:27 IST]   2026-02-03  armed= 0  filled= 0  net=₹0
+[19-06-2026 01:44:27 IST]   2026-02-04  armed= 5  filled= 2  net=₹-92
+[19-06-2026 01:44:27 IST]   2026-02-05  armed= 7  filled= 3  net=₹485
+[19-06-2026 01:44:27 IST]   2026-02-06  armed= 6  filled= 5  net=₹1873
+[19-06-2026 01:44:27 IST]   2026-02-09  armed= 4  filled= 3  net=₹784
+[19-06-2026 01:44:27 IST]   2026-02-10  armed= 5  filled= 2  net=₹-223
+[19-06-2026 01:44:27 IST]   2026-02-11  armed= 4  filled= 2  net=₹-494
+[19-06-2026 01:44:27 IST]   2026-02-12  armed= 5  filled= 4  net=₹1132
+[19-06-2026 01:44:27 IST]   2026-02-13  armed= 4  filled= 2  net=₹-274
+[19-06-2026 01:44:27 IST]   2026-02-16  armed= 5  filled= 3  net=₹100
+[19-06-2026 01:44:27 IST]   2026-02-17  armed= 3  filled= 1  net=₹-406
+[19-06-2026 01:44:27 IST]   2026-02-18  armed= 4  filled= 2  net=₹-34
+[19-06-2026 01:44:27 IST]   2026-02-19  armed= 4  filled= 2  net=₹-1224
+[19-06-2026 01:44:27 IST]   2026-02-20  armed= 6  filled= 3  net=₹308
+[19-06-2026 01:44:27 IST]   2026-02-23  armed= 4  filled= 4  net=₹-428
+[19-06-2026 01:44:27 IST]   2026-02-24  armed= 6  filled= 4  net=₹1393
+[19-06-2026 01:44:27 IST]   2026-02-25  armed= 5  filled= 2  net=₹123
+[19-06-2026 01:44:27 IST]   2026-02-26  armed= 3  filled= 1  net=₹-307
+[19-06-2026 01:44:27 IST]   2026-02-27  armed= 4  filled= 2  net=₹157
+[19-06-2026 01:44:27 IST]   2026-03-02  armed= 1  filled= 1  net=₹-1007
+[19-06-2026 01:44:27 IST]   2026-03-04  armed= 7  filled= 6  net=₹-1703
+[19-06-2026 01:44:27 IST]   2026-03-05  armed= 5  filled= 3  net=₹-616
+[19-06-2026 01:44:27 IST]   2026-03-06  armed= 5  filled= 5  net=₹46
+[19-06-2026 01:44:27 IST]   2026-03-09  armed= 6  filled= 3  net=₹-1954
+[19-06-2026 01:44:27 IST]   2026-03-10  armed= 4  filled= 3  net=₹768
+[19-06-2026 01:44:27 IST]   2026-03-11  armed= 6  filled= 3  net=₹618
+[19-06-2026 01:44:27 IST]   2026-03-12  armed= 8  filled= 3  net=₹-635
+[19-06-2026 01:44:27 IST]   2026-03-13  armed= 6  filled= 1  net=₹662
+[19-06-2026 01:44:27 IST]   2026-03-16  armed= 5  filled= 2  net=₹-137
+[19-06-2026 01:44:27 IST]   2026-03-17  armed= 5  filled= 2  net=₹-674
+[19-06-2026 01:44:27 IST]   2026-03-18  armed= 0  filled= 0  net=₹0
+[19-06-2026 01:44:27 IST]   2026-03-19  armed= 7  filled= 5  net=₹655
+[19-06-2026 01:44:27 IST]   2026-03-20  armed= 2  filled= 2  net=₹-804
+[19-06-2026 01:44:27 IST]   2026-03-23  armed= 4  filled= 4  net=₹83
+[19-06-2026 01:44:27 IST]   2026-03-24  armed= 5  filled= 5  net=₹-959
+[19-06-2026 01:44:27 IST]   2026-03-25  armed= 3  filled= 3  net=₹184
+[19-06-2026 01:44:27 IST]   2026-03-27  armed= 5  filled= 4  net=₹370
+[19-06-2026 01:44:27 IST]   2026-03-30  armed= 5  filled= 5  net=₹369
+[19-06-2026 01:44:27 IST]   2026-04-01  armed= 4  filled= 3  net=₹-825
+[19-06-2026 01:44:27 IST]   2026-04-02  armed= 6  filled= 5  net=₹-2131
+[19-06-2026 01:44:27 IST]   2026-04-06  armed= 3  filled= 2  net=₹545
+[19-06-2026 01:44:27 IST]   2026-04-07  armed= 4  filled= 2  net=₹1022
+[19-06-2026 01:44:27 IST]   2026-04-08  armed= 5  filled= 4  net=₹-432
+[19-06-2026 01:44:27 IST]   2026-04-09  armed= 4  filled= 2  net=₹-219
+[19-06-2026 01:44:27 IST]   2026-04-10  armed= 2  filled= 1  net=₹-231
+[19-06-2026 01:44:27 IST]   2026-04-13  armed= 4  filled= 3  net=₹887
+[19-06-2026 01:44:27 IST]   2026-04-15  armed= 4  filled= 1  net=₹-66
+[19-06-2026 01:44:27 IST]   2026-04-16  armed= 7  filled= 2  net=₹-59
+[19-06-2026 01:44:27 IST]   2026-04-17  armed= 4  filled= 2  net=₹55
+[19-06-2026 01:44:27 IST]   2026-04-20  armed= 4  filled= 2  net=₹106
+[19-06-2026 01:44:27 IST]   2026-04-21  armed= 5  filled= 3  net=₹122
+[19-06-2026 01:44:27 IST]   2026-04-22  armed= 2  filled= 2  net=₹-47
+[19-06-2026 01:44:27 IST]   2026-04-23  armed= 4  filled= 3  net=₹197
+[19-06-2026 01:44:27 IST]   2026-04-24  armed= 4  filled= 4  net=₹658
+[19-06-2026 01:44:27 IST]   2026-04-27  armed= 7  filled= 3  net=₹-1298
+[19-06-2026 01:44:27 IST]   2026-04-28  armed= 2  filled= 1  net=₹-558
+[19-06-2026 01:44:27 IST]   2026-04-29  armed= 5  filled= 3  net=₹-1054
+[19-06-2026 01:44:27 IST]   2026-04-30  armed= 5  filled= 3  net=₹-2032
+[19-06-2026 01:44:27 IST]   2026-05-04  armed= 5  filled= 0  net=₹0
+[19-06-2026 01:44:27 IST]   2026-05-05  armed= 4  filled= 2  net=₹-422
+[19-06-2026 01:44:27 IST]   2026-05-06  armed= 3  filled= 1  net=₹-84
+[19-06-2026 01:44:27 IST]   2026-05-07  armed= 6  filled= 3  net=₹525
+[19-06-2026 01:44:27 IST]   2026-05-08  armed= 5  filled= 3  net=₹-1921
+[19-06-2026 01:44:27 IST]   2026-05-11  armed= 7  filled= 6  net=₹1334
+[19-06-2026 01:44:27 IST]   2026-05-12  armed= 5  filled= 3  net=₹1277
+[19-06-2026 01:44:27 IST]   2026-05-13  armed= 3  filled= 1  net=₹373
+[19-06-2026 01:44:27 IST]   2026-05-14  armed= 6  filled= 2  net=₹837
+[19-06-2026 01:44:27 IST]   2026-05-15  armed= 4  filled= 3  net=₹175
+[19-06-2026 01:44:27 IST]   2026-05-18  armed= 8  filled= 5  net=₹-2083
+[19-06-2026 01:44:27 IST]   2026-05-19  armed= 4  filled= 4  net=₹-821
+[19-06-2026 01:44:27 IST]   2026-05-20  armed= 6  filled= 5  net=₹-265
+[19-06-2026 01:44:27 IST]   2026-05-21  armed= 4  filled= 4  net=₹2478
+[19-06-2026 01:44:27 IST]   2026-05-22  armed= 1  filled= 1  net=₹-555
+[19-06-2026 01:44:27 IST]   2026-05-25  armed= 3  filled= 1  net=₹-344
+[19-06-2026 01:44:27 IST]   2026-05-26  armed= 1  filled= 1  net=₹687
+[19-06-2026 01:44:27 IST]   2026-05-27  armed= 6  filled= 6  net=₹3743
+[19-06-2026 01:44:27 IST]   2026-05-29  armed= 5  filled= 5  net=₹-681
+[19-06-2026 01:44:27 IST]   2026-06-01  armed= 3  filled= 3  net=₹2524
+[19-06-2026 01:44:27 IST]   2026-06-02  armed= 3  filled= 2  net=₹1074
+[19-06-2026 01:44:27 IST]   2026-06-03  armed= 3  filled= 3  net=₹242
+[19-06-2026 01:44:27 IST]   2026-06-04  armed= 3  filled= 3  net=₹-459
+[19-06-2026 01:44:27 IST]   2026-06-05  armed= 5  filled= 5  net=₹618
+[19-06-2026 01:44:27 IST]   2026-06-08  armed= 4  filled= 4  net=₹127
+[19-06-2026 01:44:27 IST]   2026-06-09  armed= 1  filled= 1  net=₹-292
+[19-06-2026 01:44:27 IST]   2026-06-10  armed= 1  filled= 1  net=₹-119
+[19-06-2026 01:44:27 IST]   2026-06-11  armed= 3  filled= 3  net=₹630
+[19-06-2026 01:44:27 IST]   2026-06-12  armed= 5  filled= 3  net=₹-557
+[19-06-2026 01:44:27 IST]   2026-06-15  armed= 4  filled= 3  net=₹-641
+[19-06-2026 01:44:27 IST] 
+----------------  SUMMARY  ----------------
+[19-06-2026 01:44:27 IST]   Selection source:       15 days from live orb_trades, 74 days reconstructed
+[19-06-2026 01:44:27 IST]   Funnel:                 647 selected → 245 armed → 245 filled
+[19-06-2026 01:44:27 IST]   Not armed (skipped):    154  (atr14d_below_floor_0.00, no_confirm, no_5min_or_candle, doji_first_candle, atr14d_below_floor_0.34, qty_below_1, atr14d_below_floor_0.30, atr14d_below_floor_0.47)
+[19-06-2026 01:44:27 IST]   Selection gate dropped: 248  (against_trend:232, strong_vs_nifty:9, weak_vs_nifty:7)
+[19-06-2026 01:44:27 IST]   Armed but no fill:      0  (trigger never crossed)
+[19-06-2026 01:44:27 IST]   Exits:                  35 stop-outs, 210 at 15:15
+[19-06-2026 01:44:27 IST]   Win rate (net>0):       48.2%  (118/245)
+[19-06-2026 01:44:27 IST]   Avg R per trade (net):  0.063R    total: 15.5R
+[19-06-2026 01:44:27 IST]   Gross PnL:              ₹7158
+[19-06-2026 01:44:27 IST]   Net PnL (after costs):  ₹176   (0.18% of ₹100000 capital)
+[19-06-2026 01:44:27 IST]   Cost drag:              ₹6982
+[19-06-2026 01:44:27 IST] ============================================
+[19-06-2026 01:44:27 IST] NOTE: indicative only — short sample, ATR/baseline thin early, fills idealised.
+
+[19-06-2026 01:44:27 IST] 📄 CSV saved:
+[19-06-2026 01:44:27 IST]    /Users/nolojik/Documents/logdhan/orb_backtest_2026-02-02_to_2026-06-15_trades.csv
+[19-06-2026 01:44:27 IST]    /Users/nolojik/Documents/logdhan/orb_backtest_2026-02-02_to_2026-06-15_daily.csv
+
